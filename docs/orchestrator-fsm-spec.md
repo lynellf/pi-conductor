@@ -409,6 +409,21 @@ of the whole tree is likewise never used — it would pull sibling-run data.
 The host treats checkpoint snapshots the same as every §11.2–§11.5 record: an
 append-only entry. The reducer returns a new `Checkpoint` value; it does not write it.
 
+**Resume is a host entry point, not a reducer feature.** The host owns a
+`resumeRun(run_id): RunHandle` that reconstructs the live `Checkpoint` by reading the
+latest snapshot record for `run_id` from its own append-only log, re-derives the
+pinned `MachineDefinition` from the manifest version stamped on that snapshot, and
+re-enters the orchestration loop at `current_role` — spawning a fresh role session
+for `active_role_session.role` (or, if the snapshot was taken with
+`active_role_session == null`, simply continuing the loop from `current_role`). The
+loop does **not** replay agent emissions; the snapshot *is* the state. A snapshot
+whose `active_role_session` references a session that never reached a terminal
+lifecycle record is treated as a crash mid-session: the host records a
+`session_failed` (`failure_reason: "crashed"`) for that session before re-entering,
+so the run's record stream stays reconcilable. Resume is the only legal way to
+re-enter a run after a host process exit; there is no in-memory `RunHandle` survival
+across processes.
+
 ### 11.2 `transition_accepted`
 
 ```ts
@@ -633,6 +648,30 @@ Two surfaces, both host concerns; the machine is uninvolved. Under the SDK host
 `runStats`/`runConfig` are the only run-level config/visibility entry points; there is
 no run config file.
 
+### 11.9 Run lifecycle entry points (host)
+
+The host exposes a small, coherent run API so callers (a CLI, a test harness, a future
+TUI viewer) do not reach into loop internals. These are host functions, not machine
+concepts; the reducer is uninvolved.
+
+- `startRun(manifestPath, opts?): RunHandle` — load + validate the manifest, derive the
+  pinned `MachineDefinition`, call `createInitialCheckpoint` (which mints `run_id`),
+  open the `run_id`-keyed append-only log, persist the initial checkpoint snapshot, and
+  enter the orchestration loop. `opts.seed` may carry the initial goal payload for the
+  first orchestrator session.
+- `resumeRun(run_id): RunHandle` — reconstruct the live checkpoint from the latest
+  snapshot (§11.1) and re-enter the loop. Crash-mid-session reconciliation is described
+  in §11.1.
+- `listRuns(): RunSummary[]` — enumerate runs known to the host's log (for a future
+  viewer); not required for v1 CI but the log format must make it implementable
+  without a schema change.
+- `RunHandle` exposes `runStats()`, `runConfig(override)` (§11.8), `abort()`, and
+  `await completion()` (a promise that resolves with the final `RunStats` when
+  `current_role === "done"`).
+
+`run_id` is minted by `createInitialCheckpoint` and is the sole key for the host's log;
+the host reads it back off the initial checkpoint rather than generating it separately.
+
 ## 12. Reducer signature (pure)
 
 The machine core is a pure library with zero pi dependencies. It is imported by the
@@ -721,6 +760,23 @@ detail. For an accepted handoff `A → B`:
 4. `reduceLifecycle(session_started, { role: B, sessionId: B_session })` → validates
    `role === current_role` and sets `active_role_session`.
 5. Host seeds B's session and runs it.
+
+**Post-emission tool guarding (host-owned, mandatory for v1).** A `handoff`/`end`
+tool call records intent into the capture buffer and returns a terminating *message*,
+but a tool call does **not** by itself stop the agent — the model may continue calling
+tools (`bash`, `edit`, …) and execute real side effects before `prompt()` resolves and
+the loop acts on the capture. To prevent work-after-handoff from mutating the
+workspace after the role has already declared its exit intent, the host sets a
+session-level **emission-sealed** flag the moment a valid machine-event capture is
+recorded, and the host's own built-in tool wrappers (`bash`/`edit`/`write`/`read`/…)
+refuse to execute (returning an error tool result "session sealed; emission recorded")
+while that flag is set. Custom tools the role declares are likewise wrapped. This
+guarantees the capture buffer is the *last* side-effecting intent of the session, not
+merely the first. The flag is host state on the live `RunHandle`, never reducer state;
+the reducer is unchanged. A model that ignores the terminating message and calls more
+tools sees only error results and then `prompt()` resolves with the single valid
+capture intact. (Acceptance-tested in the host loop task: a stub model that calls
+`handoff` then `bash` must produce zero `bash` side effects and exactly one capture.)
 
 For a rejected handoff (retry possible): `reduce` returns rejected; **no** lifecycle
 change — the same role session retries; `active_role_session` stays set.

@@ -19,14 +19,14 @@
     `.pi/conductor.yaml`, `parseManifest` (Phase 1 Task 3) + `validateManifest`
     (Phase 1 Task 4), derive `MachineDefinition` (Phase 1 Task 4), pin
     `manifest_version` onto the checkpoint (§10). Define a `Host` interface
-    (`spawnRole`, `captureUsage`, `persistRecord`, `seedRunMemory`, `abortSession`)
-    that the orchestration loop programs against, so the loop is testable against a
-    fake `Host` before the real SDK impl lands. Fail fast with a thrown typed error on
-    hard manifest errors. **Persistence is the host's own `run_id`-keyed append-only
-    log** (`RecordLog`); checkpoint reconstruction reads the latest snapshot for the
-    `run_id` and does **not** use `SessionManager.getBranch()` scoping (resolved — spec
-    §11.1, `sdk-surface.md` §6), so spawned-session branch semantics need not be
-    confirmed.
+    (`spawnRole`, `captureUsage`, `persistRecord`, `seedRunMemory`, `abortSession`,
+    `sealSession`) that the orchestration loop programs against, so the loop is testable
+    against a fake `Host` before the real SDK impl lands. Fail fast with a thrown typed
+    error on hard manifest errors. **Persistence is the host's own `run_id`-keyed
+    append-only log** (`RecordLog`); checkpoint reconstruction reads the latest snapshot
+    for the `run_id` and does **not** use `SessionManager.getBranch()` scoping (resolved
+    — spec §11.1, `sdk-surface.md` §6), so spawned-session branch semantics need not be
+    confirmed. The `sealSession` hook supports the post-emission tool guard (Task 15.5).
   - Acceptance: A valid manifest loads and yields a `MachineDefinition`; an uncapped
     worker throws an error naming the rule. The `Host` interface compiles and a
     trivial fake-`Host` loop test passes.
@@ -34,6 +34,35 @@
   - Dependencies: Checkpoint C
   - Files: `src/host/index.ts`, `src/host/host.ts`, `src/host/manifest.ts`,
     `tests/host/scaffold.test.ts`
+  - Scope: M
+
+- [ ] **Task 13.5: Host public API + file-backed append-only log + `resumeRun` (§11.1, §11.9)**
+  - Description: Deliver the run-lifecycle entry points the spec promises and that no
+    other task covers. (a) A **file-backed `RecordLog`** (the in-memory impl from
+    Phase 3 Task 12 stays for core unit tests) that appends immutable JSON-lines
+    records + checkpoint snapshots to a `run_id`-keyed file and reads the latest
+    snapshot by scanning the log tail. (b) `startRun(manifestPath, opts?)`,
+    `resumeRun(run_id)`, `listRuns()`, and a `RunHandle` exposing `runStats()`,
+    `runConfig(override)`, `abort()`, and `await completion()` (spec §11.9). `startRun`
+    calls `createInitialCheckpoint` (minting `run_id`), opens the log, persists the
+    initial snapshot, and enters the loop. `resumeRun` reconstructs the checkpoint
+    from the latest snapshot, re-derives the pinned `MachineDefinition` from the
+    snapshot's `manifest_version`, reconciles a crash-mid-session (snapshot's
+    `active_role_session` with no terminal lifecycle record → record a
+    `session_failed` (`failure_reason: "crashed"`) for it before re-entering), and
+    re-enters the loop at `current_role`. The reducer is unchanged; this is purely host
+    state + I/O.
+  - Acceptance: A run started via `startRun` writes a `run_id`-keyed log whose latest
+    snapshot reconstructs to the in-memory checkpoint bit-for-bit. A run killed
+    (process-simulated by dropping the in-memory `RunHandle` and re-deriving from the
+    file log) mid-worker-session resumes via `resumeRun(run_id)`, records a `crashed`
+    `session_failed` for the interrupted session, and reaches the **same terminal
+    state** (`done` via the same transition path) as a non-killed equivalent run.
+    `listRuns()` enumerates the log. Automated; no `pi` CLI.
+  - Verification: `pnpm test -- host/resume` (automated, temp-dir file log).
+  - Dependencies: Task 13, Task 16 (stub provider, to drive a resumable run)
+  - Files: `src/host/log-file.ts`, `src/host/run-handle.ts`, `src/host/api.ts`,
+    `tests/host/resume.test.ts`
   - Scope: M
 
 - [ ] **Task 14: `handoff` + `end` emission tools + seam validation (§3, §5.1, §12)**
@@ -45,24 +74,25 @@
     buffer — **only if the buffer is empty** (a second machine-event call writes an
     `extra_emission` marker and returns an error tool result without overwriting);
     (3) return a **terminating** tool result that instructs the role to stop calling
-    tools and end its turn. On a valid emission, the result is "Emission recorded; do
-    not call further tools." On a seam validation failure, record a `schema_invalid`
-    marker in the capture buffer (only if the buffer is empty) and return a terminating
-    error result; this is a contract breach for Task 15 to persist as `session_failed`,
-    not a retryable reducer rejection with `legal_targets`. **The tool does not call
-    `reduce`, does not persist, and does not spawn.** `reduce` + persistence + spawning
-    are the loop's exclusive responsibilities (Task 15), so there is exactly one
-    reduce path and one persist path per role session. Termination is *enforced by the
-    loop*, not trusted to the model: a tool call is a machine-event *intent*, not an
-    automatic session end (see Task 15).
+    tools and end its turn. On a valid emission, the tool **also sets the
+    emission-sealed flag** on the live `RunHandle` for that session (Task 15.5) so no
+    further side-effecting tool executes. On a seam validation failure, record a
+    `schema_invalid` marker in the capture buffer (only if the buffer is empty) and
+    return a terminating error result; this is a contract breach for Task 15 to persist
+    as `session_failed`, not a retryable reducer rejection with `legal_targets`.
+    **The tool does not call `reduce`, does not persist, and does not spawn.** `reduce`
+    + persistence + spawning are the loop's exclusive responsibilities (Task 15), so
+    there is exactly one reduce path and one persist path per role session. Termination
+    is *enforced by the loop*, not trusted to the model: a tool call is a
+    machine-event *intent*, not an automatic session end (see Task 15).
   - Acceptance: A role calling `handoff` with a schema-valid target writes exactly one
-    capture entry and returns a terminating result; a second machine-event call in the
-    same session returns an `extra_emission` error and does not overwrite the capture;
-    a schema-invalid call writes a `schema_invalid` marker, returns a terminating error
-    result, and is later persisted by the loop as `session_failed` rather than
-    `transition_rejected`. No `transition_accepted`/`transition_rejected` record is
-    produced inside the tool (the loop produces them in Task 15). Tested against a fake
-    `Host`.
+    capture entry, sets the emission-sealed flag, and returns a terminating result; a
+    second machine-event call in the same session returns an `extra_emission` error and
+    does not overwrite the capture; a schema-invalid call writes a `schema_invalid`
+    marker, returns a terminating error result, and is later persisted by the loop as
+    `session_failed` rather than `transition_rejected`. No
+    `transition_accepted`/`transition_rejected` record is produced inside the tool
+    (the loop produces them in Task 15). Tested against a fake `Host`.
   - Verification: `pnpm test -- host/tools` (automated).
   - Dependencies: Task 13
   - Files: `src/host/tools.ts`, `src/host/seam.ts`, `tests/host/tools.test.ts`
@@ -119,17 +149,52 @@
   - Files: `src/host/loop.ts`, `tests/host/loop.test.ts`
   - Scope: M
 
-- [ ] **Task 16: Stub provider for in-CI end-to-end runs (§15.3)**
-  - Description: A deterministic stub model/provider (or a scripted mock `Model`) the
-    loop drives end-to-end without API keys, so every host test is a real assertion,
-    not a manual run. The stub emits a configurable `handoff`/`end` per role and
-    returns canned `usage` on `message_end`. This is what makes "unit tests, not
-    pinky-promises" real for the driver.
-  - Acceptance: A full `orchestrator → worker → orchestrator → end` run completes in
-    CI via the stub with no network and no API key, asserting the persisted record
-    shapes (§11.2–§11.5) and final checkpoint.
-  - Verification: `pnpm test -- host/e2e` (automated).
+- [ ] **Task 15.5: Post-emission tool sealing (spec §12.1)**
+  - Description: Implement the emission-sealed flag referenced by Task 14. The host
+    wraps every tool the role can call (built-ins like `bash`/`edit`/`write`/`read`
+    plus the role's declared custom tools) so that, while the live session's
+    emission-sealed flag is set, the wrapper short-circuits execution and returns an
+    error tool result ("session sealed; emission recorded") **without** invoking the
+    underlying tool — so no side effect occurs after the role has declared its exit
+    intent. The flag is set by the `handoff`/`end` tool on first valid capture (Task
+    14) and is per-session host state on the `RunHandle`; it is never reducer state.
+    `handoff`/`end` themselves remain callable for the `extra_emission` path (they
+    don't execute side effects; they only write the marker). The wrapper is applied at
+    `customTools` construction time in Task 15 so the agent never sees an unwrapped
+    side-effecting tool.
+  - Acceptance: A stub model that calls `handoff` (valid) and then `bash` produces
+    **zero** `bash` side effects (asserted via a temp-file probe the `bash` call would
+    have written), exactly one valid capture, and a normal `transition_accepted`. A
+    stub model that calls `bash` then `handoff` runs `bash` normally (flag not yet set)
+    and then seals. Both automated.
+  - Verification: `pnpm test -- host/seal` (automated).
   - Dependencies: Task 15
+  - Files: `src/host/tool-wrapper.ts`, `tests/host/seal.test.ts`
+  - Scope: M
+
+- [ ] **Task 16: Stub provider for in-CI end-to-end runs (§15.3)**
+  - Description: A deterministic stub model/provider (or a scripted mock `Model` +
+    `Provider`) the loop drives end-to-end without API keys, so every host test is a
+    real assertion, not a manual run. **Pin the contract first:** before writing any
+    E2E test, inspect `@earendil-works/pi-ai` `dist/types.d.ts` and confirm the exact
+    `Provider` interface + `AssistantMessageEventStream` shape the stub must implement
+    to satisfy `createAgentSession({ model: stubModel })` — a `Model` is data
+    (`id`/`name`/`api`/`provider`/`baseUrl`/`cost`/…); streaming behavior lives on
+    `Provider.stream` (`StreamFunction`). Record the pinned shape as a comment in
+    `stub-provider.ts` so a future SDK upgrade surfaces drift. The stub emits a
+    configurable `handoff`/`end` per role, returns canned `usage` on `message_end` in
+    the SDK shape (camelCase + nested `cost.total`, `totalTokens`, assistant-only),
+    and can be scripted to call `handoff` then `bash` (for Task 15.5) or to fail
+    (for Task 18). If the `Provider`/`StreamFunction` surface cannot be faked cleanly,
+    raise it as a blocker **before** any E2E test is written — this is the load-bearing
+    assumption for all of Phases 4–5.
+  - Acceptance: (1) A minimal stub `Model`+`Provider` drives one `createAgentSession`
+    turn with canned `usage` and asserts the §11.4 mapping against the captured event
+    — **gated before any E2E test**. (2) A full `orchestrator → worker →
+    orchestrator → end` run completes in CI via the stub with no network and no API
+    key, asserting the persisted record shapes (§11.2–§11.5) and final checkpoint.
+  - Verification: `pnpm test -- host/e2e` (automated).
+  - Dependencies: Task 15.5
   - Files: `src/host/stub-provider.ts`, `tests/host/e2e.test.ts`
   - Scope: M
 
@@ -152,5 +217,9 @@
 - [ ] Legal handoff spawns + seeds the next role session end-to-end (automated test)
 - [ ] Illegal handoff is rejected with `legal_targets` surfaced to the role (automated)
 - [ ] Orchestrator sees run-memory context each turn (automated)
+- [ ] **Post-emission tool guarding:** a stub model that calls `handoff` then `bash`
+      produces zero `bash` side effects and exactly one capture (automated)
+- [ ] **Resume:** a run killed mid-session resumes to the same terminal state via
+      `resumeRun(run_id)` from the file-backed log (automated)
 - [ ] Full linear run passes in CI via the stub provider, no API key
 - [ ] Review with human before cost/observability surfaces

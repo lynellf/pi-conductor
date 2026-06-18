@@ -84,8 +84,16 @@
     host also emits a `stats` event on each terminal for a consumer to render (the
     TUI live widget is out of scope under the SDK host). Cache caveat (§11.6): show
     raw per-session `cache_read`/`cache_write`, never a synthesized per-run hit rate.
+    **`runConfig` lowering edge case (must be defined, not silent):** if an override
+    sets `max_run_cost_usd` to a value **at or below** the current `run_cost_to_date`,
+    the host treats it as an immediate run-cap breach and synthesizes the `end` on the
+    next `current_role === orchestrator` moment (same path as §11.7) — it does **not**
+    retroactively reject already-spent cost, and it does **not** raise. Raising the cap
+    is always allowed. An override to a non-positive number is a typed error.
   - Acceptance: `runStats` output reconciles with the sum of terminal `usage.cost`;
-    `runConfig` changes the active cap mid-run. Automated.
+    `runConfig` changes the active cap mid-run; a `runConfig` override below current
+    spend forces the synthesized `end` on the next orchestrator-current moment (no
+    retroactive rejection, no throw); a non-positive override throws. Automated.
   - Verification: `pnpm test -- host/stats` (automated).
   - Dependencies: Task 17
   - Files: `src/host/stats.ts`, `src/host/config.ts`, `tests/host/stats.test.ts`

@@ -117,12 +117,16 @@ Gate — **Checkpoint C** (core complete):
 
 ### Phase 4: SDK host driver (host = pi SDK, §9.5 resolved)
 
-➡️ Sub-plan: [`docs/orchestrator-fsm-plans/phase-4-sdk-host.md`](orchestrator-fsm-plans/phase-4-sdk-host.md) (Tasks 13–16.5)
+➡️ Sub-plan: [`docs/orchestrator-fsm-plans/phase-4-sdk-host.md`](orchestrator-fsm-plans/phase-4-sdk-host.md) (Tasks 13–16.5, incl. 13.5 & 15.5)
 
 Gate — **Checkpoint D** (SDK host driver wired):
 - [ ] Legal handoff spawns + seeds the next role session end-to-end (automated test)
 - [ ] Illegal handoff is rejected with `legal_targets` surfaced to the role (automated)
 - [ ] Orchestrator sees run-memory context each turn (automated)
+- [ ] **Post-emission tool guarding:** a stub model that calls `handoff` then `bash`
+      produces zero `bash` side effects and exactly one capture (automated)
+- [ ] **Resume:** a run killed mid-session resumes to the same terminal state via
+      `resumeRun(run_id)` from the file-backed log (automated)
 - [ ] Full linear run passes in CI via the stub provider, no API key
 - [ ] Review with human before cost/observability surfaces
 
@@ -162,6 +166,9 @@ Gate — **Checkpoint E** (spec §15 steps 3–5 complete):
 | Two reducers fight over `active_role_session`/`current_role` | Med — checkpoint inconsistency | Composition test (Task 12.5) drives both in real call order before the host is built |
 | SDK `message_end` usage shape differs from §11.4 `usage` block | Med — cost caps silently wrong | **Resolved/pinned:** `message.usage` is camelCase + nested `cost.total` + `totalTokens` (`sdk-surface.md` §3). Task 17 maps to §11.4 explicitly, guards `message.role === "assistant"`, and sums across the session's assistant `message_end`s; stub (Task 16) emits canned usage in the SDK shape so the mapping is asserted in CI |
 | Persisted host records drift from §11 record shapes | Med — uninterpretable logs | Task 14/17/16 assert persisted record shapes match §11.2–§11.5 exactly (via the stub-driven E2E test) |
+| Crash/resume is a stated invariant with no delivering task | High — v1 "shippable" but unresumable; silent state loss on host exit | New Phase 4 task: host-owned file-backed append-only log + `resumeRun(run_id)` reconstructing from the latest snapshot, with crash-mid-session `session_failed("crashed")` reconciliation (spec §11.1/§11.9); E2E test kills the loop mid-run and asserts resume reaches the same terminal state |
+| Stub provider's `Provider`/`StreamFunction` surface is unpinned | High — every Phases 4–5 E2E test depends on the stub; if `createAgentSession({ model })` requires a real `Provider.stream` that is awkward to fake, the no-API-key-in-CI claim collapses | Pre-Task-16 spike addendum: pin the `Provider` interface + `AssistantMessageEventStream` shape against `@earendil-works/pi-ai` `dist/types.d.ts`; Task 16's first acceptance is a minimal stub `Model`+`Provider` driving one `createAgentSession` turn with canned `usage` before any E2E test is written |
+| Model executes side-effecting tools after emitting `handoff`/`end` | High — workspace mutated after the role has declared its exit intent; the capture buffer is the *first* intent, not the last | Host sets an **emission-sealed** flag on first valid capture; host-wrapped built-in + custom tools refuse to execute while sealed (spec §12.1). Acceptance: a stub model calling `handoff` then `bash` produces zero `bash` side effects and exactly one capture |
 
 ## Open Questions / Resolved Decisions
 
@@ -173,10 +180,10 @@ resolved decisions kept here for provenance so implementers do not re-open them.
    are TypeBox.
 2. ~~Manifest source~~ — **Resolved: `.pi/conductor.yaml`** (single YAML file; see spec
    §8). Per-role frontmatter rejected for v1 (cross-file version agreement problem).
-3. **Coverage threshold.** Propose 90% lines / 85% branches for `src/core` +
-   `src/manifest` + `src/seam` + `src/cost`. Confirm or adjust. (Host coverage not
-   gated by this threshold — stub-provider coverage is the host gate.)
-4. **Package manager.** Assumed pnpm (matches pi ecosystem). Confirm.
+3. ~~**Coverage threshold.**~~ **Resolved: 90% lines / 85% branches** for
+   `src/core` + `src/manifest` + `src/seam` + `src/cost`. Host coverage is gated by the
+   stub-provider E2E path, not this threshold.
+4. ~~**Package manager.**~~ **Resolved: pnpm** (matches the pi ecosystem).
 5. ~~Extension scope (project-local vs. global)~~ — **N/A under the SDK host.** The
    host is an in-repo `src/host/` package; there is no extension install path in v1.
 
@@ -219,4 +226,8 @@ should be treated as implementation constraints unless the spec changes:
       (grep-guarded); only `src/host/` imports `@earendil-works/pi-coding-agent`
 - [ ] Host driver is unit-tested against `SessionManager.inMemory()` + a stub provider
       (no `pi` CLI, no API keys required for CI)
+- [ ] **Resume works:** a run killed mid-session reaches the same terminal state via
+      `resumeRun(run_id)` from the file-backed `run_id`-keyed log (spec §11.1/§11.9)
+- [ ] **Post-emission sealing works:** no side-effecting tool executes after a role's
+      first valid `handoff`/`end` capture (spec §12.1)
 - [ ] Human has reviewed and approved before Task 1 begins
