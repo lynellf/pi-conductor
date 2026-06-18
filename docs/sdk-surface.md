@@ -142,12 +142,10 @@ unknown; it is now pinned.
 
 - `session.prompt(text, options?)` — send a prompt and await completion. Use this to
   drive each role turn with `seedFromHandoff(payload)`.
-- `session.steer(text)` — queue a steering message during streaming. This is the
-  mechanism for run-cap-breach forced-`end` (§11.7): steer "run cost cap reached,
-  end now." **Caveat (open):** if the model ignores the steer and hands off again,
-  nothing currently force-closes the run. The host may need to `abort()` + inject an
-  `end` transition directly, or force-`done` outside the reducer. This is a spec gap
-  to close before Task 17, not an SDK gap.
+- `session.steer(text)` — queue a steering message during streaming. For run-cap
+  breach this is courtesy-only: the authoritative close is the spec-pinned synthesized
+  `end` event through `reduce` (§11.7 / Task 17). The host must not rely on the model
+  obeying a steer, and it must not force `done` by mutating the checkpoint directly.
 - `session.abort()` — abort the current operation. Used for per-session cost-cap
   breach (§11.7): abort, then record `session_failed` with
   `session_cost_cap_exceeded`.

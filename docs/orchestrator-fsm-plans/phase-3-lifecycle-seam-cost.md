@@ -36,14 +36,21 @@
 - [ ] **Task 10: `reduceLifecycle` (§11.4)**
   - Description: Pure lifecycle reducer per §12 signature
     `reduceLifecycle(checkpoint, lifecycle, def, meta)`. `session_started` sets
-    `active_role_session`; `session_ended`/`session_failed` clear it and record the
-    lifecycle event with `usage` (captured on **both** terminals), `visit_index`,
-    `model`, `parent_session`, `failure_reason`. Does not change `current_role` on
-    model retry (§8.2). Returns new checkpoint + record.
+    `active_role_session` to `{ id, role, session_file }` and requires
+    `meta.role === checkpoint.current_role` with no existing active session.
+    `session_ended`/`session_failed` validate `meta.sessionId` + `meta.role` against
+    `active_role_session`, then clear it and record the lifecycle event with `usage`
+    (captured on **both** terminals), `visit_index`, `model`, `parent_session`,
+    `failure_reason`. Terminal lifecycle events do **not** require
+    `meta.role === checkpoint.current_role`, because the canonical accepted path calls
+    `reduce` first and may already have moved `current_role` to the next role (§12.1).
+    Does not change `current_role` on model retry (§8.2). Returns new checkpoint +
+    record.
   - Acceptance: A started→ended and started→failed sequence both leave
-    `active_role_session == null` and produce correct records; `usage` present on
-    both terminals; `visit_index` reconstructable from records alone; model-retry
-    does not advance `current_role`.
+    `active_role_session == null` and produce correct records; a terminal lifecycle
+    with the wrong `sessionId` or role is rejected/thrown; `usage` present on both
+    terminals; `visit_index` reconstructable from records alone; model-retry does not
+    advance `current_role`.
   - Verification: Scenario tests; a reconciliation test summing `usage.cost` across
     both terminal types equals a hand-supplied total.
   - Dependencies: Task 7
@@ -71,9 +78,9 @@
   - Description: A `RecordLog` interface + in-memory impl used by core unit tests. The
     real persistence is host-owned in the SDK driver (Phase 4): the host appends
     immutable records to its own log and reconstructs the live checkpoint by reading
-    the latest snapshot for the run, scoped to `run_id` + active branch — never a raw
-    scan of the whole tree, and never an event-sourced replay (snapshots are full;
-    §11.1). No custom adapter in the core. Also export the
+    the latest snapshot for the run from its `run_id`-keyed append-only log — never SDK
+    branch scoping, never a raw scan of the whole tree, and never an event-sourced
+    replay (snapshots are full; §11.1). No custom adapter in the core. Also export the
     run-memory artifact **shape** (§8.4) as a type + a pure
     `buildRunMemory(checkpoint, records, def): RunMemory` so the host's per-turn
     orchestrator seeder has a deterministic builder. No I/O.
@@ -95,13 +102,17 @@
 
 - [ ] **Task 12.5: Two-reducer composition (reduce + reduceLifecycle, in call order)**
   - Description: A scenario test driving both reducers in the real call order the SDK
-    host will use after an accepted handoff: `session_ended` (prev role) →
-    `session_started` (next role), interleaved with `reduce`. Asserts the checkpoint is
-    consistent across both writers (no `active_role_session`/`current_role` fight),
-    and that model-retry (`session_started` for the same role without an intervening
-    accepted transition) leaves `current_role` unchanged.
+    host will use after an accepted handoff: `reduce` first, then
+    `session_ended` for the previous role's active session, then `session_started` for
+    the next freshly-created session (§12.1). Asserts the checkpoint is consistent
+    across both writers (no `active_role_session`/`current_role` fight), including the
+    important case where terminal lifecycle clears role A's active session after
+    `current_role` has already moved to B. Also asserts that model-retry
+    (`session_failed` then `session_started` for the same role with a fresh session id,
+    without an intervening accepted transition) leaves `current_role` unchanged.
   - Acceptance: A 3-step `orch→W(ended)→orch(started)` sequence yields a single
-    consistent checkpoint lineage; a model-retry sequence does not advance role.
+    consistent checkpoint lineage; terminal lifecycle validates against active session
+    identity rather than `current_role`; a model-retry sequence does not advance role.
   - Verification: Scenario test (this is the seam bug that survives all unit tests;
     pinned before the host is built).
   - Dependencies: Task 10, Task 12

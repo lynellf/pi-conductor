@@ -9,7 +9,8 @@
 > `@earendil-works/pi-coding-agent` and owns the orchestration loop: spawn role
 > sessions via `createAgentSession`, seam-validate, call `reduce`, persist records +
 > checkpoint snapshots, seed the next role, drive the stub provider end-to-end in CI.
-> Blocked by Checkpoint C and the **Pre-Phase-4 hardening gate** in the main plan.
+> Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
+> Decisions** in the main plan.
 
 ## Tasks
 
@@ -44,20 +45,24 @@
     buffer — **only if the buffer is empty** (a second machine-event call writes an
     `extra_emission` marker and returns an error tool result without overwriting);
     (3) return a **terminating** tool result that instructs the role to stop calling
-    tools and end its turn (on a valid emission: "Emission recorded; do not call
-    further tools."; on a seam validation failure: the reject reason + `legal_targets`
-    so the role can retry). **The tool does not call `reduce`, does not persist, and
-    does not spawn.** `reduce` + persistence + spawning are the loop's exclusive
-    responsibilities (Task 15), so there is exactly one reduce path and one persist
-    path per role session. Termination is *enforced by the loop*, not trusted to the
-    model: a tool call is a machine-event *intent*, not an automatic session end (see
-    Task 15).
+    tools and end its turn. On a valid emission, the result is "Emission recorded; do
+    not call further tools." On a seam validation failure, record a `schema_invalid`
+    marker in the capture buffer (only if the buffer is empty) and return a terminating
+    error result; this is a contract breach for Task 15 to persist as `session_failed`,
+    not a retryable reducer rejection with `legal_targets`. **The tool does not call
+    `reduce`, does not persist, and does not spawn.** `reduce` + persistence + spawning
+    are the loop's exclusive responsibilities (Task 15), so there is exactly one
+    reduce path and one persist path per role session. Termination is *enforced by the
+    loop*, not trusted to the model: a tool call is a machine-event *intent*, not an
+    automatic session end (see Task 15).
   - Acceptance: A role calling `handoff` with a schema-valid target writes exactly one
     capture entry and returns a terminating result; a second machine-event call in the
     same session returns an `extra_emission` error and does not overwrite the capture;
-    a schema-invalid call returns the reject reason + `legal_targets` and writes
-    nothing. No `transition_accepted`/`transition_rejected` record is produced inside
-    the tool (the loop produces them in Task 15). Tested against a fake `Host`.
+    a schema-invalid call writes a `schema_invalid` marker, returns a terminating error
+    result, and is later persisted by the loop as `session_failed` rather than
+    `transition_rejected`. No `transition_accepted`/`transition_rejected` record is
+    produced inside the tool (the loop produces them in Task 15). Tested against a fake
+    `Host`.
   - Verification: `pnpm test -- host/tools` (automated).
   - Dependencies: Task 13
   - Files: `src/host/tools.ts`, `src/host/seam.ts`, `tests/host/tools.test.ts`
@@ -70,10 +75,12 @@
     as `resourceLoader` (`systemPromptOverride` is a `ResourceLoader` option, not a
     `createAgentSession` option); `model`, `tools` (an allowlist that **must include
     `handoff`/`end`** to enable the custom tools), `customTools: [handoff, end]`, and
-    `sessionManager` are direct `createAgentSession` options. Subscribe to the event
-    stream (capture `usage` on `message_end` — Task 17; eval caps on `turn_end` —
-    Task 17), then `session.prompt(seedFromHandoff(payload))` and await completion.
-    After the session ends, the loop — the **sole owner** of `reduce` and persistence —
+    `sessionManager` are direct `createAgentSession` options. After the session is
+    created, call `reduceLifecycle(session_started)` with its `sessionId`/`sessionFile`
+    before prompting it. Subscribe to the event stream (capture `usage` on
+    `message_end` — Task 17; eval caps on `turn_end` — Task 17), then
+    `session.prompt(seedFromHandoff(payload))` and await completion. After `prompt()`
+    resolves, the loop — the **sole owner** of `reduce` and persistence —
     reads the per-session capture buffer (Task 14) and enforces the contract:
     **exactly one** machine-event capture is required. Zero captures →
     `session_failed` (`failure_reason: no_emission`); an `extra_emission` marker in
@@ -98,9 +105,15 @@
     two as `session_failed` (`extra_emission`), and one with a schema-invalid single
     capture as `session_failed` (`schema_invalid`) — **none** of these produce a
     `transition_rejected`, and `reduce` is not called for any of them. Only a valid
-    single capture reaches `reduce`. `reduce` and persistence each run exactly once
-    per role session, in the loop. Tested against a stub provider (Task 16) + fake
-    `Host`.
+    single capture reaches `reduce`. The canonical reducer call order (§12.1) is
+    followed on an accepted transition: `reduce` first, then
+    `reduceLifecycle(session_ended)` for the previous active session id, then create
+    the next session and `reduceLifecycle(session_started)`. On a reducer `rejected`
+    result, persist the `transition_rejected` record, surface `legal_targets` back into
+    the same active session, and do **not** call terminal lifecycle; this is retryable
+    in-session and is distinct from a contract breach. `reduce` and persistence each
+    run exactly once per role session, in the loop. Tested against a fake session
+    factory; Task 16 promotes that into a reusable stub provider for E2E tests.
   - Verification: `pnpm test -- host/loop` (automated, no `pi` CLI, no API keys).
   - Dependencies: Task 14
   - Files: `src/host/loop.ts`, `tests/host/loop.test.ts`

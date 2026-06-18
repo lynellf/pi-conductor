@@ -120,10 +120,12 @@ distinct machine event — escalation is a recovery policy, not a transition.
 - **The orchestrator picks the next worker** (or ends). Its judgment lives in *which
   declared worker it names*, bounded by "must be a declared role" and "must respect
   visit caps (§7.4)."
-- **Default orchestrator.** The system provides a default orchestrator role. Users may
-  override it with their own orchestrator configuration (system prompt, model, tools).
-  The machine treats any role marked `is_orchestrator: true` as the hub; there is
-  exactly one per run.
+- **Default orchestrator.** The project provides a default orchestrator role template
+  that a host/scaffold can materialize into `.pi/conductor.yaml`. This is not hidden
+  reducer state and not an implicit role injection: the manifest still declares exactly
+  one role with `is_orchestrator: true`, and users override the default by changing that
+  declared role's prompt/model/tools. The machine treats the declared orchestrator as
+  the hub; there is exactly one per run.
 
 The entire transition shape is uniform and identical for every workflow:
 
@@ -236,7 +238,7 @@ roles: [ ... ]
 Run-level config has no separate file. `max_run_cost_usd` lives in the orchestrator's
 manifest entry because the orchestrator owns the run; the orchestrator is a role, so
 this keeps all run config in the single manifest. A runtime override is available via
-the `/run-config` slash command (§11.8) for the current run without editing the
+the `runConfig()` host function (§11.8) for the current run without editing the
 manifest; the manifest value remains the default.
 
 ### 8.1 Model assignment
@@ -320,7 +322,7 @@ Rules:
   lifecycle. The artifact is the same category as seeding a worker session from a
   handoff payload — driver context, not machine state.
 
-## 9. Open questions to resolve before implementation
+## 9. Resolved v1 decisions from abstraction review
 
 1. **Concurrency.** Single active role at a time (flat FSM, as scoped here), or can
    multiple workers run in parallel? Parallel breaks the flat FSM into a
@@ -338,8 +340,8 @@ Rules:
 5. **Host shape.** SDK host process (headless, testable) vs. in-TUI extension
    (interactive, watchable) vs. both via a pure-FSM-core split. **Resolved for v1: the
    pi SDK host.** The pure core is imported by an in-repo SDK host driver that owns the
-   orchestration loop, spawns role sessions via `runtime.newSession`/
-   `createAgentSession`, and is unit-tested against `SessionManager.inMemory()`. The
+   orchestration loop, spawns role sessions via `createAgentSession`, and is
+   unit-tested against `SessionManager.inMemory()`. The
    TUI extension path was rejected because tool handlers receive `ExtensionContext`
    (which lacks `newSession` — that lives on `ExtensionCommandContext`), forcing an
    async command-queue dance and an unverifiable manual test surface; the SDK host makes
@@ -395,7 +397,11 @@ of the whole tree is likewise never used — it would pull sibling-run data.
   manifest_version: string,     // pinned at run-start (§10)
   current_role: Role | "done",
   visit_count: Record<Role, number>,   // per-worker, for guard evaluation
-  active_role_session: string | null,  // host session id, or null when idle
+  active_role_session: {
+    id: string,                  // host session id
+    role: Role,                  // role this live session belongs to
+    session_file: string,
+  } | null,                      // null when idle
   updated_at: number,
 }
 ```
@@ -568,7 +574,10 @@ orchestrator manifest entry — §8), not machine state.
 
 **Run cap (`max_run_cost_usd`):**
 - Evaluated on every `session_ended`/`session_failed` usage capture, against the
-  running sum across all sessions in the run.
+  running sum across all sessions in the run. The host evaluates this against
+  persisted totals **plus the current terminal's captured usage before reducing the
+  role's captured machine event**, because a hard cap must be able to supersede an
+  orchestrator's proposed handoff before any worker is spawned.
 - Exceeded → the driver **synthesizes a machine `end` event and feeds it to `reduce`**.
   This is the single legal mechanism: the machine sees a normal `end` transition,
   produces a `transition_accepted` → `done` record + a checkpoint snapshot, and the run
@@ -591,6 +600,14 @@ orchestrator manifest entry — §8), not machine state.
   `current_role === orchestrator`. The cap is still a hard stop; the orchestrator gets
   no worker dispatch in between (the host suppresses any new spawn once the cap is
   tripped and drives the synthesized `end` immediately on re-entry).
+- **If the cap trips while the orchestrator is current, the synthesized `end`
+  supersedes the captured emission.** For example, if an orchestrator turn emits
+  `handoff → implementer` but that same turn pushes the run over `max_run_cost_usd`,
+  the host records the terminal usage and feeds a synthesized `end` to `reduce`
+  instead of reducing the handoff. No worker session is spawned. If the cap trips while
+  a worker is current, the host records a pending forced close, processes only the
+  worker's legal handoff back to the orchestrator, then synthesizes `end` before any
+  orchestrator session is spawned.
 
 Neither cap touches the reducer. Both read usage already captured for observability.
 
@@ -671,17 +688,22 @@ function reduce(
   meta: { role: Role; sessionFile: string; ts: number },
 ): TransitionResult;
 
-// Session-lifecycle reducer, same purity contract. `meta.role` is asserted against
-// `checkpoint.current_role`; the emitting/active role is, by construction, the current
-// role (this holds for model retries too — §8.2 — where the same role re-runs).
-// `reduceLifecycle` never advances `current_role` — only `reduce` does. The host MUST
-// call the two reducers in the canonical order below; any other order corrupts the
-// checkpoint.
+// Session-lifecycle reducer, same purity contract. `reduceLifecycle` never advances
+// `current_role` — only `reduce` does. Lifecycle identity is checked against the live
+// session, not blindly against `current_role`:
+// - `session_started`: `meta.role` MUST equal `checkpoint.current_role`, and no active
+//   role session may already exist.
+// - `session_ended` / `session_failed`: `meta.sessionId` and `meta.role` MUST match
+//   `checkpoint.active_role_session`. These terminals may run after an accepted
+//   transition has already moved `current_role` to the next role, so asserting terminal
+//   `meta.role === checkpoint.current_role` would be wrong.
+// The host MUST call the two reducers in the canonical order below; any other order
+// corrupts the checkpoint.
 function reduceLifecycle(
   checkpoint: Checkpoint,
   lifecycle: "session_started" | "session_ended" | "session_failed",
   def: MachineDefinition,
-  meta: { role: Role; sessionFile: string; model?: string | null; failureReason?: string; ts: number },
+  meta: { role: Role; sessionId: string; sessionFile: string; model?: string | null; failureReason?: string; ts: number },
 ): { checkpoint: Checkpoint; record: SessionLifecycleEvent };
 ```
 
@@ -691,21 +713,26 @@ Because `reduce` flips `current_role` and `reduceLifecycle` flips
 `active_role_session`, their interleaving is a correctness invariant, not a test
 detail. For an accepted handoff `A → B`:
 
-1. `reduce(...)` → `current_role` becomes `B`, returns the accepted record.
-2. `reduceLifecycle(session_ended, { role: A })` → clears `active_role_session`.
-3. `reduceLifecycle(session_started, { role: B })` → sets `active_role_session`.
-4. Host spawns B's session, seeds it, runs it.
+1. `reduce(...)` → `current_role` becomes `B`, returns the accepted record while
+   `active_role_session` still identifies A's live session.
+2. `reduceLifecycle(session_ended, { role: A, sessionId: A_session })` → validates
+   against `active_role_session` and clears it.
+3. Host creates B's fresh session to obtain its `sessionId` / `sessionFile`.
+4. `reduceLifecycle(session_started, { role: B, sessionId: B_session })` → validates
+   `role === current_role` and sets `active_role_session`.
+5. Host seeds B's session and runs it.
 
 For a rejected handoff (retry possible): `reduce` returns rejected; **no** lifecycle
 change — the same role session retries; `active_role_session` stays set.
 
 For a contract breach: the host records `session_failed` via `reduceLifecycle` (role
-A); `reduce` is **not** called (there is no legal transition to evaluate — §11.3).
+A, active session id); `reduce` is **not** called (there is no legal transition to
+evaluate — §11.3).
 
-For a model retry (§8.2): `reduceLifecycle(session_failed, {role: A})` then
-`reduceLifecycle(session_started, {role: A})` — `current_role` never moves.
-
-```ts
+For a model retry (§8.2): `reduceLifecycle(session_failed, { role: A, sessionId:
+failed_session })`, then the host creates a fresh replacement session and calls
+`reduceLifecycle(session_started, { role: A, sessionId: retry_session })` —
+`current_role` never moves.
 
 Host driver responsibilities (impure): own the orchestration loop — create a role
 session via the SDK (`createAgentSession` with per-role `model`, `tools`,
@@ -719,7 +746,7 @@ terminals) and evaluate caps on `turn_end`, read the role's emission (the `hando
 resulting record + a checkpoint snapshot (append-only, §11.1), and spawn the next
 role session. Maintain and seed the run memory artifact for orchestrator sessions
 (§8.4). Execute model fallback on `session_failed` (§8.2), enforce cost caps (§11.7),
-and expose `/run-stats` + `/run-config` equivalents as host functions (§11.8). The
+and expose `runStats()` + `runConfig()` host functions (§11.8). The
 TUI live widget is out of scope under the SDK host; the host emits run-stats events a
 consumer can render instead.
 

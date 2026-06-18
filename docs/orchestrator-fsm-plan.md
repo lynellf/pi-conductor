@@ -51,12 +51,12 @@ params are TypeBox, so Zod would reintroduce a second schema. TypeBox provides t
 type (via `Static<typeof schema>`) the reducer's `MachineEvent` derives from, keeping
 one schema for tool-args, seam validation, and the derived TS type.
 - **Persistence is host-owned, append-only.** The checkpoint (§11.1) and every record
-(§11.2–§11.5) are immutable entries the host appends to its own log. The live
-checkpoint is reconstructed by reading the latest snapshot for the run, scoped to
-`run_id` and the host session's active branch (`SessionManager.getBranch()` filtered by
-`run_id`) — never a raw `getEntries()` scan of the whole tree. The pure core stays free
-of this: it exposes `RecordLog` as an interface + an in-memory impl for unit tests
-only.
+(§11.2–§11.5) are immutable entries the host appends to its own `run_id`-keyed log.
+The live checkpoint is reconstructed by reading the latest checkpoint snapshot for the
+run. SDK branch scoping is not used for reconstruction; role sessions are independent
+`createAgentSession` calls, and branch membership is not a correctness dependency. The
+pure core stays free of this: it exposes `RecordLog` as an interface + an in-memory impl
+for unit tests only.
 - **v1 defaults from §9 are committed:** single-active, per-worker `max_visits`,
 per-invocation session cap shared across model fallbacks, hand-to-orchestrator-once
 recovery. Not re-litigated in tasks.
@@ -71,7 +71,7 @@ imports nothing from `@earendil-works/pi-coding-agent`; only `src/host/` may.
 
 This plan is the canonical index. Each phase is elaborated in its own sub-plan under
 `docs/orchestrator-fsm-plans/`; the sub-plans reference back here for Overview,
-Architecture Decisions, Risks, Open Questions, the Pre-Phase-4 hardening gate, and
+Architecture Decisions, Risks, Open Questions, resolved hardening decisions, and
 whole-plan Verification. Each phase's full task list, acceptance criteria, and
 verification live in its sub-plan. Checkpoints are kept here as gates (and duplicated
 in the sub-plan as the phase exit) so the gating sequence is readable from one place.
@@ -128,7 +128,7 @@ Gate — **Checkpoint D** (SDK host driver wired):
 
 ### Phase 5: Cost capture, caps, and observability surfaces
 
-➡️ Sub-plan: [`docs/orchestrator-fsm-plans/phase-5-cost-observability.md`](orchestrator-fsm-plans/phase-5-cost-observability.md) (Tasks 17–19)
+➡️ Sub-plan: [`docs/orchestrator-fsm-plans/phase-5-cost-observability.md`](orchestrator-fsm-plans/phase-5-cost-observability.md) (Tasks 17–20)
 
 Gate — **Checkpoint E** (spec §15 steps 3–5 complete):
 - [ ] Host: seam-validate → `reduce` → persist → spawn → seed → cap-enforce →
@@ -151,11 +151,11 @@ Gate — **Checkpoint E** (spec §15 steps 3–5 complete):
 | Host driver couples to core internals instead of the public API | Med — erodes the seam | Phase 4 imports only from `src/index.ts`; core types stay the contract boundary |
 | Seam schema and reducer disagree on `MachineEvent` shape | Med — double-truth | Single TypeBox schema (Task 9) derives the type the reducer consumes via `Static<>`; same schema is the `defineTool` param schema (Task 14) |
 | Reducer reads caps/roles from ambient config instead of `def` | High — breaks determinism | `reduce`/`reduceLifecycle` take `def: MachineDefinition` (§12); determinism test (Checkpoint B) pins `(checkpoint, event, def, meta)` |
-| Host supplies `meta.role ≠ current_role` | High — role-keyed logic mis-evaluates silently | `reduce`/`reduceLifecycle` assert `meta.role === checkpoint.current_role` and reject on mismatch (§12, Task 6) |
+| Host supplies mismatched role/session identity | High — role-keyed logic mis-evaluates silently | `reduce` asserts `meta.role === checkpoint.current_role`; `reduceLifecycle` asserts `session_started` role matches `current_role` and terminal lifecycle matches `active_role_session` id+role (§12, Tasks 6/10) |
 | Run-cap forced-`end` bypasses the reducer | High — broken audit trail / invariant | Single legal mechanism: host synthesizes a machine `end` event through `reduce`; direct checkpoint mutation forbidden (§11.7, Task 17) |
 | Run-cap forced-`end` synthesized while a worker is `current_role` | High — `reduce` rejects `end` from a worker; hard stop silently fails | §12.1 advances `current_role` to the worker before its terminals fire, so a breach on a worker terminal must NOT synthesize `end` immediately. Host defers the forced `end` to the first `current_role === orchestrator` moment (always reached: a worker's only target is the orchestrator), suppressing any new dispatch in between (§11.7, Task 17) |
 | `legal_targets` in rejected records is cap-unaware | Med — wrong retry guidance | `declaredTargets` vs `availableTargets` split (Task 5); rejected records use `availableTargets` (Task 7) |
-| Checkpoint mutated in place / reconstructed from whole tree | High — silent state corruption on restart | Checkpoint is snapshot-appended + reconstructed from `run_id`-scoped active branch (§11.1); in-memory `RecordLog` (Task 12) models the append-only contract |
+| Checkpoint mutated in place / reconstructed from whole tree | High — silent state corruption on restart | Checkpoint is snapshot-appended + reconstructed from the host-owned `run_id` log (§11.1); SDK branch scoping is explicitly not used; in-memory `RecordLog` (Task 12) models the append-only contract |
 | `session_failed` recovery (§8.2, §9.4) leaks into pure core | Med — scope creep | Core only records + does not advance role on retry; recovery policy lives in host (Task 10 enforces, Task 18 implements) |
 | Cost-cap "shared across fallbacks" rule mis-implemented | Med — budget loophole | Dedicated predicate test in Task 11 enumerating the multiplier attack |
 | Manifest versioning (§10) ignored early → uninterpretable logs later | Low–Med | `manifest_version` pinned on `Checkpoint` + `MachineDefinition` from Task 2/4; never mutated mid-run |
@@ -163,7 +163,10 @@ Gate — **Checkpoint E** (spec §15 steps 3–5 complete):
 | SDK `message_end` usage shape differs from §11.4 `usage` block | Med — cost caps silently wrong | **Resolved/pinned:** `message.usage` is camelCase + nested `cost.total` + `totalTokens` (`sdk-surface.md` §3). Task 17 maps to §11.4 explicitly, guards `message.role === "assistant"`, and sums across the session's assistant `message_end`s; stub (Task 16) emits canned usage in the SDK shape so the mapping is asserted in CI |
 | Persisted host records drift from §11 record shapes | Med — uninterpretable logs | Task 14/17/16 assert persisted record shapes match §11.2–§11.5 exactly (via the stub-driven E2E test) |
 
-## Open Questions (need human input)
+## Open Questions / Resolved Decisions
+
+Only items 3–4 still need human confirmation before Task 1. Struck-through items are
+resolved decisions kept here for provenance so implementers do not re-open them.
 
 1. ~~Zod vs. hand-rolled seam schema~~ — **Resolved: TypeBox** (single source of truth
    with `defineTool`; see Architecture Decisions). Zod rejected because pi tool params
@@ -177,10 +180,10 @@ Gate — **Checkpoint E** (spec §15 steps 3–5 complete):
 5. ~~Extension scope (project-local vs. global)~~ — **N/A under the SDK host.** The
    host is an in-repo `src/host/` package; there is no extension install path in v1.
 
-### Pre-Phase-4 hardening gate (block Task 13)
+### Resolved Pre-Phase-4 Hardening Decisions
 
-Promoted from `docs/sdk-surface.md` open rows + this review. These must be closed
-before any host work starts, with a named owner each:
+Promoted from `docs/sdk-surface.md` spike rows + this review. These are closed and
+should be treated as implementation constraints unless the spec changes:
 
 6. ~~**Usage/cost event shape (blocks Task 17).**~~ **Resolved** via `dist/**/*.d.ts`
    inspection (`docs/sdk-surface.md` §3, spec §11.4 SDK-mapping note). `usage` is on

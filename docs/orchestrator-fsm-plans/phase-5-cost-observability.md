@@ -8,8 +8,9 @@
 > camelCase with a nested `cost` object.
 >
 > **Scope:** Host-side usage capture on terminals, per-session + run cost-cap
-> enforcement, model fallback on `session_failed`, and `runStats`/`runConfig` host
-> functions. Blocked by Checkpoint D. Completes spec §15 steps 3–5 (v1 shippable).
+> enforcement, model fallback on `session_failed`, `runStats`/`runConfig` host
+> functions, and the default v1 role bundle. Blocked by Checkpoint D. Completes spec
+> §15 steps 3–5 (v1 shippable).
 
 ## Tasks
 
@@ -29,10 +30,14 @@
     exceed → `session.abort()` + `session_failed` w/ `session_cost_cap_exceeded`.
     **Abort accounting:** an `abort()` may itself emit a final
     `message_end`/`turn_end` with partial usage; the host de-duplicates so the
-    aborted turn is counted once, not twice. Run cap: evaluate roll-up (Phase 3 Task
-    11) on every terminal; exceed → the host **synthesizes a machine `end` event and
-    feeds it to `reduce`** (§11.7), producing a normal `transition_accepted → done`
-    record + checkpoint snapshot. **State guard (do not skip):** `end` is illegal from a
+    aborted turn is counted once, not twice. Run cap: evaluate persisted roll-up
+    (Phase 3 Task 11) **plus the current terminal's captured usage before reducing the
+    role's captured machine event**. Exceed → the host **synthesizes a machine `end`
+    event and feeds it to `reduce`** (§11.7), producing a normal
+    `transition_accepted → done` record + checkpoint snapshot. If the cap trips while
+    the orchestrator is current, the synthesized `end` supersedes any captured
+    non-`end` emission from that turn (for example, `handoff → worker` is not reduced,
+    and no worker is spawned). **State guard (do not skip):** `end` is illegal from a
     worker, and per §12.1 `current_role` is already the next worker before that worker's
     terminals fire — so a breach detected on a **worker** terminal must NOT synthesize
     `end` then (`reduce` would reject it and the hard stop would silently fail).
@@ -44,12 +49,13 @@
     orchestrator first is an optional courtesy, not the authoritative mechanism.)
   - Acceptance: A fabricated high-cost session (via the stub provider) trips the
     session cap and records `session_cost_cap_exceeded`; a run crossing
-    `max_run_cost_usd` forces `end`. **A run-cap breach detected on a worker terminal
-    defers the forced `end` until the orchestrator is current and never feeds `end` to
-    `reduce` while a worker is `current_role`** (asserted: no rejected `end` record).
-    The usage mapping is asserted against canned stub `Usage` (camelCase + nested
-    `cost.total`); a `message_end` for a non-assistant message contributes zero usage.
-    Automated.
+    `max_run_cost_usd` forces `end`. A breach detected on an orchestrator terminal
+    supersedes a captured handoff and spawns no worker. **A run-cap breach detected on a
+    worker terminal defers the forced `end` until the orchestrator is current and never
+    feeds `end` to `reduce` while a worker is `current_role`** (asserted: no rejected
+    `end` record). The usage mapping is asserted against canned stub `Usage`
+    (camelCase + nested `cost.total`); a `message_end` for a non-assistant message
+    contributes zero usage. Automated.
   - Verification: `pnpm test -- host/cost` (automated with a tiny cap).
   - Dependencies: Task 16.5
   - Files: `src/host/cost.ts`, `tests/host/cost.test.ts`
@@ -83,6 +89,26 @@
   - Verification: `pnpm test -- host/stats` (automated).
   - Dependencies: Task 17
   - Files: `src/host/stats.ts`, `src/host/config.ts`, `tests/host/stats.test.ts`
+  - Scope: M
+
+- [ ] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)**
+  - Description: Provide the default orchestrator role template and one minimal worker
+    role template, plus a sample `.pi/conductor.yaml` fixture that declares them
+    explicitly. The default is a scaffold/template, not implicit reducer state: a real
+    run still has exactly one declared `is_orchestrator: true` role and missing
+    orchestrator remains a manifest error. Use this bundle in the stub-provider linear
+    run and remediation-loop tests so the checkpoint gate proves the shipped default
+    path, not only hand-built test objects.
+  - Acceptance: A generated/sample manifest validates with the Phase 1 manifest
+    checks; the linear `orchestrator → worker → orchestrator → end` run passes using
+    the default bundle; the remediation loop revisits the worker until `max_visits`
+    forces the orchestrator to end.
+  - Verification: `pnpm test -- host/defaults host/e2e` (automated).
+  - Dependencies: Task 18, Task 19
+  - Files: `src/host/defaults.ts`, `tests/fixtures/default-conductor/.pi/conductor.yaml`,
+    `tests/fixtures/default-conductor/.pi/roles/orchestrator.md`,
+    `tests/fixtures/default-conductor/.pi/roles/worker.md`,
+    `tests/host/defaults.test.ts`
   - Scope: M
 
 ## Checkpoint E — spec §15 steps 3–5 complete
