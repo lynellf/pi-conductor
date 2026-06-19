@@ -241,12 +241,14 @@
 
 ## Checkpoint 7A — Production Host Ready
 
-- [x] All Phase 7A tasks complete (7A.1–7A.4).
+- [x] All Phase 7A tasks complete (7A.1–7A.5).
 - [x] Stub-driven E2E remains green (329 → 329 after the shared-handler
       refactor).
-- [x] Production-host unit tests are green (30+10+5 across the three
+- [x] Production-host unit tests are green (30+10+5+6 across the four
       production-host test files).
-- [ ] Manual real-model transcript is committed.
+- [ ] Manual real-model transcript is committed (deferred — see
+      `docs/dev-run-transcripts/README.md` for capture format; the
+      smoke needs `~/.pi/agent/auth.json` with a working provider).
 - [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm format:check`
-      green (374/374 tests, 71 files lint-clean).
+      green (380/380 tests, 73 files lint-clean).
 - [ ] Human review before Phase 7B.
