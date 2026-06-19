@@ -207,6 +207,8 @@ those exactly. The grep guard is part of `pnpm test`, not an afterthought.
 
 ## Current status
 
-Phase 1 (foundation) in progress. Task 1 (scaffold + pnpm supply-chain hardening)
-landed. Tasks 2–4 (core types, manifest parse/validate/derive) next. See
-`docs/orchestrator-fsm-plans/phase-1-foundation.md`.
+Phase 1 (foundation) complete pending human review. Tasks 1–4 (scaffold + pnpm
+supply-chain hardening, core FSM types, manifest parse/validate/derive) all landed
+(commits `d87db12`→`6fda6d9`); all automated gates green. See
+`docs/orchestrator-fsm-plans/phase-1-foundation.md` (Checkpoint A). Phase 2 (reducer)
+opens after human sign-off.
