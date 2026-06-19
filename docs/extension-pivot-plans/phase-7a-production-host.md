@@ -5,10 +5,18 @@
 > verification. Source spec: `docs/orchestrator-fsm-spec.md` (§8, §8.1, §11,
 > §12). SDK surface pinned in `docs/sdk-surface.md` (§1, §3, §4, §6).
 >
-> **Status:** Tasks 7A.1–7A.4 complete (feat commits `2e20ad5`, `30d7a6a`,
-> `d1ae204`, `38f5c92`; this doc commit pending). 374/374 tests green;
-> `typecheck` / `build` / `lint` / `format:check` clean. Phase 7A
-> complete pending human review.
+> **Status:** Tasks 7A.1–7A.5 complete. 380/380 tests green; `typecheck` /
+> `build` / `lint` / `format:check` clean. Phase 7A complete pending the
+> manual real-model smoke (developer-side, requires `~/.pi/agent/auth.json`)
+> and human review.
+>
+> | Task | Description | Feat commit | Doc commit |
+> |---|---|---|---|
+> | 7A.1 | Production host scaffold + boundary errors | `2e20ad5` | `4f844dd` |
+> | 7A.2 | Model and system-prompt resolution | `30d7a6a` | `43599d0` |
+> | 7A.3 | Resource loader, tools allowlist, role session spawn | `d1ae204` | `1f0f6bc` |
+> | 7A.4 | Production host parity with StubHost | `38f5c92` | `e06fdb6` |
+> | 7A.5 | Production host factory + extension-agnostic test | `3816f67` | `971675f` |
 >
 > **Scope:** Add the production `Host` implementation the SDK loop already
 > expects. It reuses the existing pure core, seam, cost helpers, file-backed log,
@@ -17,15 +25,41 @@
 
 ## Gate
 
-- [ ] Checkpoint E has human review.
-- [ ] The FSM spec remains closed; this phase only fills the production host
+- [x] Checkpoint E has human review (asserted done by human at the start of
+      this session; AGENTS.md "Current status" block removed in `75c005b`).
+- [x] The FSM spec remains closed; this phase only fills the production host
       gap.
-- [ ] `src/core`, `src/manifest`, `src/seam`, and `src/cost` remain free of pi
-      imports.
+- [x] `src/core`, `src/manifest`, `src/seam`, and `src/cost` remain free of pi
+      imports (grep guard: 4/4 green).
 
 ## Tasks
 
-- [x] **Task 7A.2: Model and system-prompt resolution** — commit `30d7a6a`
+- [x] **Task 7A.1: Production host scaffold + boundary errors** — feat `2e20ad5`, doc `4f844dd`
+  - Description: Add `ProductionHost implements Host` in `src/host/` with a
+    constructor that accepts the production context: `modelRegistry`, `cwd`,
+    `log`, `loadedManifest`, `runId`, and any existing run-handle/session state
+    dependencies the loop already passes to `StubHost`. Define typed errors for
+    missing model, malformed `provider:id`, and missing system prompt. Keep all
+    pi imports inside `src/host`.
+  - Acceptance:
+    - [x] `ProductionHost` satisfies the existing `Host` interface without
+          changing the loop contract.
+    - [x] Boundary errors include the role name and missing value in their
+          messages.
+    - [x] The grep guard still allows pi imports only in `src/host`.
+  - Verification:
+    - [x] `pnpm test -- host/production-host` (14/14 pass)
+    - [x] `pnpm test -- grep-guard` (4/4 pass)
+  - Dependencies: Checkpoint E review (asserted done by human).
+  - Files likely touched:
+    - `src/host/production-host.ts` (new, 143 LOC)
+    - `src/host/errors.ts` (3 new error classes)
+    - `src/host/index.ts` (re-exports)
+    - `src/index.ts` (public barrel re-exports)
+    - `tests/host/production-host.test.ts` (new, 14 table-driven tests)
+  - Estimated scope: M
+
+- [x] **Task 7A.2: Model and system-prompt resolution** — feat `30d7a6a`, doc `43599d0`
   - Description: Implement the pure resolution pieces used by `spawnRole`.
     Resolve `role.models[modelIndex]` in `provider:id` form through
     `modelRegistry.find(provider, id)`, record the logical model string for
@@ -52,7 +86,7 @@
       malformed entries)
   - Estimated scope: M
 
-- [x] **Task 7A.3: Resource loader, tools allowlist, and role session spawn** — commit `d1ae204`
+- [x] **Task 7A.3: Resource loader, tools allowlist, and role session spawn** — feat `d1ae204`, doc `1f0f6bc`
   - Description: Wire the real `createAgentSession` call. Build a
     `DefaultResourceLoader` with `systemPromptOverride: () => rolePrompt`, call
     `loader.reload()`, force-include `handoff` and `end` in the `tools`
@@ -65,7 +99,7 @@
     - [x] `tools` contains role-declared tools plus force-injected `handoff` and
           `end` exactly once.
     - [x] Role session files are created under a per-run conductor directory,
-          not under pi's session dir.
+          not under pi's session directory.
     - [x] No `ExtensionCommandContext.newSession()` / session-tree replacement
           surface is used.
   - Verification:
@@ -81,7 +115,7 @@
     - `tests/host/production-host-spawn.test.ts` (NEW; 10 tests)
   - Estimated scope: M
 
-- [x] **Task 7A.4: Production host parity with existing loop semantics** — commit `38f5c92`
+- [x] **Task 7A.4: Production host parity with existing loop semantics** — feat `38f5c92`, doc `e06fdb6`
   - Description: Match `StubHost` behavior for usage capture, terminal reason,
     run cost, model fallback, visit index, abort, seal, persistence, and run
     memory seeding. Extract shared session-event logic only if it removes real
@@ -110,107 +144,7 @@
     - `tests/host/production-host-parity.test.ts` (NEW; 5 tests)
   - Estimated scope: M
 
-- [x] **Task 7A.1: Production host scaffold + boundary errors** — commit `2e20ad5`
-  - Description: Add `ProductionHost implements Host` in `src/host/` with a
-    constructor that accepts the production context: `modelRegistry`, `cwd`,
-    `log`, `loadedManifest`, `runId`, and any existing run-handle/session state
-    dependencies the loop already passes to `StubHost`. Define typed errors for
-    missing model, malformed `provider:id`, and missing system prompt. Keep all
-    pi imports inside `src/host`.
-  - Acceptance:
-    - [x] `ProductionHost` satisfies the existing `Host` interface without
-          changing the loop contract.
-    - [x] Boundary errors include the role name and missing value in their
-          messages.
-    - [x] The grep guard still allows pi imports only in `src/host`.
-  - Verification:
-    - [x] `pnpm test -- host/production-host` (14/14 pass)
-    - [x] `pnpm test -- grep-guard` (4/4 pass)
-  - Dependencies: Checkpoint E review (asserted done by human; AGENTS.md
-    "Current status" block removed in `75c005b`).
-  - Files likely touched:
-    - `src/host/production-host.ts` (new, 143 LOC)
-    - `src/host/errors.ts` (3 new error classes)
-    - `src/host/index.ts` (re-exports)
-    - `src/index.ts` (public barrel re-exports)
-    - `tests/host/production-host.test.ts` (new, 14 table-driven tests)
-  - Estimated scope: M
-
-- [ ] **Task 7A.2: Model and system-prompt resolution**
-  - Description: Implement the pure resolution pieces used by `spawnRole`.
-    Resolve `role.models[modelIndex]` in `provider:id` form through
-    `modelRegistry.find(provider, id)`, record the logical model string for
-    lifecycle records, and load `role.system_prompt` from `cwd` as UTF-8.
-    Missing models and missing prompt files fail loudly with the errors from
-    7A.1.
-  - Acceptance:
-    - [ ] A mock registry hit returns the selected `Model` and logical
-          `provider:id`.
-    - [ ] A mock registry miss throws `ModelNotFoundError`.
-    - [ ] A declared prompt path loads as UTF-8; a missing declared path throws
-          `SystemPromptNotFoundError`.
-    - [ ] A role with omitted `models` keeps the existing "system model" path
-          explicit rather than guessing a provider alias.
-  - Verification:
-    - [ ] `pnpm test -- host/production-host`
-    - [ ] `pnpm typecheck`
-  - Dependencies: Task 7A.1
-  - Files likely touched:
-    - `src/host/production-host.ts`
-    - `tests/host/production-host.test.ts`
-    - `tests/fixtures/production-host/.pi/roles/*.md`
-  - Estimated scope: M
-
-- [ ] **Task 7A.3: Resource loader, tools allowlist, and role session spawn**
-  - Description: Wire the real `createAgentSession` call. Build a
-    `DefaultResourceLoader` with `systemPromptOverride: () => rolePrompt`, call
-    `loader.reload()`, force-include `handoff` and `end` in the `tools`
-    allowlist, pass the existing custom emission tools, and use a file-backed
-    `SessionManager` rooted under the conductor run log directory rather than
-    pi's own session tree.
-  - Acceptance:
-    - [ ] Tests assert `systemPromptOverride` is invoked through the resource
-          loader path.
-    - [ ] `tools` contains role-declared tools plus force-injected `handoff` and
-          `end` exactly once.
-    - [ ] Role session files are created under a per-run conductor directory,
-          not under pi's session directory.
-    - [ ] No `ExtensionCommandContext.newSession()` / session-tree replacement
-          surface is used.
-  - Verification:
-    - [ ] `pnpm test -- host/production-host`
-    - [ ] `pnpm test -- host/e2e`
-  - Dependencies: Task 7A.2
-  - Files likely touched:
-    - `src/host/production-host.ts`
-    - `tests/host/production-host.test.ts`
-  - Estimated scope: M
-
-- [ ] **Task 7A.4: Production host parity with existing loop semantics**
-  - Description: Match `StubHost` behavior for usage capture, terminal reason,
-    run cost, model fallback, visit index, abort, seal, persistence, and run
-    memory seeding. Extract shared session-event logic only if it removes real
-    duplication; otherwise keep the implementation boring and local.
-  - Acceptance:
-    - [ ] Production host records normalized usage with the same SDK mapping
-          tested in Phase 5.
-    - [ ] `sealSession` prevents side-effecting tools after a valid emission in
-          the production path.
-    - [ ] `persistRecord`, `seedRunMemory`, and `nextVisitIndex` read from the
-          same log/manifest sources as `StubHost`.
-    - [ ] Existing stub E2E and cost/fallback/stats tests remain green.
-  - Verification:
-    - [ ] `pnpm test -- host/cost host/fallback host/stats host/e2e`
-    - [ ] `pnpm test -- host/production-host`
-  - Dependencies: Task 7A.3
-  - Files likely touched:
-    - `src/host/production-host.ts`
-    - `src/host/stub-host.ts`
-    - `src/host/cost.ts`
-    - `tests/host/production-host.test.ts`
-  - Estimated scope: M
-
-- [ ] **Task 7A.5: Production host factory + real-model proof**
+- [x] **Task 7A.5: Production host factory + real-model proof** — feat `3816f67`, doc `971675f`
   - Description: Add a tiny production host factory that accepts an
     `ExtensionCommandContext`-shaped object (`modelRegistry`, `cwd`) plus the
     run context (`runId`, `log`, `loadedManifest`) and returns a
@@ -218,37 +152,108 @@
     Phase 7C's optional CLI fallback. Run one manual real-model smoke with a
     two-role manifest and record the transcript.
   - Acceptance:
-    - [ ] The factory is extension-agnostic: `src/host` does not import
-          extension types or `extensions/*`.
-    - [ ] Unit tests assert the factory passes `modelRegistry`, `cwd`, `runId`,
+    - [x] The factory is extension-agnostic: `src/host` does not import
+          extension types or `extensions/*`. (Asserted by static check in
+          `production-host-factory.test.ts`.)
+    - [x] Unit tests assert the factory passes `modelRegistry`, `cwd`, `runId`,
           `log`, and `loadedManifest` through to `ProductionHost`.
     - [ ] A real-model run against the developer's pi auth/config reaches a
           terminal state: orchestrator → worker → orchestrator → end.
     - [ ] The manual transcript is committed under `docs/dev-run-transcripts/`
           and contains no API keys or provider secrets.
   - Verification:
-    - [ ] `pnpm test -- host/production-host`
-    - [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm format:check`
-    - [ ] Manual: real-model transcript recorded
+    - [x] `pnpm test -- host/production-host-factory` (6/6)
+    - [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm format:check`
+    - [ ] Manual: real-model transcript recorded (deferred — requires developer
+          `~/.pi/agent/auth.json` with a working provider; see
+          `docs/dev-run-transcripts/README.md` for the capture format and the
+          pending status).
   - Dependencies: Task 7A.4
   - Files likely touched:
-    - `src/host/production-host.ts`
-    - `src/host/production-host-factory.ts`
-    - `src/host/index.ts`
-    - `tests/host/production-host.test.ts`
-    - `docs/dev-run-transcripts/*.md`
+    - `src/host/production-host-factory.ts` (NEW; 117 LOC)
+    - `src/host/index.ts`, `src/index.ts` (re-exports)
+    - `tests/host/production-host-factory.test.ts` (NEW; 6 tests)
+    - `docs/dev-run-transcripts/README.md` (placeholder for the manual
+      transcript)
   - Estimated scope: M
 
 ## Checkpoint 7A — Production Host Ready
 
 - [x] All Phase 7A tasks complete (7A.1–7A.5).
 - [x] Stub-driven E2E remains green (329 → 329 after the shared-handler
-      refactor).
-- [x] Production-host unit tests are green (30+10+5+6 across the four
-      production-host test files).
+      refactor in 7A.4).
+- [x] Production-host unit tests are green: 14 (7A.1) + 16 (7A.2) + 10 (7A.3)
+      + 5 (7A.4) + 6 (7A.5) = 51 production-host tests across four files
+      (`host/production-host.test.ts`, `host/production-host-spawn.test.ts`,
+      `host/production-host-parity.test.ts`,
+      `host/production-host-factory.test.ts`).
 - [ ] Manual real-model transcript is committed (deferred — see
-      `docs/dev-run-transcripts/README.md` for capture format; the
-      smoke needs `~/.pi/agent/auth.json` with a working provider).
+      `docs/dev-run-transcripts/README.md` for capture format; the smoke
+      needs `~/.pi/agent/auth.json` with a working provider).
 - [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm format:check`
       green (380/380 tests, 73 files lint-clean).
 - [ ] Human review before Phase 7B.
+
+## Notes
+
+### Files at end of 7A
+
+```
+src/host/production-host.ts              453 LOC  (Host class + spawn + 10 methods)
+src/host/production-host-resolve.ts     136 LOC  (pure helpers: selectModelEntry,
+                                                    resolveModel, loadSystemPrompt,
+                                                    buildToolsAllowlist)
+src/host/production-host-factory.ts     117 LOC  (createProductionHost factory)
+src/host/session-event-handler.ts       145 LOC  (shared with StubHost)
+src/host/stub-host.ts                   349 LOC  (refactored to use shared handler)
+src/host/errors.ts                      154 LOC  (3 new + 2 existing typed errors)
+src/host/index.ts                       159 LOC  (barrel)
+
+tests/host/production-host.test.ts               338 LOC  (7A.1 + 7A.2)
+tests/host/production-host-spawn.test.ts         293 LOC  (7A.3)
+tests/host/production-host-parity.test.ts        438 LOC  (7A.4)
+tests/host/production-host-factory.test.ts       168 LOC  (7A.5)
+```
+
+### Design notes
+
+- **Module size.** `production-host.ts` is 453 LOC — over the AGENTS.md
+  ~400-LOC soft ceiling but under the 500-LOC hard cap. Size is justified
+  inline in the file header; the class is a single coherent declaration
+  the loop imports. Pure resolution pieces live in
+  `production-host-resolve.ts`; the shared event handler lives in
+  `session-event-handler.ts`.
+- **Extraction discipline.** The shared event handler was extracted
+  (7A.4) because it was a real ~50-line duplicate across `StubHost` and
+  `ProductionHost`. The `unavailableRole` marker (7A.4) and the
+  `ExtensionContextInputs` factory inputs (7A.5) stayed inlined because
+  they're small enough that extraction would add a file without
+  meaningfully reducing duplication.
+- **Session directory default.** `<cwd>/.pi-conductor/runs/<runId>/sessions`
+  for the production host; the extension is expected to pass an explicit
+  override when it wants sessions in the conductor's run-log dir.
+- **Agent directory default.** `<cwd>/.pi-conductor/agent`. The extension
+  is expected to pass `~/.pi/agent` here so spawned role sessions see
+  the user's pi configuration (auth, models). Production host with
+  the default agent dir is isolated; with the user's `~/.pi/agent` it
+  shares the user's config.
+- **The "system model" path is explicit.** When a role has no `models`
+  field, `selectModelEntry` returns `null` and `spawnRole` does NOT
+  pass a `model` to `createAgentSession` — the SDK uses its default.
+  The production host never guesses a provider alias. (7A.2
+  acceptance.)
+- **No `ctx.newSession()` for role sessions.** Role sessions are
+  spawned via the standalone `createAgentSession` + a file-backed
+  `SessionManager` rooted in the conductor's per-run directory.
+  The conductor's `run_id`-keyed log is the host's append-only
+  record; role session files are the SDK's own JSONL files in
+  the conductor dir. (Phase 7A gate; also called out in the
+  pivot plan §1.)
+- **`createProductionHost` is the bridge for 7B and 7C.** Phase 7B
+  imports it from `src/host/index.js` to construct a host in the
+  extension entrypoint; Phase 7C's optional CLI fallback does the
+  same. The factory takes `ExtensionContextInputs`
+  (structurally compatible with `ExtensionCommandContext`) + a
+  `RunContextInputs` and returns a `ProductionHost`. Static check
+  in the factory test ensures the host layer has zero compile-time
+  dependency on extension types.
