@@ -7,8 +7,9 @@
 > and main plan Open Question #6. `usage` is on `message.usage` (`AssistantMessage`),
 > camelCase with a nested `cost` object.
 >
-> **Status:** Task 19 complete (commit `3c2ce65`, 2026-06-19). Task 20 next.
-> 324/324 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
+> **Status:** Task 20 complete (commit `d9c2eb1`, 2026-06-19). **Checkpoint E reached.**
+> 329/329 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
+> Phase 5 complete pending human review.
 >
 > **Scope:** Host-side usage capture on terminals, per-session + run cost-cap
 > enforcement, model fallback on `session_failed`, `runStats`/`runConfig` host
@@ -66,6 +67,7 @@
 
 - [x] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)** — commit `4a2e084`
 - [x] **Task 19: `runStats` / `runConfig` host functions (§11.6, §11.8)** — commit `3c2ce65`
+- [x] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)** — commit `d9c2eb1`
   - Description: On `session_failed` w/ `model_error`, try the role's next `models[]`
     entry, same role, fresh `createAgentSession` (state unchanged — §8.2). Record
     `model_fallback` (§11.5). On list exhaustion: hand to orchestrator once with a
@@ -124,10 +126,10 @@
   - Scope: M
 
 ## Checkpoint E — spec §15 steps 3–5 complete
-- [ ] Host: seam-validate → `reduce` → persist → spawn → seed → cap-enforce →
+- [x] Host: seam-validate → `reduce` → persist → spawn → seed → cap-enforce →
       observe, all via SDK primitives (§15.3), unit-tested in CI
-- [ ] Default orchestrator + one worker role defined end-to-end (§15.4)
-- [ ] Linear E2E run works: `orchestrator → worker → orchestrator → end` (§15.5), via
+- [x] Default orchestrator + one worker role defined end-to-end (§15.4)
+- [x] Linear E2E run works: `orchestrator → worker → orchestrator → end` (§15.5), via
       the stub provider in CI
-- [ ] Remediation loop exercises the visit cap forcing `end` (§15.5), via the stub
+- [x] Remediation loop exercises the visit cap forcing `end` (§15.5), via the stub
 - [ ] Review with human; v1 shippable
