@@ -12,15 +12,18 @@
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
 >
-> **Status:** In progress. Task 13 complete (commit `7ed38b4`). Tasks 13.5, 14, 15,
-> 15.5, 16, 16.5 pending. Checkpoint D (the exit gate for this phase) blocked until
-> all seven tasks are green **and reviewed by a human**.
+> **Status:** In progress. Tasks 13 and 14 complete. Tasks 13.5, 15, 15.5, 16, 16.5
+> pending. Checkpoint D (the exit gate for this phase) blocked until all seven
+> tasks are green **and reviewed by a human**.
 >
 > **Verification log:**
 > - Task 13 (commit `7ed38b4`): `pnpm typecheck && pnpm build && pnpm test
 >   && pnpm lint && pnpm format:check` all green (227 tests, 17 files; 10 new
 >   scaffold tests + 1 broadened grep-guard test for the host-agnosticism
 >   invariant).
+> - Task 14 (commit `204785b`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (243 tests, 18 files;
+>   16 new tools tests covering the §11.3 breach vocabulary end-to-end).
 
 ## Tasks
 
@@ -81,7 +84,7 @@
     `tests/host/resume.test.ts`
   - Scope: M
 
-- [ ] **Task 14: `handoff` + `end` emission tools + seam validation (§3, §5.1, §12)**
+- [x] **Task 14: `handoff` + `end` emission tools + seam validation (§3, §5.1, §12)**
   - Description: Define `handoff` and `end` as `defineTool()` tools with TypeBox params
     (`target_role`, `reason?`, `suggests_next?`) — reusing the Phase 3 Task 9 seam
     schemas as the parameter schemas (single source of truth). On call, a tool does
@@ -113,6 +116,30 @@
   - Dependencies: Task 13
   - Files: `src/host/tools.ts`, `src/host/seam.ts`, `tests/host/tools.test.ts`
   - Scope: M
+  - Status: Complete (commit `204785b`). Implementation notes from the work:
+      - `SessionSeam` is the per-session host state — capture buffer +
+        sealed flag. The post-emission wrapper (Task 15.5) reads
+        `isSealed`; the loop reads `read()` after `prompt()` resolves.
+      - Buffer state machine maps directly to `validateEmission`'s
+        precedence (extra_emission > schema_invalid > no_emission); the
+        tool doesn't have to second-guess.
+      - `seam.seal()` flips ONLY on the first *valid* capture.
+        Schema-invalid first calls do not seal (the loop will record
+        `session_failed` regardless).
+      - `handoff`/`end` themselves stay callable while sealed (they
+        don't execute side effects; they only write the buffer). The
+        post-emission wrapper (Task 15.5) wraps BUILT-IN and CUSTOM
+        *side-effecting* tools, not these.
+      - Pinned during implementation: `ToolDefinition.execute` is
+        5-arg (toolCallId, params, signal, onUpdate, ctx); the SDK's
+        `AgentToolResult` has no direct `isError` field — the tool
+        returns `terminate: true` plus a structured `details` payload
+        (`EmissionToolDetails`). Errors are signaled via the buffer
+        state (read by the loop) and via the text content (read by the
+        model), per the plan's "single owner" rule.
+      - Schemas are `additionalProperties: true` per spec §5.1 ("plus
+        role-defined fields"); extra fields on handoff/end are
+        silently accepted and preserved on the captured args.
 
 - [ ] **Task 15: Orchestration loop via `createAgentSession` (§8, §12)**
   - Description: The synchronous host loop: while `state !== "done"`, create the
