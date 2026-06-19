@@ -2,11 +2,10 @@
 
 > **Read this before any work in the repo.**
 >
-> **Step 0 — load the `using-agent-skills` skill first.** Its file is at
-> `.agents/skills/using-agent-skills/SKILL.md`. Read it in full before touching
-> anything. It defines the skill-discovery flow (which skill applies to which
-> phase of work) and the **Core Operating Behaviors** that govern _all_ work
-> here: surface assumptions, manage confusion actively, push back when
+> **Step 0 — load the `using-agent-skills` skill first.** Read it in full before
+> touching anything. It defines the skill-discovery flow (which skill applies to
+> which phase of work) and the **Core Operating Behaviors** that govern _all_
+> work here: surface assumptions, manage confusion actively, push back when
 > warranted, enforce simplicity, maintain scope discipline, verify (don't
 > assume). Those behaviors are non-negotiable and are _not_ restated below —
 > they apply on top of this file.
@@ -207,13 +206,13 @@ those exactly. The grep guard is part of `pnpm test`, not an afterthought.
 
 ## Current status
 
-Phases 1–4 complete pending human review.
+Phases 1–4 complete pending human review. Phase 5 in progress.
 
 - **Phase 1 (foundation)** — Tasks 1–4 (scaffold + pnpm supply-chain hardening,
   core FSM types, manifest parse/validate/derive) landed (`d87db12`→`6fda6d9`).
   Checkpoint A. See `docs/orchestrator-fsm-plans/phase-1-foundation.md`.
-- **Phase 2 (reducer)** — core reducer, lifecycle reducer, target resolution, visit
-  caps, two-reducer composition. Checkpoint B.
+- **Phase 2 (reducer)** — core reducer, lifecycle reducer, target resolution,
+  visit caps, two-reducer composition. Checkpoint B.
 - **Phase 3 (seam + cost + persistence)** — TypeBox emission schemas,
   `validateEmission`, usage roll-up + cap predicates, `RecordLog` interface,
   run-memory builder. Checkpoint C.
@@ -222,5 +221,8 @@ Phases 1–4 complete pending human review.
   Checkpoint D — every automated item verified; only the human review of the
   full phase remains before Phase 5. See
   `docs/orchestrator-fsm-plans/phase-4-sdk-host.md`.
+- **Phase 5 (cost + observability)** — Task 17 complete (commit `57d1b03`,
+  295 tests / 24 files). Task 18 (model fallback) next. See
+  `docs/orchestrator-fsm-plans/phase-5-cost-observability.md`.
 
 Phase 5 (cost + observability) opens after human sign-off of Phase 4.

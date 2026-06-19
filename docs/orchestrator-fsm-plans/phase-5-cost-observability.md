@@ -7,6 +7,9 @@
 > and main plan Open Question #6. `usage` is on `message.usage` (`AssistantMessage`),
 > camelCase with a nested `cost` object.
 >
+> **Status:** Task 17 complete (commit `57d1b03`, 2026-06-19). Task 18 next.
+> 295/295 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
+>
 > **Scope:** Host-side usage capture on terminals, per-session + run cost-cap
 > enforcement, model fallback on `session_failed`, `runStats`/`runConfig` host
 > functions, and the default v1 role bundle. Blocked by Checkpoint D. Completes spec
@@ -14,7 +17,7 @@
 
 ## Tasks
 
-- [ ] **Task 17: Usage capture on terminals + cost caps (§11.4, §11.7)**
+- [x] **Task 17: Usage capture on terminals + cost caps (§11.4, §11.7)** — commit `57d1b03`
   - Description: The host's session `subscribe` callback captures `usage` from
     `message_end` events. Usage lives on `event.message.usage` (`AssistantMessage`),
     so the callback **must guard `event.message.role === "assistant"`** (message_end
