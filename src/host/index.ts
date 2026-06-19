@@ -171,3 +171,19 @@ export {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
+
+// ─── ProductionHost factory (Phase 7A.5) ────────────────────────────
+// `createProductionHost` — typed bridge from the extension's
+// `ExtensionCommandContext` subset + the run's context to a
+// `ProductionHost`. Lives in `src/host/` so it ships with the
+// host; Phase 7B's extension entrypoint imports the factory
+// from here. Extension-agnostic: the factory's
+// `ExtensionContextInputs` interface is a structural subset of
+// `ExtensionCommandContext` defined here, not imported.
+
+export type {
+  CreateProductionHostInputs,
+  ExtensionContextInputs,
+  RunContextInputs,
+} from "./production-host-factory.js";
+export { createProductionHost } from "./production-host-factory.js";

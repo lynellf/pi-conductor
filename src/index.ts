@@ -156,7 +156,9 @@ export { buildRunMemory } from "./core/run-memory.js";
 // ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
 export type {
   applyRunConfigOverride,
+  CreateProductionHostInputs,
   DefaultBundle,
+  ExtensionContextInputs,
   getDefaultBundle,
   getDefaultConductorYaml,
   getDefaultOrchestratorPrompt,
@@ -169,6 +171,7 @@ export type {
   RoleSession,
   RunConfigError,
   RunConfigOverride,
+  RunContextInputs,
   RunExecutionStatus,
   RunStats,
   runStats,
@@ -180,6 +183,7 @@ export type {
 } from "./host/index.js";
 export {
   buildToolsAllowlist,
+  createProductionHost,
   FileRecordLog,
   formatRunMemorySeed,
   HostManifestError,
