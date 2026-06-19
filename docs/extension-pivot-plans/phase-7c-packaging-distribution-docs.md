@@ -47,16 +47,28 @@
 - [ ] **Task 7C.2: Local install proof + CI guard**
   - Description: Prove the package installs through the same local-path flow a
     user will run. Add a CI or scripted guard that installs from a clean checkout
-    into a temp pi environment and asserts the extension loads.
+    into a temp pi environment and asserts the extension loads. **This is also
+    the home of the relocated 7A.5 real-model smoke** — it is the first phase
+    with an installable launch surface (`pi install ./` + `/conduct`), so the
+    manual transcript is captured here.
   - Acceptance:
     - [ ] Manual `pi install ./` on a clean checkout succeeds.
     - [ ] `pi list` shows the package.
     - [ ] `/conduct` is available after install.
     - [ ] A CI/scripted check exercises local install or documents a specific
           SDK limitation that keeps it manual for now.
+    - [ ] **Relocated from 7A.5:** A real-model run against the developer's pi
+          auth/config reaches a terminal state: orchestrator → worker →
+          orchestrator → end.
+    - [ ] **Relocated from 7A.5:** The manual transcript is committed under
+          `docs/dev-run-transcripts/` and contains no API keys or provider
+          secrets.
   - Verification:
     - [ ] Manual: `pi install ./ && pi list`
     - [ ] Automated/scripted install check if SDK supports it
+    - [ ] Manual: real-model transcript recorded (see
+          `docs/dev-run-transcripts/README.md` for the capture format; requires
+          developer `~/.pi/agent/auth.json` with a working provider).
     - [ ] `pnpm lint && pnpm format:check`
   - Dependencies: Task 7C.1
   - Files likely touched:
