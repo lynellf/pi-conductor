@@ -95,6 +95,19 @@ export interface RoleSession {
    */
   readCaptureBuffer(): readonly EmissionCapture[];
 
+  /**
+   * Clear the capture buffer. Called by the orchestration loop (Task 15)
+   * after `reduce` returns, so the next `prompt()` is evaluated against
+   * a fresh buffer. Used on the reducer-rejection retry path: after a
+   * `transition_rejected`, the loop re-prompts the same session; the
+   * rejected capture must not count as the new attempt's emission
+   * (which would deterministically read as `extra_emission`).
+   *
+   * Production: delegates to `SessionSeam.reset()` (Task 14). Idempotent;
+   * a no-op on an empty buffer.
+   */
+  resetCaptureBuffer(): void;
+
   /** Subscribe to session events (Task 17: capture usage on `message_end`,
    *  evaluate session-cap on `turn_end`). Returns an unsubscribe fn. */
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
@@ -125,16 +138,16 @@ export interface RoleSession {
 export interface SpawnRoleOptions {
   /** Resolved model for this role invocation (Host resolves from
    *  `role.models` via `modelRegistry.find` or the system default, §8.1). */
-  readonly model: Model<// biome-ignore lint/suspicious/noExplicitAny: pi-coding-agent's own `CreateAgentSessionOptions.model` is `Model<any>`; matching the SDK convention.
+  readonly model?: Model<// biome-ignore lint/suspicious/noExplicitAny: pi-coding-agent's own `CreateAgentSessionOptions.model` is `Model<any>`; matching the SDK convention.
   any>;
   /** Per-role system prompt (loaded from `role.system_prompt`). */
-  readonly systemPrompt: string;
+  readonly systemPrompt?: string;
   /** Tool allowlist for this role (already includes `handoff`/`end`). */
-  readonly tools: readonly string[];
+  readonly tools?: readonly string[];
   /** Custom tools to register (`handoff` + `end` from Task 14). */
-  readonly customTools: readonly ToolDefinition[];
+  readonly customTools?: readonly ToolDefinition[];
   /** Session manager (in-memory for tests, file-backed for real runs). */
-  readonly sessionManager: SessionManager;
+  readonly sessionManager?: SessionManager;
   /** Working directory for the session (default: `process.cwd()`). */
   readonly cwd?: string;
 }
@@ -255,4 +268,17 @@ export interface Host {
    * they only write the `extra_emission` marker.
    */
   sealSession(session: RoleSession): void;
+
+  /**
+   * Get the 1-based visit_index for the next visit to `role` (§11.4).
+   * Counts `session_started` records for `role` already in the
+   * `run_id`-keyed log and returns that count + 1. The loop calls
+   * this immediately before `reduceLifecycle(session_started)` so
+   * the recorded `visit_index` reflects the current visit number.
+   *
+   * Reconstructable from records alone: "implementer ran 3 times"
+   * (§11.4) is deterministically recoverable from the persisted
+   * `session_started` history.
+   */
+  nextVisitIndex(role: Role): number;
 }

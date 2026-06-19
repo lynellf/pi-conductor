@@ -55,3 +55,12 @@ export { SessionSeam } from "./seam.js";
 
 export type { EmissionToolDetails } from "./tools.js";
 export { createEndTool, createHandoffTool } from "./tools.js";
+
+// ─── Orchestration loop (Task 15) ─────────────────────────────────────
+// The synchronous loop over role sessions. Owns `reduce` /
+// `reduceLifecycle` / persistence; programs against the `Host` seam
+// (Task 13). Tested against a fake host + scripted session factory
+// here; Task 16 promotes that into a reusable stub provider for E2E.
+
+export type { RunLoopOptions, RunLoopResult } from "./loop.js";
+export { runLoop } from "./loop.js";

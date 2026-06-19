@@ -245,6 +245,7 @@ describe("Host interface — type-level sanity check", () => {
       sessionId: "test-session-id",
       sessionFile: "/tmp/test-session.jsonl",
       readCaptureBuffer: () => [],
+      resetCaptureBuffer: () => {},
       subscribe: () => () => {},
       prompt: async () => {},
       dispose: async () => {},
@@ -278,6 +279,7 @@ describe("Host interface — type-level sanity check", () => {
       },
       abortSession: async () => {},
       sealSession: () => {},
+      nextVisitIndex: () => 1,
     };
 
     // Smoke: every method is callable on the fake.
@@ -287,5 +289,6 @@ describe("Host interface — type-level sanity check", () => {
     expect(typeof fakeHost.seedRunMemory).toBe("function");
     expect(typeof fakeHost.abortSession).toBe("function");
     expect(typeof fakeHost.sealSession).toBe("function");
+    expect(typeof fakeHost.nextVisitIndex).toBe("function");
   });
 });
