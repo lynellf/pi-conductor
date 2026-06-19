@@ -12,9 +12,9 @@
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
 >
-> **Status:** In progress. Tasks 13, 13.5, 14, 15, 15.5, 16 complete. Task 16.5
-> pending. Checkpoint D (the exit gate for this phase) blocked until all seven
-> tasks are green **and reviewed by a human**.
+> **Status:** Tasks 13, 13.5, 14, 15, 15.5, 16, 16.5 all complete. **Checkpoint D
+> reached** — every Phase 4 task is green. The exit gate is now a **human review
+> of the full phase** before Phase 5 (cost + observability) begins.
 >
 > **Verification log:**
 > - Task 13 (commit `7ed38b4`): `pnpm typecheck && pnpm build && pnpm test
@@ -25,6 +25,10 @@
 >   && pnpm lint && pnpm format:check` all green (272 tests, 22 files;
 >   5 new resume tests covering file-backed log + crash reconciliation
 >   + startRun/resumeRun/listRuns API).
+> - Task 16.5 (commit `b990c46`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (276 tests, 23 files;
+>   4 new run-memory tests covering the §8.4 single-writer rule and
+>   the visit_history propagation across orchestrator turns).
 > - Task 14 (commit `204785b`): `pnpm typecheck && pnpm build && pnpm test
 >   && pnpm lint && pnpm format:check` all green (243 tests, 18 files;
 >   16 new tools tests covering the §11.3 breach vocabulary end-to-end).
@@ -476,7 +480,7 @@
             transition_rejected. Same contract as Task 15's
             FakeHost tests, end-to-end via the real SDK.
 
-- [ ] **Task 16.5: Orchestrator run-memory seeding per turn (§8.4, §11.8)**
+- [x] **Task 16.5: Orchestrator run-memory seeding per turn (§8.4, §11.8)**
   - Description: Before each orchestrator session's `prompt`, the host rebuilds the
     run-memory artifact via `buildRunMemory` (Phase 3 Task 12) from the persisted
     records + checkpoint and injects it into the seed (system prompt / first user
@@ -490,14 +494,41 @@
   - Dependencies: Task 16
   - Files: `src/host/run-memory.ts`, `tests/host/run-memory.test.ts`
   - Scope: M
+  - Status: Complete (commit `b990c46`). Implementation notes from the work:
+      - **Loop-level wiring.** The loop checks `role === def.orchestrator`
+        at the top of each outer iteration; if so, it calls
+        `host.seedRunMemory({ checkpoint, def, goal, runCostCap })`
+        and feeds `formatRunMemorySeed(memory)` into `session.prompt`.
+        Worker sessions bypass this branch (single-writer rule, §8.4).
+      - **RunLoopOptions.runCostCap** (Task 16.5 surface) defaults to
+        null; Phase 5 wires the live `RunHandle.runConfig()` to push
+        overrides through here.
+      - **StubHost.seedRunMemory** updated to delegate to
+        `buildRunMemory(args.checkpoint, records, args.def, ...)`
+        so the seed reflects actual persisted visit_history /
+        per_role_cost / next_candidates.
+      - **4 new tests** in `tests/host/run-memory.test.ts` cover:
+          - First orchestrator turn references `$0.0000` cost,
+            `uncapped` cap, `(no sessions yet)` history, `(no role
+            cost yet)`, and `Available workers (visit-capped AND
+            run-budget-uncapped): worker.`.
+          - Second orchestrator turn after a worker visit
+            surfaces a `worker (visit 1, session_ended,
+            $0.0000)` history entry and a `worker: $0.0000 (0
+            tokens)` per-role-cost entry.
+          - Single-writer rule: worker sessions get the handoff
+            payload (`[handoff → worker]`) and NOT the run-memory
+            artifact.
+          - `runCostCap: 5.0` flows through to the seed:
+            `run_cost_cap: $5.0000`, `$5.0000 remaining`.
 
 ## Checkpoint D — SDK host driver wired
-- [ ] Legal handoff spawns + seeds the next role session end-to-end (automated test)
-- [ ] Illegal handoff is rejected with `legal_targets` surfaced to the role (automated)
-- [ ] Orchestrator sees run-memory context each turn (automated)
-- [ ] **Post-emission tool guarding:** a stub model that calls `handoff` then `bash`
+- [x] Legal handoff spawns + seeds the next role session end-to-end (automated test)
+- [x] Illegal handoff is rejected with `legal_targets` surfaced to the role (automated)
+- [x] Orchestrator sees run-memory context each turn (automated)
+- [x] **Post-emission tool guarding:** a stub model that calls `handoff` then `bash`
       produces zero `bash` side effects and exactly one capture (automated)
-- [ ] **Resume:** a run killed mid-session resumes to the same terminal state via
+- [x] **Resume:** a run killed mid-session resumes to the same terminal state via
       `resumeRun(run_id)` from the file-backed log (automated)
-- [ ] Full linear run passes in CI via the stub provider, no API key
+- [x] Full linear run passes in CI via the stub provider, no API key
 - [ ] Review with human before cost/observability surfaces
