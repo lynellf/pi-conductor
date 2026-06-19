@@ -78,6 +78,7 @@ import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/t
 import type { CheckpointSnapshot, PersistedRecord } from "../persistence/log.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import type { Host, RoleSession, SeedRunMemoryArgs, SpawnRoleOptions } from "./host.js";
+import { formatRunMemorySeed } from "./run-memory.js";
 
 // ─── Public API ────────────────────────────────────────────────────────
 
@@ -98,6 +99,12 @@ export interface RunLoopOptions {
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
    *  to skip real disk I/O. */
   readonly spawnDefaults?: Partial<SpawnRoleOptions>;
+  /** Optional: run cost cap (`max_run_cost_usd`). `null` = uncapped.
+   *  Read by Task 16.5's run-memory seed (the orchestrator sees
+   *  `remaining_budget` and `run_cost_cap` fields). Phase 5 wires
+   *  the actual cost-cap evaluation; for now the value flows
+   *  through the seed only. */
+  readonly runCostCap?: number | null;
 }
 
 /** Result of `runLoop`. */
@@ -138,6 +145,22 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       throw new Error(
         `runLoop: checkpoint.current_role='${String(role)}' but active_role_session is set (id='${checkpoint.active_role_session.id}'); resume/crash reconciliation is Task 13.5's responsibility`,
       );
+    }
+
+    // ── Task 16.5: orchestrator run-memory seed ──────────────────
+    // Spec §8.4 single-writer rule: only orchestrator sessions
+    // receive the artifact. Workers get the handoff payload
+    // (Task 15's `formatHandoffSeed`) instead. The host owns the
+    // record log and the buildRunMemory call — the loop just calls
+    // host.seedRunMemory and formats the result.
+    if (role === def.orchestrator) {
+      const runMemory = host.seedRunMemory({
+        checkpoint,
+        def,
+        goal: opts.initialGoal,
+        runCostCap: opts.runCostCap ?? null,
+      });
+      seed = formatRunMemorySeed(runMemory);
     }
 
     const session = await host.spawnRole(role, opts.spawnDefaults ?? {});

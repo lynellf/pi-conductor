@@ -24,9 +24,11 @@ import {
   ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-
+import { buildRunMemory } from "../core/run-memory.js";
 import type {
+  Checkpoint,
   Host,
+  MachineDefinition,
   PersistedRecord,
   RecordLog,
   Role,
@@ -132,19 +134,23 @@ export class StubHost implements Host {
     );
   }
 
-  seedRunMemory(): RunMemory {
-    return {
-      run_id: this.runId,
-      goal: "",
-      current_role: "orchestrator",
-      state: "orchestrator",
-      visit_history: [],
-      run_cost_to_date: 0,
-      run_cost_cap: null,
-      remaining_budget: null,
-      per_role_cost: {},
-      next_candidates: [],
-    };
+  seedRunMemory(args: {
+    checkpoint: Checkpoint;
+    def: MachineDefinition;
+    goal: string;
+    runCostCap: number | null;
+  }): RunMemory {
+    // Real call into the core's buildRunMemory so the orchestrator's
+    // run-memory seed reflects the actual persisted record history
+    // (visit_history, per_role_cost, next_candidates). The host owns
+    // its log; this is the canonical seam for the loop's
+    // orchestrator-seed injection (Task 16.5, §8.4 single-writer
+    // rule).
+    const records = this.log.records(this.runId);
+    return buildRunMemory(args.checkpoint, records, args.def, {
+      goal: args.goal,
+      runCostCap: args.runCostCap,
+    });
   }
 
   async abortSession(): Promise<void> {

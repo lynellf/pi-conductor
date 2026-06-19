@@ -165,14 +165,17 @@ export type {
   SeedRunMemoryArgs,
   SpawnRoleOptions,
   StartRunOptions,
+  StubHostOptions,
 } from "./host/index.js";
 export {
   FileRecordLog,
+  formatRunMemorySeed,
   HostManifestError,
   listRuns,
   loadManifest,
   loadManifestFromString,
   RunHandle,
   resumeRun,
+  StubHost,
   startRun,
 } from "./host/index.js";

@@ -118,3 +118,11 @@ export type {
   StartRunOptions,
 } from "./api.js";
 export { listRuns, resumeRun, startRun } from "./api.js";
+
+// ─── Orchestrator run-memory seed (Task 16.5, §8.4) ─────────────────
+// formatRunMemorySeed — formats the Phase 3 buildRunMemory
+// artifact as a structured prompt for the next orchestrator session.
+// Single-writer rule (§8.4): only orchestrator sessions receive
+// the artifact; worker sessions get the handoff payload instead.
+
+export { formatRunMemorySeed } from "./run-memory.js";

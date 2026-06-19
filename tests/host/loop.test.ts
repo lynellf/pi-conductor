@@ -176,17 +176,22 @@ class FakeHost implements Host {
     this.log.append(record);
   }
 
-  seedRunMemory(): unknown {
+  seedRunMemory(args: {
+    checkpoint: Checkpoint;
+    def: MachineDefinition;
+    goal: string;
+    runCostCap: number | null;
+  }): unknown {
     this.seedRunMemoryCalls += 1;
     return {
       run_id: "fake-run",
-      goal: "",
+      goal: args.goal,
       current_role: "orchestrator",
       state: "orchestrator",
       visit_history: [],
       run_cost_to_date: 0,
-      run_cost_cap: null,
-      remaining_budget: null,
+      run_cost_cap: args.runCostCap,
+      remaining_budget: args.runCostCap,
       per_role_cost: {},
       next_candidates: [],
     };
