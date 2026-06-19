@@ -115,7 +115,8 @@ commands/UI**; and a new **Phase 7 (extension shell)** wraps it all.
   new framing: pi-conductor ships as a pi extension; the pure core + SDK host
   driver are the engine it wraps; the library is also importable for advanced /
   test use.
-- `AGENTS.md` "Current status" — mark the pivot.
+- `AGENTS.md` "Current status" + "Repo layout" — mark the pivot and add
+  `extensions/`.
 
 ### Explicitly NOT changed
 
@@ -130,153 +131,67 @@ commands/UI**; and a new **Phase 7 (extension shell)** wraps it all.
 - The pure core's zero-pi-imports rule. The extension imports the **public
   barrel** (`src/index.ts`) + pi types only; it never reaches into `src/core`.
 
-## 3. Task list
+## 3. Implementation sub-plans
 
-Each task has acceptance + verification. Phases 7A–7C gate each other; 7A can
-land independently of the (already-needed) production `Host`.
+Task details now live in phase sub-plans so each implementation slice has its
+own acceptance criteria, verification, dependency notes, and likely files
+touched. This parent remains the canonical overview and gate index.
 
-### Phase 7A — Production `Host` (unblocks real-model runs, extension or not)
+### Phase 7A — Production `Host`
 
-This is the task that was already missing under the library framing. It is
-prerequisite to any real-model user test, with or without the extension shell.
+➡️ Sub-plan:
+[`docs/extension-pivot-plans/phase-7a-production-host.md`](extension-pivot-plans/phase-7a-production-host.md)
 
-➡️ Task 7A.1 — `src/host/production-host.ts`
+Gate: unblocks real-model runs with or without the extension shell. This is the
+production `Host` gap that already existed under the library framing.
 
-- Implement `ProductionHost implements Host`:
-  - Constructor takes `{ modelRegistry, cwd, log, loadedManifest, runId }`.
-    `modelRegistry` is shared (from `ExtensionCommandContext` in the extension
-    path; from a `ModelRegistry.create(authStorage, modelsPath)` in standalone).
-  - `spawnRole(role, { modelIndex })`:
-    - Resolve the model: read `roleConfig.models[modelIndex]`, split `provider:id`,
-      call `modelRegistry.find(provider, id)`. Throw a typed `ModelNotFoundError`
-      if absent. Track the logical `provider:id` string for the lifecycle record.
-    - Load the system prompt: read `role.system_prompt` (resolved against `cwd`)
-      as UTF-8. Throw `SystemPromptNotFoundError` if the path is declared but
-      missing. Pass via
-      `new DefaultResourceLoader({ cwd, agentDir, settingsManager,
-      systemPromptOverride: () => rolePrompt })` then `await loader.reload()`,
-      handed to `createAgentSession({ resourceLoader: loader, … })`.
-    - Build the tool allowlist: `role.tools` + force-injected `handoff`/`end`.
-    - Use a **file-backed** `SessionManager` (role session files live under a
-      per-run subdirectory of the conductor log dir, **not** pi's session dir —
-      keeps conductor runs isolated from pi's own session tree).
-    - Wire the same event subscription + `SessionState` usage accumulation +
-      per-session cap as `StubHost` (Task 17). Extract the shared
-      `onSessionEvent` logic into a helper if it reduces duplication; otherwise
-      duplicate (boring > clever).
-  - `captureUsage` / `sessionTerminalReason` / `runCostSoFar` /
-    `nextVisitIndex` / `getNextModel` / `abortSession` / `sealSession` /
-    `persistRecord` / `seedRunMemory` — same semantics as `StubHost`, reading
-    from `loadedManifest` + the log.
-- **Acceptance:**
-  - A real-model run against `ModelRegistry.create()` pointed at the developer's
-    `~/.pi/agent/auth.json` reaches a terminal state (hand-coded two-role
-    manifest, one orchestrator turn + one worker turn + `end`). Manual gate (no
-    API key in CI); record a transcript in `docs/dev-run-transcripts/`.
-  - Unit test: `spawnRole` with a mock `modelRegistry` exercises model
-    resolution (hit + `ModelNotFoundError`), system-prompt loading (hit +
-    `SystemPromptNotFoundError`), and the `resourceLoader` wiring (assert the
-    `systemPromptOverride` is invoked). No network.
-  - `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm
-    format:check` green.
-- **Verification:** the existing stub E2E suite still green; the new
-  `tests/host/production-host.test.ts` green; manual real-model transcript
-  committed.
-
-➡️ Task 7A.2 — `productionHostFactory`
-
-- A tiny factory `(ctx: { modelRegistry, cwd, runId, log, loadedManifest }) =>
-  ProductionHost` used by both the extension command handler and a `bin/`
-  fallback (see 7C.2). Keeps the extension thin.
+Exit criteria:
+- [ ] `ProductionHost` resolves `provider:id` models, loads role prompts, wires
+      `DefaultResourceLoader`, spawns real role sessions, and preserves the
+      existing host-loop semantics.
+- [ ] A factory can construct the production host from an
+      `ExtensionCommandContext`-shaped object without importing extension code
+      into `src/host`.
+- [ ] Stub E2E remains green; production-host unit tests are green; a manual
+      real-model transcript is recorded.
+- [ ] Human review before Phase 7B.
 
 ### Phase 7B — Extension shell
 
-Gate: Phase 7A landed and reviewed. The extension can't be user-tested without a
-real `Host`.
+➡️ Sub-plan:
+[`docs/extension-pivot-plans/phase-7b-extension-shell.md`](extension-pivot-plans/phase-7b-extension-shell.md)
 
-➡️ Task 7B.1 — `extensions/conduct.ts` entrypoint
+Gate: Phase 7A landed and reviewed. The extension can be loaded before 7A, but
+`/conduct` cannot be meaningfully user-tested without the production host.
 
-- `export default function (pi: ExtensionAPI)`.
-- Register `/conduct` (start), `/conduct:resume`, `/conduct:list`,
-  `/conduct:abort`, and the `--conduct-manifest` flag.
-- The `/conduct` handler:
-  1. Resolve the manifest path (flag override or `.pi/conductor.yaml` under
-     `ctx.cwd`). Notify + bail if missing.
-  2. Build `productionHostFactory` from `ctx.modelRegistry` + `ctx.cwd`.
-  3. `const handle = await startRun(manifestPath, { goal: args, hostFactory })`.
-  4. `ctx.ui.setStatus("conduct", "run <runId>: orchestrator…")` from
-     `handle.runStats()` on a polling tick (the loop is sync-ish; poll
-     `runStats()` on an interval, clear on completion).
-  5. `const { finalCheckpoint, exitReason } = await handle.completion()`.
-  6. `ctx.ui.notify(...)` with the terminal state.
-- **Acceptance:**
-  - `pi -e ./extensions/conduct.ts` loads without error; `/conduct` appears in
-    command listing.
-  - `/conduct <goal>` with the stub provider registered (via an
-    `extensions/conduct.dev.ts` shim or a `--conduct-stub` flag) reaches a
-    terminal state and notifies.
-  - No call to `ctx.newSession()` for role sessions (asserted by code review +
-    a grep guard: `extensions/conduct.ts` must not reference
-    `ctx.newSession`/`ctx.fork` for role spawning).
-- **Verification:** `tests/extension/conduct.test.ts` drives the extension
-  factory with a stub `ExtensionAPI` (or an in-process harness if the SDK
-  exposes one — verify before assuming; fall back to a real `pi -e` subprocess
-  test if not). Green.
-
-➡️ Task 7B.2 — Status/observability surface
-
-- Wire `RunHandle.runStats()` → `ctx.ui.setStatus` / `ctx.ui.setWidget` so the
-  user sees live role transitions, visit count, and remaining budget. Keep it
-  minimal in v1 (status line + a widget with the run-memory summary); full TUI
-  viewer deferred to v1.1.
-- **Acceptance:** during a stub-driven run, the status line updates on each
-  role transition; the widget shows `runStats()` fields. Tested in 7B.1's harness.
+Exit criteria:
+- [ ] `extensions/conduct.ts` registers `/conduct`, `/conduct:resume`,
+      `/conduct:list`, `/conduct:abort`, and `--conduct-manifest`.
+- [ ] `/conduct <goal>` starts a run through `startRun` + production
+      `hostFactory`, surfaces progress with `RunHandle.runStats()`, and notifies
+      on completion.
+- [ ] Role sessions remain standalone `createAgentSession` sessions; no
+      `ctx.newSession()` / `ctx.fork` path is used for role spawning.
+- [ ] Extension harness or `pi -e` test proves the shell loads and the stub path
+      reaches a terminal state.
+- [ ] Human review before Phase 7C.
 
 ### Phase 7C — Packaging, distribution, docs
 
+➡️ Sub-plan:
+[`docs/extension-pivot-plans/phase-7c-packaging-distribution-docs.md`](extension-pivot-plans/phase-7c-packaging-distribution-docs.md)
+
 Gate: Phase 7B landed and reviewed.
 
-➡️ Task 7C.1 — `package.json` as a pi package
-
-- Add `"pi": { "extensions": ["./extensions"] }`, `"keywords": ["pi-package"]`.
-- Move `@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `typebox` to
-  `peerDependencies` (`"*"` range) — pi bundles them; do not ship them in the
-  tarball.
-- Keep `@sinclair/typebox` alignment: verify whether pi re-exports `typebox` or
-  `@sinclair/typebox` is the canonical name the SDK uses, and peer-depend on the
-  **same name** pi's `Available Imports` table lists (`typebox`). Mismatched
-  typebox instances would break `Static<typeof schema>` identity across the
-  seam.
-- Keep `pnpm` for dev; `pi install` uses `npm install --omit=dev` at the user's
-  end — ensure no runtime import is accidentally in `devDependencies`.
-- **Acceptance:** `pi install ./` (local path) on a clean checkout loads the
-  extension and `/conduct` is available; `pi list` shows the package.
-- **Verification:** manual + a CI job that runs `pi install ./` into a temp dir
-  and asserts the extension loads.
-
-➡️ Task 7C.2 — `bin/conduct.ts` fallback (optional, recommended)
-
-- A thin CLI that calls `startRun` with `productionHostFactory` built from a
-  fresh `ModelRegistry.create()`. Not the primary surface (the extension is),
-  but it (a) gives CI a no-TUI way to exercise the production `Host`, and (b)
-  gives non-pi users a fallback. Mark optional in v1 if scope is tight.
-- **Acceptance:** `node dist/bin/conduct.js .pi/conductor.yaml "goal"` runs to
-  completion against real models (manual gate).
-
-➡️ Task 7C.3 — Docs pivot
-
-- Rewrite `README.md`: lead with "pi-conductor is a pi extension for
-  multi-role LLM orchestration." `pi install`, `/conduct` usage, manifest
-  declaration, role prompt files, status surface. Keep a short "library use"
-  section for advanced/test consumers. Remove the "It is a library, not a pi
-  extension" framing.
-- Update `docs/orchestrator-fsm-plan.md` §9.5 note (clarification, not
-  reversal — see §1).
-- Update `AGENTS.md` "Current status" + "Repo layout" (add `extensions/`).
-- Add `docs/extension-usage.md` with the `/conduct` command reference, the
-  manifest path resolution rules, and the "role sessions are independent SDK
-  sessions, not pi session-tree entries" caveat (so users don't expect
-  `/switch` into a worker).
+Exit criteria:
+- [ ] `package.json` declares the pi package metadata and keeps pi-bundled
+      packages as peers without moving runtime imports into `devDependencies`.
+- [ ] `pi install ./` on a clean checkout loads the extension and exposes
+      `/conduct`.
+- [ ] Optional CLI fallback is either implemented and documented or explicitly
+      deferred.
+- [ ] README, main FSM plan, AGENTS, and extension usage docs reflect the
+      extension framing without reopening the FSM spec.
 
 ## 4. Risks and mitigations
 
@@ -289,8 +204,8 @@ Gate: Phase 7B landed and reviewed.
 | Extension factory starts `startRun` (long-lived) → resource leak in no-session invocations | Med | Defer all `startRun` calls to command handlers (never the factory); matches `docs/extensions.md` guidance. Assert in 7B.1. |
 | Polling `runStats()` for the status line races the sync loop | Low | The loop writes stats to the `RunHandle` synchronously per transition; poll on a coarse interval (250ms) and render the last value. No cross-process sync needed. |
 | No in-process `ExtensionAPI` harness exists → 7B.1 tests need a `pi -e` subprocess | Med | Verify the SDK surface first; if no harness, the subprocess test is slower but sufficient. Don't assume — check. |
-| Real-model E2E can't run in CI (no API key) | Med | CI runs the stub-provider path; the real-model gate is manual with a committed transcript (7A.1). Same as under the library framing. |
-| `SessionManager` file location for role sessions collides with pi's session dir | Low | 7A.1 puts role session files under the conductor log dir, not pi's. Verified against `SessionManager.create(cwd)` semantics in `docs/sdk-surface.md` §6. |
+| Real-model E2E can't run in CI (no API key) | Med | CI runs the stub-provider path; the real-model gate is manual with a committed transcript (7A.5). Same as under the library framing. |
+| `SessionManager` file location for role sessions collides with pi's session dir | Low | 7A.3 puts role session files under the conductor log dir, not pi's. Verified against `SessionManager.create(cwd)` semantics in `docs/sdk-surface.md` §6. |
 
 ## 5. Verification (whole plan)
 
