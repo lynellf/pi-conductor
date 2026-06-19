@@ -12,7 +12,7 @@
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
 >
-> **Status:** In progress. Tasks 13, 14, 15, 15.5, 16 complete. Tasks 13.5, 16.5
+> **Status:** In progress. Tasks 13, 13.5, 14, 15, 15.5, 16 complete. Task 16.5
 > pending. Checkpoint D (the exit gate for this phase) blocked until all seven
 > tasks are green **and reviewed by a human**.
 >
@@ -21,6 +21,10 @@
 >   && pnpm lint && pnpm format:check` all green (227 tests, 17 files; 10 new
 >   scaffold tests + 1 broadened grep-guard test for the host-agnosticism
 >   invariant).
+> - Task 13.5 (commit `d0260ff`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (272 tests, 22 files;
+>   5 new resume tests covering file-backed log + crash reconciliation
+>   + startRun/resumeRun/listRuns API).
 > - Task 14 (commit `204785b`): `pnpm typecheck && pnpm build && pnpm test
 >   && pnpm lint && pnpm format:check` all green (243 tests, 18 files;
 >   16 new tools tests covering the §11.3 breach vocabulary end-to-end).
@@ -68,7 +72,7 @@
     SDK-backed impl lands in Task 15; tests implement the same interface as a
     fake.
 
-- [ ] **Task 13.5: Host public API + file-backed append-only log + `resumeRun` (§11.1, §11.9)**
+- [x] **Task 13.5: Host public API + file-backed append-only log + `resumeRun` (§11.1, §11.9)**
   - Description: Deliver the run-lifecycle entry points the spec promises and that no
     other task covers. (a) A **file-backed `RecordLog`** (the in-memory impl from
     Phase 3 Task 12 stays for core unit tests) that appends immutable JSON-lines
@@ -96,6 +100,74 @@
   - Files: `src/host/log-file.ts`, `src/host/run-handle.ts`, `src/host/api.ts`,
     `tests/host/resume.test.ts`
   - Scope: M
+  - Status: Complete (commit `d0260ff`). Implementation notes from the work:
+      - **File-backed log (`FileRecordLog`).** JSONL-per-run under
+        `baseDir/<runId>.jsonl`. Sync writes (appendFileSync) for the
+        Phase 4 test surface; production can swap to an async tail
+        or embedded store transparently since the `RecordLog`
+        interface is preserved. `latestCheckpoint` walks the file
+        in reverse to find the last `checkpoint_snapshot` (§11.1:
+        "the snapshot *is* the state"). `listRunIds` reads
+        `baseDir` for files matching `*.jsonl`.
+      - **`RunHandle`** exposes `completion()` (resolves with
+        `finalCheckpoint` + `exitReason`), `abort(reason)`
+        (sets a host-side flag for Phase 5 cost-cap to honor),
+        `runStats()` (renders the §11.6 roll-up over persisted
+        records + latest checkpoint + exitReason inference),
+        `runConfig(override)` / `currentConfigOverride()` (Phase 5
+        surface for live `max_run_cost_usd` updates), `isAborted()`,
+        and `buildRunMemory(goal, runCostCap)` (Task 16.5's
+        orchestrator-seed entry point).
+      - **`startRun(manifestPath, opts)`** loads the manifest, mints
+        a `run_id` (via `createInitialCheckpoint`), opens the
+        file-backed log, persists the initial `CheckpointSnapshot`,
+        constructs the host via `hostFactory`, and enters the
+        orchestration loop. Returns a `RunHandle` whose
+        `completion()` resolves when the loop reaches a terminal
+        state.
+      - **`resumeRun(manifestPath, runId, opts)`** re-loads the
+        manifest (source of truth for `def`), verifies the
+        snapshot's `manifest_version` matches the manifest's
+        version (mismatch → throw, §10), reads the latest snapshot,
+        runs the crash reconciler, then enters the loop at
+        `current_role`.
+      - **Crash reconciler** detects an orphaned session by checking
+        the snapshot's `active_role_session` against the records:
+        if non-null and no `session_ended` / `session_failed` record
+        exists for that `session_file`, it calls
+        `reduceLifecycle(session_failed, { failureReason:
+        "crashed", usage: zeros })` and persists the cleared
+        snapshot. Reconciler is host-side glue — the reducer
+        doesn't know about crash semantics; it sees a normal
+        `session_failed` lifecycle event.
+      - **Crash detection relies on a per-session_started snapshot.**
+        Task 13.5 surfaced a real bug: previously the loop
+        snapshotted only after `reduce`, leaving the latest
+        snapshot's `active_role_session` pointing at the
+        just-finished session rather than the in-progress one. The
+        fix: every reducer call (`session_started`, `reduce`,
+        `session_ended`, `session_failed`) produces a snapshot.
+        Per visit: post-session_started, post-reduce,
+        post-session-ended — 3 snapshots per visit. The
+        post-session_started snapshot is what crash detection
+        reads when a run is killed mid-prompt.
+      - **5 new tests** in `tests/host/resume.test.ts` cover the
+        acceptance scenarios:
+          - `startRun` writes a run_id-keyed log whose latest
+            snapshot reconstructs the in-memory final checkpoint
+            bit-for-bit.
+          - `resumeRun` after a mid-worker-session crash (manual
+            record writeup of the killed state) records
+            `session_failed("crashed")` for the interrupted worker,
+            then drives the rest of the run to completion.
+          - `resumeRun` on a clean terminal (no orphans) is a
+            no-op — no extra session_failed records.
+          - `listRuns` enumerates the run_ids known to a baseDir.
+          - `RunHandle.runStats` reflects persisted records +
+            final checkpoint + exitReason.
+      - **`StubHost`** was extracted from `tests/host/e2e.test.ts`
+        into `src/host/stub-host.ts` so the resume tests can reuse
+        it without duplication.
 
 - [x] **Task 14: `handoff` + `end` emission tools + seam validation (§3, §5.1, §12)**
   - Description: Define `handoff` and `end` as `defineTool()` tools with TypeBox params
