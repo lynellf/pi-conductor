@@ -196,20 +196,27 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     });
 
     // §11.4: every session_ended carries usage (both terminals cost).
+    // The StubHost accumulates the stub's canned usage via its
+    // message_end event subscription (Task 17). The §11.4 SDK
+    // mapping (sdk-surface.md §3, pinned in Test 1) is the source
+    // for these numbers:
+    //   input  ← message.usage.input
+    //   output ← message.usage.output
+    //   cache_read   ← message.usage.cacheRead
+    //   cache_write  ← message.usage.cacheWrite
+    //   tokens       ← message.usage.totalTokens
+    //   cost         ← message.usage.cost.total
     const ended = records.filter((r): r is SessionLifecycleEvent => r.type === "session_ended");
     expect(ended).toHaveLength(3);
     for (const ev of ended) {
       expect(ev.usage).toBeDefined();
-      // Task 17 wires real accumulation; StubHost.captureUsage returns
-      // zeros so the usage is recorded as zeros. This assertion
-      // verifies the record shape carries the usage field at all.
       expect(ev.usage).toEqual({
-        input: 0,
-        output: 0,
+        input: 50,
+        output: 25,
         cache_read: 0,
         cache_write: 0,
-        tokens: 0,
-        cost: 0,
+        tokens: 75,
+        cost: 0.009,
       });
     }
 

@@ -83,6 +83,14 @@ export interface RoleSession {
   readonly sessionId: string;
   /** Path to the session log file (used in `reduceLifecycle`, §11.4). */
   readonly sessionFile: string;
+  /**
+   * The model this session ran on, as a `provider:id` string
+   * (Task 17, §11.4). `null` for sessions that ran on the
+   * system/default model (no `models:` field on the role, §8.1).
+   * The loop reads this and passes it to `reduceLifecycle` as
+   * the `model` field on the persisted record (§11.4).
+   */
+  readonly model: string | null;
 
   /**
    * Read the per-session machine-event capture buffer (Task 14).
@@ -150,6 +158,14 @@ export interface SpawnRoleOptions {
   readonly sessionManager?: SessionManager;
   /** Working directory for the session (default: `process.cwd()`). */
   readonly cwd?: string;
+  /**
+   * 0-based index into the role's `models[]` list (Task 18, §8.2).
+   * `0` = primary model; `1` = first fallback, etc. The Host resolves
+   * the actual `Model<any>` from the role config + the index. The
+   * loop increments this on `session_failed(model_error)` and re-spawns
+   * until the list is exhausted (Task 18). Defaults to `0`.
+   */
+  readonly modelIndex?: number;
 }
 
 // ─── seedRunMemory args ────────────────────────────────────────────────
@@ -281,4 +297,51 @@ export interface Host {
    * `session_started` history.
    */
   nextVisitIndex(role: Role): number;
+
+  /**
+   * Host-owned per-session terminal reason. Read by the loop after
+   * `prompt()` resolves; the loop uses it to set
+   * `session_failed.failure_reason` (Task 17 / Task 18).
+   *
+   * Returns `null` when the session ended normally — the loop records
+   * `session_ended` rather than `session_failed` in that case.
+   *
+   *  - `session_cost_cap_exceeded` — the host's per-session cap
+   *    (`max_session_cost_usd`) fired on a `turn_end` event
+   *    (§11.7, Task 17). The host called `session.abort()` and the
+   *    session terminated.
+   *  - `model_error` — the session failed because the model
+   *    errored; the loop should try the next model in the role's
+   *    `models[]` list (Task 18, §8.2). On list exhaustion, the
+   *    loop records `session_failed(model_error)` and dispatches
+   *    the orchestrator with a "role unavailable" payload.
+   *
+   * The host's contract: this method returns a non-null value iff
+   * the session terminated abnormally AND the host knows the
+   * reason. The session_failed record is recorded by the loop,
+   * never the host; the host only signals the reason.
+   */
+  sessionTerminalReason(session: RoleSession): SessionTerminalReason;
+
+  /**
+   * Cumulative run cost across all persisted terminal sessions
+   * (`session_ended` AND `session_failed`, §11.4 — both terminals
+   * cost) in the run, summed over `usage.cost`. Excludes the
+   * current session's terminal usage (the loop adds it manually
+   * before evaluating the cap, per §11.7's "persisted roll-up
+   * plus the current terminal's captured usage before reducing
+   * the role's captured machine event").
+   *
+   * The host reads the log and applies the §11.6 rollup. The
+   * reducer is uninvolved — the host owns the I/O, the loop owns
+   * the policy.
+   */
+  runCostSoFar(): number;
 }
+
+/**
+ * Per-session terminal reason the host surfaces (Task 17 / Task 18).
+ * See `Host.sessionTerminalReason`. `null` is represented as the
+ * absence of a string — the function returns a union with `null`.
+ */
+export type SessionTerminalReason = "session_cost_cap_exceeded" | "model_error" | null;

@@ -59,9 +59,15 @@ export class HostManifestError extends Error {
  * `warnings` are non-blocking (§13 soft warnings: cheaper-fallback
  * missing, missing-required-tool in role.tools). Callers may surface
  * them but should not block run-start on them.
+ *
+ * `manifest` is the parsed on-disk shape (the role configs the host
+ * needs for per-role cost caps and model-fallback resolution — Task
+ * 17 / Task 18). The reducer never sees it (`def` is the reducer's
+ * view).
  */
 export interface LoadedManifest {
   readonly def: MachineDefinition;
+  readonly manifest: import("../manifest/types.js").Manifest;
   readonly warnings: readonly ManifestWarning[];
 }
 
@@ -117,6 +123,7 @@ export function loadManifestFromString(rawYaml: string): LoadedManifest {
 
   return Object.freeze({
     def,
+    manifest,
     warnings: Object.freeze([...report.warnings]),
   }) as LoadedManifest;
 }

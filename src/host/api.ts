@@ -64,7 +64,7 @@ import type { CheckpointSnapshot, RecordLog } from "../persistence/log.js";
 import type { Host } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
-import { loadManifest } from "./manifest.js";
+import { type LoadedManifest, loadManifest } from "./manifest.js";
 import { RunHandle } from "./run-handle.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
@@ -97,6 +97,14 @@ export interface HostFactoryContext {
   readonly runId: string;
   readonly def: MachineDefinition;
   readonly log: RecordLog;
+  /**
+   * The loaded manifest the host reads role config from (Task 17 /
+   * Task 18). Carries `def` and the parsed `Manifest` (so the host
+   * can look up `role.max_session_cost_usd` and `role.models[]`).
+   * The reducer never sees this — it is host-side state for
+   * per-role cost caps and model fallback.
+   */
+  readonly loadedManifest: LoadedManifest;
 }
 
 // ─── startRun ──────────────────────────────────────────────────────────
@@ -122,7 +130,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   };
   log.append(initialSnapshot);
 
-  const host = opts.hostFactory({ runId, def, log });
+  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
   void opts.goal; // goal is unused by runLoop directly; Task 16.5 wires it into the orchestrator seed
 
   return await runWithCompletion({
@@ -173,7 +181,7 @@ export async function resumeRun(
   // Crash reconciliation (§11.1).
   const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
 
-  const host = opts.hostFactory({ runId, def, log });
+  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
   void opts.goal;
 
   return await runWithCompletion({
@@ -301,6 +309,7 @@ function reconcileCrash(
     visit_index: sessionStarted.visit_index,
     parent_session: sessionStarted.parent_session,
     usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
+    model: sessionStarted.model,
   });
   log.append(result.record);
   // Persist the cleared checkpoint.

@@ -74,7 +74,13 @@
 
 import { createInitialCheckpoint, reduce } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
-import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
+import type {
+  Checkpoint,
+  MachineDefinition,
+  MachineEvent,
+  Role,
+  UsageRecord,
+} from "../core/types.js";
 import type { CheckpointSnapshot, PersistedRecord } from "../persistence/log.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import type { Host, RoleSession, SeedRunMemoryArgs, SpawnRoleOptions } from "./host.js";
@@ -99,11 +105,27 @@ export interface RunLoopOptions {
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
    *  to skip real disk I/O. */
   readonly spawnDefaults?: Partial<SpawnRoleOptions>;
-  /** Optional: run cost cap (`max_run_cost_usd`). `null` = uncapped.
-   *  Read by Task 16.5's run-memory seed (the orchestrator sees
-   *  `remaining_budget` and `run_cost_cap` fields). Phase 5 wires
-   *  the actual cost-cap evaluation; for now the value flows
-   *  through the seed only. */
+  /**
+   * Optional: dynamic cap reader for `max_run_cost_usd` (§11.7, Task 17).
+   * Called on every terminal usage capture to evaluate the run cap.
+   * `null` = uncapped. The RunHandle's `runConfig()` override flows
+   * through this callback (api.ts wires `getRunCostCap` to read the
+   * override or the manifest orchestrator's `max_run_cost_usd`).
+   *
+   * If omitted, the run is treated as uncapped (the loop's
+   * Task-16.5 seed still uses the static `runCostCap` option).
+   */
+  readonly getRunCostCap?: () => number | null;
+  /**
+   * Optional: static `max_run_cost_usd` (§11.7, Task 17). A fallback
+   * for callers that don't need `runConfig()` overrides (tests, CLI
+   * runs without a RunHandle). The loop reads `getRunCostCap()` first
+   * and falls back to this value. `null` / undefined = uncapped.
+   *
+   * Production: prefer `getRunCostCap` (wired to `RunHandle.runConfig`
+   * in api.ts). This static option exists so unit tests can pin the
+   * cap without constructing a RunHandle.
+   */
   readonly runCostCap?: number | null;
 }
 
@@ -134,8 +156,56 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // the snapshot's active_role_session id (resume case) or null (fresh).
   let parentSessionId: string | null = checkpoint.active_role_session?.id ?? null;
   let seed = initialGoal;
+  // Task 17 §11.7 worker-deferral guard: a run-cap breach detected on
+  // a worker terminal defers the synthesized `end` to the next
+  // orchestrator-current moment (spec: "the host does NOT synthesize
+  // `end` while a worker is current"). Set here, consumed at the
+  // top of the next outer iteration.
+  let pendingForcedEnd = false;
+  // Sentinel sessionFile for the synthesized `end` records. There is
+  // no live session at the time of synthesis, so the record's
+  // `session_file` field carries a stable marker rather than a real
+  // path. `run_id` is the real runId; the marker is just a hint for
+  // log consumers.
+  const SYNTHESIZED_SESSION_FILE = "<synthesized:end:run-cost-cap>";
 
   while (checkpoint.current_role !== "done") {
+    // ── §11.7 deferred forced end (Task 17) ──────────────────
+    // A previous worker's terminal tripped the run cap; the worker's
+    // handoff returned control to the orchestrator (state advanced).
+    // On the first orchestrator-current moment, the loop synthesizes
+    // a machine `end` event and feeds it to `reduce` (the only
+    // legal mechanism — the host MUST NOT mutate the checkpoint to
+    // `done` directly, §11.7). The reducer doesn't know the event
+    // is synthesized; it sees a normal end from the orchestrator.
+    if (pendingForcedEnd) {
+      if (checkpoint.current_role !== def.orchestrator) {
+        // Defensive: pendingForcedEnd should only be set on a
+        // worker terminal, and a worker's only legal target is the
+        // orchestrator (§6). If we ever reach this branch the
+        // invariant is broken; surface as a typed error rather
+        // than silently mis-close the run.
+        throw new Error(
+          `runLoop: pendingForcedEnd set but current_role='${String(
+            checkpoint.current_role,
+          )}' (expected '${def.orchestrator}'); §11.7 worker-deferral guard invariant violated`,
+        );
+      }
+      const synthesized: MachineEvent = {
+        type: "end",
+        payload: { reason: "run_cost_cap_exceeded" },
+      };
+      const result = reduce(checkpoint, synthesized, def, {
+        role: def.orchestrator,
+        sessionFile: SYNTHESIZED_SESSION_FILE,
+        ts: Date.now(),
+      });
+      host.persistRecord(result.record);
+      checkpoint = result.checkpoint;
+      host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+      return { finalCheckpoint: checkpoint, exitReason: "done" };
+    }
+
     const role = checkpoint.current_role;
     // Defensive: a non-null active_role_session on a non-done state is
     // a host bug (session_started requires no active session). The
@@ -158,7 +228,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         checkpoint,
         def,
         goal: opts.initialGoal,
-        runCostCap: opts.runCostCap ?? null,
+        // Task 17: the seed's runCostCap is the CURRENT cap (read
+        // dynamically via getRunCostCap so runConfig overrides flow
+        // through). Falls back to the static `runCostCap` option
+        // for tests that don't provide a dynamic reader.
+        runCostCap: opts.getRunCostCap?.() ?? opts.runCostCap ?? null,
       });
       seed = formatRunMemorySeed(runMemory);
     }
@@ -178,6 +252,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         ts: Date.now(),
         visit_index: visitIndex,
         parent_session: sessionParentId,
+        model: session.model,
       });
       checkpoint = started.checkpoint;
       host.persistRecord(started.record);
@@ -205,6 +280,15 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
 
         if (validated.kind === "breach") {
           // ── §11.3 contract breach: session_failed, NO reduce call ──
+          // The host may also have terminated the session (e.g., the
+          // per-session cap fired on `turn_end` and called `abort()`,
+          // Task 17). The host's reason, when set, takes precedence
+          // over the buffer-derived reason: a cap-terminated session
+          // still has an empty buffer, but the host knows WHY it
+          // terminated. For model errors (Task 18) the same path
+          // applies — the host's reason reflects the upstream cause.
+          const hostReason = host.sessionTerminalReason(session);
+          const failureReason: string = hostReason ?? validated.reason;
           const failed = reduceLifecycle(checkpoint, "session_failed", def, {
             role,
             sessionId,
@@ -213,7 +297,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             visit_index: visitIndex,
             parent_session: sessionParentId,
             usage: capturedUsage,
-            failureReason: validated.reason,
+            failureReason,
+            model: session.model,
           });
           checkpoint = failed.checkpoint;
           host.persistRecord(failed.record);
@@ -221,6 +306,98 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           // snapshot. session_failed clears active_role_session;
           // persist a fresh snapshot so latestCheckpoint reflects
           // the post-terminal state (active=null).
+          host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+          inner = { kind: "failed" };
+          break;
+        }
+
+        // ── §11.7 run-cap evaluation (Task 17) ──────────────
+        // Evaluate the cap against the persisted rollup PLUS this
+        // terminal's captured usage, before reducing the role's
+        // captured machine event. The hard cap is non-negotiable;
+        // a breach is the single legal mechanism to close the run.
+        //
+        // The cap is only meaningful when the captured emission is
+        // a handoff (not an end). If the orchestrator emitted end,
+        // the run is closing anyway — no synthesis needed.
+        const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
+        const runCapBreached =
+          runCap !== null && host.runCostSoFar() + capturedUsage.cost >= runCap;
+        const capturedIsHandoff = validated.event.type === "handoff";
+
+        if (runCapBreached && capturedIsHandoff) {
+          if (role === def.orchestrator) {
+            // ── Orchestrator current: synthesize end, reduce it.
+            // The captured handoff is SUPERSEDED; no worker is
+            // spawned. session_ended for the orchestrator is
+            // recorded normally first (it carries the captured
+            // usage — both terminals cost, §11.4), then the
+            // synthesized transition_accepted ends the run.
+            const ended = reduceLifecycle(checkpoint, "session_ended", def, {
+              role,
+              sessionId,
+              sessionFile,
+              ts: Date.now(),
+              visit_index: visitIndex,
+              parent_session: sessionParentId,
+              usage: capturedUsage,
+            });
+            checkpoint = ended.checkpoint;
+            host.persistRecord(ended.record);
+            host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+
+            const synthesized: MachineEvent = {
+              type: "end",
+              payload: { reason: "run_cost_cap_exceeded" },
+            };
+            const result = reduce(checkpoint, synthesized, def, {
+              role: def.orchestrator,
+              sessionFile: SYNTHESIZED_SESSION_FILE,
+              ts: Date.now(),
+            });
+            host.persistRecord(result.record);
+            checkpoint = result.checkpoint;
+            host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+            return { finalCheckpoint: checkpoint, exitReason: "done" };
+          }
+          // ── Worker current: defer the synthesized end.
+          // `end` from a worker is rejected (§7.2/§12.1). Let the
+          // worker's natural handoff to the orchestrator reduce
+          // normally (worker → orch is the only legal target,
+          // §6); on the next outer iteration, the deferred-end
+          // branch above synthesizes the end. The cap is still a
+          // hard stop — no further dispatch, no orchestrator
+          // session in between.
+          pendingForcedEnd = true;
+        }
+
+        // ── Host-driven session termination (Task 17 / Task 18) ──────
+        // The host may have terminated the session (e.g., the
+        // per-session cap fired on a `message_end` and the abort
+        // raced the tool-execution phase — the handoff tool
+        // wrapper may have already written to the capture buffer
+        // before the abort took effect). The host's terminal
+        // reason, when set, takes precedence: the captured
+        // emission is discarded and `session_failed` is recorded
+        // with the host's reason. For model errors (Task 18) the
+        // same path applies — the host's reason reflects the
+        // upstream cause. This is the single point where the host
+        // can override a non-empty capture buffer.
+        const hostReasonOnOk = host.sessionTerminalReason(session);
+        if (hostReasonOnOk !== null) {
+          const failed = reduceLifecycle(checkpoint, "session_failed", def, {
+            role,
+            sessionId,
+            sessionFile,
+            ts: Date.now(),
+            visit_index: visitIndex,
+            parent_session: sessionParentId,
+            usage: capturedUsage,
+            failureReason: hostReasonOnOk,
+            model: session.model,
+          });
+          checkpoint = failed.checkpoint;
+          host.persistRecord(failed.record);
           host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
           inner = { kind: "failed" };
           break;
@@ -273,6 +450,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           visit_index: visitIndex,
           parent_session: sessionParentId,
           usage: capturedUsage,
+          model: session.model,
         });
         checkpoint = ended.checkpoint;
         host.persistRecord(ended.record);
@@ -320,18 +498,18 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // spec §12.1 lifecycle step 7 / `RoleSession.dispose` (host.ts):
       // release this iteration's session resources on EVERY exit path —
       // accepted handoff, session_failed (breach / host reason), done,
-      // or a thrown invariant. Without this, each spawned session's
-      // runtime / listeners / file handles persist until the Vitest
-      // worker exits, which dominated memory pressure during Phase 5's
-      // host-heavy suite. The `finally` wraps the session block (spawn
-      // is outside: a spawn failure leaves no handle to dispose). The
-      // inner retry `continue` stays inside the try, so the session is
-      // NOT disposed mid-retry — only on the iteration's terminal
-      // exit.
+      // run-cap early return, or a thrown invariant. Without this, each
+      // spawned session's runtime / listeners / file handles persist
+      // until the Vitest worker exits, which dominated memory pressure
+      // during Phase 5's host-heavy suite. The `finally` wraps the
+      // session block (spawn is outside: a spawn failure leaves no
+      // handle to dispose). The inner retry `continue` stays inside the
+      // try, so the session is NOT disposed mid-retry — only on the
+      // iteration's terminal exit.
       //
       // A dispose rejection must not shadow the run's authoritative
       // outcome (transition / session_failed / thrown invariant); we
-      // suppress it here and route to structured logging once the
+      // suppress it here and route to structured logging once Task 5's
       // observability seam lands. This is a deliberate, documented
       // suppression — not a silent fallback on ambiguity.
       await session.dispose().catch((disposeError) => {

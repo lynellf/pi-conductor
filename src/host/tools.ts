@@ -89,17 +89,89 @@ interface EmissionToolFactoryOptions {
   readonly schema: TSchema;
   readonly description: string;
   readonly label: string;
+  /**
+   * Optional: host-supplied predicate consulted at the start of
+   * `execute`. When the predicate returns `true`, the tool returns
+   * a terminating error result WITHOUT writing to the capture
+   * buffer. The host uses this to honor cap / model-failure
+   * decisions (Task 17 / Task 18) that fire *during* the session:
+   * the per-session cap may trip on a `message_end` *before* the
+   * tool-execution phase, and we want the tool to refuse the
+   * write so the loop records `session_failed(cap_reason)`
+   * instead of reducing a captured handoff that was racing the
+   * abort.
+   *
+   * The predicate runs synchronously inside the tool's `execute`,
+   * so the cap decision is visible to the tool at call time
+   * (the SDK fires tool calls synchronously from the agent loop,
+   * after the host's `message_end` listener has had a chance to
+   * set the cap state).
+   *
+   * Default: no predicate (the tool always writes — backward
+   * compat with Phase 4 / Task 14 behavior).
+   */
+  readonly shouldRejectCapture?: () => boolean;
 }
 
 function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
-  const { seam, toolName, schema, description, label } = opts;
+  const { seam, toolName, schema, description, label, shouldRejectCapture } = opts;
 
   return defineTool({
     name: toolName,
     label,
     description,
     parameters: schema,
-    execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
+    execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
+      // ── Abort-signal check (Task 17 §11.7) ──────────────────
+      // The host calls `session.abort()` from its message_end
+      // listener when the per-session cap trips. The SDK
+      // propagates the abort via the tool's `signal` parameter.
+      // If the signal is already aborted at execute time, the
+      // cap (or model error) tripped *before* the tool was
+      // invoked, and we refuse the write so the loop records
+      // `session_failed(cap_reason)` instead of reducing a
+      // captured handoff that was racing the abort. The check
+      // is synchronous: by the time `execute` runs, the
+      // message_end event that fired the cap has already been
+      // processed (SDK events flow in order), so the abort
+      // signal is the authoritative cross-event visibility
+      // for the cap decision.
+      if (signal?.aborted === true) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `${toolName} was rejected: the session was aborted (signal aborted). The loop will record this as session_failed with the host's reason (§11.7 / §8.2).`,
+            },
+          ],
+          details: { ok: false, reason: "schema_invalid" } satisfies EmissionToolDetails,
+          terminate: true,
+        };
+      }
+
+      // ── Host-driven reject (Task 17 / Task 18) ────────────────
+      // If the host's predicate says "the session is over (cap
+      // tripped, model errored)", the tool returns an error
+      // result WITHOUT touching the capture buffer. The loop's
+      // `validateEmission` then reads an empty buffer and the
+      // host's `sessionTerminalReason` is honored, producing a
+      // `session_failed` record with the host's reason. The
+      // §11.3 contract-breach vocabulary is preserved: this is
+      // not a `transition_rejected`, it's a `session_failed` for
+      // a host-driven cause.
+      if (shouldRejectCapture?.() === true) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `host rejected ${toolName}: session was terminated by a host-driven cause (per-session cap or model error, §11.7/§8.2). The loop will record this as session_failed with the host's reason.`,
+            },
+          ],
+          details: { ok: false, reason: "schema_invalid" } satisfies EmissionToolDetails,
+          terminate: true,
+        };
+      }
+
       // ── §3 rule 1, §11.3: extra emission ────────────────────────────
       // A second machine-event call in the same session is a contract
       // breach. Push this call's args as a marker so the buffer length
@@ -193,7 +265,10 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
  * that derives the host's typed view of the validated payload
  * (`HandoffArgs`). No second schema.
  */
-export function createHandoffTool(seam: SessionSeam): ToolDefinition {
+export function createHandoffTool(
+  seam: SessionSeam,
+  shouldRejectCapture?: () => boolean,
+): ToolDefinition {
   return createEmissionTool({
     seam,
     toolName: "handoff",
@@ -201,6 +276,7 @@ export function createHandoffTool(seam: SessionSeam): ToolDefinition {
     label: "Handoff",
     description:
       "Terminate this role's session and route to another declared role. Workers may only hand off back to the orchestrator; the orchestrator may hand off to any declared worker (subject to visit caps).",
+    ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
   });
 }
 
@@ -211,7 +287,10 @@ export function createHandoffTool(seam: SessionSeam): ToolDefinition {
  * records the emission; the loop's `reduce` call determines whether
  * the transition is accepted.
  */
-export function createEndTool(seam: SessionSeam): ToolDefinition {
+export function createEndTool(
+  seam: SessionSeam,
+  shouldRejectCapture?: () => boolean,
+): ToolDefinition {
   return createEmissionTool({
     seam,
     toolName: "end",
@@ -219,5 +298,6 @@ export function createEndTool(seam: SessionSeam): ToolDefinition {
     label: "End",
     description:
       "Terminate this role's session and declare the run complete. Only legal from the orchestrator (§7.2); workers calling this tool produce a transition_rejected record with legal_targets surfaced.",
+    ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
   });
 }

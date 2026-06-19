@@ -79,6 +79,15 @@ import {
  * the SDK agent runtime routes it to the registered tool's
  * `execute`, which is Task 14's wrapper writing to the
  * `SessionSeam` capture buffer.
+ *
+ * **Per-step usage (Task 17).** Each step that produces a message
+ * may carry an optional `usage` override. When set, the stub uses
+ * it for the emitted `AssistantMessage.usage`; otherwise the stub
+ * falls back to the default usage supplied to
+ * `makeStubStreamFunction({ usage })`. This lets tests script
+ * per-role cost — e.g., a worker session with $0.80 and an
+ * orchestrator session with $0.50 — without instantiating a
+ * separate stub provider per role.
  */
 export type StubStep =
   | {
@@ -86,9 +95,18 @@ export type StubStep =
       readonly target_role: string;
       readonly reason?: string;
       readonly suggests_next?: string;
+      readonly usage?: Partial<Usage>;
     }
-  | { readonly kind: "emit_end"; readonly reason?: string }
-  | { readonly kind: "emit_text"; readonly text: string }
+  | {
+      readonly kind: "emit_end";
+      readonly reason?: string;
+      readonly usage?: Partial<Usage>;
+    }
+  | {
+      readonly kind: "emit_text";
+      readonly text: string;
+      readonly usage?: Partial<Usage>;
+    }
   | { readonly kind: "no_emission" }
   | { readonly kind: "fail"; readonly errorMessage: string };
 
@@ -155,24 +173,34 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
   return (_model, _context, _options) => {
     const stream = createAssistantMessageEventStream();
 
-    const usage: Usage = {
-      input: cannedUsage?.input ?? 0,
-      output: cannedUsage?.output ?? 0,
-      cacheRead: cannedUsage?.cacheRead ?? 0,
-      cacheWrite: cannedUsage?.cacheWrite ?? 0,
-      totalTokens:
-        cannedUsage?.totalTokens ?? (cannedUsage?.input ?? 0) + (cannedUsage?.output ?? 0),
-      cost: cannedUsage?.cost ?? {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    };
-
+    // Per-step usage override (Task 17). When a step declares its
+    // own `usage`, that wins over the stream-level default. The
+    // merge mirrors the default-usage construction above so callers
+    // only need to specify the fields they care about.
     const step = steps[stepIndex];
     if (step !== undefined) stepIndex += 1;
+    const stepUsage: Partial<Usage> | undefined =
+      step !== undefined && "usage" in step ? step.usage : undefined;
+    const usage: Usage = {
+      input: stepUsage?.input ?? cannedUsage?.input ?? 0,
+      output: stepUsage?.output ?? cannedUsage?.output ?? 0,
+      cacheRead: stepUsage?.cacheRead ?? cannedUsage?.cacheRead ?? 0,
+      cacheWrite: stepUsage?.cacheWrite ?? cannedUsage?.cacheWrite ?? 0,
+      totalTokens:
+        stepUsage?.totalTokens ??
+        cannedUsage?.totalTokens ??
+        (stepUsage?.input ?? cannedUsage?.input ?? 0) +
+          (stepUsage?.output ?? cannedUsage?.output ?? 0),
+      cost: stepUsage?.cost ??
+        cannedUsage?.cost ?? {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+    };
+
     const finalMessage: AssistantMessage = {
       role: "assistant",
       content: [],

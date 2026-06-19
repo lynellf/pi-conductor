@@ -91,6 +91,7 @@ class FakeSession {
       role: this.role,
       sessionId: this.sessionId,
       sessionFile: this.sessionFile,
+      model: null,
       readCaptureBuffer: () => Object.freeze([...this.captureBuffer]),
       resetCaptureBuffer: () => {
         this.captureBuffer.length = 0;
@@ -205,6 +206,20 @@ class FakeHost implements Host {
 
   sealSession(session: RoleSession): void {
     this.sealed.push(session.sessionId);
+  }
+
+  sessionTerminalReason(_session: RoleSession): null {
+    // Loop-test default: no host-driven termination. Loop tests
+    // exercise the contract-breach path (no_emission /
+    // extra_emission / schema_invalid), not the cap/model_error
+    // paths (Task 17 / Task 18). Cost tests cover the latter.
+    return null;
+  }
+
+  runCostSoFar(): number {
+    // Loop-test default: zero. Cost tests assert a non-zero
+    // runCostSoFar against a real cap.
+    return 0;
   }
 
   nextVisitIndex(role: Role): number {
@@ -645,11 +660,11 @@ describe("runLoop — canonical reducer call order (§12.1)", () => {
 // ─── Session disposal: §12.1 lifecycle step 7 ────────────────────────
 
 // `runLoop` must call `session.dispose()` exactly once per spawned
-// session, on every terminal path (accepted / failed / done / thrown
-// invariant). Without it, each session's runtime, listeners, and file
-// handles persist until the Vitest worker exits — the dominant
-// memory-pressure driver observed during Phase 5. `FakeSession.disposed`
-// is the regression sentinel.
+// session, on every terminal path (accepted / failed / done / run-cap
+// early return / thrown invariant). Without it, each session's runtime,
+// listeners, and file handles persist until the Vitest worker exits —
+// the dominant memory-pressure driver observed during Phase 5.
+// `FakeSession.disposed` is the regression sentinel.
 describe("runLoop — session disposal (§12.1 step 7)", () => {
   it("disposes every spawned session on the happy path", async () => {
     const log = new InMemoryRecordLog();
