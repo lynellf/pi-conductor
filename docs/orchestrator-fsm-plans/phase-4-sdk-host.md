@@ -12,7 +12,7 @@
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
 >
-> **Status:** In progress. Tasks 13, 14, 15 complete. Tasks 13.5, 15.5, 16, 16.5
+> **Status:** In progress. Tasks 13, 14, 15, 15.5 complete. Tasks 13.5, 16, 16.5
 > pending. Checkpoint D (the exit gate for this phase) blocked until all seven
 > tasks are green **and reviewed by a human**.
 >
@@ -28,6 +28,10 @@
 >   && pnpm lint && pnpm format:check` all green (255 tests, 19 files;
 >   12 new loop tests covering the §12.1 canonical reducer call order,
 >   the §11.3 breach vocabulary, and the reducer-rejection retry path).
+> - Task 15.5 (commit `20caecf`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (264 tests, 20 files;
+>   9 new seal tests covering the §12.1 wrap utility + integration with
+>   Task 14's seam + the bash / handoff ordering acceptance scenarios).
 
 ## Tasks
 
@@ -250,7 +254,7 @@
         that the loop never calls `sealSession` / `abortSession`
         directly (those are Task 15.5 / Task 18's hooks).
 
-- [ ] **Task 15.5: Post-emission tool sealing (spec §12.1)**
+- [x] **Task 15.5: Post-emission tool sealing (spec §12.1)**
   - Description: Implement the emission-sealed flag referenced by Task 14. The host
     wraps every tool the role can call (built-ins like `bash`/`edit`/`write`/`read`
     plus the role's declared custom tools) so that, while the live session's
@@ -272,6 +276,51 @@
   - Dependencies: Task 15
   - Files: `src/host/tool-wrapper.ts`, `tests/host/seal.test.ts`
   - Scope: M
+  - Status: Complete (commit `20caecf`). Implementation notes from the work:
+      - **Public surface.** `wrapToolWithSeal(tool, sealCheck)` returns a
+        new `ToolDefinition` whose `execute` consults `sealCheck()`
+        before delegating. `wrapAllToolsWithSeal(tools, sealCheck)` is
+        a list convenience for the host's `spawnRole` wiring.
+        `SealCheck = () => boolean` is the callback the caller closes
+        over `SessionSeam.isSealed`.
+      - **What gets preserved.** All tool metadata (name, label,
+        description, parameters, renderCall, renderResult,
+        promptSnippet, promptGuidelines, executionMode,
+        prepareArguments) is preserved via object spread; only
+        `execute` is replaced. So the wrapped tool is
+        indistinguishable from the original except for the
+        short-circuit on sealed.
+      - **What gets returned when sealed.** `content: [{ type:
+        'text', text: 'session sealed; emission recorded. ...' }]`,
+        `details: { sealed: true }`, `terminate: true`. The
+        `terminate: true` flag is the SDK's "stop after this tool
+        batch" hint (see Task 14's tool results for the same pattern).
+      - **Generic erasure.** `ToolDefinition<TParams, TDetails,
+        TState>` is erased at the SDK's `customTools: ToolDefinition[]`
+        boundary on `CreateAgentSessionOptions`, so the wrapper
+        preserves the call signature but the inner cast is
+        type-erased. Documented in module JSDoc; matches the
+        `Model<any>` pattern in `src/host/host.ts`.
+      - **Production wiring** lives in Task 15's SDK-backed sibling
+        (not yet built). At `spawnRole` time, the host will:
+          1. Build the built-in tools + role's declared custom tools.
+          2. `wrapAllToolsWithSeal(tools, () => seam.isSealed)` for
+             the side-effecting set.
+          3. Build `handoff` / `end` via the Task 14 factories
+             UNWRAPPED and register separately so the §11.3
+             `extra_emission` marker path (Task 14) still works.
+      - **Acceptance scenarios from the plan** are asserted directly:
+          - `handoff` (valid) then `bash` → bash side effect (writing
+            a temp probe file) does NOT fire; capture buffer has
+            exactly 1 entry.
+          - `bash` then `handoff` → bash runs normally (flag not yet
+            set); then handoff seals.
+          - Multiple bash calls after sealing all short-circuit
+            (call count stays at 1).
+          - `handoff` then `handoff` (extra_emission): first handoff
+            seals; second handoff call writes an `extra_emission`
+            marker — proves handoff/end themselves remain unwrapped
+            so the §11.3 breach vocabulary is preserved.
 
 - [ ] **Task 16: Stub provider for in-CI end-to-end runs (§15.3)**
   - Description: A deterministic stub model/provider (or a scripted mock `Model` +
