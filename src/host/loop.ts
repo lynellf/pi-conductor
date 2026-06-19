@@ -83,7 +83,14 @@ import type {
 } from "../core/types.js";
 import type { CheckpointSnapshot, PersistedRecord } from "../persistence/log.js";
 import { validateEmission } from "../seam/validate-emission.js";
-import type { Host, RoleSession, SeedRunMemoryArgs, SpawnRoleOptions } from "./host.js";
+import { NoMoreModelsError } from "./errors.js";
+import type {
+  Host,
+  RoleSession,
+  SeedRunMemoryArgs,
+  SessionTerminalReason,
+  SpawnRoleOptions,
+} from "./host.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -162,12 +169,31 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // `end` while a worker is current"). Set here, consumed at the
   // top of the next outer iteration.
   let pendingForcedEnd = false;
+  // Task 18: visit_index tracking. A role's visit_index is the same
+  // across all model retries within that visit (the role didn't
+  // transition, it re-ran). The index is captured BEFORE the fallback
+  // loop so both the primary and fallback sessions share it, and
+  // incremented AFTER the visit ends (accepted handoff, done, or
+  // exhaustion) so the next visit to the same role gets the next
+  // index. This is the loop's source of truth for visit_index;
+  // `host.nextVisitIndex` is no longer used by the loop (the host
+  // method stays in the `Host` interface for backward compat with
+  // existing fakes, but its terminal-counting logic is incorrect
+  // for model retries — the primary's `session_failed` is recorded
+  // before the fallback's `session_started`, which would inflate
+  // the count).
+  const visitIndexByRole = new Map<Role, number>();
   // Sentinel sessionFile for the synthesized `end` records. There is
   // no live session at the time of synthesis, so the record's
   // `session_file` field carries a stable marker rather than a real
   // path. `run_id` is the real runId; the marker is just a hint for
   // log consumers.
   const SYNTHESIZED_SESSION_FILE = "<synthesized:end:run-cost-cap>";
+  // Sentinel sessionFile for the synthesized handoff to the
+  // orchestrator on model-fallback exhaustion (Task 18, §8.2/§9.4).
+  // Distinct from the run-cap sentinel so log consumers can tell the
+  // two synthesized-event paths apart.
+  const SYNTHESIZED_UNAVAILABLE_SESSION_FILE = "<synthesized:handoff:role-unavailable>";
 
   while (checkpoint.current_role !== "done") {
     // ── §11.7 deferred forced end (Task 17) ──────────────────
@@ -237,103 +263,101 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       seed = formatRunMemorySeed(runMemory);
     }
 
-    const session = await host.spawnRole(role, opts.spawnDefaults ?? {});
-    try {
-      const sessionId = session.sessionId;
-      const sessionFile = session.sessionFile;
-      const visitIndex = host.nextVisitIndex(role);
-      const sessionParentId = parentSessionId;
+    // ── Task 18: model-fallback loop ─────────────────────────
+    // Per §8.2, on `session_failed(model_error)`, try the next model
+    // in the role's `models[]` list (same role, fresh session, state
+    // unchanged). Record `model_fallback` on each transition. On
+    // list exhaustion (`NoMoreModelsError` from `host.spawnRole`),
+    // break with `roleOutcome = "exhausted"` and synthesize a
+    // handoff to the orchestrator with a "role unavailable" payload
+    // (§9.4 v1 default: hand to orchestrator once, then escalate).
+    //
+    // Capture the visit_index BEFORE the fallback loop so all model
+    // attempts within this visit share the same index. The index is
+    // incremented after the visit ends (below) so the next visit to
+    // the same role gets the next index.
+    const visitIndex = visitIndexByRole.get(role) ?? 1;
+    let modelIndex = 0;
+    let roleOutcome: RoleOutcome = { kind: "advance", nextSeed: seed };
 
-      // ── §12.1 step 4: session_started for the new session ─────────
-      const started = reduceLifecycle(checkpoint, "session_started", def, {
-        role,
-        sessionId,
-        sessionFile,
-        ts: Date.now(),
-        visit_index: visitIndex,
-        parent_session: sessionParentId,
-        model: session.model,
-      });
-      checkpoint = started.checkpoint;
-      host.persistRecord(started.record);
-      // §11.1: each transition produces a new full checkpoint snapshot.
-      // session_started sets active_role_session; a snapshot here is
-      // what resumeRun reads when a run crashed mid-prompt — without
-      // it, latestCheckpoint would still point to the previous visit's
-      // cleared terminal and crash detection wouldn't fire.
-      host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-
-      // Track this session as parent for the next session_started.
-      parentSessionId = sessionId;
-
-      // ── Inner loop: prompt → validate → reduce (with retry on rejection) ──
-      let inner: InnerOutcome;
-      let nextSeed = seed;
-      let capturedUsage: UsageRecord = ZERO_USAGE;
-
-      while (true) {
-        await session.prompt(nextSeed);
-        capturedUsage = host.captureUsage(session);
-
-        const captures = session.readCaptureBuffer();
-        const validated = validateEmission(captures);
-
-        if (validated.kind === "breach") {
-          // ── §11.3 contract breach: session_failed, NO reduce call ──
-          // The host may also have terminated the session (e.g., the
-          // per-session cap fired on `turn_end` and called `abort()`,
-          // Task 17). The host's reason, when set, takes precedence
-          // over the buffer-derived reason: a cap-terminated session
-          // still has an empty buffer, but the host knows WHY it
-          // terminated. For model errors (Task 18) the same path
-          // applies — the host's reason reflects the upstream cause.
-          const hostReason = host.sessionTerminalReason(session);
-          const failureReason: string = hostReason ?? validated.reason;
-          const failed = reduceLifecycle(checkpoint, "session_failed", def, {
-            role,
-            sessionId,
-            sessionFile,
-            ts: Date.now(),
-            visit_index: visitIndex,
-            parent_session: sessionParentId,
-            usage: capturedUsage,
-            failureReason,
-            model: session.model,
-          });
-          checkpoint = failed.checkpoint;
-          host.persistRecord(failed.record);
-          // §11.1: each transition produces a new full checkpoint
-          // snapshot. session_failed clears active_role_session;
-          // persist a fresh snapshot so latestCheckpoint reflects
-          // the post-terminal state (active=null).
-          host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-          inner = { kind: "failed" };
+    while (true) {
+      // Spawn (may throw `NoMoreModelsError` when the list is
+      // exhausted, or `RoleEscalationError` when the orchestrator
+      // re-dispatches the same role after exhaustion). The former
+      // is caught here and converted to `roleOutcome = "exhausted"`;
+      // the latter propagates to abort the run per §9.4.
+      let session: RoleSession;
+      try {
+        session = await host.spawnRole(role, { ...opts.spawnDefaults, modelIndex });
+      } catch (err) {
+        if (err instanceof NoMoreModelsError) {
+          roleOutcome = { kind: "exhausted" };
           break;
         }
+        // RoleEscalationError and other errors propagate up to abort
+        // the run. The caller's `runLoop` does not catch typed
+        // errors — surface to the caller, which catches (test,
+        // RunHandle).
+        throw err;
+      }
 
-        // ── §11.7 run-cap evaluation (Task 17) ──────────────
-        // Evaluate the cap against the persisted rollup PLUS this
-        // terminal's captured usage, before reducing the role's
-        // captured machine event. The hard cap is non-negotiable;
-        // a breach is the single legal mechanism to close the run.
-        //
-        // The cap is only meaningful when the captured emission is
-        // a handoff (not an end). If the orchestrator emitted end,
-        // the run is closing anyway — no synthesis needed.
-        const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
-        const runCapBreached =
-          runCap !== null && host.runCostSoFar() + capturedUsage.cost >= runCap;
-        const capturedIsHandoff = validated.event.type === "handoff";
+      // Session block — declare exit variables before the
+      // try-finally so the fallback loop can read them after dispose.
+      // The inner loop always sets `inner` before breaking, so the
+      // initial values are just type-system defaults.
+      let inner: InnerOutcome = { kind: "failed" };
+      let sessionHostReason: SessionTerminalReason = null;
+      let capturedUsage: UsageRecord = ZERO_USAGE;
+      let nextSeed = seed;
 
-        if (runCapBreached && capturedIsHandoff) {
-          if (role === def.orchestrator) {
-            // ── Orchestrator current: synthesize end, reduce it.
-            // The captured handoff is SUPERSEDED; no worker is
-            // spawned. session_ended for the orchestrator is
-            // recorded normally first (it carries the captured
-            // usage — both terminals cost, §11.4), then the
-            // synthesized transition_accepted ends the run.
-            const ended = reduceLifecycle(checkpoint, "session_ended", def, {
+      try {
+        const sessionId = session.sessionId;
+        const sessionFile = session.sessionFile;
+        const sessionParentId = parentSessionId;
+
+        // ── §12.1 step 4: session_started for the new session ─────────
+        const started = reduceLifecycle(checkpoint, "session_started", def, {
+          role,
+          sessionId,
+          sessionFile,
+          ts: Date.now(),
+          visit_index: visitIndex,
+          parent_session: sessionParentId,
+          model: session.model,
+        });
+        checkpoint = started.checkpoint;
+        host.persistRecord(started.record);
+        // §11.1: each transition produces a new full checkpoint snapshot.
+        // session_started sets active_role_session; a snapshot here is
+        // what resumeRun reads when a run crashed mid-prompt — without
+        // it, latestCheckpoint would still point to the previous visit's
+        // cleared terminal and crash detection wouldn't fire.
+        host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+
+        // Track this session as parent for the next session_started.
+        parentSessionId = sessionId;
+
+        // ── Inner loop: prompt → validate → reduce (with retry on rejection) ──
+        while (true) {
+          await session.prompt(nextSeed);
+          capturedUsage = host.captureUsage(session);
+
+          const captures = session.readCaptureBuffer();
+          const validated = validateEmission(captures);
+
+          if (validated.kind === "breach") {
+            // ── §11.3 contract breach: session_failed, NO reduce call ──
+            // The host may also have terminated the session (e.g., the
+            // per-session cap fired on `turn_end` and called `abort()`,
+            // Task 17). The host's reason, when set, takes precedence
+            // over the buffer-derived reason: a cap-terminated session
+            // still has an empty buffer, but the host knows WHY it
+            // terminated. For model errors (Task 18) the same path
+            // applies — the host's reason reflects the upstream cause.
+            const hostReason = host.sessionTerminalReason(session);
+            sessionHostReason = hostReason;
+            const failureReason: string = hostReason ?? validated.reason;
+            const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
               sessionId,
               sessionFile,
@@ -341,51 +365,153 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               visit_index: visitIndex,
               parent_session: sessionParentId,
               usage: capturedUsage,
+              failureReason,
+              model: session.model,
             });
-            checkpoint = ended.checkpoint;
-            host.persistRecord(ended.record);
+            checkpoint = failed.checkpoint;
+            host.persistRecord(failed.record);
+            // §11.1: each transition produces a new full checkpoint
+            // snapshot. session_failed clears active_role_session;
+            // persist a fresh snapshot so latestCheckpoint reflects
+            // the post-terminal state (active=null).
             host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-
-            const synthesized: MachineEvent = {
-              type: "end",
-              payload: { reason: "run_cost_cap_exceeded" },
-            };
-            const result = reduce(checkpoint, synthesized, def, {
-              role: def.orchestrator,
-              sessionFile: SYNTHESIZED_SESSION_FILE,
-              ts: Date.now(),
-            });
-            host.persistRecord(result.record);
-            checkpoint = result.checkpoint;
-            host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-            return { finalCheckpoint: checkpoint, exitReason: "done" };
+            inner = { kind: "failed" };
+            break;
           }
-          // ── Worker current: defer the synthesized end.
-          // `end` from a worker is rejected (§7.2/§12.1). Let the
-          // worker's natural handoff to the orchestrator reduce
-          // normally (worker → orch is the only legal target,
-          // §6); on the next outer iteration, the deferred-end
-          // branch above synthesizes the end. The cap is still a
-          // hard stop — no further dispatch, no orchestrator
-          // session in between.
-          pendingForcedEnd = true;
-        }
 
-        // ── Host-driven session termination (Task 17 / Task 18) ──────
-        // The host may have terminated the session (e.g., the
-        // per-session cap fired on a `message_end` and the abort
-        // raced the tool-execution phase — the handoff tool
-        // wrapper may have already written to the capture buffer
-        // before the abort took effect). The host's terminal
-        // reason, when set, takes precedence: the captured
-        // emission is discarded and `session_failed` is recorded
-        // with the host's reason. For model errors (Task 18) the
-        // same path applies — the host's reason reflects the
-        // upstream cause. This is the single point where the host
-        // can override a non-empty capture buffer.
-        const hostReasonOnOk = host.sessionTerminalReason(session);
-        if (hostReasonOnOk !== null) {
-          const failed = reduceLifecycle(checkpoint, "session_failed", def, {
+          // ── §11.7 run-cap evaluation (Task 17) ──────────────
+          // Evaluate the cap against the persisted rollup PLUS this
+          // terminal's captured usage, before reducing the role's
+          // captured machine event. The hard cap is non-negotiable;
+          // a breach is the single legal mechanism to close the run.
+          //
+          // The cap is only meaningful when the captured emission is
+          // a handoff (not an end). If the orchestrator emitted end,
+          // the run is closing anyway — no synthesis needed.
+          const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
+          const runCapBreached =
+            runCap !== null && host.runCostSoFar() + capturedUsage.cost >= runCap;
+          const capturedIsHandoff = validated.event.type === "handoff";
+
+          if (runCapBreached && capturedIsHandoff) {
+            if (role === def.orchestrator) {
+              // ── Orchestrator current: synthesize end, reduce it.
+              // The captured handoff is SUPERSEDED; no worker is
+              // spawned. session_ended for the orchestrator is
+              // recorded normally first (it carries the captured
+              // usage — both terminals cost, §11.4), then the
+              // synthesized transition_accepted ends the run.
+              const ended = reduceLifecycle(checkpoint, "session_ended", def, {
+                role,
+                sessionId,
+                sessionFile,
+                ts: Date.now(),
+                visit_index: visitIndex,
+                parent_session: sessionParentId,
+                usage: capturedUsage,
+              });
+              checkpoint = ended.checkpoint;
+              host.persistRecord(ended.record);
+              host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+
+              const synthesized: MachineEvent = {
+                type: "end",
+                payload: { reason: "run_cost_cap_exceeded" },
+              };
+              const result = reduce(checkpoint, synthesized, def, {
+                role: def.orchestrator,
+                sessionFile: SYNTHESIZED_SESSION_FILE,
+                ts: Date.now(),
+              });
+              host.persistRecord(result.record);
+              checkpoint = result.checkpoint;
+              host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+              return { finalCheckpoint: checkpoint, exitReason: "done" };
+            }
+            // ── Worker current: defer the synthesized end.
+            // `end` from a worker is rejected (§7.2/§12.1). Let the
+            // worker's natural handoff to the orchestrator reduce
+            // normally (worker → orch is the only legal target,
+            // §6); on the next outer iteration, the deferred-end
+            // branch above synthesizes the end. The cap is still a
+            // hard stop — no further dispatch, no orchestrator
+            // session in between.
+            pendingForcedEnd = true;
+          }
+
+          // ── Host-driven session termination (Task 17 / Task 18) ──────
+          // The host may have terminated the session (e.g., the
+          // per-session cap fired on a `message_end` and the abort
+          // raced the tool-execution phase — the handoff tool
+          // wrapper may have already written to the capture buffer
+          // before the abort took effect). The host's terminal
+          // reason, when set, takes precedence: the captured
+          // emission is discarded and `session_failed` is recorded
+          // with the host's reason. For model errors (Task 18) the
+          // same path applies — the host's reason reflects the
+          // upstream cause. This is the single point where the host
+          // can override a non-empty capture buffer.
+          const hostReasonOnOk = host.sessionTerminalReason(session);
+          if (hostReasonOnOk !== null) {
+            sessionHostReason = hostReasonOnOk;
+            const failed = reduceLifecycle(checkpoint, "session_failed", def, {
+              role,
+              sessionId,
+              sessionFile,
+              ts: Date.now(),
+              visit_index: visitIndex,
+              parent_session: sessionParentId,
+              usage: capturedUsage,
+              failureReason: hostReasonOnOk,
+              model: session.model,
+            });
+            checkpoint = failed.checkpoint;
+            host.persistRecord(failed.record);
+            host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+            inner = { kind: "failed" };
+            break;
+          }
+
+          // ── Single valid emission — call reduce (§12) ──────────────
+          const reduceResult = reduce(checkpoint, validated.event, def, {
+            role,
+            sessionFile,
+            ts: Date.now(),
+          });
+          host.persistRecord(reduceResult.record);
+
+          // Clear the capture buffer for the next attempt (whether the
+          // reduce was accepted or rejected). For accepted: defensive;
+          // the session is about to end anyway. For rejected: required,
+          // so the next prompt's emission is the sole candidate for
+          // validateEmission (without this, a second emission would read
+          // as `extra_emission` against the rejected capture).
+          session.resetCaptureBuffer();
+
+          if (reduceResult.kind === "rejected") {
+            // ── Retry in-session: re-prompt with legal_targets (§11.3) ─
+            // No terminal lifecycle — the session continues. Persist the
+            // rejected record (above), then surface legal_targets to the
+            // model and re-prompt.
+            nextSeed = formatRejectionMessage(reduceResult);
+            continue;
+          }
+
+          // ── Accepted (§12.1) ─────────────────────────────────────────
+          // 1. Update the checkpoint from the reducer and persist it.
+          checkpoint = reduceResult.checkpoint;
+          const snapshot: CheckpointSnapshot = {
+            type: "checkpoint_snapshot",
+            checkpoint,
+          };
+          host.persistRecord(snapshot);
+
+          // 2. §12.1 step 2: session_ended for the just-finished session.
+          // active_role_session was set by session_started above; reduce
+          // did NOT clear it (only lifecycle terminals do). session_ended
+          // validates meta.sessionId/role against the live session and
+          // clears active_role_session.
+          const ended = reduceLifecycle(checkpoint, "session_ended", def, {
             role,
             sessionId,
             sessionFile,
@@ -393,129 +519,146 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             visit_index: visitIndex,
             parent_session: sessionParentId,
             usage: capturedUsage,
-            failureReason: hostReasonOnOk,
             model: session.model,
           });
-          checkpoint = failed.checkpoint;
-          host.persistRecord(failed.record);
+          checkpoint = ended.checkpoint;
+          host.persistRecord(ended.record);
+          // §11.1: each transition produces a new full checkpoint
+          // snapshot. session_ended clears active_role_session;
+          // persist a fresh snapshot so latestCheckpoint reflects
+          // the post-terminal state (active=null). This is what
+          // resumeRun reads — a non-null active_role_session on
+          // the latest snapshot is the crash signal.
           host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-          inner = { kind: "failed" };
+
+          if (reduceResult.state === "done") {
+            inner = { kind: "done" };
+            break;
+          }
+
+          // ── Accepted handoff to next role. Prepare the seed for the
+          // outer loop's next iteration (§8.3: `suggests_next` is
+          // advisory, surfaced as orchestrator context). The host's next
+          // spawnRole + session_started (next outer iteration) wires
+          // parent_session = sessionId automatically. ─────────────────
+          const nextRole: Role = reduceResult.state;
+          const payload = validated.event.payload as Record<string, unknown> | undefined;
+          const suggestsNext =
+            validated.event.type === "handoff" &&
+            payload !== undefined &&
+            typeof payload === "object" &&
+            typeof payload.suggests_next === "string"
+              ? (payload.suggests_next as Role)
+              : null;
+          nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext);
+          inner = { kind: "advance", nextSeed };
           break;
         }
-
-        // ── Single valid emission — call reduce (§12) ──────────────
-        const reduceResult = reduce(checkpoint, validated.event, def, {
-          role,
-          sessionFile,
-          ts: Date.now(),
+      } finally {
+        // spec §12.1 lifecycle step 7 / `RoleSession.dispose` (host.ts):
+        // release this iteration's session resources on EVERY exit path —
+        // accepted handoff, session_failed (breach / host reason), done,
+        // run-cap early return, or a thrown invariant. Without this, each
+        // spawned session's runtime / listeners / file handles persist
+        // until the Vitest worker exits, which dominated memory pressure
+        // during Phase 5's host-heavy suite. The `finally` wraps the
+        // session block (spawn is outside: a spawn failure leaves no
+        // handle to dispose). The inner retry `continue` stays inside the
+        // try, so the session is NOT disposed mid-retry — only on the
+        // iteration's terminal exit.
+        //
+        // A dispose rejection must not shadow the run's authoritative
+        // outcome (transition / session_failed / thrown invariant); we
+        // suppress it here and route to structured logging once Task 5's
+        // observability seam lands. This is a deliberate, documented
+        // suppression — not a silent fallback on ambiguity.
+        await session.dispose().catch((disposeError) => {
+          void disposeError;
         });
-        host.persistRecord(reduceResult.record);
-
-        // Clear the capture buffer for the next attempt (whether the
-        // reduce was accepted or rejected). For accepted: defensive;
-        // the session is about to end anyway. For rejected: required,
-        // so the next prompt's emission is the sole candidate for
-        // validateEmission (without this, a second emission would read
-        // as `extra_emission` against the rejected capture).
-        session.resetCaptureBuffer();
-
-        if (reduceResult.kind === "rejected") {
-          // ── Retry in-session: re-prompt with legal_targets (§11.3) ─
-          // No terminal lifecycle — the session continues. Persist the
-          // rejected record (above), then surface legal_targets to the
-          // model and re-prompt.
-          nextSeed = formatRejectionMessage(reduceResult);
-          continue;
-        }
-
-        // ── Accepted (§12.1) ─────────────────────────────────────────
-        // 1. Update the checkpoint from the reducer and persist it.
-        checkpoint = reduceResult.checkpoint;
-        const snapshot: CheckpointSnapshot = {
-          type: "checkpoint_snapshot",
-          checkpoint,
-        };
-        host.persistRecord(snapshot);
-
-        // 2. §12.1 step 2: session_ended for the just-finished session.
-        // active_role_session was set by session_started above; reduce
-        // did NOT clear it (only lifecycle terminals do). session_ended
-        // validates meta.sessionId/role against the live session and
-        // clears active_role_session.
-        const ended = reduceLifecycle(checkpoint, "session_ended", def, {
-          role,
-          sessionId,
-          sessionFile,
-          ts: Date.now(),
-          visit_index: visitIndex,
-          parent_session: sessionParentId,
-          usage: capturedUsage,
-          model: session.model,
-        });
-        checkpoint = ended.checkpoint;
-        host.persistRecord(ended.record);
-        // §11.1: each transition produces a new full checkpoint
-        // snapshot. session_ended clears active_role_session;
-        // persist a fresh snapshot so latestCheckpoint reflects
-        // the post-terminal state (active=null). This is what
-        // resumeRun reads — a non-null active_role_session on
-        // the latest snapshot is the crash signal.
-        host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-
-        if (reduceResult.state === "done") {
-          inner = { kind: "done" };
-          break;
-        }
-
-        // ── Accepted handoff to next role. Prepare the seed for the
-        // outer loop's next iteration (§8.3: `suggests_next` is
-        // advisory, surfaced as orchestrator context). The host's next
-        // spawnRole + session_started (next outer iteration) wires
-        // parent_session = sessionId automatically. ─────────────────
-        const nextRole: Role = reduceResult.state;
-        const payload = validated.event.payload as Record<string, unknown> | undefined;
-        const suggestsNext =
-          validated.event.type === "handoff" &&
-          payload !== undefined &&
-          typeof payload === "object" &&
-          typeof payload.suggests_next === "string"
-            ? (payload.suggests_next as Role)
-            : null;
-        nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext);
-        inner = { kind: "advance", nextSeed };
-        break;
       }
 
-      if (inner.kind === "failed") {
-        return { finalCheckpoint: checkpoint, exitReason: "session_failed" };
+      // ── Task 18: model_error → fallback to next model ──────────
+      // The session ended with `model_error`. Record `model_fallback`
+      // (per §11.5) only when the role has a next model in its
+      // `models[]` list — a transition to a non-existent model is
+      // not a real fallback, just exhaustion. Then `continue` to
+      // try the next model. If the list is exhausted, the next
+      // `spawnRole` call throws `NoMoreModelsError`, the host sets
+      // its `unavailableRole` marker, and the catch below sets
+      // `exhausted` and breaks. State is unchanged across model
+      // retries (same role, same `visitIndex` captured above).
+      if (inner.kind === "failed" && sessionHostReason === "model_error") {
+        const nextModel = host.getNextModel(role, modelIndex);
+        if (nextModel !== null) {
+          host.persistRecord({
+            type: "model_fallback",
+            run_id: checkpoint.run_id,
+            role,
+            from_model: session.model,
+            to_model: nextModel,
+            reason: "model_error",
+            session_file: session.sessionFile,
+            ts: Date.now(),
+          });
+        }
+        modelIndex += 1;
+        continue; // try the next model (or hit NoMoreModelsError)
       }
+
+      // Other outcomes — exit the fallback loop.
       if (inner.kind === "done") {
-        return { finalCheckpoint: checkpoint, exitReason: "done" };
+        roleOutcome = { kind: "done" };
+      } else if (inner.kind === "failed") {
+        roleOutcome = { kind: "failed" };
+      } else {
+        roleOutcome = { kind: "advance", nextSeed: inner.nextSeed };
       }
-      // advance: continue outer loop with the new seed.
-      seed = inner.nextSeed;
-    } finally {
-      // spec §12.1 lifecycle step 7 / `RoleSession.dispose` (host.ts):
-      // release this iteration's session resources on EVERY exit path —
-      // accepted handoff, session_failed (breach / host reason), done,
-      // run-cap early return, or a thrown invariant. Without this, each
-      // spawned session's runtime / listeners / file handles persist
-      // until the Vitest worker exits, which dominated memory pressure
-      // during Phase 5's host-heavy suite. The `finally` wraps the
-      // session block (spawn is outside: a spawn failure leaves no
-      // handle to dispose). The inner retry `continue` stays inside the
-      // try, so the session is NOT disposed mid-retry — only on the
-      // iteration's terminal exit.
-      //
-      // A dispose rejection must not shadow the run's authoritative
-      // outcome (transition / session_failed / thrown invariant); we
-      // suppress it here and route to structured logging once Task 5's
-      // observability seam lands. This is a deliberate, documented
-      // suppression — not a silent fallback on ambiguity.
-      await session.dispose().catch((disposeError) => {
-        void disposeError;
-      });
+      break;
     }
+
+    // Handle role outcome (after fallback loop)
+    if (roleOutcome.kind === "done") {
+      return { finalCheckpoint: checkpoint, exitReason: "done" };
+    }
+    if (roleOutcome.kind === "failed") {
+      return { finalCheckpoint: checkpoint, exitReason: "session_failed" };
+    }
+    if (roleOutcome.kind === "exhausted") {
+      // ── Task 18: synthesize handoff to orchestrator (§9.4) ────────
+      // The role exhausted its model fallback list. Per §9.4 v1
+      // default, hand to the orchestrator once with a "role
+      // unavailable" payload. The orchestrator decides whether to
+      // end, re-dispatch a different role, or re-dispatch the same
+      // role (which escalates per §9.4). The synthesized handoff is
+      // a legal transition (worker → orch is the only legal target,
+      // §7.2) — the reducer accepts it and advances state.
+      const synthesized: MachineEvent = {
+        type: "handoff",
+        target_role: def.orchestrator,
+        payload: { reason: "role_unavailable", role: role },
+      };
+      const result = reduce(checkpoint, synthesized, def, {
+        role: role,
+        sessionFile: SYNTHESIZED_UNAVAILABLE_SESSION_FILE,
+        ts: Date.now(),
+      });
+      host.persistRecord(result.record);
+      checkpoint = result.checkpoint;
+      host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+      // Continue outer loop with a "role unavailable" seed for the
+      // orchestrator. The orchestrator's system prompt would handle
+      // this payload; the loop just formats the surface text.
+      seed = formatRoleUnavailableSeed(role);
+    } else {
+      // advance: continue outer loop with the new seed.
+      seed = roleOutcome.nextSeed;
+    }
+    // Increment visit_index for the role that just finished its
+    // visit. Covers both `exhausted` (the role is abandoned) and
+    // `advance` (the role transitions away). The next visit to the
+    // same role gets the next index. Model retries within this
+    // visit already shared the captured `visitIndex` above.
+    visitIndexByRole.set(role, visitIndex + 1);
   }
 
   return { finalCheckpoint: checkpoint, exitReason: "done" };
@@ -527,6 +670,13 @@ type InnerOutcome =
   | { readonly kind: "failed" }
   | { readonly kind: "done" }
   | { readonly kind: "advance"; readonly nextSeed: string };
+
+/** Task 18: outcome of a role visit's fallback loop. */
+type RoleOutcome =
+  | { readonly kind: "failed" }
+  | { readonly kind: "done" }
+  | { readonly kind: "advance"; readonly nextSeed: string }
+  | { readonly kind: "exhausted" };
 
 const ZERO_USAGE: UsageRecord = Object.freeze({
   input: 0,
@@ -561,6 +711,31 @@ function formatRejectionMessage(result: {
     `Legal targets: handoff to [${targets}]${endClause}.`,
     "Please emit exactly one of those machine events in your next turn.",
   ].join(" ");
+}
+
+/**
+ * Format a "role unavailable" payload into the orchestrator's seed
+ * text (Task 18, §9.4 v1 default). The orchestrator receives this
+ * as its first user message when a role exhausts its model fallback
+ * list. The orchestrator decides whether to end, re-dispatch a
+ * different role, or re-dispatch the same role (which escalates
+ * per §9.4).
+ *
+ * The text is human-readable so the model can act on it. The
+ * payload itself is the structured handoff argument the loop
+ * synthesized; the seed is a surface for the model, not a
+ * machine-readable contract.
+ */
+function formatRoleUnavailableSeed(role: Role): string {
+  return [
+    `[role_unavailable: ${role}]`,
+    `The role '${role}' exhausted its model fallback list (§8.2).`,
+    `Per §9.4 v1 default, you have one chance to handle this:`,
+    `  - end the run, OR`,
+    `  - hand off to a different role (NOT '${role}'), OR`,
+    `  - hand off to '${role}' (this will escalate per §9.4).`,
+    "When done, emit exactly one handoff (target_role=<next role>) or end.",
+  ].join("\n");
 }
 
 /**

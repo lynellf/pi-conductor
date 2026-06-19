@@ -222,6 +222,12 @@ class FakeHost implements Host {
     return 0;
   }
 
+  getNextModel(_role: Role, _currentModelIndex: number): string | null {
+    // Loop-test default: no next model. Fallback tests (Task 18)
+    // override FakeHost to return configured models per role.
+    return null;
+  }
+
   nextVisitIndex(role: Role): number {
     // Count session_started records for `role` in the log + 1.
     const startedForRole = this.log

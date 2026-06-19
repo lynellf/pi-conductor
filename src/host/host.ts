@@ -324,6 +324,20 @@ export interface Host {
   sessionTerminalReason(session: RoleSession): SessionTerminalReason;
 
   /**
+   * Get the next model in the role's `models[]` list (Task 18, §8.2).
+   * Returns the `provider:id` string at `currentModelIndex + 1`, or
+   * `null` if the list is exhausted (or the role has no `models` field).
+   * The loop uses this to populate the `model_fallback` record's
+   * `to_model` field on each model transition.
+   *
+   * Distinct from `spawnRole`'s `modelIndex` option: this is a read
+   * for observability (recording which model is being tried next),
+   * not a spawn. The loop increments `modelIndex` and calls
+   * `spawnRole` separately.
+   */
+  getNextModel(role: Role, currentModelIndex: number): string | null;
+
+  /**
    * Cumulative run cost across all persisted terminal sessions
    * (`session_ended` AND `session_failed`, §11.4 — both terminals
    * cost) in the run, summed over `usage.cost`. Excludes the

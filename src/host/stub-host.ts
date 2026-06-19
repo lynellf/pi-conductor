@@ -127,14 +127,32 @@ export class StubHost implements Host {
     // §9.4 v1 default: hand to orchestrator once, then escalate.
     // The "unavailable" marker is set when the role's models were
     // just exhausted; the next spawnRole for the same role
-    // surfaces as a typed error. A different role clears the
-    // marker.
+    // surfaces as a typed error.
+    //
+    // Marker lifecycle:
+    //   - Set: list exhausted for `role` (NoMoreModelsError path).
+    //   - Consumed: a same-role spawn (escalation). The marker is
+    //     cleared when consumed.
+    //   - Cleared (not consumed): a non-orchestrator, non-unavailable
+    //     role is spawned. The orchestrator's spawn is the "hand
+    //     to orchestrator once" — the marker persists so that a
+    //     re-dispatch of the same role can escalate. A different
+    //     non-orchestrator role's spawn consumes the "one chance":
+    //     the unavailable role is no longer relevant, the marker
+    //     is cleared.
     if (this.unavailableRole === role) {
       this.unavailableRole = null; // consume the escalation
       throw new RoleEscalationError(role);
     }
     if (this.unavailableRole !== null && this.unavailableRole !== role) {
-      this.unavailableRole = null;
+      // Different role — clear only if it's a non-orchestrator role
+      // (the "one chance" is used). The orchestrator's spawn leaves
+      // the marker in place so a re-dispatch of the same role
+      // escalates.
+      const orchestrator = this.loadedManifestValue?.def.orchestrator;
+      if (role !== orchestrator) {
+        this.unavailableRole = null;
+      }
     }
 
     // ── Task 18: resolve the model from the role's models[] list.
@@ -253,9 +271,24 @@ export class StubHost implements Host {
   }
 
   nextVisitIndex(role: Role): number {
+    // Count terminals (session_ended + session_failed) for the role,
+    // not session_started. A model retry (Task 18) is the SAME visit
+    // with a different model — the role didn't transition, it re-ran.
+    // Counting session_started would inflate the visit_index on every
+    // model retry within the same visit, which would be wrong.
+    //
+    // Semantics: visit_index is "which visit of this role in the run"
+    // (§11.4). A visit ends when the role transitions away (terminal
+    // session_ended) or is abandoned (session_failed for a non-
+    // recoverable cause). A model retry produces a session_failed for
+    // the failed model — that counts as the same visit, so the count
+    // doesn't increment until the visit actually ends.
     return (
-      this.log.records(this.runId).filter((r) => r.type === "session_started" && r.role === role)
-        .length + 1
+      this.log
+        .records(this.runId)
+        .filter(
+          (r) => (r.type === "session_ended" || r.type === "session_failed") && r.role === role,
+        ).length + 1
     );
   }
 
@@ -294,6 +327,18 @@ export class StubHost implements Host {
     return total;
   }
 
+  getNextModel(role: Role, currentModelIndex: number): string | null {
+    // Read the role's `models[]` list from the loaded manifest
+    // and return the entry at `currentModelIndex + 1`, or `null`
+    // if the list is exhausted (or the role has no models field).
+    // The loop uses this to populate the `model_fallback`
+    // record's `to_model` field on each model transition.
+    const roleConfig = this.lookupRoleConfig(role);
+    if (roleConfig?.models === undefined) return null;
+    const next = roleConfig.models[currentModelIndex + 1];
+    return next ?? null;
+  }
+
   async abortSession(_session: RoleSession, _reason: string): Promise<void> {
     // No-op: the cap abort is driven from the session-event
     // subscription in `spawnRole`, which has direct access to
@@ -327,6 +372,16 @@ export class StubHost implements Host {
   ): void {
     if (event.type === "message_end") {
       const message = event.message as AssistantMessage;
+      // Model-error detection (Task 18, §8.2). The stub's `fail`
+      // step emits an AssistantMessage with `stopReason: "error"`.
+      // If the SDK fires `message_end` after the `error` event
+      // (protocol-dependent), we catch it here and flip the
+      // terminal reason. The `error` event handler below catches
+      // the case where `message_end` does NOT fire after `error`.
+      if (message?.role === "assistant" && message.stopReason === "error") {
+        state.setTerminalReason("model_error");
+        return;
+      }
       if (message?.role === "assistant" && message.usage) {
         // De-dup key: timestamp + totalTokens + cost.total. The
         // SDK contract is one message_end per message; this
@@ -355,11 +410,13 @@ export class StubHost implements Host {
       }
       return;
     }
-    // Model-error detection (Task 18) is wired via the stub's
-    // `fail` step: the assistant message it emits carries
-    // `stopReason: "error"`, which the host's per-session state
-    // picks up on the next `message_end`. Task 18's test will
-    // exercise the full path (fail → model_error → next model).
+    // Model-error detection is handled on `message_end` above
+    // (check for `message.stopReason === "error"`). The SDK's
+    // `AgentSessionEvent` protocol doesn't include a separate
+    // `error` event type — the `AssistantMessageEvent` `error`
+    // type from the underlying `pi-ai` stream is translated into
+    // a `message_end` carrying the error message by the agent
+    // runtime. No additional handler needed here.
   }
 
   /**
