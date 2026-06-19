@@ -11,16 +11,12 @@
  *       asserting the persisted record shapes (§11.2–§11.5) and
  *       final checkpoint.
  *
- * `StubHost` is a minimal real `Host` implementation that wires
- * `createAgentSession` to the stub provider registered on an
- * in-memory `ModelRegistry`. It is the load-bearing test surface
- * for Phases 4–5 (the production SDK-backed Host will reuse the
- * same wiring with a real provider).
+ * `StubHost` lives in `src/host/stub-host.ts` and is reused here
+ * + by Task 13.5's resume tests.
  */
 
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import {
-  type AgentSession,
   type AgentSessionEvent,
   AuthStorage,
   createAgentSession,
@@ -28,125 +24,19 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { createEndTool, createHandoffTool, SessionSeam } from "../../src/host/index.js";
+
+import { createEndTool, createHandoffTool, SessionSeam, StubHost } from "../../src/host/index.js";
 import { runLoop } from "../../src/host/loop.js";
-import {
-  makeStubModel,
-  makeStubStreamFunction,
-  type StubStep,
-} from "../../src/host/stub-provider.js";
+import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
 import {
   type Checkpoint,
   createInitialCheckpoint,
-  type Host,
   InMemoryRecordLog,
   type MachineDefinition,
-  type PersistedRecord,
-  type Role,
-  type RoleSession,
   type SessionLifecycleEvent,
   type TransitionAccepted,
   type TransitionRejected,
-  type UsageRecord,
 } from "../../src/index.js";
-
-// ─── Test fakes ────────────────────────────────────────────────────────
-
-/**
- * Minimal real `Host` that wires `createAgentSession` to the stub
- * provider. Implements only the methods the loop calls
- * (Task 15's loop: spawnRole, captureUsage, persistRecord,
- * nextVisitIndex); the rest are no-ops.
- */
-class StubHost implements Host {
-  readonly log = new InMemoryRecordLog();
-  private readonly modelRegistry: ModelRegistry;
-  private readonly sessionManager: SessionManager;
-  private readonly model = makeStubModel();
-  private readonly sessionsBySessionId = new Map<
-    string,
-    { agentSession: AgentSession; seam: SessionSeam; role: Role }
-  >();
-  private sessionCounter = 0;
-
-  constructor(
-    readonly runId: string,
-    opts: { steps: readonly StubStep[]; usage?: Partial<Usage> },
-  ) {
-    const authStorage = AuthStorage.inMemory();
-    this.modelRegistry = ModelRegistry.inMemory(authStorage);
-    const streamFn = makeStubStreamFunction({
-      steps: opts.steps,
-      ...(opts.usage !== undefined && { usage: opts.usage }),
-    });
-    this.modelRegistry.registerProvider("stub", {
-      api: "anthropic-messages" as const,
-      apiKey: "stub-dummy-key-not-used",
-      streamSimple: streamFn,
-    });
-    this.sessionManager = SessionManager.inMemory();
-  }
-
-  async spawnRole(role: Role): Promise<RoleSession> {
-    const seam = new SessionSeam();
-    const handoff = createHandoffTool(seam);
-    const end = createEndTool(seam);
-
-    const { session } = await createAgentSession({
-      model: this.model,
-      modelRegistry: this.modelRegistry,
-      tools: ["handoff", "end"],
-      customTools: [handoff, end],
-      sessionManager: this.sessionManager,
-    });
-
-    this.sessionCounter += 1;
-    const sid = `stub-session-${this.sessionCounter}`;
-    this.sessionsBySessionId.set(sid, { agentSession: session, seam, role });
-
-    return {
-      role,
-      sessionId: session.sessionId,
-      sessionFile: session.sessionFile ?? `/tmp/${sid}.jsonl`,
-      readCaptureBuffer: () => seam.read(),
-      resetCaptureBuffer: () => seam.reset(),
-      subscribe: (listener) => session.subscribe(listener),
-      prompt: (text) => session.prompt(text),
-      dispose: () => session.dispose(),
-    };
-  }
-
-  captureUsage(_session: RoleSession): UsageRecord {
-    // Task 17 wires real usage accumulation from the event stream;
-    // for Task 16 we return zeros. The §11.4 mapping is asserted
-    // against the message_end event directly in Test 1.
-    return { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 };
-  }
-
-  persistRecord(record: PersistedRecord): void {
-    this.log.append(record);
-  }
-
-  nextVisitIndex(role: Role): number {
-    return (
-      this.log.records(this.runId).filter((r) => r.type === "session_started" && r.role === role)
-        .length + 1
-    );
-  }
-
-  // Unused by the loop; no-ops for interface compliance.
-  seedRunMemory(): unknown {
-    return {};
-  }
-
-  async abortSession(): Promise<void> {
-    /* no-op */
-  }
-
-  sealSession(): void {
-    /* no-op */
-  }
-}
 
 function makeDef(): MachineDefinition {
   return Object.freeze({
@@ -157,22 +47,10 @@ function makeDef(): MachineDefinition {
   }) as MachineDefinition;
 }
 
-const ZERO_USAGE: UsageRecord = Object.freeze({
-  input: 0,
-  output: 0,
-  cache_read: 0,
-  cache_write: 0,
-  tokens: 0,
-  cost: 0,
-}) as UsageRecord;
-
 // ─── (1) Stub drives one createAgentSession turn ──────────────────────
 
 describe("stub provider — drives one createAgentSession turn (Task 16 acceptance #1)", () => {
   it("emits assistant usage on the message_end event in the SDK shape", async () => {
-    // Use a self-contained registration (no StubHost) for this test —
-    // we want to drive exactly one turn and inspect the event stream
-    // directly, before any Host machinery is involved.
     const authStorage = AuthStorage.inMemory();
     const modelRegistry = ModelRegistry.inMemory(authStorage);
     const stubModel = makeStubModel();
@@ -256,7 +134,10 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     // 3 visits: orchestrator → worker, worker → orchestrator,
     // orchestrator → end.
     const initialCheckpoint: Checkpoint = createInitialCheckpoint(makeDef());
-    const host = new StubHost(initialCheckpoint.run_id, {
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
       steps: [
         { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
@@ -285,7 +166,7 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     expect(result.finalCheckpoint.visit_count.worker).toBe(1);
 
     // §11.2 + §11.4 + §11.1 record shape assertions.
-    const records = host.log.records(initialCheckpoint.run_id);
+    const records = log.records(initialCheckpoint.run_id);
     const byType = records.reduce<Record<string, number>>((acc, r) => {
       acc[r.type] = (acc[r.type] ?? 0) + 1;
       return acc;
@@ -293,7 +174,9 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     expect(byType.session_started).toBe(3);
     expect(byType.session_ended).toBe(3);
     expect(byType.transition_accepted).toBe(3);
-    expect(byType.checkpoint_snapshot).toBe(3);
+    // 3 visits × 3 snapshots per visit (post-session_started,
+    // post-reduce, post-session-ended) = 9.
+    expect(byType.checkpoint_snapshot).toBe(9);
     expect(byType.session_failed).toBeUndefined();
     expect(byType.transition_rejected).toBeUndefined();
 
@@ -317,36 +200,50 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     expect(ended).toHaveLength(3);
     for (const ev of ended) {
       expect(ev.usage).toBeDefined();
-      // Note: Task 17 wires the host's accumulation. For Task 16,
-      // host.captureUsage returns zeros — this assertion verifies
-      // the record shape carries the usage field at all.
-      expect(ev.usage).toEqual(ZERO_USAGE);
+      // Task 17 wires real accumulation; StubHost.captureUsage returns
+      // zeros so the usage is recorded as zeros. This assertion
+      // verifies the record shape carries the usage field at all.
+      expect(ev.usage).toEqual({
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        tokens: 0,
+        cost: 0,
+      });
     }
 
-    // §11.1: every accepted transition produced a checkpoint snapshot.
+    // §11.1: every reducer call produces a checkpoint snapshot.
+    // 3 visits × 3 snapshots per visit = 9. The post-reduce snapshots
+    // at indices 1, 4, 7 reflect the current_role advance.
     const snapshots = records.filter((r) => r.type === "checkpoint_snapshot");
-    expect(snapshots).toHaveLength(3);
-    expect(snapshots[0]).toMatchObject({
+    expect(snapshots).toHaveLength(9);
+    expect(snapshots[1]).toMatchObject({
       type: "checkpoint_snapshot",
       checkpoint: { current_role: "worker" },
     });
-    expect(snapshots[2]).toMatchObject({
+    expect(snapshots[4]).toMatchObject({
+      type: "checkpoint_snapshot",
+      checkpoint: { current_role: "orchestrator" },
+    });
+    expect(snapshots[7]).toMatchObject({
       type: "checkpoint_snapshot",
       checkpoint: { current_role: "done" },
     });
+    // The post-session-ended snapshots (2, 5, 8) clear
+    // active_role_session — this is what Task 13.5's resumeRun
+    // reads to decide whether a run is in a clean terminal state.
+    expect(snapshots[2]?.checkpoint.active_role_session).toBeNull();
+    expect(snapshots[5]?.checkpoint.active_role_session).toBeNull();
+    expect(snapshots[8]?.checkpoint.active_role_session).toBeNull();
 
-    // parent_session links (§11.4) form a tree: orch₁ → worker → orch₂.
+    // §11.4 parent_session links form a tree: orch₁ → worker → orch₂.
     const started = records.filter((r): r is SessionLifecycleEvent => r.type === "session_started");
     expect(started).toHaveLength(3);
     expect(started.map((s) => s.role)).toEqual(["orchestrator", "worker", "orchestrator"]);
-    // Root has no parent; descendants link to the previous session.
     expect(started[0]?.parent_session).toBeNull();
     expect(started[1]?.parent_session).not.toBeNull();
     expect(started[2]?.parent_session).not.toBeNull();
-    // parent_session is an opaque link string per §11.4 — the loop
-    // uses RoleSession.sessionId as the link token (and session_file
-    // as the on-disk identifier). They are intentionally different
-    // strings; the assertion above just verifies the chain shape.
   });
 });
 
@@ -355,7 +252,10 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
 describe("stub provider — no_emission drives a §11.3 breach (no_emission)", () => {
   it("session emits no tool call → session_failed(no_emission), no reduce", async () => {
     const initialCheckpoint = createInitialCheckpoint(makeDef());
-    const host = new StubHost(initialCheckpoint.run_id, {
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
       steps: [{ kind: "no_emission" }],
     });
 
@@ -367,11 +267,10 @@ describe("stub provider — no_emission drives a §11.3 breach (no_emission)", (
     });
 
     expect(result.exitReason).toBe("session_failed");
-    const records = host.log.records(initialCheckpoint.run_id);
+    const records = log.records(initialCheckpoint.run_id);
     expect(records.some((r) => r.type === "session_started")).toBe(true);
     const failed = records.find((r): r is SessionLifecycleEvent => r.type === "session_failed");
     expect(failed?.failure_reason).toBe("no_emission");
-    // CRITICAL: no transition_rejected and no reduce call.
     expect(records.some((r): r is TransitionRejected => r.type === "transition_rejected")).toBe(
       false,
     );

@@ -157,6 +157,12 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     });
     checkpoint = started.checkpoint;
     host.persistRecord(started.record);
+    // §11.1: each transition produces a new full checkpoint snapshot.
+    // session_started sets active_role_session; a snapshot here is
+    // what resumeRun reads when a run crashed mid-prompt — without
+    // it, latestCheckpoint would still point to the previous visit's
+    // cleared terminal and crash detection wouldn't fire.
+    host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
 
     // Track this session as parent for the next session_started.
     parentSessionId = sessionId;
@@ -187,6 +193,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         });
         checkpoint = failed.checkpoint;
         host.persistRecord(failed.record);
+        // §11.1: each transition produces a new full checkpoint
+        // snapshot. session_failed clears active_role_session;
+        // persist a fresh snapshot so latestCheckpoint reflects
+        // the post-terminal state (active=null).
+        host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
         inner = { kind: "failed" };
         break;
       }
@@ -241,6 +252,13 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       });
       checkpoint = ended.checkpoint;
       host.persistRecord(ended.record);
+      // §11.1: each transition produces a new full checkpoint
+      // snapshot. session_ended clears active_role_session;
+      // persist a fresh snapshot so latestCheckpoint reflects
+      // the post-terminal state (active=null). This is what
+      // resumeRun reads — a non-null active_role_session on
+      // the latest snapshot is the crash signal.
+      host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
 
       if (reduceResult.state === "done") {
         inner = { kind: "done" };

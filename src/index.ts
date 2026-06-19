@@ -153,11 +153,26 @@ export { buildRunMemory } from "./core/run-memory.js";
 // for the SDK package name in `src/core` + `src/manifest` + `src/seam` +
 // `src/cost`; `src/host/` is by exclusion the only allowed home.
 
+// ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
 export type {
   Host,
+  HostFactoryContext,
   LoadedManifest,
+  ResumeRunOptions,
   RoleSession,
+  RunConfigOverride,
+  RunStats,
   SeedRunMemoryArgs,
   SpawnRoleOptions,
+  StartRunOptions,
 } from "./host/index.js";
-export { HostManifestError, loadManifest, loadManifestFromString } from "./host/index.js";
+export {
+  FileRecordLog,
+  HostManifestError,
+  listRuns,
+  loadManifest,
+  loadManifestFromString,
+  RunHandle,
+  resumeRun,
+  startRun,
+} from "./host/index.js";

@@ -84,3 +84,37 @@ export { wrapAllToolsWithSeal, wrapToolWithSeal } from "./tool-wrapper.js";
 
 export type { StubStep, StubStreamOptions } from "./stub-provider.js";
 export { makeStubModel, makeStubStreamFunction } from "./stub-provider.js";
+
+// ─── StubHost (Task 13.5 / Task 16) ───────────────────────────────────
+// Minimal real `Host` that wires `createAgentSession` to the stub
+// provider. Used by the Phase 4 E2E tests (and the resume tests).
+
+export type { StubHostOptions } from "./stub-host.js";
+export { StubHost } from "./stub-host.js";
+
+// ─── File-backed RecordLog (Task 13.5, §11.1) ────────────────────────
+// JSONL-per-run log; one file per run_id. Phase 4 test surface
+// uses sync writes; production's persistent log (Phase 5) can
+// swap to an async tail or external store transparently.
+
+export type { FileRecordLogOptions } from "./log-file.js";
+export { FileRecordLog } from "./log-file.js";
+
+// ─── RunHandle (Task 13.5, §11.9) ────────────────────────────────────
+// Runtime handle for a run. Returned by startRun / resumeRun;
+// exposes completion(), abort(), runStats(), runConfig(),
+// buildRunMemory().
+
+export type { RunConfigOverride, RunStats } from "./run-handle.js";
+export { RunHandle } from "./run-handle.js";
+
+// ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
+// startRun / resumeRun / listRuns — the canonical CLI / TUI
+// surfaces for orchestrating a run end-to-end.
+
+export type {
+  HostFactoryContext,
+  ResumeRunOptions,
+  StartRunOptions,
+} from "./api.js";
+export { listRuns, resumeRun, startRun } from "./api.js";

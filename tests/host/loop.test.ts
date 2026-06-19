@@ -297,7 +297,8 @@ describe("runLoop — happy path", () => {
     expect(byType.session_started).toBe(3);
     expect(byType.session_ended).toBe(3);
     expect(byType.transition_accepted).toBe(3);
-    expect(byType.checkpoint_snapshot).toBe(3);
+    // 3 visits × 3 snapshots per visit = 9.
+    expect(byType.checkpoint_snapshot).toBe(9);
     expect(byType.session_failed).toBeUndefined();
     expect(byType.transition_rejected).toBeUndefined();
   });
@@ -531,13 +532,19 @@ describe("runLoop — reducer rejection (§11.3 retry path)", () => {
 
     const records = log.records(initialCheckpoint.run_id);
     const order = records.map((r) => r.type);
-    // The order should be: session_started, transition_rejected, transition_accepted, checkpoint_snapshot, session_ended
+    // The order should be: session_started, checkpoint_snapshot
+    // (post-session_started), transition_rejected (rejected),
+    // transition_accepted (accepted on retry), checkpoint_snapshot
+    // (post-reduce), session_ended, checkpoint_snapshot
+    // (post-session-ended).
     expect(order).toEqual([
       "session_started",
+      "checkpoint_snapshot",
       "transition_rejected",
       "transition_accepted",
       "checkpoint_snapshot",
       "session_ended",
+      "checkpoint_snapshot",
     ]);
   });
 });
@@ -563,29 +570,32 @@ describe("runLoop — canonical reducer call order (§12.1)", () => {
     const records = log.records(initialCheckpoint.run_id);
     const order = records.map((r) => r.type);
 
-    // Visit 1 (orchestrator → worker):
-    //   session_started(orch)
-    //   transition_accepted(orch → worker)
-    //   checkpoint_snapshot
-    //   session_ended(orch)
-    // Visit 2 (worker → end):
-    //   session_started(worker)
-    //   transition_accepted(worker → done)
-    //   checkpoint_snapshot
-    //   session_ended(worker)
+    // Per §11.1 "each transition produces a snapshot", the loop
+    // persists a checkpoint_snapshot after every reducer call
+    // (session_started, reduce, session_ended). Per visit the order is:
+    //   session_started, checkpoint_snapshot (active set),
+    //   transition_accepted, checkpoint_snapshot (current advanced),
+    //   session_ended, checkpoint_snapshot (active cleared).
+    // 3 visits × 6 records each = 18 records.
     expect(order).toEqual([
       "session_started",
+      "checkpoint_snapshot",
       "transition_accepted",
       "checkpoint_snapshot",
       "session_ended",
+      "checkpoint_snapshot",
       "session_started",
+      "checkpoint_snapshot",
       "transition_accepted",
       "checkpoint_snapshot",
       "session_ended",
+      "checkpoint_snapshot",
       "session_started",
+      "checkpoint_snapshot",
       "transition_accepted",
       "checkpoint_snapshot",
       "session_ended",
+      "checkpoint_snapshot",
     ]);
   });
 
@@ -607,10 +617,19 @@ describe("runLoop — canonical reducer call order (§12.1)", () => {
     const snapshots = log
       .records(initialCheckpoint.run_id)
       .filter((r): r is CheckpointSnapshot => r.type === "checkpoint_snapshot");
-    expect(snapshots).toHaveLength(3);
-    expect(snapshots[0]?.checkpoint.current_role).toBe("worker");
-    expect(snapshots[1]?.checkpoint.current_role).toBe("orchestrator");
-    expect(snapshots[2]?.checkpoint.current_role).toBe("done");
+    // 3 visits × 3 snapshots per visit (post-session_started,
+    // post-reduce, post-session-ended) = 9.
+    expect(snapshots).toHaveLength(9);
+    // Snapshot at indices [1, 4, 7] are the post-reduce snapshots
+    // (current_role advanced to the next role).
+    expect(snapshots[1]?.checkpoint.current_role).toBe("worker");
+    expect(snapshots[4]?.checkpoint.current_role).toBe("orchestrator");
+    expect(snapshots[7]?.checkpoint.current_role).toBe("done");
+    // Snapshot at indices [2, 5, 8] are the post-session-ended
+    // snapshots (active_role_session cleared).
+    expect(snapshots[2]?.checkpoint.active_role_session).toBeNull();
+    expect(snapshots[5]?.checkpoint.active_role_session).toBeNull();
+    expect(snapshots[8]?.checkpoint.active_role_session).toBeNull();
   });
 });
 
