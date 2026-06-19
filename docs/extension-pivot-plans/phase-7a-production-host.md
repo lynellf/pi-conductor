@@ -5,8 +5,9 @@
 > verification. Source spec: `docs/orchestrator-fsm-spec.md` (§8, §8.1, §11,
 > §12). SDK surface pinned in `docs/sdk-surface.md` (§1, §3, §4, §6).
 >
-> **Status:** Task 7A.1 complete (feat commit `2e20ad5`, this doc commit pending).
-> 343/343 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
+> **Status:** Task 7A.1 complete (feat commit `2e20ad5`); Task 7A.2 complete
+> (feat commit `30d7a6a`, this doc commit pending). 359/359 tests green;
+> `typecheck` / `build` / `lint` / `format:check` clean.
 >
 > **Scope:** Add the production `Host` implementation the SDK loop already
 > expects. It reuses the existing pure core, seam, cost helpers, file-backed log,
@@ -22,6 +23,33 @@
       imports.
 
 ## Tasks
+
+- [x] **Task 7A.2: Model and system-prompt resolution** — commit `30d7a6a`
+  - Description: Implement the pure resolution pieces used by `spawnRole`.
+    Resolve `role.models[modelIndex]` in `provider:id` form through
+    `modelRegistry.find(provider, id)`, record the logical model string for
+    lifecycle records, and load `role.system_prompt` from `cwd` as UTF-8.
+    Missing models and missing prompt files fail loudly with the errors from
+    7A.1.
+  - Acceptance:
+    - [x] A mock registry hit returns the selected `Model` and logical
+          `provider:id`.
+    - [x] A mock registry miss throws `ModelNotFoundError`.
+    - [x] A declared prompt path loads as UTF-8; a missing declared path throws
+          `SystemPromptNotFoundError`.
+    - [x] A role with omitted `models` keeps the existing "system model" path
+          explicit rather than guessing a provider alias.
+  - Verification:
+    - [x] `pnpm test -- host/production-host` (30/30, was 14/14)
+    - [x] `pnpm typecheck`
+  - Dependencies: Task 7A.1
+  - Files likely touched:
+    - `src/host/production-host.ts` (3 new exports: `selectModelEntry`,
+      `resolveModel`, `loadSystemPrompt`)
+    - `src/host/index.ts`, `src/index.ts` (re-exports)
+    - `tests/host/production-host.test.ts` (16 new tests; 5 case table for
+      malformed entries)
+  - Estimated scope: M
 
 - [x] **Task 7A.1: Production host scaffold + boundary errors** — commit `2e20ad5`
   - Description: Add `ProductionHost implements Host` in `src/host/` with a
