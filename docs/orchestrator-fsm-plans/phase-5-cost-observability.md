@@ -7,7 +7,7 @@
 > and main plan Open Question #6. `usage` is on `message.usage` (`AssistantMessage`),
 > camelCase with a nested `cost` object.
 >
-> **Status:** Task 20 complete (commit `d9c2eb1`, 2026-06-19). **Checkpoint E reached.**
+> **Status:** Task 20 complete (feat commit `bf02366`, doc commit `a3a22fc`, 2026-06-19). **Checkpoint E reached.**
 > 329/329 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
 > Phase 5 complete pending human review.
 >
@@ -103,7 +103,7 @@
   - Files: `src/host/stats.ts`, `src/host/config.ts`, `tests/host/stats.test.ts`
   - Scope: M
 
-- [x] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)** — commit `d9c2eb1`
+- [x] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)** — feat commit `bf02366`
   - Description: Provide the default orchestrator role template and one minimal worker
     role template, plus a sample `.pi/conductor.yaml` fixture that declares them
     explicitly. The default is a scaffold/template, not implicit reducer state: a real
