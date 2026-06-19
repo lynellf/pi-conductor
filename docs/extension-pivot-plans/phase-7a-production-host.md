@@ -5,9 +5,10 @@
 > verification. Source spec: `docs/orchestrator-fsm-spec.md` (§8, §8.1, §11,
 > §12). SDK surface pinned in `docs/sdk-surface.md` (§1, §3, §4, §6).
 >
-> **Status:** Tasks 7A.1, 7A.2, 7A.3 complete (feat commits `2e20ad5`,
-> `30d7a6a`, `d1ae204`; this doc commit pending). 369/369 tests green;
-> `typecheck` / `build` / `lint` / `format:check` clean.
+> **Status:** Tasks 7A.1–7A.4 complete (feat commits `2e20ad5`, `30d7a6a`,
+> `d1ae204`, `38f5c92`; this doc commit pending). 374/374 tests green;
+> `typecheck` / `build` / `lint` / `format:check` clean. Phase 7A
+> complete pending human review.
 >
 > **Scope:** Add the production `Host` implementation the SDK loop already
 > expects. It reuses the existing pure core, seam, cost helpers, file-backed log,
@@ -78,6 +79,35 @@
       to keep the class file under 400 LOC)
     - `src/host/index.ts`, `src/index.ts` (re-exports)
     - `tests/host/production-host-spawn.test.ts` (NEW; 10 tests)
+  - Estimated scope: M
+
+- [x] **Task 7A.4: Production host parity with existing loop semantics** — commit `38f5c92`
+  - Description: Match `StubHost` behavior for usage capture, terminal reason,
+    run cost, model fallback, visit index, abort, seal, persistence, and run
+    memory seeding. Extract shared session-event logic only if it removes real
+    duplication; otherwise keep the implementation boring and local.
+  - Acceptance:
+    - [x] Production host records normalized usage with the same SDK mapping
+          tested in Phase 5.
+    - [x] `sealSession` prevents side-effecting tools after a valid emission in
+          the production path.
+    - [x] `persistRecord`, `seedRunMemory`, and `nextVisitIndex` read from the
+          same log/manifest sources as `StubHost`.
+    - [x] Existing stub E2E and cost/fallback/stats tests remain green.
+  - Verification:
+    - [x] `pnpm test -- host/cost host/fallback host/stats host/e2e` (green
+          after the StubHost refactor)
+    - [x] `pnpm test -- host/production-host` (30/30)
+    - [x] `pnpm test -- host/production-host-spawn` (10/10)
+    - [x] `pnpm test -- host/production-host-parity` (5/5)
+  - Dependencies: Task 7A.3
+  - Files likely touched:
+    - `src/host/session-event-handler.ts` (NEW; ~145 LOC, shared handler)
+    - `src/host/stub-host.ts` (refactored to use the shared handler; -113
+      lines)
+    - `src/host/production-host.ts` (all Host methods implemented;
+      +283 / -29)
+    - `tests/host/production-host-parity.test.ts` (NEW; 5 tests)
   - Estimated scope: M
 
 - [x] **Task 7A.1: Production host scaffold + boundary errors** — commit `2e20ad5`
@@ -211,10 +241,12 @@
 
 ## Checkpoint 7A — Production Host Ready
 
-- [ ] All Phase 7A tasks complete.
-- [ ] Stub-driven E2E remains green.
-- [ ] Production-host unit tests are green.
+- [x] All Phase 7A tasks complete (7A.1–7A.4).
+- [x] Stub-driven E2E remains green (329 → 329 after the shared-handler
+      refactor).
+- [x] Production-host unit tests are green (30+10+5 across the three
+      production-host test files).
 - [ ] Manual real-model transcript is committed.
-- [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm format:check`
-      green.
+- [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint && pnpm format:check`
+      green (374/374 tests, 71 files lint-clean).
 - [ ] Human review before Phase 7B.
