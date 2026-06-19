@@ -18,7 +18,6 @@
 ## Tasks
 
 - [x] **Task 17: Usage capture on terminals + cost caps (§11.4, §11.7)** — commit `57d1b03`
-- [x] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)** — commit `4a2e084`
   - Description: The host's session `subscribe` callback captures `usage` from
     `message_end` events. Usage lives on `event.message.usage` (`AssistantMessage`),
     so the callback **must guard `event.message.role === "assistant"`** (message_end
@@ -65,7 +64,7 @@
   - Files: `src/host/cost.ts`, `tests/host/cost.test.ts`
   - Scope: M
 
-- [ ] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)**
+- [x] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)** — commit `4a2e084`
   - Description: On `session_failed` w/ `model_error`, try the role's next `models[]`
     entry, same role, fresh `createAgentSession` (state unchanged — §8.2). Record
     `model_fallback` (§11.5). On list exhaustion: hand to orchestrator once with a
