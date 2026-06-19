@@ -207,8 +207,20 @@ those exactly. The grep guard is part of `pnpm test`, not an afterthought.
 
 ## Current status
 
-Phase 1 (foundation) complete pending human review. Tasks 1–4 (scaffold + pnpm
-supply-chain hardening, core FSM types, manifest parse/validate/derive) all landed
-(commits `d87db12`→`6fda6d9`); all automated gates green. See
-`docs/orchestrator-fsm-plans/phase-1-foundation.md` (Checkpoint A). Phase 2 (reducer)
-opens after human sign-off.
+Phases 1–4 complete pending human review.
+
+- **Phase 1 (foundation)** — Tasks 1–4 (scaffold + pnpm supply-chain hardening,
+  core FSM types, manifest parse/validate/derive) landed (`d87db12`→`6fda6d9`).
+  Checkpoint A. See `docs/orchestrator-fsm-plans/phase-1-foundation.md`.
+- **Phase 2 (reducer)** — core reducer, lifecycle reducer, target resolution, visit
+  caps, two-reducer composition. Checkpoint B.
+- **Phase 3 (seam + cost + persistence)** — TypeBox emission schemas,
+  `validateEmission`, usage roll-up + cap predicates, `RecordLog` interface,
+  run-memory builder. Checkpoint C.
+- **Phase 4 (SDK host driver)** — Tasks 13–16.5 (`7ed38b4`→`b990c46`) all green
+  (276 tests / 23 files; `typecheck` / `build` / `lint` / `format:check` clean).
+  Checkpoint D — every automated item verified; only the human review of the
+  full phase remains before Phase 5. See
+  `docs/orchestrator-fsm-plans/phase-4-sdk-host.md`.
+
+Phase 5 (cost + observability) opens after human sign-off of Phase 4.

@@ -119,15 +119,17 @@ Gate — **Checkpoint C** (core complete):
 
 ➡️ Sub-plan: [`docs/orchestrator-fsm-plans/phase-4-sdk-host.md`](orchestrator-fsm-plans/phase-4-sdk-host.md) (Tasks 13–16.5, incl. 13.5 & 15.5)
 
-Gate — **Checkpoint D** (SDK host driver wired):
-- [ ] Legal handoff spawns + seeds the next role session end-to-end (automated test)
-- [ ] Illegal handoff is rejected with `legal_targets` surfaced to the role (automated)
-- [ ] Orchestrator sees run-memory context each turn (automated)
-- [ ] **Post-emission tool guarding:** a stub model that calls `handoff` then `bash`
+Gate — **Checkpoint D** (SDK host driver wired) — all automated items verified green
+(276 tests / 23 files; `typecheck` / `build` / `lint` / `format:check` clean) on
+commits `7ed38b4`→`b990c46`; awaiting human review before Phase 5:
+- [x] Legal handoff spawns + seeds the next role session end-to-end (automated test)
+- [x] Illegal handoff is rejected with `legal_targets` surfaced to the role (automated)
+- [x] Orchestrator sees run-memory context each turn (automated)
+- [x] **Post-emission tool guarding:** a stub model that calls `handoff` then `bash`
       produces zero `bash` side effects and exactly one capture (automated)
-- [ ] **Resume:** a run killed mid-session resumes to the same terminal state via
+- [x] **Resume:** a run killed mid-session resumes to the same terminal state via
       `resumeRun(run_id)` from the file-backed log (automated)
-- [ ] Full linear run passes in CI via the stub provider, no API key
+- [x] Full linear run passes in CI via the stub provider, no API key
 - [ ] Review with human before cost/observability surfaces
 
 ### Phase 5: Cost capture, caps, and observability surfaces
