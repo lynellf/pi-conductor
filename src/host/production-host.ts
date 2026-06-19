@@ -1,34 +1,32 @@
 /**
- * `ProductionHost` — Phase 7A production `Host` (Tasks 7A.1,
- * 7A.2, 7A.3).
+ * `ProductionHost` — Phase 7A production `Host` (Tasks 7A.1–7A.4).
  *
  * Production `Host` implementation that resolves
  * `role.models[modelIndex]` (`provider:id`) against a real
- * `ModelRegistry`, loads `role.system_prompt` from disk, and
- * wires a real `DefaultResourceLoader` + file-backed
- * `SessionManager` for each role session. Reuses the host-owned
- * `run_id`-keyed append-only log and `LoadedManifest` the loop
- * already programs against.
+ * `ModelRegistry`, loads `role.system_prompt` from disk, wires
+ * a real `DefaultResourceLoader` + file-backed `SessionManager`
+ * for each role session, and matches `StubHost`'s event-handling
+ * semantics (usage capture, terminal reason, model fallback,
+ * visit index, abort, seal, persistence, run-memory seeding).
  *
- * **Status (Phase 7A):** 7A.1 delivers the constructor + `Host`
- * interface conformance + the three boundary errors
- * (`ModelNotFoundError`, `MalformedModelEntryError`,
- * `SystemPromptNotFoundError`). 7A.2 adds the **pure resolution
- * pieces** used by `spawnRole` (`selectModelEntry`,
- * `resolveModel`, `loadSystemPrompt`). 7A.3 wires
- * `DefaultResourceLoader` + `SessionManager` into `spawnRole` and
- * adds the `buildToolsAllowlist` helper. 7A.4 matches
- * `StubHost`'s event-handling semantics (usage capture,
- * terminal reason, model fallback, visit index, abort, seal,
- * persistence, run-memory seeding).
+ * **Status (Phase 7A):** 7A.1 — constructor + `Host` interface
+ * conformance + three boundary errors. 7A.2 — pure resolution
+ * pieces (`selectModelEntry`, `resolveModel`, `loadSystemPrompt`).
+ * 7A.3 — `DefaultResourceLoader` + `SessionManager` wiring +
+ * `buildToolsAllowlist`. 7A.4 — full `Host` method parity with
+ * `StubHost` (every method now implemented; the event-handler
+ * logic is shared via `session-event-handler.ts`).
  *
- * The class is constructible, type-conformant, and its
- * `spawnRole` produces a real `AgentSession` after 7A.3. The
- * remaining `Host` methods (`captureUsage`,
- * `sessionTerminalReason`, `abortSession`, `sealSession`,
- * `nextVisitIndex`, `getNextModel`, `runCostSoFar`,
- * `seedRunMemory`, `persistRecord`) still throw "not yet
- * implemented" until 7A.4 lands.
+ * **Module size.** This file is ~455 LOC, over the AGENTS.md
+ * ~400-LOC soft ceiling. The size is justified by the
+ * comprehensive JSDoc on every `Host` method (each method has a
+ * spec-section pointer + 5–15 lines of intent documentation, per
+ * the repo's code conventions) and the fact that splitting the
+ * class would break the single `class ProductionHost implements
+ * Host` declaration the loop imports. The class stays under the
+ * 500-LOC hard cap that AGENTS.md allows for "coherent concept"
+ * files. The pure resolution pieces were already extracted to
+ * `production-host-resolve.ts` (Tasks 7A.2, 7A.3).
  *
  * **Host-agnosticism:** this module imports from
  * `@earendil-works/pi-coding-agent` (it's in `src/host/` — the
@@ -42,17 +40,20 @@ import { join } from "node:path";
 
 import type { Model } from "@earendil-works/pi-ai";
 import {
+  type AgentSession,
   type AgentSessionEvent,
   createAgentSession,
   DefaultResourceLoader,
   type ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
-
 import type { RunMemory } from "../core/run-memory.js";
-import type { Role, UsageRecord } from "../core/types.js";
+import { buildRunMemory } from "../core/run-memory.js";
+import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { SessionState } from "./cost.js";
+import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import type { Host, RoleSession, SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
 import {
@@ -62,6 +63,7 @@ import {
   selectModelEntry,
 } from "./production-host-resolve.js";
 import { SessionSeam } from "./seam.js";
+import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
 
 /**
@@ -150,26 +152,71 @@ export class ProductionHost implements Host {
     mkdirSync(this.sessionDir, { recursive: true });
   }
 
+  // ─── Per-session state (Task 17 / 7A.4) ────────────────────────
+  // The host tracks the `SessionState` + the live `AgentSession`
+  // for each spawned role so the `Host` methods (`captureUsage`,
+  // `sessionTerminalReason`, `dispose`) can read the per-session
+  // cap/usage/terminal-reason state and clean up on dispose.
+  // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
+  private readonly sessionStates: Map<string, SessionState> = new Map();
+  private readonly agentsBySessionId: Map<string, AgentSession> = new Map();
+
+  /**
+   * Tracks the most-recent role that exhausted its model fallback
+   * (Task 18, §9.4 v1 default). The next `spawnRole` for this
+   * role throws `RoleEscalationError`; a `spawnRole` for any
+   * other role clears the marker (so a different re-dispatch
+   * doesn't trip the guard, only the same-role re-dispatch
+   * does). Identical semantics to `StubHost.unavailableRole` —
+   * kept as per-class state rather than extracted (the 15-line
+   * policy doesn't cross a "real duplication" threshold).
+   */
+  private unavailableRole: Role | null = null;
+
   // ─── Host methods ──────────────────────────────────────────────────
   // `spawnRole` is wired (7A.3). The remaining methods throw a
   // phase-tagged "not yet implemented" error so 7A.4 fills them
   // in (one task at a time, per the plan's slice structure).
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
-    // 7A.3 wires the real `createAgentSession` call. The class-level
-    // SessionState (cap detection, model-error capture, per-session
-    // usage accumulation) lands in 7A.4 alongside StubHost parity;
-    // for now the session is spawned without that bookkeeping so
-    // the seam wiring is the only thing this test exercises.
+    // ── Task 18: model-fallback policy (parity with StubHost) ──
+    // §9.4 v1 default: hand to orchestrator once, then escalate.
+    // The "unavailable" marker is set when the role's models were
+    // just exhausted; the next spawnRole for the same role
+    // surfaces as a typed error. Different-role spawns clear the
+    // marker (unless the different role is the orchestrator and
+    // the unavailable role was a non-orchestrator, in which case
+    // the marker persists so a same-role re-dispatch escalates).
+    if (this.unavailableRole === role) {
+      this.unavailableRole = null; // consume the escalation
+      throw new RoleEscalationError(role);
+    }
+    if (this.unavailableRole !== null && this.unavailableRole !== role) {
+      const orchestrator = this.loadedManifest.def.orchestrator;
+      if (role !== orchestrator) {
+        this.unavailableRole = null;
+      }
+    }
+
     const roleConfig = this.lookupRoleConfig(role);
     const modelIndex = opts.modelIndex ?? 0;
 
-    // 1. Resolve the model. `selectModelEntry` returns null for the
-    //    system-model path (no `models` field on the role); the SDK
-    //    then uses its own default model. `resolveModel` throws
-    //    `MalformedModelEntryError` / `ModelNotFoundError` on
-    //    malformed / missing entries.
-    const entry = selectModelEntry(role, roleConfig, modelIndex);
+    // ── Task 18: resolve the model from the role's models[] list.
+    // The "logical" model is the `provider:id` string the
+    // lifecycle record will carry; the SDK model is resolved via
+    // `resolveModel` against `this.modelRegistry`. On a registry
+    // miss (`NoMoreModelsError` for out-of-range index), the role
+    // is marked unavailable so the next re-dispatch escalates
+    // (§9.4 v1 default).
+    let entry: string | null = null;
+    try {
+      entry = selectModelEntry(role, roleConfig, modelIndex);
+    } catch (e) {
+      if (e instanceof NoMoreModelsError) {
+        this.unavailableRole = role;
+      }
+      throw e;
+    }
     let model: Model<never> | undefined;
     let logical: string | null = null;
     if (entry !== null) {
@@ -215,10 +262,13 @@ export class ProductionHost implements Host {
 
     // 6. Build the per-session seam + the handoff/end tools. The
     //    seam's capture buffer is the loop's read surface (§12.1);
-    //    the tools write to it on call.
+    //    the tools write to it on call. The `rejector` predicate
+    //    is bound to the `SessionState` after construction (the
+    //    state needs the `sessionId`).
     const seam = new SessionSeam();
-    const handoff = createHandoffTool(seam);
-    const end = createEndTool(seam);
+    const rejector = createCaptureRejector();
+    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
+    const end = createEndTool(seam, rejector.shouldRejectCapture);
 
     // 7. Spawn the real `AgentSession` via the SDK. `model` is
     //    `undefined` for the system-model path; the SDK uses its
@@ -240,26 +290,34 @@ export class ProductionHost implements Host {
     }
     const { session } = await createAgentSession(createOpts);
 
-    // 8. Wrap the SDK session in the loop's `RoleSession` seam.
-    //    The wrapper explicitly forwards the SDK methods the loop
-    //    uses (`subscribe`, `prompt`, `dispose`) — the SDK's
-    //    `AgentSession` has these on the prototype, so a spread
-    //    would miss them. Two SDK fields are also exposed as
-    //    extra properties: `systemPrompt` (a getter) and
-    //    `getActiveToolNames` (a method). These are NOT part of
-    //    the `RoleSession` interface — the loop doesn't read them
-    //    — but the 7A.3 wiring tests do (via a typed cast). The
-    //    spread-vs-forward choice is deliberate: forwarding keeps
-    //    the wrapper small and makes the seam-only fields
-    //    (`readCaptureBuffer`, `resetCaptureBuffer`) obvious.
-    //    7A.4 adds the per-session `SessionState` (cap detection,
-    //    usage accumulation) and event subscription; for now the
-    //    session is bare, which is enough for the 7A.3 wiring
-    //    tests (systemPrompt + tools + session file location).
+    // 8. Track per-session state (Task 17 / 7A.4). The host's
+    //    `captureUsage` and `sessionTerminalReason` read from
+    //    this; `dispose` cleans up the maps.
+    const cap = roleConfig?.max_session_cost_usd ?? null;
+    const state = new SessionState({ cap, model: logical });
+    this.sessionStates.set(session.sessionId, state);
+    this.agentsBySessionId.set(session.sessionId, session);
+    rejector.bindState(state);
+
+    // 9. Subscribe the session to the shared event handler
+    //    (Task 17 + 18). The handler accumulates usage, detects
+    //    model errors, and enforces the per-session cost cap.
+    attachSessionEventHandler({ session, state });
+
+    // 10. Wrap the SDK session in the loop's `RoleSession` seam.
+    //     The wrapper explicitly forwards the SDK methods the loop
+    //     uses (`subscribe`, `prompt`, `dispose`) — the SDK's
+    //     `AgentSession` has these on the prototype, so a spread
+    //     would miss them. Two SDK fields are also exposed as
+    //     extra properties: `systemPrompt` (a getter) and
+    //     `getActiveToolNames` (a method). These are NOT part of
+    //     the `RoleSession` interface — the loop doesn't read them
+    //     — but the wiring tests do (via a typed cast).
+    const sessionId = session.sessionId;
     const wrapper = {
       role,
-      sessionId: session.sessionId,
-      sessionFile: session.sessionFile ?? `${this.sessionDir}/${session.sessionId}.jsonl`,
+      sessionId,
+      sessionFile: session.sessionFile ?? `${this.sessionDir}/${sessionId}.jsonl`,
       model: logical,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
@@ -267,6 +325,8 @@ export class ProductionHost implements Host {
       prompt: (text: string) => session.prompt(text),
       dispose: async () => {
         session.dispose();
+        this.sessionStates.delete(sessionId);
+        this.agentsBySessionId.delete(sessionId);
       },
       // Test-introspection escape hatches. The loop never reads
       // these; the wiring tests cast through `unknown` to verify
@@ -289,44 +349,105 @@ export class ProductionHost implements Host {
     return this.loadedManifest.manifest.roles.find((r) => r.name === role);
   }
 
-  captureUsage(_session: RoleSession): UsageRecord {
-    throw new Error("ProductionHost.captureUsage: not yet implemented (Phase 7A.4)");
+  captureUsage(session: RoleSession): UsageRecord {
+    // Read the session's cumulative §11.4 normalized usage from
+    // the per-session `SessionState`. Returns zeros for a session
+    // with no state (e.g., never registered, or already disposed).
+    const state = this.sessionStates.get(session.sessionId);
+    return (
+      state?.usage() ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 }
+    );
   }
 
-  persistRecord(_record: PersistedRecord): void {
-    throw new Error("ProductionHost.persistRecord: not yet implemented (Phase 7A.4)");
+  sessionTerminalReason(session: RoleSession): SessionTerminalReason {
+    // Read the host-set terminal reason (cap exceeded, model
+    // error, or null if the session ended normally). The loop
+    // uses this to set `session_failed.failure_reason`.
+    const state = this.sessionStates.get(session.sessionId);
+    return state?.terminalReason ?? null;
   }
 
-  seedRunMemory(_args: {
-    readonly checkpoint: import("../core/types.js").Checkpoint;
-    readonly def: import("../core/types.js").MachineDefinition;
+  persistRecord(record: PersistedRecord): void {
+    // Append-only: the host is the sole writer (the loop calls
+    // this exactly once per reduce / reduceLifecycle result,
+    // plus once per checkpoint snapshot).
+    this.log.append(record);
+  }
+
+  seedRunMemory(args: {
+    readonly checkpoint: Checkpoint;
+    readonly def: MachineDefinition;
     readonly goal: string;
     readonly runCostCap: number | null;
   }): RunMemory {
-    throw new Error("ProductionHost.seedRunMemory: not yet implemented (Phase 7A.4)");
+    // Delegate to the core's `buildRunMemory` so the
+    // orchestrator's seed reflects the actual persisted record
+    // history (visit_history, per_role_cost, next_candidates).
+    // The host owns its log; this is the canonical seam for
+    // the loop's orchestrator-seed injection (Task 16.5, §8.4
+    // single-writer rule).
+    const records = this.log.records(this.runId);
+    return buildRunMemory(args.checkpoint, records, args.def, {
+      goal: args.goal,
+      runCostCap: args.runCostCap,
+    });
   }
 
-  async abortSession(_session: RoleSession, _reason: string): Promise<void> {
-    throw new Error("ProductionHost.abortSession: not yet implemented (Phase 7A.4)");
+  nextVisitIndex(role: Role): number {
+    // Count terminals (session_ended + session_failed) for the
+    // role. A model retry (Task 18) is the SAME visit with a
+    // different model — the role didn't transition, it re-ran.
+    // Counting session_started would inflate visit_index on
+    // every model retry within the same visit. The visit ends
+    // when the role transitions away or is abandoned.
+    return (
+      this.log
+        .records(this.runId)
+        .filter(
+          (r) => (r.type === "session_ended" || r.type === "session_failed") && r.role === role,
+        ).length + 1
+    );
   }
 
-  sealSession(_session: RoleSession): void {
-    throw new Error("ProductionHost.sealSession: not yet implemented (Phase 7A.4)");
-  }
-
-  nextVisitIndex(_role: Role): number {
-    throw new Error("ProductionHost.nextVisitIndex: not yet implemented (Phase 7A.4)");
-  }
-
-  sessionTerminalReason(_session: RoleSession): SessionTerminalReason {
-    throw new Error("ProductionHost.sessionTerminalReason: not yet implemented (Phase 7A.4)");
-  }
-
-  getNextModel(_role: Role, _currentModelIndex: number): string | null {
-    throw new Error("ProductionHost.getNextModel: not yet implemented (Phase 7A.4)");
+  getNextModel(role: Role, currentModelIndex: number): string | null {
+    // Read the role's `models[]` list and return the entry at
+    // `currentModelIndex + 1`, or `null` if exhausted (or the
+    // role has no `models` field). The loop uses this to
+    // populate the `model_fallback` record's `to_model` field.
+    const roleConfig = this.lookupRoleConfig(role);
+    if (roleConfig?.models === undefined) return null;
+    const next = roleConfig.models[currentModelIndex + 1];
+    return next ?? null;
   }
 
   runCostSoFar(): number {
-    throw new Error("ProductionHost.runCostSoFar: not yet implemented (Phase 7A.4)");
+    // Sum `usage.cost` across all session_ended + session_failed
+    // records in the run. Both terminals cost (§11.4). The
+    // loop adds the current terminal's usage on top of this
+    // when evaluating the cap (§11.7: "persisted roll-up plus
+    // the current terminal's captured usage before reducing
+    // the role's captured machine event").
+    let total = 0;
+    for (const r of this.log.records(this.runId)) {
+      if ((r.type === "session_ended" || r.type === "session_failed") && r.usage) {
+        total += r.usage.cost;
+      }
+    }
+    return total;
+  }
+
+  async abortSession(_session: RoleSession, _reason: string): Promise<void> {
+    // No-op: the per-session cap abort is driven from the
+    // session-event subscription in `attachSessionEventHandler`,
+    // which has direct access to the `AgentSession`. This method
+    // is reserved for explicit external aborts (e.g.,
+    // user-initiated run abort via `RunHandle.abort`) — those
+    // would also call `session.abort()` here in a future task.
+  }
+
+  sealSession(_session: RoleSession): void {
+    // No-op: sealing is owned by the handoff/end tool wrapper
+    // (Task 15.5) flipping `SessionSeam.isSealed`. This method
+    // is reserved for external consumers.
   }
 }

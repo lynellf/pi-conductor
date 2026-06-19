@@ -35,10 +35,9 @@
  * re-dispatch escalation.
  */
 
-import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
+import type { Usage } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
-  type AgentSessionEvent,
   AuthStorage,
   createAgentSession,
   ModelRegistry,
@@ -61,6 +60,7 @@ import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import type { SessionTerminalReason } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
+import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
 export interface StubHostOptions {
@@ -186,18 +186,14 @@ export class StubHost implements Host {
     const cap = roleConfig?.max_session_cost_usd ?? null;
 
     const seam = new SessionSeam();
-    // The state isn't created yet (we need the AgentSession for
-    // its sessionId), so the rejection predicate closes over a
-    // "to be filled" placeholder. We set the state on the
-    // predicate right after construction so the tool wrappers
-    // can read the live cap state at execute time.
-    let stateForReject: SessionState | null = null;
-    const shouldRejectCapture = (): boolean => {
-      if (stateForReject === null) return false;
-      return stateForReject.terminalReason !== null || stateForReject.aborted;
-    };
-    const handoff = createHandoffTool(seam, shouldRejectCapture);
-    const end = createEndTool(seam, shouldRejectCapture);
+    // Shared rejection predicate (7A.4): the tool factories
+    // close over a `shouldRejectCapture` that reads the
+    // session's terminal state. Bound to the state after the
+    // session is constructed (the state needs the
+    // `sessionId`).
+    const rejector = createCaptureRejector();
+    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
+    const end = createEndTool(seam, rejector.shouldRejectCapture);
 
     const { session } = await createAgentSession({
       model: this.model,
@@ -215,27 +211,12 @@ export class StubHost implements Host {
     const state = new SessionState({ cap, model: logicalModel });
     this.sessionStates.set(session.sessionId, state);
     this.agentsBySessionId.set(session.sessionId, session);
-    // Wire the rejection predicate to the live state so the
-    // tool wrappers see updated cap/terminalReason at execute
-    // time.
-    stateForReject = state;
+    rejector.bindState(state);
 
-    // ── Task 17: subscribe to the session's events. The agent
-    // runtime calls listeners synchronously as events flow (the
-    // stub pushes them synchronously onto the event stream). The
-    // listener:
-    //   - on `message_end` for an assistant message, accumulates
-    //     the message's `Usage` into the SessionState (with the
-    //     §11.4 SDK → normalized mapping).
-    //   - on `turn_end`, evaluates the per-session cap; if
-    //     exceeded, calls `session.abort()` and flips the terminal
-    //     reason to `"session_cost_cap_exceeded"`. The abort
-    //     terminates the session; the loop records
-    //     `session_failed(session_cost_cap_exceeded)`.
-    //   - on `error`, flips the terminal reason to `"model_error"`
-    //     (Task 18). The loop will catch this on the next prompt
-    //     resolution.
-    session.subscribe((event) => this.onSessionEvent(session, state, event));
+    // ── Task 17: subscribe to the session's events. The shared
+    // handler (session-event-handler.ts) accumulates usage,
+    // detects model errors, and enforces the per-session cap.
+    attachSessionEventHandler({ session, state });
 
     return {
       role,
@@ -354,70 +335,6 @@ export class StubHost implements Host {
   }
 
   // ─── Internals ──────────────────────────────────────────────
-
-  /**
-   * Per-session event handler (Task 17 / Task 18). The agent
-   * runtime calls this synchronously as events flow; the stub
-   * provider pushes them synchronously onto the event stream.
-   *
-   * The handler is intentionally minimal — it only writes to the
-   * per-session `SessionState` and (for cap detection) calls
-   * `session.abort()`. The loop owns the rest (record shape,
-   * `reduceLifecycle`, persistence).
-   */
-  private onSessionEvent(
-    session: AgentSession,
-    state: SessionState,
-    event: AgentSessionEvent,
-  ): void {
-    if (event.type === "message_end") {
-      const message = event.message as AssistantMessage;
-      // Model-error detection (Task 18, §8.2). The stub's `fail`
-      // step emits an AssistantMessage with `stopReason: "error"`.
-      // If the SDK fires `message_end` after the `error` event
-      // (protocol-dependent), we catch it here and flip the
-      // terminal reason. The `error` event handler below catches
-      // the case where `message_end` does NOT fire after `error`.
-      if (message?.role === "assistant" && message.stopReason === "error") {
-        state.setTerminalReason("model_error");
-        return;
-      }
-      if (message?.role === "assistant" && message.usage) {
-        // De-dup key: timestamp + totalTokens + cost.total. The
-        // SDK contract is one message_end per message; this
-        // guard is defensive against an abort() re-emitting the
-        // final message's events (Task 17 §11.7 "abort
-        // accounting"). The composite key is unique per message
-        // by construction.
-        const key = `${message.timestamp ?? 0}-${message.usage.totalTokens}-${message.usage.cost.total}`;
-        state.addMessageUsage(key, message.usage);
-
-        // Per-session cap (Task 17 §11.7). Evaluate against the
-        // cumulative usage; if exceeded, abort and flip the
-        // terminal reason. The check is on `message_end` (not
-        // `turn_end` as the spec sketch mentions) so the abort
-        // fires BEFORE the tool-execution phase — the handoff
-        // tool wrapper (Task 14) checks the same state via
-        // `shouldRejectCapture` and refuses to write to the
-        // capture buffer, leaving it empty. The loop then
-        // records `session_failed(session_cost_cap_exceeded)`
-        // with no captured handoff to reduce.
-        if (state.isSessionCapExceeded() && !state.aborted) {
-          state.markAborted();
-          state.setTerminalReason("session_cost_cap_exceeded");
-          void session.abort();
-        }
-      }
-      return;
-    }
-    // Model-error detection is handled on `message_end` above
-    // (check for `message.stopReason === "error"`). The SDK's
-    // `AgentSessionEvent` protocol doesn't include a separate
-    // `error` event type — the `AssistantMessageEvent` `error`
-    // type from the underlying `pi-ai` stream is translated into
-    // a `message_end` carrying the error message by the agent
-    // runtime. No additional handler needed here.
-  }
 
   /**
    * Look up the role's config from the loaded manifest. Returns
