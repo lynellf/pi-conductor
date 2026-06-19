@@ -27,19 +27,43 @@
 Guidance for any agent (human or LLM) working in this repo. Read this first; it
 restates only what the spec/plan assume as standing context. Source of truth for
 behavior is `docs/orchestrator-fsm-spec.md`; sequencing is in
-`docs/orchestrator-fsm-plan.md` + `docs/orchestrator-fsm-plans/*`.
+`docs/orchestrator-fsm-plan.md` + `docs/orchestrator-fsm-plans/*`. Delivery plan
+(shipping as a pi extension) is in `docs/extension-pivot-plan.md` +
+`docs/extension-pivot-plans/*`.
+
+## Current status (post-Phase 7C)
+
+- **Phases 1–5 (pure core + stub-driven E2E):** complete, human-reviewed, 276 → 329 tests green.
+- **Phase 7A (production `Host`):** complete, human-reviewed, 380 tests green. The 7A.5 real-model smoke was structurally deferred until Phase 7C landed the installable launch surface (relocated to Phase 7C Task 7C.2).
+- **Phase 7B (extension shell):** complete, human-reviewed, 412 tests green. `/conduct`, `/conduct:resume`, `/conduct:list`, `/conduct:abort`, and `--conduct-manifest` are registered.
+- **Phase 7C (packaging + CLI + docs):** complete, awaiting human review. `pi install ./` works, `bin/conduct` ships, README + `AGENTS.md` + main FSM plan + `docs/extension-usage.md` reflect the extension framing. 432 tests green; typecheck/build/lint/format:check clean.
+
+See `docs/extension-pivot-plan.md` for the pivot rationale (delivery-shape
+change only; FSM spec §12 invariants untouched) and `docs/extension-usage.md`
+for the user-facing surface.
 
 ## What this is
 
 `pi-conductor` orchestrates multi-role LLM workflows on
 [pi](https://github.com/earendil-works/pi-coding-agent) via a **guarded,
-observable handoff state machine**. Two layers, kept strictly apart:
+observable handoff state machine**. It ships as a pi extension exposing
+`/conduct`, `/conduct:resume`, `/conduct:list`, and `/conduct:abort`
+(`docs/extension-usage.md` walks through the surface end-to-end). Three
+layers, kept strictly apart:
 
-- **Pure core** (`src/core`, `src/manifest`, later `src/seam`, `src/cost`): a
-  deterministic FSM reducer + manifest static checks. Zero pi imports. Zero I/O.
+- **Pure core** (`src/core`, `src/manifest`, `src/seam`, `src/cost`,
+  `src/persistence`): a deterministic FSM reducer + manifest static checks +
+  TypeBox emission schemas + cost roll-up. Zero pi imports. Zero I/O.
 - **SDK host driver** (`src/host`, Phase 4+): owns the orchestration loop,
   spawns role sessions via `createAgentSession`, persists records, enforces cost
-  caps. The only place that imports `@earendil-works/pi-coding-agent`.
+  caps. The only place in the engine layer that imports `@earendil-works/pi-coding-agent`.
+- **Extension UX shell** (`extensions/conduct.ts` + `src/extension/`): thin
+  handlers that resolve the manifest, build a production `Host` via
+  `createProductionHost`, and forward to `startRun` / `resumeRun` / `listRuns`
+  / `RunHandle.abort`. The extension layer may import pi (same posture as
+  `src/host/`); the grep guard does NOT scan `src/extension/` or
+  `extensions/`. The shell does NOT call `ctx.newSession()` /
+  `ctx.fork()` — a grep guard on `extensions/**/*.ts` rejects those calls.
 
 The core is imported by the host; the host is never imported by the core.
 
@@ -48,11 +72,12 @@ The core is imported by the host; the host is never imported by the core.
 These exist for concrete reasons (see spec/plan). Do not violate them without an
 explicit decision recorded in `docs/`.
 
-1. **Host-agnostic core.** `src/core`, `src/manifest`, `src/seam`, `src/cost`
-   must not import `@earendil-works/pi-coding-agent` (or any pi runtime).
-   Enforced by the grep-guard test (`tests/grep-guard.test.ts`) — it scans
-   source as text so a TS error can never mask an illegal import. Only
-   `src/host` may import pi.
+1. **Host-agnostic core.** `src/core`, `src/manifest`, `src/seam`, `src/cost`,
+   `src/persistence` must not import `@earendil-works/pi-coding-agent` (or any
+   pi runtime). Enforced by the grep-guard test (`tests/grep-guard.test.ts`) —
+   it scans source as text so a TS error can never mask an illegal import.
+   `src/host`, `src/extension`, and `extensions/` may import pi (they are the
+   three layers that bridge to the SDK).
 2. **Reducer purity.** `reduce` / `reduceLifecycle` are pure functions of
    `(checkpoint, event, def, meta)` (modulo `meta.ts`). No ambient config, no
    I/O. Role set + caps come only from the pinned `MachineDefinition` (`def`),
@@ -78,7 +103,17 @@ explicit decision recorded in `docs/`.
    content (§3/§4).
 9. **One schema, TypeBox.** `handoff`/`end` tool param schemas are TypeBox; the
    same schema is the seam contract and derives the TS type via `Static<>`. No
-   Zod.
+   Zod. The runtime `typebox` package (pi bundles `typebox@1.1.38`) is the
+   peer-dependency declaration in `package.json`; do not swap back to
+   `@sinclair/typebox` (different package, would break tool-arg validation
+   at runtime — the seam and the SDK would use distinct TypeBox instances).
+10. **No `ctx.newSession()` / `ctx.fork()` in `extensions/`.** Role sessions
+    are spawned by the production `Host` via the standalone `createAgentSession`
+    only. The grep guard on `extensions/**/*.ts` rejects `ctx.newSession(` and
+    `ctx.fork(` substrings. This is the §9.5 boundary — putting role sessions
+    in pi's session tree would break the host-owned `run_id`-keyed log (§11.1).
+    The extension pivot plan §1 documents why this is a delivery-shape change
+    only, not a re-architecture.
 
 ## Code conventions
 
@@ -146,25 +181,34 @@ Rules:
 
 ```
 src/
-  core/        # FSM types + (Phase 2) reducer. Host-agnostic. No pi imports.
-  manifest/    # Manifest types + parse + validate + toMachineDefinition (§8/§13)
-  seam/        # (Phase 3) TypeBox emission schemas + validateEmission
-  cost/        # (Phase 3) pure usage roll-up + cap-evaluation predicates
-  host/        # (Phase 4+) SDK driver — the ONLY place that imports pi
-  index.ts     # public barrel; host imports only from here
+  core/         # FSM types + (Phase 2) reducer + lifecycle + run-memory. Host-agnostic. No pi imports.
+  manifest/     # Manifest types + parse + validate + toMachineDefinition (§8/§13)
+  seam/         # (Phase 3) TypeBox emission schemas + validateEmission
+  cost/         # (Phase 3) pure usage roll-up + cap-evaluation predicates
+  persistence/  # RecordLog interface + InMemoryRecordLog
+  host/         # (Phase 4+) SDK driver — engine. May import pi.
+  extension/    # (Phase 7B) UX-shell helpers (manifest resolution, status poller, command handlers).
+                # Mirrors src/host/ posture — may import pi; not scanned by the grep guard.
+  bin/          # (Phase 7C.3) conduct CLI fallback (built to dist/bin/conduct.js)
+  index.ts      # public barrel; host + extension + library consumers import only from here
+extensions/
+  conduct.ts    # (Phase 7B) pi extension entrypoint; loaded by pi via jiti
 tests/
-  *.test.ts           # unit tests (table-driven where spec enumerates)
-  grep-guard.test.ts  # asserts src/core + src/manifest (+seam/cost) have zero pi imports
-biome.json           # linter + formatter (replaces ESLint + Prettier)
-lefthook.yml         # git hooks: pre-push runs lint + typecheck + tests
+  *.test.ts              # unit + E2E (stub-provider-driven; no API key)
+  grep-guard.test.ts     # asserts src/core + src/manifest (+seam/cost/+persistence) have zero pi imports
+  package-metadata.test.ts # asserts pi extension manifest + peer-dependency posture (Phase 7C.2)
+biome.json               # linter + formatter (replaces ESLint + Prettier)
+lefthook.yml             # git hooks: pre-push runs lint + typecheck + tests
 docs/
   orchestrator-fsm-spec.md            # the spec (authority)
   orchestrator-fsm-plan.md            # task index + checkpoints A–E
   orchestrator-fsm-plans/phase-*.md   # per-phase task detail
+  extension-pivot-plan.md             # pivot delivery plan (parent of 7A/7B/7C)
+  extension-pivot-plans/phase-7*.md   # per-pivot-phase task detail
+  extension-usage.md                  # user-facing extension surface (/conduct, resume/list/abort, etc.)
   sdk-surface.md                      # pinned SDK primitives (Phase 4)
-pnpm-workspace.yaml   # pnpm config + supply-chain hardening (camelCase keys)
-biome.json            # linter + formatter (replaces ESLint + Prettier)
-lefthook.yml          # git hooks: pre-push runs lint + typecheck + tests
+  dev-run-transcripts/                # manual real-model smoke transcripts
+pnpm-workspace.yaml     # pnpm config + supply-chain hardening (camelCase keys)
 ```
 
 ## Verification

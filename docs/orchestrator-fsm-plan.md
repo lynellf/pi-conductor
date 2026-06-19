@@ -186,8 +186,20 @@ resolved decisions kept here for provenance so implementers do not re-open them.
    `src/core` + `src/manifest` + `src/seam` + `src/cost`. Host coverage is gated by the
    stub-provider E2E path, not this threshold.
 4. ~~**Package manager.**~~ **Resolved: pnpm** (matches the pi ecosystem).
-5. ~~Extension scope (project-local vs. global)~~ — **N/A under the SDK host.** The
-   host is an in-repo `src/host/` package; there is no extension install path in v1.
+5. ~~Extension scope (project-local vs. global)~~ — **Clarified (Phase 7C, post-v1 host framing).**
+   The §9.5 decision ("orchestration is **not** in-TUI slash commands / extension
+   tool/event handlers") stands. What §9.5 did **not** foreclose, and what the
+   extension pivot plan makes explicit, is shipping the orchestration **engine**
+   (the SDK host driver) wrapped in a **UX shell** (a pi extension that
+   exposes `/conduct`, `/conduct:resume`, `/conduct:list`, `/conduct:abort`,
+   and `--conduct-manifest`). The engine stays in `src/host/`; the shell lives
+   in `extensions/conduct.ts` + `src/extension/`. Role sessions remain
+   standalone `createAgentSession` calls owned by the host loop — the
+   extension does not call `ctx.newSession()` or `ctx.fork()` (a grep guard
+   rejects both). The pivot is delivery-shape only; this section's rejection
+   of "orchestration *as* extension tool/event handlers" is preserved. See
+   `docs/extension-pivot-plan.md` §1–§2 and `docs/extension-usage.md` for the
+   user-facing surface.
 
 ### Resolved Pre-Phase-4 Hardening Decisions
 
