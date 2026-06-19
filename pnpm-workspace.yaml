@@ -1,0 +1,33 @@
+# pnpm project configuration.
+#
+# This is pnpm 10's canonical project config file (`.npmrc` is the legacy fallback).
+# Keys are camelCase here, unlike .npmrc's kebab-case. Verified against pnpm 10.33.1
+# source: getOptionsFromPnpmSettings() reads these keys directly off the parsed YAML
+# and merges them into pnpmConfig.
+#
+# Supply-chain hardening:
+#   - minimumReleaseAge is in MINUTES (pnpm.cjs: opts.minimumReleaseAge * 60 * 1e3).
+#     10080 = 7 days. Only resolve versions published >= 7 days ago, mitigating
+#     dependency-confusion and freshly-published malicious-package attacks.
+#     (Local installs; CI runs `--frozen-lockfile` so this governs lockfile updates.)
+#   - strictDepBuilds: fail the install if any dependency runs a build script not on
+#     onlyBuiltDependencies. Postinstall/build scripts are the primary execution
+#     surface; the allowlist must stay explicit. Never set dangerouslyAllowAllBuilds.
+#   - verifyDepsBeforeRun: warn locally if the lockfile is out of sync before
+#     scripts run; CI overrides to error via --frozen-lockfile.
+#   - excludeLinksFromLockfile: cleaner lockfile diffs.
+#
+# Build-script allowlist:
+#   - esbuild: Vitest's native esbuild loader needs its postinstall to fetch/verify
+#     its platform binary.
+#   - lefthook: postinstall runs `lefthook install -f` to sync git hooks; it skips
+#     in CI (gated on the CI env var).
+
+minimumReleaseAge: 10080
+strictDepBuilds: true
+verifyDepsBeforeRun: warn
+excludeLinksFromLockfile: true
+
+onlyBuiltDependencies:
+  - esbuild
+  - lefthook

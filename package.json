@@ -1,0 +1,43 @@
+{
+  "name": "pi-conductor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-role LLM orchestration via a guarded, observable handoff state machine (pure FSM core + pi SDK host driver).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "audit": "pnpm audit --prod",
+    "prepublishOnly": "pnpm typecheck && pnpm build && pnpm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
+    "@types/node": "^22.10.0",
+    "lefthook": "^2.1.9",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0",
+    "yaml": "^2.6.0"
+  }
+}

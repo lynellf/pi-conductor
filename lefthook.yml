@@ -1,0 +1,20 @@
+# Lefthook git hooks for pi-conductor.
+# Installed automatically by `lefthook`'s postinstall (which is allowlisted in
+# package.json#pnpm.onlyBuiltDependencies under strict-dep-builds). The postinstall
+# skips in CI (gated on the CI env var), so these hooks run locally only; CI runs
+# the same checks directly.
+#
+# Pre-push runs lint (biome), type checks (tsc), and unit tests (vitest). A failure
+# blocks the push.
+pre-push:
+  parallel: false
+  commands:
+    biome-check:
+      tags: lint
+      run: pnpm lint
+    typecheck:
+      tags: types
+      run: pnpm typecheck
+    unit-tests:
+      tags: test
+      run: pnpm test
