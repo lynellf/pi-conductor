@@ -74,3 +74,13 @@ export { runLoop } from "./loop.js";
 
 export type { SealCheck } from "./tool-wrapper.js";
 export { wrapAllToolsWithSeal, wrapToolWithSeal } from "./tool-wrapper.js";
+
+// ─── Stub provider (Task 16, §15.3) ────────────────────────────────────
+// Deterministic StreamFunction + Model that drives a real
+// createAgentSession without a network or API key. The Phase 4–5
+// E2E tests register this on an in-memory ModelRegistry and feed
+// scripted steps (handoff, end, no_emission, fail) to drive the
+// loop end-to-end in CI.
+
+export type { StubStep, StubStreamOptions } from "./stub-provider.js";
+export { makeStubModel, makeStubStreamFunction } from "./stub-provider.js";
