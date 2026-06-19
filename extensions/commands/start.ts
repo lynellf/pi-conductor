@@ -28,6 +28,9 @@
  * both branches.
  */
 
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
+
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -41,6 +44,42 @@ import {
 import { getActiveRun, setActiveRun } from "../active-run.js";
 import { resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
+
+/**
+ * Default per-project location for the file-backed
+ * `RecordLog`. Pinned so `/conduct:list` can find runs
+ * from prior `/conduct` invocations within the same
+ * project. Matches the production host's session-dir
+ * convention (`<cwd>/.pi-conductor/runs/...`) so the
+ * log + session files are co-located.
+ *
+ * The directory is `mkdirSync`'d on the first
+ * `/conduct` invocation. Idempotent.
+ */
+export const DEFAULT_RUN_BASE_DIR = ".pi-conductor/runs";
+
+/**
+ * Resolve the per-project run-log base dir. Always
+ * returns a project-relative absolute path; the caller
+ * (handler) is responsible for ensuring the directory
+ * exists.
+ */
+export function resolveRunBaseDir(cwd: string): string {
+  return join(cwd, DEFAULT_RUN_BASE_DIR);
+}
+
+/**
+ * Ensure the run-log base dir exists. Idempotent —
+ * `mkdirSync({ recursive: true })` is a no-op if the
+ * dir already exists. Called by `/conduct` and
+ * `/conduct:resume` before delegating to `startRun` /
+ * `resumeRun`.
+ */
+export function ensureRunBaseDir(cwd: string): string {
+  const baseDir = resolveRunBaseDir(cwd);
+  mkdirSync(baseDir, { recursive: true });
+  return baseDir;
+}
 
 /**
  * Closure the factory passes to each handler. `getFlag`
@@ -122,10 +161,13 @@ export async function handleStart(
 
   // 3. Start the run. The host factory throws on hard
   // manifest errors; the typed `HostManifestError`
-  // surfaces the rule codes. We catch and notify.
+  // surfaces the rule codes. We catch and notify. The
+  // baseDir is pinned to a per-project location so
+  // `/conduct:list` can find runs from prior calls.
+  const baseDir = ensureRunBaseDir(ctx.cwd);
   let handle: RunHandle;
   try {
-    handle = await startRun(manifestPath, { goal, hostFactory });
+    handle = await startRun(manifestPath, { goal, hostFactory, baseDir });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     ctx.ui.notify(`Cannot start run: ${message}`, "error");
@@ -144,12 +186,12 @@ export async function handleStart(
   try {
     const { finalCheckpoint, exitReason } = await handle.completion();
     ctx.ui.notify(
-      `pi-conductor run ${handle.runId} reached terminal state=${finalCheckpoint.current_role} reason=${exitReason}`,
+      `pi-conductor run_id=${handle.runId} reached terminal state=${finalCheckpoint.current_role} reason=${exitReason}`,
       "info",
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    ctx.ui.notify(`pi-conductor run ${handle.runId} failed: ${message}`, "error");
+    ctx.ui.notify(`pi-conductor run_id=${handle.runId} failed: ${message}`, "error");
   } finally {
     stopPoller();
     // Clear the active slot on terminal — a new run can

@@ -108,6 +108,11 @@ export function startStatusPoller(
       clearInterval(timer);
       timer = null;
     }
+    // Always clear the line on stop. The handler
+    // calls `stop()` in `finally`, so the line is
+    // guaranteed to clear on terminal OR handler
+    // failure regardless of which tick last ran.
+    setStatus(undefined);
   };
 
   return stop;

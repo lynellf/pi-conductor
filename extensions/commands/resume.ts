@@ -9,23 +9,111 @@
  * the time the user typed `/conduct:resume` — the active
  * slot is overwritten.
  *
- * **Placeholder.** The full implementation lands in
- * Task 7B.3; this stub is here so the factory can
- * register all four commands in Task 7B.1. The stub
- * notifies and returns — it does NOT throw — so an
- * accidental invocation during 7B.1 testing surfaces a
- * clear message rather than an unhandled rejection.
+ * **Validation order:**
+ *   1. `args` is non-empty after trim (the run_id is
+ *      required). Empty → "Usage" warning.
+ *   2. Manifest path resolves (same rule as `/conduct`).
+ *      Missing → manifest warning.
+ *   3. `resumeRun` is called. Errors from `resumeRun`
+ *      (manifest version mismatch, no checkpoint for
+ *      `run_id`, etc.) surface as a `Cannot resume run`
+ *      error notification.
+ *
+ * The status poller + active-run tracking + terminal
+ * notification are all delegated to the same teardown
+ * path as `handleStart` — the only difference is the
+ * `resumeRun` call.
  */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
-import type { HandleDeps } from "./start.js";
+import {
+  createProductionHost,
+  type Host,
+  type HostFactoryContext,
+  type LoadedManifest,
+  type RunHandle,
+  resumeRun,
+} from "../../src/index.js";
+import { getActiveRun, setActiveRun } from "../active-run.js";
+import { resolveManifestPath } from "../manifest.js";
+import { startStatusPoller } from "../status.js";
+import { ensureRunBaseDir, type HandleDeps } from "./start.js";
 
 export async function handleResume(
-  _args: string,
-  _ctx: ExtensionCommandContext,
-  _deps: HandleDeps,
+  args: string,
+  ctx: ExtensionCommandContext,
+  deps: HandleDeps,
 ): Promise<void> {
-  // Implemented in Task 7B.3. Notify-only for now.
-  _ctx.ui.notify("/conduct:resume is not yet implemented (Phase 7B.3).", "warning");
+  const runId = args.trim();
+  if (runId.length === 0) {
+    ctx.ui.notify("Usage: /conduct:resume <run_id>", "warning");
+    return;
+  }
+
+  const flagValue = deps.getFlag("conduct-manifest");
+  const manifestPath = resolveManifestPath(
+    typeof flagValue === "string" ? flagValue : undefined,
+    ctx.cwd,
+  );
+  if (manifestPath === null) {
+    ctx.ui.notify(
+      `No conductor manifest found. Tried --conduct-manifest="${flagValue ?? ""}" and <cwd>/.pi/conductor.yaml. Write a manifest or pass --conduct-manifest <path>.`,
+      "warning",
+    );
+    return;
+  }
+
+  // Production host factory — same shape as /conduct.
+  // Resume does not carry a goal (the run's existing
+  // checkpoint + run memory are the seed); the goal
+  // arg to `resumeRun` is used only if the resume
+  // path needs a fresh prompt (it does not, in v1 —
+  // the run continues from `current_role`).
+  const modelRegistry = ctx.modelRegistry;
+  const cwd = ctx.cwd;
+  const hostFactory = (factoryCtx: HostFactoryContext): Host =>
+    createProductionHost({
+      extension: { modelRegistry, cwd },
+      run: {
+        log: factoryCtx.log,
+        loadedManifest: factoryCtx.loadedManifest as LoadedManifest,
+        runId: factoryCtx.runId,
+      },
+    });
+
+  const baseDir = ensureRunBaseDir(ctx.cwd);
+  let handle: RunHandle;
+  try {
+    handle = await resumeRun(manifestPath, runId, {
+      goal: "",
+      hostFactory,
+      baseDir,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ctx.ui.notify(`Cannot resume run ${runId}: ${message}`, "error");
+    return;
+  }
+
+  setActiveRun(handle);
+  const stopPoller = startStatusPoller(handle, (text) => {
+    ctx.ui.setStatus("conduct", text);
+  });
+
+  try {
+    const { finalCheckpoint, exitReason } = await handle.completion();
+    ctx.ui.notify(
+      `pi-conductor run_id=${handle.runId} reached terminal state=${finalCheckpoint.current_role} reason=${exitReason}`,
+      "info",
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    ctx.ui.notify(`pi-conductor run_id=${handle.runId} failed: ${message}`, "error");
+  } finally {
+    stopPoller();
+    if (getActiveRun() === handle) {
+      setActiveRun(null);
+    }
+  }
 }
