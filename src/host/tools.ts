@@ -59,7 +59,7 @@
  */
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { TSchema } from "@sinclair/typebox";
+import type { TSchema } from "typebox";
 
 import { endArgsSchema, handoffArgsSchema } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";

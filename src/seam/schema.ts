@@ -23,7 +23,13 @@
  * strings when present) without restricting what roles can attach.
  */
 
-import { type Static, Type } from "@sinclair/typebox";
+// TypeBox schemas — single source of truth for tool-args, seam validation,
+// and the derived TS type (spec §3 rule 2, plan AD). We use `typebox` (the
+// renamed successor to `@sinclair/typebox`) so the schemas are validated at
+// runtime against the same package instance pi bundles in its own runtime;
+// this is the peer-dependency identity requirement documented in the
+// extension pivot plan §4 (typebox identity risk).
+import { type Static, Type } from "typebox";
 
 /**
  * §5.1 handoff payload schema. `target_role` is the only required field;

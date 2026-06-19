@@ -9,14 +9,11 @@ importers:
   .:
     dependencies:
       '@earendil-works/pi-ai':
-        specifier: ^0.79.1
+        specifier: '*'
         version: 0.79.1(ws@8.21.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
-        specifier: ^0.79.1
+        specifier: '*'
         version: 0.79.1(ws@8.21.0)(zod@4.4.3)
-      '@sinclair/typebox':
-        specifier: ^0.34.49
-        version: 0.34.49
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.16
@@ -27,6 +24,9 @@ importers:
       lefthook:
         specifier: ^2.1.9
         version: 2.1.9
+      typebox:
+        specifier: ^1.1.38
+        version: 1.1.38
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -640,9 +640,6 @@ packages:
 
   '@silvia-odwyer/photon-node@0.3.4':
     resolution: {integrity: sha512-bnly4BKB3KDTFxrUIcgCLbaeVVS8lrAkri1pEzskpmxu9MdfGQTy8b8EgcD83ywD3RPMsIulY8xJH5Awa+t9fA==}
-
-  '@sinclair/typebox@0.34.49':
-    resolution: {integrity: sha512-brySQQs7Jtn0joV8Xh9ZV/hZb9Ozb0pmazDIASBkYKCjXrXU3mpcFahmK/z4YDhGkQvP9mWJbVyahdtU5wQA+A==}
 
   '@smithy/core@3.24.6':
     resolution: {integrity: sha512-wBXDRup6UU97VKyaiRo8AssnfStPtG0oAAfpq/bC0a1YYau8pM86YB4kM6ccoVi1mS8l/UHbn9oDM+7uozr/ug==}
@@ -1857,8 +1854,6 @@ snapshots:
     optional: true
 
   '@silvia-odwyer/photon-node@0.3.4': {}
-
-  '@sinclair/typebox@0.34.49': {}
 
   '@smithy/core@3.24.6':
     dependencies:

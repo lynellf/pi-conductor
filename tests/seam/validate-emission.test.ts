@@ -17,7 +17,7 @@
  * is pinned here, not in the host.
  */
 
-import { Value } from "@sinclair/typebox/value";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { endArgsSchema, handoffArgsSchema } from "../../src/seam/schema.js";
 import type { EmissionCapture } from "../../src/seam/validate-emission.js";

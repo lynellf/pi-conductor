@@ -28,7 +28,7 @@
  * Pure. No I/O. No pi imports.
  */
 
-import { Value } from "@sinclair/typebox/value";
+import { Value } from "typebox/value";
 import type { MachineEvent } from "../core/types.js";
 import { type EndArgs, endArgsSchema, type HandoffArgs, handoffArgsSchema } from "./schema.js";
 
