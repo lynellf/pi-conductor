@@ -221,8 +221,8 @@ Phases 1–4 complete pending human review. Phase 5 in progress.
   Checkpoint D — every automated item verified; only the human review of the
   full phase remains before Phase 5. See
   `docs/orchestrator-fsm-plans/phase-4-sdk-host.md`.
-- **Phase 5 (cost + observability)** — Task 17 complete (commit `57d1b03`,
-  295 tests / 24 files). Task 18 (model fallback) next. See
+- **Phase 5 (cost + observability)** — Task 18 complete (commit `4a2e084`,
+  298 tests / 25 files). Task 19 (`runStats` / `runConfig`) next. See
   `docs/orchestrator-fsm-plans/phase-5-cost-observability.md`.
 
 Phase 5 (cost + observability) opens after human sign-off of Phase 4.

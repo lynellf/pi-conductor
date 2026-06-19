@@ -7,8 +7,8 @@
 > and main plan Open Question #6. `usage` is on `message.usage` (`AssistantMessage`),
 > camelCase with a nested `cost` object.
 >
-> **Status:** Task 17 complete (commit `57d1b03`, 2026-06-19). Task 18 next.
-> 295/295 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
+> **Status:** Task 18 complete (commit `4a2e084`, 2026-06-19). Task 19 next.
+> 298/298 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
 >
 > **Scope:** Host-side usage capture on terminals, per-session + run cost-cap
 > enforcement, model fallback on `session_failed`, `runStats`/`runConfig` host
@@ -18,6 +18,7 @@
 ## Tasks
 
 - [x] **Task 17: Usage capture on terminals + cost caps (§11.4, §11.7)** — commit `57d1b03`
+- [x] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)** — commit `4a2e084`
   - Description: The host's session `subscribe` callback captures `usage` from
     `message_end` events. Usage lives on `event.message.usage` (`AssistantMessage`),
     so the callback **must guard `event.message.role === "assistant"`** (message_end
