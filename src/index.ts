@@ -2,8 +2,12 @@
  * pi-conductor public entrypoint.
  *
  * Phase 1 (foundation): re-exports the pure FSM types from `src/core`.
- * Phase 2 adds the pure reducer + cap-aware legal-target helpers.
- * Phase 3 adds the seam (TypeBox schemas + validateEmission).
+ * Phase 2 adds the pure reducer (`reduce` / `createInitialCheckpoint`) +
+ *   cap-aware legal-target helpers.
+ * Phase 3 adds: the seam (TypeBox schemas + `validateEmission`),
+ *   `reduceLifecycle`, pure cost roll-up + cap predicates (`src/cost`),
+ *   the `RecordLog` interface + in-memory impl (`src/persistence`), and
+ *   the run-memory builder (`src/core/run-memory.ts`).
  * Host-agnosticism invariant (spec §12): `src/core`, `src/manifest`,
  * `src/seam`, and `src/cost` import nothing from
  * `@earendil-works/pi-coding-agent`; enforced by `tests/grep-guard.test.ts`.
