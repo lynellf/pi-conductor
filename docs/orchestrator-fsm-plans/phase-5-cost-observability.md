@@ -66,8 +66,6 @@
   - Scope: M
 
 - [x] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)** — commit `4a2e084`
-- [x] **Task 19: `runStats` / `runConfig` host functions (§11.6, §11.8)** — commit `3c2ce65`
-- [x] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)** — commit `d9c2eb1`
   - Description: On `session_failed` w/ `model_error`, try the role's next `models[]`
     entry, same role, fresh `createAgentSession` (state unchanged — §8.2). Record
     `model_fallback` (§11.5). On list exhaustion: hand to orchestrator once with a
@@ -81,7 +79,7 @@
   - Files: `src/host/fallback.ts`, `tests/host/fallback.test.ts`
   - Scope: M
 
-- [ ] **Task 19: `runStats` / `runConfig` host functions (§11.6, §11.8)**
+- [x] **Task 19: `runStats` / `runConfig` host functions (§11.6, §11.8)** — commit `3c2ce65`
   - Description: `runStats(records): RunStats` renders current state, transition
     history, and the §11.6 roll-up (per-run/per-role/per-model/orchestrator-overhead)
     from persisted records. `runConfig(state, override)` overrides `max_run_cost_usd`
@@ -105,7 +103,7 @@
   - Files: `src/host/stats.ts`, `src/host/config.ts`, `tests/host/stats.test.ts`
   - Scope: M
 
-- [ ] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)**
+- [x] **Task 20: Default v1 role bundle + shipped E2E fixtures (§6, §15.4, §15.5)** — commit `d9c2eb1`
   - Description: Provide the default orchestrator role template and one minimal worker
     role template, plus a sample `.pi/conductor.yaml` fixture that declares them
     explicitly. The default is a scaffold/template, not implicit reducer state: a real
