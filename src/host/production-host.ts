@@ -1,28 +1,34 @@
 /**
- * `ProductionHost` — Phase 7A scaffold + pure resolution pieces
- * (Tasks 7A.1, 7A.2).
+ * `ProductionHost` — Phase 7A production `Host` (Tasks 7A.1,
+ * 7A.2, 7A.3).
  *
  * Production `Host` implementation that resolves
  * `role.models[modelIndex]` (`provider:id`) against a real
  * `ModelRegistry`, loads `role.system_prompt` from disk, and
- * wires a real `DefaultResourceLoader` for each role session.
- * Reuses the host-owned `run_id`-keyed append-only log and
- * `LoadedManifest` the loop already programs against.
+ * wires a real `DefaultResourceLoader` + file-backed
+ * `SessionManager` for each role session. Reuses the host-owned
+ * `run_id`-keyed append-only log and `LoadedManifest` the loop
+ * already programs against.
  *
  * **Status (Phase 7A):** 7A.1 delivers the constructor + `Host`
  * interface conformance + the three boundary errors
  * (`ModelNotFoundError`, `MalformedModelEntryError`,
  * `SystemPromptNotFoundError`). 7A.2 adds the **pure resolution
- * pieces** used by `spawnRole` (this file's three module-level
- * exports). 7A.3 wires `DefaultResourceLoader` and the
- * `SessionManager` into `spawnRole`. 7A.4 matches `StubHost`'s
- * event-handling semantics (usage capture, terminal reason,
- * model fallback, visit index, abort, seal, persistence,
- * run-memory seeding).
+ * pieces** used by `spawnRole` (`selectModelEntry`,
+ * `resolveModel`, `loadSystemPrompt`). 7A.3 wires
+ * `DefaultResourceLoader` + `SessionManager` into `spawnRole` and
+ * adds the `buildToolsAllowlist` helper. 7A.4 matches
+ * `StubHost`'s event-handling semantics (usage capture,
+ * terminal reason, model fallback, visit index, abort, seal,
+ * persistence, run-memory seeding).
  *
- * The class is constructible and type-conformant, but its
- * `Host` methods still throw "not yet implemented" until 7A.3
- * (for `spawnRole`) and 7A.4 (for the rest) land.
+ * The class is constructible, type-conformant, and its
+ * `spawnRole` produces a real `AgentSession` after 7A.3. The
+ * remaining `Host` methods (`captureUsage`,
+ * `sessionTerminalReason`, `abortSession`, `sealSession`,
+ * `nextVisitIndex`, `getNextModel`, `runCostSoFar`,
+ * `seedRunMemory`, `persistRecord`) still throw "not yet
+ * implemented" until 7A.4 lands.
  *
  * **Host-agnosticism:** this module imports from
  * `@earendil-works/pi-coding-agent` (it's in `src/host/` — the
@@ -31,24 +37,32 @@
  * untouched and remains host-agnostic.
  */
 
-import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 import type { Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  type AgentSessionEvent,
+  createAgentSession,
+  DefaultResourceLoader,
+  type ModelRegistry,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 
 import type { RunMemory } from "../core/run-memory.js";
 import type { Role, UsageRecord } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
-import {
-  MalformedModelEntryError,
-  ModelNotFoundError,
-  NoMoreModelsError,
-  SystemPromptNotFoundError,
-} from "./errors.js";
 import type { Host, RoleSession, SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
+import {
+  buildToolsAllowlist,
+  loadSystemPrompt,
+  resolveModel,
+  selectModelEntry,
+} from "./production-host-resolve.js";
+import { SessionSeam } from "./seam.js";
+import { createEndTool, createHandoffTool } from "./tools.js";
 
 /**
  * Constructor options for `ProductionHost`. Mirrors the production
@@ -72,10 +86,29 @@ export interface ProductionHostOptions {
   readonly loadedManifest: LoadedManifest;
   /** The run this host is bound to. */
   readonly runId: string;
+  /**
+   * Optional: directory for SDK `SessionManager` files. The plan
+   * calls for the file-backed `SessionManager` to be "rooted under
+   * the conductor run log directory" — i.e., NOT in pi's own
+   * session tree (~/.pi/agent/sessions/<encoded-cwd>/). Default:
+   * `<cwd>/.pi-conductor/runs/<runId>/sessions`. Created on
+   * construction (`mkdirSync({ recursive: true })`).
+   */
+  readonly sessionDir?: string;
+  /**
+   * Optional: directory for the SDK's `DefaultResourceLoader` agent
+   * config (auth.json, models.json, extensions, etc.). Default:
+   * `<cwd>/.pi-conductor/agent`. The extension is expected to
+   * share its own `~/.pi/agent` by passing the path here, so
+   * spawned role sessions see the user's pi configuration. The
+   * default keeps the conductor's role sessions isolated from pi.
+   */
+  readonly agentDir?: string;
 }
 
 /**
- * Production `Host` — `Phase 7A` scaffold.
+ * Production `Host` — `Phase 7A` scaffold + role-session spawn
+ * (Tasks 7A.1, 7A.2, 7A.3).
  *
  * `implements Host` enforces compile-time conformance to the
  * seam the loop programs against. Adding/removing/renaming a
@@ -96,6 +129,10 @@ export class ProductionHost implements Host {
   readonly loadedManifest: LoadedManifest;
   /** See {@link ProductionHostOptions.runId}. */
   readonly runId: string;
+  /** See {@link ProductionHostOptions.sessionDir}. */
+  readonly sessionDir: string;
+  /** See {@link ProductionHostOptions.agentDir}. */
+  readonly agentDir: string;
 
   constructor(opts: ProductionHostOptions) {
     this.modelRegistry = opts.modelRegistry;
@@ -103,15 +140,153 @@ export class ProductionHost implements Host {
     this.log = opts.log;
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
+    this.sessionDir =
+      opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
+    this.agentDir = opts.agentDir ?? join(opts.cwd, ".pi-conductor", "agent");
+    // The SessionManager writes JSONL files directly into `sessionDir`
+    // without creating parent directories. Ensure the dir exists so
+    // the first `SessionManager.create(cwd, this.sessionDir)` call
+    // in `spawnRole` doesn't ENOENT.
+    mkdirSync(this.sessionDir, { recursive: true });
   }
 
-  // ─── Host methods (scaffold — not yet implemented) ────────────────
-  // 7A.1 deliverable is the surface only. Each method throws a
-  // typed, phase-tagged error so any accidental use is loud and
-  // traceable to the task that will fill it in.
+  // ─── Host methods ──────────────────────────────────────────────────
+  // `spawnRole` is wired (7A.3). The remaining methods throw a
+  // phase-tagged "not yet implemented" error so 7A.4 fills them
+  // in (one task at a time, per the plan's slice structure).
 
-  async spawnRole(_role: Role, _opts: SpawnRoleOptions = {}): Promise<RoleSession> {
-    throw new Error("ProductionHost.spawnRole: not yet implemented (Phase 7A.2 / 7A.3)");
+  async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
+    // 7A.3 wires the real `createAgentSession` call. The class-level
+    // SessionState (cap detection, model-error capture, per-session
+    // usage accumulation) lands in 7A.4 alongside StubHost parity;
+    // for now the session is spawned without that bookkeeping so
+    // the seam wiring is the only thing this test exercises.
+    const roleConfig = this.lookupRoleConfig(role);
+    const modelIndex = opts.modelIndex ?? 0;
+
+    // 1. Resolve the model. `selectModelEntry` returns null for the
+    //    system-model path (no `models` field on the role); the SDK
+    //    then uses its own default model. `resolveModel` throws
+    //    `MalformedModelEntryError` / `ModelNotFoundError` on
+    //    malformed / missing entries.
+    const entry = selectModelEntry(role, roleConfig, modelIndex);
+    let model: Model<never> | undefined;
+    let logical: string | null = null;
+    if (entry !== null) {
+      const resolved = resolveModel(role, entry, this.modelRegistry);
+      model = resolved.model;
+      logical = resolved.logical;
+    }
+
+    // 2. Load the role's system prompt. `loadSystemPrompt` returns
+    //    null when the role has no `system_prompt` field; the
+    //    `systemPromptOverride` then leaves the SDK default in
+    //    place.
+    const rolePrompt = await loadSystemPrompt(role, roleConfig?.system_prompt, this.cwd);
+
+    // 3. Build the `DefaultResourceLoader` with the role's prompt
+    //    wired via `systemPromptOverride`. The override is a closure
+    //    over `rolePrompt` so a single loader instance re-evaluates
+    //    the same string each time the SDK calls
+    //    `loader.getSystemPrompt()`. `await loader.reload()` is
+    //    required by the SDK before the session uses the loader.
+    const loader = new DefaultResourceLoader({
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      systemPromptOverride: () => rolePrompt ?? undefined,
+    });
+    await loader.reload();
+
+    // 4. Build the tools allowlist. The `tools` option on
+    //    `createAgentSession` is the SDK's allowlist — forgetting
+    //    to name `handoff` / `end` here silently disables them
+    //    even when they're in `customTools` (sdk-surface.md §1).
+    //    `buildToolsAllowlist` dedups so a role that already names
+    //    them in `role.tools` still gets them exactly once.
+    const roleTools = roleConfig?.tools;
+    const tools = buildToolsAllowlist(roleTools);
+
+    // 5. Build the file-backed `SessionManager` rooted under the
+    //    conductor's per-run directory (NOT pi's own session tree).
+    //    `SessionManager.create(cwd, sessionDir)` puts each session's
+    //    JSONL file directly in `sessionDir`. The constructor
+    //    `mkdirSync`'d `sessionDir` already, so this never ENOENTs.
+    const sessionManager = SessionManager.create(this.cwd, this.sessionDir);
+
+    // 6. Build the per-session seam + the handoff/end tools. The
+    //    seam's capture buffer is the loop's read surface (§12.1);
+    //    the tools write to it on call.
+    const seam = new SessionSeam();
+    const handoff = createHandoffTool(seam);
+    const end = createEndTool(seam);
+
+    // 7. Spawn the real `AgentSession` via the SDK. `model` is
+    //    `undefined` for the system-model path; the SDK uses its
+    //    default in that case (no `model` override).
+    const createOpts: Parameters<typeof createAgentSession>[0] = {
+      cwd: this.cwd,
+      modelRegistry: this.modelRegistry,
+      resourceLoader: loader,
+      sessionManager,
+      customTools: [handoff, end],
+      tools: [...tools],
+    };
+    if (model !== undefined) {
+      // The SDK's `model` is `Model<any>`; `resolveModel` returns
+      // `Model<never>` (any-Api escape, see the function's
+      // comment). Cast at the boundary; the SDK handles any-Api
+      // models via its discriminated `api` field.
+      (createOpts as { model?: Model<never> }).model = model;
+    }
+    const { session } = await createAgentSession(createOpts);
+
+    // 8. Wrap the SDK session in the loop's `RoleSession` seam.
+    //    The wrapper explicitly forwards the SDK methods the loop
+    //    uses (`subscribe`, `prompt`, `dispose`) — the SDK's
+    //    `AgentSession` has these on the prototype, so a spread
+    //    would miss them. Two SDK fields are also exposed as
+    //    extra properties: `systemPrompt` (a getter) and
+    //    `getActiveToolNames` (a method). These are NOT part of
+    //    the `RoleSession` interface — the loop doesn't read them
+    //    — but the 7A.3 wiring tests do (via a typed cast). The
+    //    spread-vs-forward choice is deliberate: forwarding keeps
+    //    the wrapper small and makes the seam-only fields
+    //    (`readCaptureBuffer`, `resetCaptureBuffer`) obvious.
+    //    7A.4 adds the per-session `SessionState` (cap detection,
+    //    usage accumulation) and event subscription; for now the
+    //    session is bare, which is enough for the 7A.3 wiring
+    //    tests (systemPrompt + tools + session file location).
+    const wrapper = {
+      role,
+      sessionId: session.sessionId,
+      sessionFile: session.sessionFile ?? `${this.sessionDir}/${session.sessionId}.jsonl`,
+      model: logical,
+      readCaptureBuffer: () => seam.read(),
+      resetCaptureBuffer: () => seam.reset(),
+      subscribe: (listener: (event: AgentSessionEvent) => void) => session.subscribe(listener),
+      prompt: (text: string) => session.prompt(text),
+      dispose: async () => {
+        session.dispose();
+      },
+      // Test-introspection escape hatches. The loop never reads
+      // these; the wiring tests cast through `unknown` to verify
+      // the resource loader + tools allowlist are wired correctly.
+      get systemPrompt(): string {
+        return session.systemPrompt;
+      },
+      getActiveToolNames: () => session.getActiveToolNames(),
+    };
+    return wrapper as unknown as RoleSession;
+  }
+
+  /**
+   * Look up the role's `RoleConfig` from the loaded manifest.
+   * Returns `undefined` for an undeclared role (which the loop
+   * shouldn't ask for; surfaced as a "use system model" fallback
+   * downstream, matching `StubHost`'s tolerance). Internal helper.
+   */
+  private lookupRoleConfig(role: Role): RoleConfig | undefined {
+    return this.loadedManifest.manifest.roles.find((r) => r.name === role);
   }
 
   captureUsage(_session: RoleSession): UsageRecord {
@@ -153,172 +328,5 @@ export class ProductionHost implements Host {
 
   runCostSoFar(): number {
     throw new Error("ProductionHost.runCostSoFar: not yet implemented (Phase 7A.4)");
-  }
-}
-
-// ─── Task 7A.2: pure resolution pieces (§8.1) ────────────────────────
-// Three module-level exports. The class above does not call them
-// yet — 7A.3 wires `spawnRole` to use them. 7A.2 delivers them as
-// independently-testable pure functions so the boundary-error
-// paths (malformed entry, missing model, missing prompt) and the
-// "system model" path (omitted `models` field) are pinned down
-// before the orchestration arrives.
-
-// ─── `selectModelEntry` ────────────────────────────────────────────────
-
-/**
- * Pick the `provider:id` entry to resolve for a role (Task 7A.2,
- * spec §8.1).
- *
- * Returns `roleConfig.models[modelIndex]` when the role has a
- * `models` list. Returns `null` when the role has no `models`
- * field (or no `RoleConfig` at all) — caller uses the SDK's
- * default ("system model" path). Throws `NoMoreModelsError`
- * (Phase 4 Task 18) when `modelIndex` is past the end of the
- * list — same signal both hosts use for fallback exhaustion.
- *
- * **Why explicit (plan 7A.2 acceptance):** a "no `models` field"
- * role is a different policy from a "registry miss" or from
- * "fallback exhausted." Conflating them (e.g., by guessing an
- * alias when `models` is omitted) hides which roles are uncapped
- * vs misconfigured. This function makes the system-model path
- * visible at the type level: `string | null` rather than a
- * sentinel or a thrown error.
- *
- * @param role - The role name (for `NoMoreModelsError` diagnostics).
- * @param roleConfig - The role's `RoleConfig` from `LoadedManifest`.
- *   Pass `undefined` when the role is not declared in the manifest
- *   (a malformed/legacy path; the caller is expected to validate
- *   the role set upstream).
- * @param modelIndex - 0-based index into the `models` list.
- * @returns The entry string, or `null` for the system-model path.
- * @throws {NoMoreModelsError} when `modelIndex` is out of range.
- */
-export function selectModelEntry(
-  role: Role,
-  roleConfig: Pick<RoleConfig, "models"> | undefined,
-  modelIndex: number,
-): string | null {
-  if (roleConfig === undefined) return null;
-  const models = roleConfig.models;
-  if (models === undefined || models.length === 0) return null;
-  const entry = models[modelIndex];
-  if (entry === undefined) {
-    throw new NoMoreModelsError(role, modelIndex, models.length);
-  }
-  return entry;
-}
-
-// ─── `resolveModel` ───────────────────────────────────────────────────
-
-/**
- * Look up the `Model` for a `provider:id` entry (Task 7A.2, §8.1).
- *
- * Validates the entry is in `provider:id` form (exactly one `:`
- * with both sides non-empty), splits it, and calls
- * `modelRegistry.find(provider, id)`. On a registry miss throws
- * `ModelNotFoundError`; on a malformed entry throws
- * `MalformedModelEntryError`. The `logical` field on the return
- * is the original `provider:id` string the lifecycle record
- * carries (§11.4) — not the registry's normalized form.
- *
- * @param role - The role name (for error diagnostics).
- * @param entry - The `provider:id` string from `role.models[modelIndex]`.
- * @param modelRegistry - The host's `ModelRegistry` (typically the
- *   extension's `ExtensionCommandContext.modelRegistry`).
- * @returns `{ model, logical }` — the resolved `Model` and the
- *   original `provider:id` for the lifecycle record.
- * @throws {MalformedModelEntryError} when `entry` is not `provider:id`.
- * @throws {ModelNotFoundError} when the registry has no model for
- *   the resolved `(provider, id)`.
- */
-export function resolveModel(
-  role: Role,
-  entry: string,
-  modelRegistry: ModelRegistry,
-): { model: Model<never>; logical: string } {
-  const split = splitProviderId(role, entry);
-  // The SDK types `ModelRegistry.find` as `Model<Api> | undefined`,
-  // but we expose `Model<never>` on the return for the same
-  // escape-hatch reason the existing `SpawnRoleOptions.model` does
-  // (any-Api model is what flows through `createAgentSession`).
-  const model = modelRegistry.find(split.provider, split.id);
-  if (model === undefined) {
-    throw new ModelNotFoundError(role, entry);
-  }
-  return { model: model as Model<never>, logical: entry };
-}
-
-/**
- * Split a `provider:id` entry. Internal helper for `resolveModel`;
- * not exported — the entry validation is the resolution contract,
- * and exposing the raw split would invite callers to skip the
- * check. The form is strict: exactly one `:`, both sides non-empty.
- */
-function splitProviderId(role: Role, entry: string): { provider: string; id: string } {
-  const first = entry.indexOf(":");
-  if (first === -1) {
-    throw new MalformedModelEntryError(role, entry);
-  }
-  // Reject more than one colon — `provider:id` has exactly one
-  // separator. `anthropic:claude:x` is malformed (would have to
-  // pick which colon to split on).
-  if (entry.indexOf(":", first + 1) !== -1) {
-    throw new MalformedModelEntryError(role, entry);
-  }
-  const provider = entry.slice(0, first);
-  const id = entry.slice(first + 1);
-  if (provider === "" || id === "") {
-    throw new MalformedModelEntryError(role, entry);
-  }
-  return { provider, id };
-}
-
-// ─── `loadSystemPrompt` ───────────────────────────────────────────────
-
-/**
- * Load a role's system prompt from disk (Task 7A.2, §8.1).
- *
- * - `path === undefined` (no `system_prompt` declared) → returns
- *   `null` (caller does not pass `systemPromptOverride`; the SDK
- *   uses its default).
- * - `path` declared and file exists → returns UTF-8 contents.
- * - `path` declared but file missing on disk → throws
- *   `SystemPromptNotFoundError`.
- *
- * Relative paths are resolved against `cwd`; absolute paths are
- * used as-is (standard Node `path.resolve` semantics). Symlinks
- * are followed (default `fs.readFile` behavior).
- *
- * The function reads the file once and returns the full contents
- * as a UTF-8 string — `createAgentSession`'s
- * `DefaultResourceLoader({ systemPromptOverride })` expects a
- * `() => string` closure, so a string return is the right shape.
- *
- * @param role - The role name (for `SystemPromptNotFoundError` diagnostics).
- * @param path - The declared `system_prompt` path from the
- *   manifest. `undefined` means "no prompt declared."
- * @param cwd - The host's working directory (relative-path base).
- * @returns UTF-8 prompt contents, or `null` when no path was declared.
- * @throws {SystemPromptNotFoundError} when the declared path is
- *   missing or unreadable on disk.
- */
-export async function loadSystemPrompt(
-  role: Role,
-  path: string | undefined,
-  cwd: string,
-): Promise<string | null> {
-  if (path === undefined) return null;
-  const fullPath = isAbsolute(path) ? path : resolve(cwd, path);
-  try {
-    return await readFile(fullPath, "utf8");
-  } catch {
-    // Anything other than a clean read — ENOENT, EACCES, EISDIR,
-    // a symlink loop — is "the prompt isn't loadable as a UTF-8
-    // file." The error message names the role + path; the
-    // underlying `NodeJS.ErrnoException` is intentionally not
-    // preserved (callers should re-derive the cause from the
-    // filesystem rather than parsing stack text).
-    throw new SystemPromptNotFoundError(role, path);
   }
 }

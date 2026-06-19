@@ -164,9 +164,10 @@ export {
 // is the scaffold + boundary errors; 7A.2–7A.4 fill in the wiring.
 
 export type { ProductionHostOptions } from "./production-host.js";
+export { ProductionHost } from "./production-host.js";
 export {
+  buildToolsAllowlist,
   loadSystemPrompt,
-  ProductionHost,
   resolveModel,
   selectModelEntry,
-} from "./production-host.js";
+} from "./production-host-resolve.js";

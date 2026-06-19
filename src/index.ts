@@ -179,6 +179,7 @@ export type {
   TransitionRecord,
 } from "./host/index.js";
 export {
+  buildToolsAllowlist,
   FileRecordLog,
   formatRunMemorySeed,
   HostManifestError,
