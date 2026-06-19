@@ -7,15 +7,16 @@ Manual real-model smoke transcripts. Per
 > A real-model run against the developer's pi auth/config reaches a
 > terminal state: orchestrator → worker → orchestrator → end.
 
-## When this is runnable
+## Captured
 
-This step is **structurally deferred** until Phase 7C, Task 7C.2 lands.
-Phase 7A ships a library only — there is no `bin`, no `extensions/`
-entrypoint, and no installable launch surface, so a real-model run cannot be
-started from the shell until `/conduct` is available after `pi install ./`.
-Phase 7B's `pi -e ./extensions/conduct.ts` is a dev/subprocess mode, not an
-install; the user-facing install arrives in 7C.2. Do **not** attempt the smoke
-before 7C.2 — there is nothing to invoke.
+| Date | Surface | Transcript |
+|---|---|---|
+| 2026-06-19 | `bin/conduct` (Task 7C.3 CLI fallback) | [`2026-06-19-cli-real-model-smoke.md`](2026-06-19-cli-real-model-smoke.md) |
+
+The first transcript ran the CLI against `openrouter:openrouter/fusion`
+against the developer's configured `~/.pi/agent/auth.json`. Three sessions
+(orchestrator → worker → orchestrator → done) in ~30s, $0 cost. The full
+transition table is in the transcript file.
 
 ## What the smoke needs
 
@@ -36,6 +37,8 @@ Recommended capture format:
 
 ## Status
 
-**Pending — blocked on Phase 7C, Task 7C.2** (`pi install ./` exposes
-`/conduct`). No transcript yet. Will be added when a real-model run is
-performed after install is available.
+✅ **Phase 7C.2 smoke captured** (`2026-06-19-cli-real-model-smoke.md`).
+The CLI fallback surface from Task 7C.3 was used for the first transcript;
+the extension's `/conduct` is the user-facing equivalent for interactive
+runs (exercised separately during `pi install -l ./` install proof in the
+Task 7C.2 commit).
