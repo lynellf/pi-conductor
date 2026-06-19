@@ -105,6 +105,14 @@ export { FileRecordLog } from "./log-file.js";
 // exposes completion(), abort(), runStats(), runConfig(),
 // buildRunMemory().
 
+export { applyRunConfigOverride, RunConfigError } from "./config.js";
+export {
+  type DefaultBundle,
+  getDefaultBundle,
+  getDefaultConductorYaml,
+  getDefaultOrchestratorPrompt,
+  getDefaultWorkerPrompt,
+} from "./defaults.js";
 export type {
   ConfigOverrideContainer,
   RunConfigOverride,
@@ -113,7 +121,6 @@ export type {
   TransitionRecord,
 } from "./run-handle.js";
 export { RunHandle } from "./run-handle.js";
-export { applyRunConfigOverride, RunConfigError } from "./config.js";
 export { runStats } from "./stats.js";
 
 // ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
