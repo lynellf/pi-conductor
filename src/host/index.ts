@@ -64,3 +64,13 @@ export { createEndTool, createHandoffTool } from "./tools.js";
 
 export type { RunLoopOptions, RunLoopResult } from "./loop.js";
 export { runLoop } from "./loop.js";
+
+// ─── Post-emission tool sealing (Task 15.5, §12.1) ────────────────────
+// Wraps every side-effecting tool so that, while the session is
+// sealed (i.e., a valid handoff/end capture has been recorded), the
+// tool short-circuits to an error result without invoking the
+// underlying execute. Prevents work-after-handoff from mutating the
+// workspace after the role has declared its exit intent.
+
+export type { SealCheck } from "./tool-wrapper.js";
+export { wrapAllToolsWithSeal, wrapToolWithSeal } from "./tool-wrapper.js";
