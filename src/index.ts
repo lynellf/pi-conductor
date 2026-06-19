@@ -32,6 +32,13 @@ export type {
   UsageRecord,
 } from "./core/types.js";
 
+// ─── Cap-aware legal-target helpers (§7.2 / §7.4) ─────────────────────
+// Phase 2 Task 5. Pure; used by the reducer for `legal_targets` on a
+// `transition_rejected` record (§11.3) and by anything else that wants
+// to surface the topology / cap state.
+
+export { availableTargets, declaredTargets } from "./core/targets.js";
+
 // Reducer signatures (`reduce`, `reduceLifecycle`, `createInitialCheckpoint`)
 // are declared via `declare function` so they have no runtime presence
 // here. Their implementations land in Phase 2 (Task 6) and Phase 3
