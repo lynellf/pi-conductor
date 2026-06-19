@@ -5,8 +5,8 @@
 > verification. Source spec: `docs/orchestrator-fsm-spec.md` (§8, §8.1, §11,
 > §12). SDK surface pinned in `docs/sdk-surface.md` (§1, §3, §4, §6).
 >
-> **Status:** Task 7A.1 complete (feat commit `2e20ad5`); Task 7A.2 complete
-> (feat commit `30d7a6a`, this doc commit pending). 359/359 tests green;
+> **Status:** Tasks 7A.1, 7A.2, 7A.3 complete (feat commits `2e20ad5`,
+> `30d7a6a`, `d1ae204`; this doc commit pending). 369/369 tests green;
 > `typecheck` / `build` / `lint` / `format:check` clean.
 >
 > **Scope:** Add the production `Host` implementation the SDK loop already
@@ -49,6 +49,35 @@
     - `src/host/index.ts`, `src/index.ts` (re-exports)
     - `tests/host/production-host.test.ts` (16 new tests; 5 case table for
       malformed entries)
+  - Estimated scope: M
+
+- [x] **Task 7A.3: Resource loader, tools allowlist, and role session spawn** — commit `d1ae204`
+  - Description: Wire the real `createAgentSession` call. Build a
+    `DefaultResourceLoader` with `systemPromptOverride: () => rolePrompt`, call
+    `loader.reload()`, force-include `handoff` and `end` in the `tools`
+    allowlist, pass the existing custom emission tools, and use a file-backed
+    `SessionManager` rooted under the conductor run log directory rather than
+    pi's own session tree.
+  - Acceptance:
+    - [x] Tests assert `systemPromptOverride` is invoked through the resource
+          loader path.
+    - [x] `tools` contains role-declared tools plus force-injected `handoff` and
+          `end` exactly once.
+    - [x] Role session files are created under a per-run conductor directory,
+          not under pi's session dir.
+    - [x] No `ExtensionCommandContext.newSession()` / session-tree replacement
+          surface is used.
+  - Verification:
+    - [x] `pnpm test -- host/production-host` (30/30)
+    - [x] `pnpm test -- host/production-host-spawn` (10/10)
+    - [x] `pnpm typecheck`, `pnpm build`, `pnpm lint`, `pnpm format:check`
+  - Dependencies: Task 7A.2
+  - Files likely touched:
+    - `src/host/production-host.ts` (rewrote `spawnRole`; +402 / -199)
+    - `src/host/production-host-resolve.ts` (NEW; pure helpers split out
+      to keep the class file under 400 LOC)
+    - `src/host/index.ts`, `src/index.ts` (re-exports)
+    - `tests/host/production-host-spawn.test.ts` (NEW; 10 tests)
   - Estimated scope: M
 
 - [x] **Task 7A.1: Production host scaffold + boundary errors** — commit `2e20ad5`
