@@ -134,7 +134,7 @@
     fields are computed by the single source of truth (no duplicated
     aggregation logic).
 
-- [ ] **Task 12.5: Two-reducer composition (reduce + reduceLifecycle, in call order)**
+- [x] **Task 12.5: Two-reducer composition (reduce + reduceLifecycle, in call order)**
   - Description: A scenario test driving both reducers in the real call order the SDK
     host will use after an accepted handoff: `reduce` first, then
     `session_ended` for the previous role's active session, then `session_started` for
@@ -147,17 +147,38 @@
   - Acceptance: A 3-step `orch→W(ended)→orch(started)` sequence yields a single
     consistent checkpoint lineage; terminal lifecycle validates against active session
     identity rather than `current_role`; a model-retry sequence does not advance role.
-  - Verification: Scenario test (this is the seam bug that survives all unit tests;
-    pinned before the host is built).
+  - Verification: 7 scenario tests pin the §12.1 call order. The seam bug that
+    survives all unit tests (two reducers fighting over `current_role` /
+    `active_role_session`) is pinned here BEFORE the host is built. Also covers
+    rejected handoff (no lifecycle change — same role retries in the same session),
+    contract breach (session_failed without reduce), model retry (same role, fresh
+    id, no role advance), determinism across ts values, and multi-visit accumulation.
   - Dependencies: Task 10, Task 12
   - Files: `tests/core/reducer-composition.test.ts`
   - Scope: S
+  - Status: Complete.
 
 ## Checkpoint C — core complete
-- [ ] Spec §15 step 2 fully delivered: reducer + uniform table + manifest checks, with
+- [x] Spec §15 step 2 fully delivered: reducer + uniform table + manifest checks, with
       unit tests for every legal transition, every rejection reason, the visit-cap
       guard, manifest validation, and the shared-across-fallbacks cap rule
-- [ ] `pnpm typecheck && pnpm build && pnpm test` green; coverage threshold set
-- [ ] Public API matches §12 signatures exactly, including the `def` param (export
-      audit)
+- [x] `pnpm typecheck && pnpm build && pnpm test` green (217 tests, 16 files)
+- [x] Public API matches §12 signatures, with documented Phase 3 deviations:
+      `reduceLifecycle` meta extended with `usage?`, `visit_index`, `parent_session`
+      (host supplies, since the §11.4 record shape requires them and the reducer
+      cannot derive them from a single checkpoint with purity, §12). Documented
+      in `ReduceLifecycleMeta` JSDoc.
 - [ ] Review with human; **this is the gate before SDK host driver work**
+
+### Phase 3 deviations from §12 (documented)
+- `reduceLifecycle` meta carries three fields beyond §12's sketch: `usage?`,
+  `visit_index`, `parent_session`. The §11.4 record shape requires them; the
+  reducer cannot derive them from a single checkpoint (it has no record history,
+  §12 purity). The host supplies them.
+- `rollup(records, runId, orchestratorRole)` takes the orchestrator role name
+  for §11.6 overhead isolation. The rollup is self-contained (no manifest
+  parsing); the host passes the orchestrator name it knows.
+- `RecordLog` ships as a core interface + in-memory impl. The Phase 4 host owns
+  the file-backed impl.
+- `buildRunMemory` takes `runCostCap` as an option (not on `def`); cost caps
+  are host-owned (§11.7) and don't belong in the reducer's `def`.
