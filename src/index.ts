@@ -2,9 +2,11 @@
  * pi-conductor public entrypoint.
  *
  * Phase 1 (foundation): re-exports the pure FSM types from `src/core`.
- * Host-agnosticism invariant (spec §12): `src/core` and `src/manifest`
- * import nothing from `@earendil-works/pi-coding-agent`; enforced by
- * `tests/grep-guard.test.ts`.
+ * Phase 2 adds the pure reducer + cap-aware legal-target helpers.
+ * Phase 3 adds the seam (TypeBox schemas + validateEmission).
+ * Host-agnosticism invariant (spec §12): `src/core`, `src/manifest`,
+ * `src/seam`, and `src/cost` import nothing from
+ * `@earendil-works/pi-coding-agent`; enforced by `tests/grep-guard.test.ts`.
  */
 
 export const PACKAGE_NAME = "pi-conductor";
@@ -68,3 +70,20 @@ export type {
   ManifestWarningCode,
 } from "./manifest/validate.js";
 export { validateManifest } from "./manifest/validate.js";
+
+// ─── Seam: TypeBox schemas + validateEmission (§3, §11.3) ─────────────
+// Phase 3 Task 9. The TypeBox schemas are the single source of truth
+// for `handoff`/`end` payload shape — they are reused as `defineTool`
+// param schemas in Phase 4 (no second-schema double truth). The
+// `HandoffArgs` / `EndArgs` types are the host's typed view of a
+// validated payload (for seeding the next session); the reducer never
+// sees them (§3/§12: payload is `unknown`).
+
+export type { EndArgs, HandoffArgs } from "./seam/schema.js";
+export { endArgsSchema, handoffArgsSchema } from "./seam/schema.js";
+export type {
+  BreachFailureReason,
+  EmissionCapture,
+  ValidatedEmission,
+} from "./seam/validate-emission.js";
+export { validateEmission } from "./seam/validate-emission.js";

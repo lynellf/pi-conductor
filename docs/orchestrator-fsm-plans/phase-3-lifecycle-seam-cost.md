@@ -11,7 +11,7 @@
 
 ## Tasks
 
-- [ ] **Task 9: Seam schema (TypeBox) + contract-breach reasons (§3, §11.3)**
+- [x] **Task 9: Seam schema (TypeBox) + contract-breach reasons (§3, §11.3)**
   - Description: TypeBox schemas for `handoff`/`end` payloads (the *same* schemas the
     host will pass to `defineTool`/`customTools` in Phase 4 — single source of truth)
     and a `validateEmission()` that enforces contract rules (1)–(3) of §3: exactly one
@@ -27,11 +27,16 @@
   - Acceptance: Each breach type has a failing-then-passing test. A well-formed
     single emission is accepted; two events → `extra_emission`; missing `target_role`
     → `schema_invalid`; empty session output → `no_emission`.
-  - Verification: `pnpm test -- seam`
+  - Verification: `pnpm test -- validate-emission` (28 tests, all green)
   - Dependencies: Task 7
   - Files: `src/seam/schema.ts`, `src/seam/validate-emission.ts`,
     `tests/seam/validate-emission.test.ts`
   - Scope: M
+  - Status: Complete. TypeBox schemas serve dual purpose: `defineTool` param
+    schemas (Phase 4 host use) AND seam contract for `validateEmission`.
+    `additionalProperties: true` honors §5.1 ("plus role-defined fields").
+    Precedence: `extra_emission` > `schema_invalid` > `no_emission`. The reducer
+    remains `payload: unknown` (§12 verbatim).
 
 - [ ] **Task 10: `reduceLifecycle` (§11.4)**
   - Description: Pure lifecycle reducer per §12 signature
