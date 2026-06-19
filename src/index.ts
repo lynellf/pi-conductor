@@ -32,12 +32,11 @@ export type {
   UsageRecord,
 } from "./core/types.js";
 
-// Reducer signatures are declared via `declare function` so they have
-// no runtime presence here. Their implementations land in Phase 2
-// (Task 6) and Phase 3 (Tasks 9–10). Re-exported so consumers can
-// `import { reduce } from "pi-conductor"`; calling before Phase 2 is a
-// runtime no-op failure (the declaration has no body).
-export { createInitialCheckpoint, reduce, reduceLifecycle } from "./core/types.js";
+// Reducer signatures (`reduce`, `reduceLifecycle`, `createInitialCheckpoint`)
+// are declared via `declare function` so they have no runtime presence
+// here. Their implementations land in Phase 2 (Task 6) and Phase 3
+// (Tasks 9–10). Once implemented, this barrel will re-export them so
+// consumers can `import { reduce } from "pi-conductor"`.
 
 // ─── Manifest types + parser (spec §8) ────────────────────────────────
 // Type-only re-exports for the on-disk shape; runtime values for the
@@ -47,3 +46,18 @@ export { createInitialCheckpoint, reduce, reduceLifecycle } from "./core/types.j
 export { parseManifest } from "./manifest/parse.js";
 export type { Manifest, RoleConfig } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
+
+// ─── Manifest validation + derivation (§13, §12) ──────────────────────
+// validateManifest surfaces hard errors vs soft warnings; toMachineDefinition
+// throws on hard errors and produces the frozen MachineDefinition snapshot
+// the reducer (Phase 2) consumes as `def`.
+
+export { toMachineDefinition } from "./manifest/definition.js";
+export type {
+  ManifestError,
+  ManifestErrorCode,
+  ManifestReport,
+  ManifestWarning,
+  ManifestWarningCode,
+} from "./manifest/validate.js";
+export { validateManifest } from "./manifest/validate.js";

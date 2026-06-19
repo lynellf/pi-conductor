@@ -1,0 +1,187 @@
+/**
+ * Table-driven tests for `validateManifest` (spec §13) and
+ * `toMachineDefinition` (spec §12). One assertion per behavior; cases
+ * named after the rule they exercise.
+ */
+
+import { describe, expect, it } from "vitest";
+
+import { toMachineDefinition } from "../../src/manifest/definition.js";
+import { parseManifest } from "../../src/manifest/parse.js";
+import type { Manifest, RoleConfig } from "../../src/manifest/types.js";
+import { validateManifest } from "../../src/manifest/validate.js";
+
+const VALID_YAML = `
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [anthropic:claude-sonnet-4-5]
+    max_run_cost_usd: 25.0
+    system_prompt: .pi/roles/orchestrator.md
+    tools: [read, bash, handoff, end]
+  - name: implementer
+    max_visits: 3
+    max_session_cost_usd: 5.0
+    models: [anthropic:claude-opus-4-5, openai:gpt-4o]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, edit, write, bash, handoff, end]
+  - name: reviewer
+    max_visits: 3
+    system_prompt: .pi/roles/reviewer.md
+    tools: [read, grep, handoff, end]
+`;
+
+function m(roles: RoleConfig[], version = 1): Manifest {
+  return { version, roles };
+}
+
+// ─── §13 hard errors ───────────────────────────────────────────────────
+
+describe("validateManifest: hard errors (§13)", () => {
+  it("accepts the §8 example manifest with no errors and no warnings", () => {
+    const manifest = parseManifest(VALID_YAML);
+    const r = validateManifest(manifest);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("missing-orchestrator: rejects when no role carries is_orchestrator: true", () => {
+    const manifest = m([{ name: "worker", max_visits: 3 }]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).toContain("missing-orchestrator");
+  });
+
+  it("multiple-orchestrators: rejects when more than one role carries is_orchestrator: true", () => {
+    const manifest = m([
+      { name: "orch-a", is_orchestrator: true },
+      { name: "orch-b", is_orchestrator: true },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).toContain("multiple-orchestrators");
+  });
+
+  it("uncapped-worker: rejects a worker without max_visits", () => {
+    const manifest = m([
+      { name: "orch", is_orchestrator: true },
+      { name: "looper" /* no max_visits */ },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).toContain("uncapped-worker");
+  });
+
+  it("max-run-cost-on-worker: rejects max_run_cost_usd on a worker", () => {
+    const manifest = m([
+      { name: "orch", is_orchestrator: true },
+      { name: "w", max_visits: 3, max_run_cost_usd: 10 },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).toContain("max-run-cost-on-worker");
+  });
+
+  it("bare-model-alias: rejects a models entry that is not provider:id", () => {
+    const manifest = m([{ name: "orch", is_orchestrator: true, models: ["claude-sonnet"] }]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).toContain("bare-model-alias");
+  });
+
+  it("does not flag a role whose tools include both handoff and end", () => {
+    const manifest = m([
+      {
+        name: "orch",
+        is_orchestrator: true,
+        tools: ["read", "handoff", "end"],
+      },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.warnings).toEqual([]);
+  });
+});
+
+// ─── §13 soft warnings ─────────────────────────────────────────────────
+
+describe("validateManifest: soft warnings (§13)", () => {
+  it("no-cheaper-fallback: warns when max_session_cost_usd is set with only one model", () => {
+    const manifest = m([
+      { name: "orch", is_orchestrator: true },
+      {
+        name: "w",
+        max_visits: 3,
+        max_session_cost_usd: 5,
+        models: ["anthropic:claude-opus-4-5"],
+      },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.warnings.map((w) => w.code)).toContain("no-cheaper-fallback");
+  });
+
+  it("no-cheaper-fallback: does not warn when models has 2+ entries", () => {
+    const manifest = m([
+      { name: "orch", is_orchestrator: true },
+      {
+        name: "w",
+        max_visits: 3,
+        max_session_cost_usd: 5,
+        models: ["anthropic:claude-opus-4-5", "openai:gpt-4o"],
+      },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("no-cheaper-fallback: does not warn when models is absent (uses system model)", () => {
+    // Spec phrasing: "its `models` list should include..." — absence
+    // of a list is not a fallback-list-too-short, so no warning.
+    const manifest = m([
+      { name: "orch", is_orchestrator: true },
+      { name: "w", max_visits: 3, max_session_cost_usd: 5 },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("missing-required-tool: warns when a role's tools omits handoff or end", () => {
+    const manifest = m([{ name: "orch", is_orchestrator: true, tools: ["read"] }]);
+    const r = validateManifest(manifest);
+    expect(r.warnings.map((w) => w.code)).toContain("missing-required-tool");
+  });
+});
+
+// ─── toMachineDefinition (§12) ─────────────────────────────────────────
+
+describe("toMachineDefinition", () => {
+  const manifest = parseManifest(VALID_YAML);
+
+  it("stamps manifest_version as the integer version coerced to string", () => {
+    const def = toMachineDefinition(manifest);
+    expect(def.manifest_version).toBe("1");
+  });
+
+  it("orchestrator is the one role with is_orchestrator: true", () => {
+    const def = toMachineDefinition(manifest);
+    expect(def.orchestrator).toBe("orchestrator");
+  });
+
+  it("workers list excludes the orchestrator", () => {
+    const def = toMachineDefinition(manifest);
+    expect(def.workers).toEqual(["implementer", "reviewer"]);
+  });
+
+  it("max_visits matches each worker's finite cap", () => {
+    const def = toMachineDefinition(manifest);
+    expect(def.max_visits.implementer).toBe(3);
+    expect(def.max_visits.reviewer).toBe(3);
+  });
+
+  it("returns a frozen object (top level + workers + max_visits)", () => {
+    const def = toMachineDefinition(manifest);
+    expect(Object.isFrozen(def)).toBe(true);
+    expect(Object.isFrozen(def.workers)).toBe(true);
+    expect(Object.isFrozen(def.max_visits)).toBe(true);
+  });
+
+  it("throws when called on a manifest with hard errors (no silent fallback)", () => {
+    const bad = m([{ name: "w", max_visits: 3 }]); // no orchestrator
+    expect(() => toMachineDefinition(bad)).toThrow(/hard error/);
+  });
+});
