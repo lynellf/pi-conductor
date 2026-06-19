@@ -7,8 +7,8 @@
 > and main plan Open Question #6. `usage` is on `message.usage` (`AssistantMessage`),
 > camelCase with a nested `cost` object.
 >
-> **Status:** Task 18 complete (commit `4a2e084`, 2026-06-19). Task 19 next.
-> 298/298 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
+> **Status:** Task 19 complete (commit `3c2ce65`, 2026-06-19). Task 20 next.
+> 324/324 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
 >
 > **Scope:** Host-side usage capture on terminals, per-session + run cost-cap
 > enforcement, model fallback on `session_failed`, `runStats`/`runConfig` host
@@ -65,6 +65,7 @@
   - Scope: M
 
 - [x] **Task 18: Model fallback on `session_failed` (§8.2, §9.4)** — commit `4a2e084`
+- [x] **Task 19: `runStats` / `runConfig` host functions (§11.6, §11.8)** — commit `3c2ce65`
   - Description: On `session_failed` w/ `model_error`, try the role's next `models[]`
     entry, same role, fresh `createAgentSession` (state unchanged — §8.2). Record
     `model_fallback` (§11.5). On list exhaustion: hand to orchestrator once with a
