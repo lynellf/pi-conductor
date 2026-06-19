@@ -11,10 +11,20 @@
 > checkpoint snapshots, seed the next role, drive the stub provider end-to-end in CI.
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
+>
+> **Status:** In progress. Task 13 complete (commit `7ed38b4`). Tasks 13.5, 14, 15,
+> 15.5, 16, 16.5 pending. Checkpoint D (the exit gate for this phase) blocked until
+> all seven tasks are green **and reviewed by a human**.
+>
+> **Verification log:**
+> - Task 13 (commit `7ed38b4`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (227 tests, 17 files; 10 new
+>   scaffold tests + 1 broadened grep-guard test for the host-agnosticism
+>   invariant).
 
 ## Tasks
 
-- [ ] **Task 13: Host scaffold + manifest load + `Host` interface (§8, §12)**
+- [x] **Task 13: Host scaffold + manifest load + `Host` interface (§8, §12)**
   - Description: `src/host/` package importing `@earendil-works/pi-coding-agent`. Load
     `.pi/conductor.yaml`, `parseManifest` (Phase 1 Task 3) + `validateManifest`
     (Phase 1 Task 4), derive `MachineDefinition` (Phase 1 Task 4), pin
@@ -35,6 +45,12 @@
   - Files: `src/host/index.ts`, `src/host/host.ts`, `src/host/manifest.ts`,
     `tests/host/scaffold.test.ts`
   - Scope: M
+  - Status: Complete (commit `7ed38b4`). `@earendil-works/pi-coding-agent@0.79.1` +
+    `@earendil-works/pi-ai@0.79.1` added as direct deps; `minimumReleaseAge`
+    excluded 0.79.7. Grep-guard broadened to all four pi packages per plan
+    invariant 1 ("any pi runtime"). `Host` ships as an interface only — the
+    SDK-backed impl lands in Task 15; tests implement the same interface as a
+    fake.
 
 - [ ] **Task 13.5: Host public API + file-backed append-only log + `resumeRun` (§11.1, §11.9)**
   - Description: Deliver the run-lifecycle entry points the spec promises and that no
