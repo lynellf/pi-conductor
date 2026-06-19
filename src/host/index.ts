@@ -38,3 +38,20 @@ export type {
 
 export type { LoadedManifest } from "./manifest.js";
 export { HostManifestError, loadManifest, loadManifestFromString } from "./manifest.js";
+
+// ─── Per-session seam state (Task 14) ──────────────────────────────
+// Mutable host state per role session: the machine-event capture
+// buffer + the post-emission sealed flag. The handoff/end tool
+// factories (Task 14) write to it; the loop reads from it after
+// prompt() resolves; the post-emission tool wrapper (Task 15.5)
+// reads the sealed flag.
+
+export { SessionSeam } from "./seam.js";
+
+// ─── handoff / end emission tools (Task 14) ────────────────────────
+// defineTool() entries registered via customTools. The factory takes
+// a SessionSeam and closes over it; the loop does not see these
+// tools directly — only their effect on the seam.
+
+export type { EmissionToolDetails } from "./tools.js";
+export { createEndTool, createHandoffTool } from "./tools.js";
