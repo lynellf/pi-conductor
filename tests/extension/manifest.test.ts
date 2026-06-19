@@ -19,7 +19,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { DEFAULT_MANIFEST_PATH, resolveManifestPath } from "../../extensions/manifest.js";
+import { DEFAULT_MANIFEST_PATH, resolveManifestPath } from "../../src/extension/manifest.js";
 
 describe("resolveManifestPath", () => {
   let cwd: string;

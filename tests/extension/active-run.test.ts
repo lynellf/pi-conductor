@@ -17,7 +17,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { getActiveRun, setActiveRun } from "../../extensions/active-run.js";
+import { getActiveRun, setActiveRun } from "../../src/extension/active-run.js";
 
 describe("active-run tracker", () => {
   it("returns null when no run has been set", () => {

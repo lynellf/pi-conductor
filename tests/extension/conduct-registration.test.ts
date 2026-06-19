@@ -80,7 +80,7 @@ describe("extension shell — Task 7B.1: registration", () => {
     // the factory started a run, the active-run
     // tracker would be non-null after
     // `loadExtension` returns.
-    const { getActiveRun } = await import("../../extensions/active-run.js");
+    const { getActiveRun } = await import("../../src/extension/active-run.js");
     await loadExtension("<test>", cwd);
     expect(getActiveRun()).toBeNull();
   });

@@ -30,15 +30,15 @@
  */
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { FileRecordLog } from "../../src/host/index.js";
-import { runStats } from "../../src/host/stats.js";
+import { FileRecordLog } from "../../host/index.js";
+import { runStats } from "../../host/stats.js";
 import {
   type LoadedManifest,
   listRuns,
   loadManifest,
   type PersistedRecord,
   type RunStats,
-} from "../../src/index.js";
+} from "../../index.js";
 import { resolveManifestPath } from "../manifest.js";
 import { type HandleDeps, resolveRunBaseDir } from "./start.js";
 

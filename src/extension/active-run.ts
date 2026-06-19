@@ -39,7 +39,7 @@
  * is called — the user is explicitly starting over.
  */
 
-import type { RunHandle } from "../src/host/index.js";
+import type { RunHandle } from "../host/index.js";
 
 /**
  * The currently-active run in this extension process, or `null`

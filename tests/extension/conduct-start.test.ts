@@ -32,7 +32,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CONDUCT_STATUS_KEY, formatConductStatus } from "../../extensions/status.js";
+import { CONDUCT_STATUS_KEY, formatConductStatus } from "../../src/extension/status.js";
 import { loadExtension, makeCtx, type NotifyCall } from "./conduct-harness.js";
 
 describe("extension shell — status surface (re-exported names)", () => {
@@ -86,7 +86,7 @@ describe("extension shell — Task 7B.2: /conduct start handler (no-run branches
 
     // The active-run tracker is still null — the
     // handler returned without starting anything.
-    const { getActiveRun } = await import("../../extensions/active-run.js");
+    const { getActiveRun } = await import("../../src/extension/active-run.js");
     expect(getActiveRun()).toBeNull();
   });
 

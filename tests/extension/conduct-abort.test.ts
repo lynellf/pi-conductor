@@ -46,7 +46,7 @@ describe("extension shell — Task 7B.3: /conduct:abort", () => {
     // The active-run tracker is module-level; the
     // previous tests should have left it null, but we
     // re-clear here for isolation.
-    const { setActiveRun } = await import("../../extensions/active-run.js");
+    const { setActiveRun } = await import("../../src/extension/active-run.js");
     setActiveRun(null);
 
     const ext = await loadExtension("<test>", cwd);

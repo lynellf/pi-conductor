@@ -64,10 +64,14 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { handleAbort } from "./commands/abort.js";
-import { handleList } from "./commands/list.js";
-import { handleResume } from "./commands/resume.js";
-import { type GetFlagValue, type HandleDeps, handleStart } from "./commands/start.js";
+import { handleAbort } from "../src/extension/commands/abort.js";
+import { handleList } from "../src/extension/commands/list.js";
+import { handleResume } from "../src/extension/commands/resume.js";
+import {
+  type GetFlagValue,
+  type HandleDeps,
+  handleStart,
+} from "../src/extension/commands/start.js";
 
 /**
  * Manifest path override flag. Default is resolved at

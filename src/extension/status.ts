@@ -28,7 +28,7 @@
  * fractional cents in practice).
  */
 
-import type { RunHandle, RunStats } from "../src/host/index.js";
+import type { RunHandle, RunStats } from "../host/index.js";
 
 /** The status-line key used by `ctx.ui.setStatus`. The
  *  extension is the single owner of this key — no other

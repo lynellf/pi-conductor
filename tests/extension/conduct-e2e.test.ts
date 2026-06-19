@@ -56,7 +56,7 @@ import { join } from "node:path";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CONDUCT_STATUS_KEY } from "../../extensions/status.js";
+import { CONDUCT_STATUS_KEY } from "../../src/extension/status.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
 import { listRuns } from "../../src/index.js";
 import { loadExtension, makeCtx, type NotifyCall, type StatusUpdate } from "./conduct-harness.js";
@@ -139,7 +139,7 @@ roles:
     await rm(workdir, { recursive: true, force: true });
     // Clear the active-run tracker between tests so
     // a crashed run doesn't leak into the next.
-    const { setActiveRun } = await import("../../extensions/active-run.js");
+    const { setActiveRun } = await import("../../src/extension/active-run.js");
     setActiveRun(null);
   });
 
@@ -184,14 +184,14 @@ roles:
     expect(lastStatus?.text).toBeUndefined();
 
     // The active-run tracker is cleared on terminal.
-    const { getActiveRun } = await import("../../extensions/active-run.js");
+    const { getActiveRun } = await import("../../src/extension/active-run.js");
     expect(getActiveRun()).toBeNull();
 
     // The file-backed log under
     // <cwd>/.pi-conductor/runs/ now has the run.
     // /conduct:list can find it on a fresh
     // invocation.
-    const { resolveRunBaseDir } = await import("../../extensions/commands/start.js");
+    const { resolveRunBaseDir } = await import("../../src/extension/commands/start.js");
     const ids = listRuns(resolveRunBaseDir(workdir));
     expect(ids).toHaveLength(1);
   });

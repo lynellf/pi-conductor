@@ -34,7 +34,7 @@ import {
   type LoadedManifest,
   type RunHandle,
   resumeRun,
-} from "../../src/index.js";
+} from "../../index.js";
 import { getActiveRun, setActiveRun } from "../active-run.js";
 import { resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";

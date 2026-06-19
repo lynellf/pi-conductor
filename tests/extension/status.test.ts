@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { CONDUCT_STATUS_KEY, formatConductStatus } from "../../extensions/status.js";
+import { CONDUCT_STATUS_KEY, formatConductStatus } from "../../src/extension/status.js";
 import type { RunStats } from "../../src/host/index.js";
 
 /** Build a `RunStats` literal with only the fields the
