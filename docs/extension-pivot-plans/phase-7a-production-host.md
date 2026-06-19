@@ -5,7 +5,8 @@
 > verification. Source spec: `docs/orchestrator-fsm-spec.md` (§8, §8.1, §11,
 > §12). SDK surface pinned in `docs/sdk-surface.md` (§1, §3, §4, §6).
 >
-> **Status:** Draft — awaiting human review before any task starts.
+> **Status:** Task 7A.1 complete (feat commit `2e20ad5`, this doc commit pending).
+> 343/343 tests green; `typecheck` / `build` / `lint` / `format:check` clean.
 >
 > **Scope:** Add the production `Host` implementation the SDK loop already
 > expects. It reuses the existing pure core, seam, cost helpers, file-backed log,
@@ -22,7 +23,7 @@
 
 ## Tasks
 
-- [ ] **Task 7A.1: Production host scaffold + boundary errors**
+- [x] **Task 7A.1: Production host scaffold + boundary errors** — commit `2e20ad5`
   - Description: Add `ProductionHost implements Host` in `src/host/` with a
     constructor that accepts the production context: `modelRegistry`, `cwd`,
     `log`, `loadedManifest`, `runId`, and any existing run-handle/session state
@@ -30,19 +31,22 @@
     missing model, malformed `provider:id`, and missing system prompt. Keep all
     pi imports inside `src/host`.
   - Acceptance:
-    - [ ] `ProductionHost` satisfies the existing `Host` interface without
+    - [x] `ProductionHost` satisfies the existing `Host` interface without
           changing the loop contract.
-    - [ ] Boundary errors include the role name and missing value in their
+    - [x] Boundary errors include the role name and missing value in their
           messages.
-    - [ ] The grep guard still allows pi imports only in `src/host`.
+    - [x] The grep guard still allows pi imports only in `src/host`.
   - Verification:
-    - [ ] `pnpm test -- host/production-host`
-    - [ ] `pnpm test -- grep-guard`
-  - Dependencies: Checkpoint E review
+    - [x] `pnpm test -- host/production-host` (14/14 pass)
+    - [x] `pnpm test -- grep-guard` (4/4 pass)
+  - Dependencies: Checkpoint E review (asserted done by human; AGENTS.md
+    "Current status" block removed in `75c005b`).
   - Files likely touched:
-    - `src/host/production-host.ts`
-    - `src/host/index.ts`
-    - `tests/host/production-host.test.ts`
+    - `src/host/production-host.ts` (new, 143 LOC)
+    - `src/host/errors.ts` (3 new error classes)
+    - `src/host/index.ts` (re-exports)
+    - `src/index.ts` (public barrel re-exports)
+    - `tests/host/production-host.test.ts` (new, 14 table-driven tests)
   - Estimated scope: M
 
 - [ ] **Task 7A.2: Model and system-prompt resolution**
