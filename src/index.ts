@@ -105,3 +105,30 @@ export { validateEmission } from "./seam/validate-emission.js";
 export { runCapExceeded, sessionCapExceeded } from "./cost/caps.js";
 export type { RunRollup, UsageAggregate } from "./cost/rollup.js";
 export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";
+
+// ─── Persistence: RecordLog interface + InMemoryRecordLog (§11.1) ──────
+// Phase 3 Task 12. The pure core ships the interface and an in-memory
+// implementation for unit tests; the Phase 4 host driver owns the
+// file-backed implementation (append-only JSONL keyed by run_id; no
+// SDK branch scoping, §11.1).
+//
+// CheckpointSnapshot (§11.1) wraps a full Checkpoint so `latestCheckpoint`
+// reads the last snapshot — never replays records. The host's resume
+// path (§11.9) reconstructs from this single read.
+
+export type { CheckpointSnapshot, PersistedRecord, RecordLog } from "./persistence/log.js";
+export { InMemoryRecordLog } from "./persistence/log.js";
+
+// ─── Run memory artifact (§8.4) ───────────────────────────────────────
+// Phase 3 Task 12. The orchestrator's externalized memory: a single
+// structured record seeded into every fresh orchestrator session.
+// Pure builder; no I/O. The host calls this before each orchestrator
+// session starts to compose the seed context.
+
+export type {
+  BuildRunMemoryOptions,
+  RoleCostEntry,
+  RunMemory,
+  VisitHistoryEntry,
+} from "./core/run-memory.js";
+export { buildRunMemory } from "./core/run-memory.js";

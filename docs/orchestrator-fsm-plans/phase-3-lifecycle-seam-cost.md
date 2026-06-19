@@ -99,7 +99,7 @@
     use `cost >= cap` (hard stop, matching the reducer's `visit_count >= cap`
     convention).
 
-- [ ] **Task 12: `RecordLog` interface (in-memory) + run-memory builder (§8.4, §11.1)**
+- [x] **Task 12: `RecordLog` interface (in-memory) + run-memory builder (§8.4, §11.1)**
   - Description: A `RecordLog` interface + in-memory impl used by core unit tests. The
     real persistence is host-owned in the SDK driver (Phase 4): the host appends
     immutable records to its own log and reconstructs the live checkpoint by reading
@@ -118,12 +118,21 @@
     `open_concerns` is absent (dropped for v1, §8.4). Tested with a scenario where the
     run budget is exhausted (no candidates) and one where a worker is visit-capped
     (drops out while others remain).
-  - Verification: Scenario test building memory mid-run after 2 visits + a cost-capped
-    worker case.
+  - Verification: 14 run-memory scenario tests + 10 `InMemoryRecordLog` tests.
+    Covers every §8.4 field, the run-budget gate, the visit-cap gate,
+    terminal-state empty candidates, deterministic output, and snapshot lookup.
   - Dependencies: Task 11
   - Files: `src/persistence/log.ts`, `src/core/run-memory.ts`,
-    `tests/core/run-memory.test.ts`
+    `tests/core/run-memory.test.ts`, `tests/persistence/log.test.ts`
   - Scope: M
+  - Status: Complete. **Phase 3 design note:** `PersistedRecord` extended
+    with `CheckpointSnapshot` (§11.1: snapshots are full Checkpoints; the
+    wrapper is a uniform log entry). The in-memory `RecordLog` routes the
+    snapshot under `checkpoint.run_id` (snapshots don't carry run_id
+    directly; the wrapped Checkpoint is the source of truth). `buildRunMemory`
+    uses the §11.6 rollup internally for per-role / per-run cost so cost
+    fields are computed by the single source of truth (no duplicated
+    aggregation logic).
 
 - [ ] **Task 12.5: Two-reducer composition (reduce + reduceLifecycle, in call order)**
   - Description: A scenario test driving both reducers in the real call order the SDK
