@@ -11,7 +11,19 @@ import { describe, expect, it } from "vitest";
  * pre-push hook. Source files are scanned as text so a transient TS error can never
  * mask an illegal import.
  */
-const RESTRICTED = ["@earendil-works/pi-coding-agent"];
+const RESTRICTED = [
+  // Spec §12, plan invariant 1: "src/core + src/manifest + src/seam +
+  // src/cost must not import the pi SDK or any pi runtime package.
+  // Only src/host may import pi." Listed:
+  //  - pi-coding-agent: the agent CLI / session SDK (host's primary surface).
+  //  - pi-ai:           the model / provider / stream surface (Model, Usage, …).
+  //  - pi-agent-core:   the Agent runtime (state, events).
+  //  - pi-tui:          the TUI layer (not used by the host driver but in the same monorepo).
+  "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-ai",
+  "@earendil-works/pi-agent-core",
+  "@earendil-works/pi-tui",
+];
 const GUARDED_DIRS = ["src/core", "src/manifest", "src/seam", "src/cost"];
 
 const ROOT = new URL("../", import.meta.url).pathname;

@@ -136,3 +136,28 @@ export type {
   VisitHistoryEntry,
 } from "./core/run-memory.js";
 export { buildRunMemory } from "./core/run-memory.js";
+
+// ─── Host (SDK driver) — spec §8, §12, §15.3 ──────────────────────────
+// Phase 4 (Tasks 13–16.5). This is the ONLY entrypoint that imports the
+// pi SDK (`@earendil-works/pi-coding-agent`). The pure core above is
+// host-agnostic; the host programs against it.
+//
+// Task 13 ships the manifest loader + the `Host` seam. The actual
+// SDK-backed `Host` implementation, the file-backed `RecordLog`,
+// `startRun` / `resumeRun` / `listRuns` / `RunHandle`, the orchestration
+// loop, the post-emission sealing wrapper, the stub provider, and the
+// orchestrator run-memory seeding land in subsequent tasks (13.5, 14,
+// 15, 15.5, 16, 16.5).
+//
+// The grep-guard test (`tests/grep-guard.test.ts`) scans source as text
+// for the SDK package name in `src/core` + `src/manifest` + `src/seam` +
+// `src/cost`; `src/host/` is by exclusion the only allowed home.
+
+export type {
+  Host,
+  LoadedManifest,
+  RoleSession,
+  SeedRunMemoryArgs,
+  SpawnRoleOptions,
+} from "./host/index.js";
+export { HostManifestError, loadManifest, loadManifestFromString } from "./host/index.js";
