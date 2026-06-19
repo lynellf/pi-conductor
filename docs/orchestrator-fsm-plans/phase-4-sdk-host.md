@@ -12,7 +12,7 @@
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
 >
-> **Status:** In progress. Tasks 13 and 14 complete. Tasks 13.5, 15, 15.5, 16, 16.5
+> **Status:** In progress. Tasks 13, 14, 15 complete. Tasks 13.5, 15.5, 16, 16.5
 > pending. Checkpoint D (the exit gate for this phase) blocked until all seven
 > tasks are green **and reviewed by a human**.
 >
@@ -24,6 +24,10 @@
 > - Task 14 (commit `204785b`): `pnpm typecheck && pnpm build && pnpm test
 >   && pnpm lint && pnpm format:check` all green (243 tests, 18 files;
 >   16 new tools tests covering the §11.3 breach vocabulary end-to-end).
+> - Task 15 (commit `825f77a`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (255 tests, 19 files;
+>   12 new loop tests covering the §12.1 canonical reducer call order,
+>   the §11.3 breach vocabulary, and the reducer-rejection retry path).
 
 ## Tasks
 
@@ -141,7 +145,7 @@
         role-defined fields"); extra fields on handoff/end are
         silently accepted and preserved on the captured args.
 
-- [ ] **Task 15: Orchestration loop via `createAgentSession` (§8, §12)**
+- [x] **Task 15: Orchestration loop via `createAgentSession` (§8, §12)**
   - Description: The synchronous host loop: while `state !== "done"`, create the
     current role's session via `createAgentSession`. Per role, the host builds a
     `DefaultResourceLoader({ systemPromptOverride: () => rolePrompt })` and passes it
@@ -191,6 +195,60 @@
   - Dependencies: Task 14
   - Files: `src/host/loop.ts`, `tests/host/loop.test.ts`
   - Scope: M
+  - Status: Complete (commit `825f77a`). Implementation notes from the work:
+      - **Single-owner rule.** `reduce` / `reduceLifecycle` / `persistRecord`
+        live ONLY in `runLoop`. The handoff/end tool wrappers (Task 14)
+        write to the capture buffer; they never reduce or persist. Each
+        role session produces exactly one `transition_accepted` /
+        `transition_rejected` / `session_failed` record, plus lifecycle
+        bracketing, plus a `checkpoint_snapshot` on accepted transitions.
+      - **§12.1 canonical call order** is followed verbatim:
+        1. `reduceLifecycle(session_started)` after spawn
+        2. `session.prompt(seed)` and await
+        3. `validateEmission` on the capture buffer
+        4. On accepted handoff: `reduce` → persist transition record →
+           persist checkpoint snapshot → `reduceLifecycle(session_ended)`
+           for the just-finished session.
+        5. The next outer iteration spawns the next role's session
+           with `parent_session` = the just-finished session id (§11.4
+           tree links: orch → worker → orch).
+      - **§11.3 contract breach = single `session_failed`, never
+        `transition_rejected`.** Zero captures, schema-invalid single
+        captures, and extra_emission (length > 1) all reach
+        `session_failed` with the breach vocabulary
+        (`no_emission` / `schema_invalid` / `extra_emission`); `reduce`
+        is never called for any of them.
+      - **Reducer-rejection retry** (`transition_rejected`) keeps the
+        session alive. The loop persists the rejected record, clears
+        the capture buffer via `session.resetCaptureBuffer()` (a new
+        `RoleSession` method, see below), and re-prompts the same
+        session with `formatRejectionMessage(legal_targets)`. The buffer
+        clear is essential: without it, the next emission against the
+        stale rejected capture would deterministically read as
+        `extra_emission`.
+      - **New Host / RoleSession surface** added for Task 15 (kept
+        narrow — single-purpose):
+        - `RoleSession.resetCaptureBuffer()`: clear the buffer for the
+          next prompt attempt.
+        - `Host.nextVisitIndex(role)`: 1-based visit_index for the
+          next visit, derived from the run_id-keyed log
+          (§11.4: "reconstructable from records alone").
+        - `SpawnRoleOptions` fields are now all optional; the host
+          fills in defaults from the loaded manifest (model, system
+          prompt, tools). The loop passes minimal overrides.
+      - **Loop's contract for tests.** Tests script a `FakeHost` + a
+        queue of `FakeSession`s, each emitting on `prompt()`. The
+        fake's `prompt()` consumes the next scripted emission and
+        pushes it to the capture buffer (mirroring Task 14's tool
+        wrapper effect). 12 tests cover: 3-visit happy path with
+        parent_session chain and visit_index; the three §11.3 breach
+        types each producing exactly one `session_failed` and zero
+        `transition_rejected`; the reducer-rejection retry path with
+        three variants (succeeds on retry; breaches on retry; no
+        `session_ended` until the accepted attempt); the §12.1
+        canonical record order across a 3-visit run; and the assertion
+        that the loop never calls `sealSession` / `abortSession`
+        directly (those are Task 15.5 / Task 18's hooks).
 
 - [ ] **Task 15.5: Post-emission tool sealing (spec §12.1)**
   - Description: Implement the emission-sealed flag referenced by Task 14. The host
