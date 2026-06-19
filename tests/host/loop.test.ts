@@ -143,6 +143,7 @@ class FakeHost implements Host {
   readonly log: InMemoryRecordLog;
   readonly sessionQueue: FakeSession[] = [];
   sessionCounter = 0;
+  spawnedSessions: FakeSession[] = [];
   aborted: Array<{ sessionId: string; reason: string }> = [];
   sealed: string[] = [];
   // Captures for assertions about what was called.
@@ -165,6 +166,7 @@ class FakeHost implements Host {
     if (next === undefined) {
       throw new Error(`scripted session queue exhausted for role '${role}'`);
     }
+    this.spawnedSessions.push(next);
     return next.toRoleSession();
   }
 
@@ -639,6 +641,90 @@ describe("runLoop — canonical reducer call order (§12.1)", () => {
 });
 
 // ─── Session seal / abort hooks (Task 15.5 / 18 contracts) ────────────
+
+// ─── Session disposal: §12.1 lifecycle step 7 ────────────────────────
+
+// `runLoop` must call `session.dispose()` exactly once per spawned
+// session, on every terminal path (accepted / failed / done / thrown
+// invariant). Without it, each session's runtime, listeners, and file
+// handles persist until the Vitest worker exits — the dominant
+// memory-pressure driver observed during Phase 5. `FakeSession.disposed`
+// is the regression sentinel.
+describe("runLoop — session disposal (§12.1 step 7)", () => {
+  it("disposes every spawned session on the happy path", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+
+    host.enqueue(
+      new FakeSession("orchestrator", "sess-1", [{ kind: "emit_handoff", target_role: "worker" }]),
+    );
+    host.enqueue(
+      new FakeSession("worker", "sess-2", [{ kind: "emit_handoff", target_role: "orchestrator" }]),
+    );
+    host.enqueue(new FakeSession("orchestrator", "sess-3", [{ kind: "emit_end" }]));
+
+    await makeRun(initialCheckpoint, host);
+
+    expect(host.spawnedSessions).toHaveLength(3);
+    expect(host.spawnedSessions.every((s) => s.disposed)).toBe(true);
+  });
+
+  it("disposes the session on a session_failed (no_emission) path", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+
+    host.enqueue(new FakeSession("orchestrator", "sess-1", [{ kind: "no_emission" }]));
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(host.spawnedSessions).toHaveLength(1);
+    expect(host.spawnedSessions[0]?.disposed).toBe(true);
+  });
+
+  it("does NOT dispose mid-retry; disposes once after an accepted end", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+
+    host.enqueue(
+      new FakeSession("orchestrator", "sess-1", [
+        { kind: "emit_illegal_handoff", target_role: "undeclared-role" },
+        { kind: "emit_end" },
+      ]),
+    );
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("done");
+    expect(host.spawnedSessions).toHaveLength(1);
+    // The retry path kept the session alive across two prompts; disposal
+    // happens once, after the accepted end — not between prompts.
+    expect(host.spawnedSessions[0]?.disposed).toBe(true);
+    expect(host.spawnedSessions[0]?.prompts).toHaveLength(2);
+  });
+
+  it("disposes the session when a reducer-rejected retry breaches", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+
+    host.enqueue(
+      new FakeSession("orchestrator", "sess-1", [
+        { kind: "emit_illegal_handoff", target_role: "undeclared-role" },
+        { kind: "no_emission" },
+      ]),
+    );
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(host.spawnedSessions).toHaveLength(1);
+    expect(host.spawnedSessions[0]?.disposed).toBe(true);
+  });
+});
 
 describe("runLoop — host hook usage", () => {
   it("does not call sealSession or abortSession on the happy path", async () => {
