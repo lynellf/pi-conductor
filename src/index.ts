@@ -24,6 +24,7 @@ export type {
   MachineEvent,
   ModelFallback,
   PayloadSummary,
+  ReduceLifecycleMeta,
   RejectReason,
   Role,
   SessionLifecycleEvent,
@@ -42,10 +43,11 @@ export type {
 export { availableTargets, declaredTargets } from "./core/targets.js";
 
 // Reducer signatures: `reduce` + `createInitialCheckpoint` are implemented in
-// Phase 2 (Tasks 6–7, src/core/reduce.ts). `reduceLifecycle` remains a
-// `declare function` until Phase 3 (Tasks 9–10).
+// Phase 2 (Tasks 6–7, src/core/reduce.ts). `reduceLifecycle` lands in
+// Phase 3 (Task 10, src/core/reduce-lifecycle.ts).
 
 export { createInitialCheckpoint, ReduceInvariantError, reduce } from "./core/reduce.js";
+export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.js";
 
 // ─── Manifest types + parser (spec §8) ────────────────────────────────
 // Type-only re-exports for the on-disk shape; runtime values for the

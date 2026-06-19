@@ -38,7 +38,7 @@
     Precedence: `extra_emission` > `schema_invalid` > `no_emission`. The reducer
     remains `payload: unknown` (§12 verbatim).
 
-- [ ] **Task 10: `reduceLifecycle` (§11.4)**
+- [x] **Task 10: `reduceLifecycle` (§11.4)**
   - Description: Pure lifecycle reducer per §12 signature
     `reduceLifecycle(checkpoint, lifecycle, def, meta)`. `session_started` sets
     `active_role_session` to `{ id, role, session_file }` and requires
@@ -56,11 +56,21 @@
     with the wrong `sessionId` or role is rejected/thrown; `usage` present on both
     terminals; `visit_index` reconstructable from records alone; model-retry does not
     advance `current_role`.
-  - Verification: Scenario tests; a reconciliation test summing `usage.cost` across
-    both terminal types equals a hand-supplied total.
+  - Verification: 30 scenario tests + reconciliation test (sum of `usage.cost`
+    across both terminal types equals a hand-supplied total).
   - Dependencies: Task 7
   - Files: `src/core/reduce-lifecycle.ts`, `tests/core/reduce-lifecycle.test.ts`
   - Scope: M
+  - Status: Complete. **Phase 3 deviation (documented):** §12's sketched meta
+    omits three fields the §11.4 record shape requires: `usage?`, `visit_index`,
+    `parent_session`. The reducer cannot derive these from a single checkpoint
+    (it has no record history; §12 purity), so the host supplies them. `usage`
+    is required on terminals (otherwise reconciliation breaks §11.6);
+    `visit_index` / `parent_session` flow from the host's record log.
+    Documented in `ReduceLifecycleMeta` JSDoc in `src/core/types.ts`.
+    The reducer is the single-source-of-truth plumb: it never computes
+    visit_index (it can't, without records) and never inspects usage content
+    (seam/§3).
 
 - [ ] **Task 11: Pure usage roll-up + cap predicates (§11.6, §11.7)**
   - Description: Pure functions over a list of persisted records:

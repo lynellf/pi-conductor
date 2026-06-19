@@ -192,19 +192,41 @@ export type TransitionResult =
  * §12 `reduceLifecycle` signature. Pure, same contract as `reduce`.
  * Lifecycle identity is checked against `checkpoint.active_role_session`,
  * not blindly against `current_role` (§12, §12.1).
+ *
+ * **Phase 3 extension (documented deviation from the §12 sketch):**
+ * the spec's sketched meta omits three fields that the §11.4 record shape
+ * requires. The reducer cannot derive these from the checkpoint alone (it
+ * has no record history; pure, §12), so the host supplies them:
+ *
+ *  - `usage?: UsageRecord` — present on `session_ended` / `session_failed`
+ *    terminals (both terminals cost, §11.4). Omitted on `session_started`.
+ *  - `visit_index: number` — the 1-based visit index of THIS role in the
+ *    run. Host tracks session_started counts per role in its append-only
+ *    log and supplies it; the reducer plumbs it onto the record.
+ *    Records are "reconstructable from records alone" (§11.4) — the host
+ *    is the single source of this number.
+ *  - `parent_session: string | null` — the parent role session in the
+ *    execution tree (§11.4). `null` for the first orchestrator session.
+ *    Host knows the parent from its log.
  */
+export interface ReduceLifecycleMeta {
+  readonly role: Role;
+  readonly sessionId: string;
+  readonly sessionFile: string;
+  readonly model?: string | null;
+  readonly failureReason?: string;
+  readonly ts: number;
+  // Phase 3 extensions (see JSDoc above).
+  readonly usage?: UsageRecord;
+  readonly visit_index: number;
+  readonly parent_session: string | null;
+}
+
 export declare function reduceLifecycle(
   checkpoint: Checkpoint,
   lifecycle: "session_started" | "session_ended" | "session_failed",
   def: MachineDefinition,
-  meta: {
-    readonly role: Role;
-    readonly sessionId: string;
-    readonly sessionFile: string;
-    readonly model?: string | null;
-    readonly failureReason?: string;
-    readonly ts: number;
-  },
+  meta: ReduceLifecycleMeta,
 ): { readonly checkpoint: Checkpoint; readonly record: SessionLifecycleEvent };
 
 // ─── §11.4: Session-lifecycle record ───────────────────────────────────
