@@ -38,3 +38,12 @@ export type {
 // `import { reduce } from "pi-conductor"`; calling before Phase 2 is a
 // runtime no-op failure (the declaration has no body).
 export { createInitialCheckpoint, reduce, reduceLifecycle } from "./core/types.js";
+
+// ─── Manifest types + parser (spec §8) ────────────────────────────────
+// Type-only re-exports for the on-disk shape; runtime values for the
+// parser + the typed error so consumers can `import { parseManifest }`
+// and `catch (e) { if (e instanceof ManifestParseError) ... }`.
+
+export { parseManifest } from "./manifest/parse.js";
+export type { Manifest, RoleConfig } from "./manifest/types.js";
+export { ManifestParseError } from "./manifest/types.js";

@@ -1,0 +1,30 @@
+# pi-conductor manifest — spec §8 example.
+#
+# Source of truth for the orchestrator FSM in this repo. The host
+# driver reads this file at run-start, validates it (Phase 1 Task 4),
+# derives a pinned MachineDefinition (Phase 1 Task 4), and the pure
+# FSM core consumes that definition as `def`.
+#
+# This file mirrors the §8 example in the spec verbatim. Validation
+# and tests assert against this fixture; edit both together.
+#
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [anthropic:claude-sonnet-4-5]
+    max_run_cost_usd: 25.0
+    system_prompt: .pi/roles/orchestrator.md
+    tools: [read, bash, handoff, end]
+
+  - name: implementer
+    max_visits: 3
+    max_session_cost_usd: 5.0
+    models: [anthropic:claude-opus-4-5, openai:gpt-4o]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, edit, write, bash, handoff, end]
+
+  - name: reviewer
+    max_visits: 3
+    system_prompt: .pi/roles/reviewer.md
+    tools: [read, grep, handoff, end]
