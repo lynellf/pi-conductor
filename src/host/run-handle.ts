@@ -1,5 +1,5 @@
 /**
- * RunHandle — spec §11.9, plan Task 13.5.
+ * RunHandle — spec §11.9, plan Task 13.5 (extended in Task 19).
  *
  * The runtime handle returned by `startRun` / `resumeRun`.
  * Exposes:
@@ -8,16 +8,29 @@
  *    state (`done` or `session_failed`); returns the final
  *    `Checkpoint`.
  *  - `abort(reason)` — request the loop to stop on the next
- *    `turn_end` / `session_ended` boundary. (Wire-up is Phase 5
- *    cost-cap territory; Task 13.5 ships the surface only.)
+ *    `turn_end` / `session_ended` boundary.
  *  - `runStats()` — render the current run's state, transition
- *    history, and cost roll-up from persisted records.
+ *    history, and cost roll-up from persisted records
+ *    (§11.6 / §11.8). Delegates to the pure `runStats` function
+ *    in `./stats.js` (Task 19).
  *  - `runConfig(override)` — override the run's `max_run_cost_usd`
- *    for the live run. (Loop reads this on each terminal usage
- *    capture — Phase 5 cost-cap territory.)
+ *    for the live run (§11.8). Validates via
+ *    `applyRunConfigOverride` (Task 19): non-positive throws
+ *    `RunConfigError`; override at or below current spend
+ *    triggers the existing §11.7 `pendingForcedEnd` path
+ *    (synthesized `end` on next orchestrator-current moment).
  *  - `buildRunMemory(goal, runCostCap)` — convenience for the
  *    orchestrator session's first-user-message seed (§8.4,
  *    Task 16.5).
+ *
+ * **Shared `configOverride` container (Task 19):** the loop's
+ * `getRunCostCap` closure (wired in `api.ts`'s `runWithCompletion`)
+ * reads from the same mutable container that `runConfig` writes
+ * to. The container is passed in via the constructor options so
+ * the closure and the handle see the same reference. This is the
+ * only piece of mutable host state that the loop reads on every
+ * terminal — it MUST be the same reference both sides see, or
+ * the cap override would never reach the loop.
  *
  * The handle owns the run's `runId`, `MachineDefinition`, and
  * `RecordLog`. Records are append-only; the handle never mutates
@@ -26,21 +39,35 @@
 
 import { buildRunMemory, type RunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
-import { type RunRollup, rollup } from "../cost/rollup.js";
 import type { RecordLog } from "../persistence/log.js";
+import { applyRunConfigOverride } from "./config.js";
+import { type RunStats, runStats, type TransitionRecord } from "./stats.js";
 
-export interface RunStats {
-  readonly runId: string;
-  readonly manifestVersion: string;
-  readonly recordsCount: number;
-  readonly perRun: RunRollup["perRun"];
-  readonly latestCheckpoint: Checkpoint | null;
-  readonly exitReason: "done" | "session_failed" | "aborted" | "running";
-}
+// Re-export the public types so existing consumers
+// (`src/index.ts`, external callers) keep working.
+export type { RunExecutionStatus, RunStats, TransitionRecord } from "./stats.js";
 
+/**
+ * Run config override payload. `maxRunCostUsd` is the only field
+ * for v1 (§11.8). The shape is open for future extensions (e.g.,
+ * per-session cap overrides) without a breaking change.
+ */
 export interface RunConfigOverride {
   readonly maxRunCostUsd?: number;
 }
+
+/**
+ * Mutable container for the live `configOverride`. Shared between
+ * `RunHandle.runConfig` (writer) and the loop's `getRunCostCap`
+ * closure (reader) — Task 19 wires this in `api.ts`'s
+ * `runWithCompletion`. The container pattern (vs. a plain
+ * `RunConfigOverride` field) is required because closures capture
+ * by reference: the loop's `getRunCostCap` must read the same
+ * object that `RunHandle.runConfig` mutates. `current` is
+ * reassigned (not mutated in place) so the writer and reader see
+ * a consistent snapshot of the override at any point.
+ */
+export type ConfigOverrideContainer = { current: RunConfigOverride };
 
 export class RunHandle {
   readonly runId: string;
@@ -52,12 +79,20 @@ export class RunHandle {
   }>;
   private aborted = false;
   private abortedReason: string | null = null;
-  private configOverride: RunConfigOverride = {};
+  /**
+   * Shared mutable container for the live `configOverride`. The
+   * loop's `getRunCostCap` closure (in `api.ts`) holds a reference
+   * to the same container; updates here are visible to the loop
+   * on its next terminal. See `ConfigOverrideContainer` for why
+   * this is a container rather than a plain field.
+   */
+  private readonly configOverrideContainer: ConfigOverrideContainer;
 
   constructor(opts: {
     runId: string;
     def: MachineDefinition;
     log: RecordLog;
+    configOverrideContainer: ConfigOverrideContainer;
     completionPromise: Promise<{
       finalCheckpoint: Checkpoint;
       exitReason: "done" | "session_failed" | "aborted";
@@ -66,6 +101,7 @@ export class RunHandle {
     this.runId = opts.runId;
     this.def = opts.def;
     this.log = opts.log;
+    this.configOverrideContainer = opts.configOverrideContainer;
     this.completionPromise = opts.completionPromise;
   }
 
@@ -90,43 +126,47 @@ export class RunHandle {
     this.abortedReason = reason;
   }
 
-  /** Snapshot of the run's persisted state (§11.8 / §11.6 roll-up). */
+  /**
+   * Snapshot of the run's persisted state (§11.8 / §11.6 roll-up).
+   * Delegates to the pure `runStats` function in `./stats.js` —
+   * the `RunHandle` only supplies the execution status (abort is
+   * host state, not reducible from records).
+   */
   runStats(): RunStats {
     const records = this.log.records(this.runId);
-    const r = rollup(records, this.runId, this.def.orchestrator);
-    const latest = this.log.latestCheckpoint(this.runId);
-    const lastRecord = records[records.length - 1];
-    const exitReason: RunStats["exitReason"] = (() => {
-      if (this.aborted) return "aborted";
-      if (latest?.current_role === "done") return "done";
-      if (lastRecord !== undefined && lastRecord.type === "session_failed") return "session_failed";
-      return "running";
-    })();
-    return Object.freeze({
-      runId: this.runId,
-      manifestVersion: this.def.manifest_version,
-      recordsCount: records.length,
-      perRun: r.perRun,
-      latestCheckpoint: latest,
-      exitReason,
-    }) as RunStats;
+    const exitReason = this.computeExitReason();
+    return runStats(records, this.runId, this.def, exitReason);
   }
 
-  /** Override the live run's config (e.g., `max_run_cost_usd`).
-   *  The loop reads this on each terminal usage capture; the
-   *  override is a no-op after the run terminates. */
+  /**
+   * Override the live run's `max_run_cost_usd` (§11.8, Task 19).
+   * Validates via `applyRunConfigOverride`:
+   *
+   *  - Non-positive `maxRunCostUsd` throws `RunConfigError` —
+   *    the override is rejected, the previous cap is preserved.
+   *  - Positive override at or below current spend is accepted;
+   *    the loop's existing run-cap check + §11.7 `pendingForcedEnd`
+   *    handle the breach on the next terminal. The synthesized
+   *    `end` fires on the next orchestrator-current moment
+   *    (same path as a naturally-occurring run-cap breach).
+   *  - Raising the cap is always allowed.
+   *
+   * The override is a no-op after the run terminates — the loop
+   * has exited and `getRunCostCap` is no longer called.
+   */
   runConfig(override: RunConfigOverride): void {
-    this.configOverride = {
-      ...this.configOverride,
-      ...(override.maxRunCostUsd !== undefined && { maxRunCostUsd: override.maxRunCostUsd }),
-    };
+    const records = this.log.records(this.runId);
+    const runCostSoFar = this.computeRunCostSoFar(records);
+    const result = applyRunConfigOverride({ runCostSoFar }, override);
+    this.configOverrideContainer.current = { maxRunCostUsd: result.newCap };
   }
 
   /** Read the current override (used by the loop on each terminal
    *  usage capture). Returns the merged override or null if none
    *  was set. */
   currentConfigOverride(): RunConfigOverride | null {
-    return Object.keys(this.configOverride).length > 0 ? { ...this.configOverride } : null;
+    const current = this.configOverrideContainer.current;
+    return Object.keys(current).length > 0 ? { ...current } : null;
   }
 
   /** Whether abort was requested and the reason. */
@@ -156,4 +196,52 @@ export class RunHandle {
       } as Checkpoint);
     return buildRunMemory(effectiveCheckpoint, records, this.def, { goal, runCostCap });
   }
+
+  // ─── Internals ──────────────────────────────────────────────
+
+  /**
+   * Compute the run's execution status. The `aborted` flag takes
+   * precedence (the user explicitly requested abort). Then the
+   * latest checkpoint: if `current_role === "done"`, the run
+   * completed normally. Otherwise, the last record's type tells
+   * us: `session_failed` → "session_failed"; anything else →
+   * "running".
+   */
+  private computeExitReason(): RunStats["exitReason"] {
+    if (this.aborted) return "aborted";
+    const latest = this.log.latestCheckpoint(this.runId);
+    if (latest?.current_role === "done") return "done";
+    const records = this.log.records(this.runId);
+    const lastRecord = records[records.length - 1];
+    if (lastRecord !== undefined && lastRecord.type === "session_failed") {
+      return "session_failed";
+    }
+    return "running";
+  }
+
+  /**
+   * Sum `usage.cost` across all persisted terminal sessions
+   * (`session_ended` + `session_failed`, §11.4 — both terminals
+   * cost). Used by `runConfig` to evaluate the lowering edge
+   * case. The result is the same number the loop's
+   * `host.runCostSoFar()` returns; recomputing here avoids
+   * threading the `Host` instance through the `RunHandle`.
+   */
+  private computeRunCostSoFar(
+    records: readonly import("../persistence/log.js").PersistedRecord[],
+  ): number {
+    let total = 0;
+    for (const r of records) {
+      if ((r.type === "session_ended" || r.type === "session_failed") && r.usage !== undefined) {
+        total += r.usage.cost;
+      }
+    }
+    return total;
+  }
 }
+
+// Suppress the unused-import warning for `TransitionRecord` — the
+// type is re-exported above but the import is also used as a
+// structural reference in JSDoc. Keeping it imported (rather than
+// re-importing) avoids a cycle.
+void (null as unknown as TransitionRecord);

@@ -160,12 +160,17 @@ export type {
   LoadedManifest,
   ResumeRunOptions,
   RoleSession,
+  RunConfigError,
   RunConfigOverride,
+  RunExecutionStatus,
   RunStats,
   SeedRunMemoryArgs,
   SpawnRoleOptions,
   StartRunOptions,
   StubHostOptions,
+  TransitionRecord,
+  applyRunConfigOverride,
+  runStats,
 } from "./host/index.js";
 export {
   FileRecordLog,

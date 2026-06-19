@@ -65,7 +65,7 @@ import type { Host } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
-import { RunHandle } from "./run-handle.js";
+import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -140,6 +140,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     host,
     initialCheckpoint,
     goal: opts.goal,
+    loadedManifest: loaded,
   });
 }
 
@@ -191,6 +192,7 @@ export async function resumeRun(
     host,
     initialCheckpoint: reconciledCheckpoint,
     goal: opts.goal,
+    loadedManifest: loaded,
   });
 }
 
@@ -211,18 +213,54 @@ interface RunWithCompletionArgs {
   readonly host: Host;
   readonly initialCheckpoint: Checkpoint;
   readonly goal: string;
+  readonly loadedManifest: LoadedManifest;
 }
 
 async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle> {
-  const { runId, def, log, host, initialCheckpoint, goal } = args;
+  const { runId, def, log, host, initialCheckpoint, goal, loadedManifest } = args;
+  // Task 19: shared mutable container for the live `configOverride`.
+  // The loop's `getRunCostCap` closure (below) reads from this
+  // container; `RunHandle.runConfig` writes to it. Both must see
+  // the same reference — closures capture by reference, and a
+  // plain `RunConfigOverride` field on the handle would not be
+  // visible to the closure. The container pattern is the simplest
+  // way to share mutable host state between the handle and the
+  // loop's run-cap check.
+  const configOverrideContainer: ConfigOverrideContainer = { current: {} };
+
+  // `getRunCostCap` is the loop's source of truth for the active
+  // run cap. Precedence:
+  //   1. `RunHandle.runConfig` override (set via `runConfig()`).
+  //   2. Manifest's orchestrator `max_run_cost_usd` (the static
+  //      default; §8.1).
+  //   3. `null` — uncapped.
+  // The closure reads `configOverrideContainer.current` on every
+  // call, so a `runConfig` update is visible to the loop on its
+  // next terminal usage capture.
+  const getRunCostCap = (): number | null => {
+    const override = configOverrideContainer.current.maxRunCostUsd;
+    if (override !== undefined) return override;
+    const orchestratorConfig = loadedManifest.manifest.roles.find(
+      (r) => r.name === def.orchestrator,
+    );
+    return orchestratorConfig?.max_run_cost_usd ?? null;
+  };
+
   // The initial orchestrator session is seeded with `goal` via the
-  // runLoop's initialGoal parameter. Task 16.5 will replace this
-  // with a per-turn run-memory injection.
-  const completionPromise = runLoop({ def, initialCheckpoint, host, initialGoal: goal });
+  // runLoop's initialGoal parameter. Task 16.5 replaces this with a
+  // per-turn run-memory injection.
+  const completionPromise = runLoop({
+    def,
+    initialCheckpoint,
+    host,
+    initialGoal: goal,
+    getRunCostCap,
+  });
   return new RunHandle({
     runId,
     def,
     log,
+    configOverrideContainer,
     completionPromise: completionPromise.then((r) => ({
       finalCheckpoint: r.finalCheckpoint,
       exitReason: r.exitReason === "done" ? "done" : ("session_failed" as const),

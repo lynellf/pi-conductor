@@ -105,8 +105,16 @@ export { FileRecordLog } from "./log-file.js";
 // exposes completion(), abort(), runStats(), runConfig(),
 // buildRunMemory().
 
-export type { RunConfigOverride, RunStats } from "./run-handle.js";
+export type {
+  ConfigOverrideContainer,
+  RunConfigOverride,
+  RunExecutionStatus,
+  RunStats,
+  TransitionRecord,
+} from "./run-handle.js";
 export { RunHandle } from "./run-handle.js";
+export { applyRunConfigOverride, RunConfigError } from "./config.js";
+export { runStats } from "./stats.js";
 
 // ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
 // startRun / resumeRun / listRuns — the canonical CLI / TUI
