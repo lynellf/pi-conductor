@@ -39,11 +39,11 @@ export type {
 
 export { availableTargets, declaredTargets } from "./core/targets.js";
 
-// Reducer signatures (`reduce`, `reduceLifecycle`, `createInitialCheckpoint`)
-// are declared via `declare function` so they have no runtime presence
-// here. Their implementations land in Phase 2 (Task 6) and Phase 3
-// (Tasks 9–10). Once implemented, this barrel will re-export them so
-// consumers can `import { reduce } from "pi-conductor"`.
+// Reducer signatures: `reduce` + `createInitialCheckpoint` are implemented in
+// Phase 2 (Tasks 6–7, src/core/reduce.ts). `reduceLifecycle` remains a
+// `declare function` until Phase 3 (Tasks 9–10).
+
+export { createInitialCheckpoint, ReduceInvariantError, reduce } from "./core/reduce.js";
 
 // ─── Manifest types + parser (spec §8) ────────────────────────────────
 // Type-only re-exports for the on-disk shape; runtime values for the

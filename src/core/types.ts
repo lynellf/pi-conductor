@@ -2,9 +2,9 @@
  * Pure FSM types — spec §5, §7, §11, §12.
  *
  * Pure type module. No runtime logic. Implementation lives in:
- *   - reduce / reduceLifecycle       (Phase 2, Tasks 6–7)
- *   - createInitialCheckpoint        (Phase 2, Task 6)
- *   - declaredTargets / availableTargets (Phase 2, Task 5)
+ *   - reduce / createInitialCheckpoint   (Phase 2, Tasks 6–7: src/core/reduce.ts)
+ *   - reduceLifecycle                    (Phase 3, Tasks 9–10)
+ *   - declaredTargets / availableTargets (Phase 2, Task 5:  src/core/targets.ts)
  *
  * Host-agnostic: this file must not import the pi SDK. Enforced by
  * tests/grep-guard.test.ts (which scans source as text, so the package
@@ -154,47 +154,44 @@ export interface TransitionRejected {
  * §12 `TransitionResult` discriminant. `reduce` returns exactly one branch
  * per call. `state` is the post-transition state: for accepted, the new
  * `current_role`; for rejected, unchanged from the input checkpoint.
+ *
+ * `checkpoint` is the post-transition `Checkpoint` snapshot the host
+ * persists (§11.1: "Each transition produces a new full checkpoint
+ * snapshot"). For `accepted`, it reflects the new state (e.g. visit_count
+ * increments, `current_role` advanced); for `rejected`, it is a fresh
+ * object with the same content as the input (state unchanged) but a
+ * fresh reference and `updated_at = meta.ts`. The reducer is the single
+ * source of truth for the visit_count effect — duplicating that logic in
+ * the host is the wrong seam.
  */
 export type TransitionResult =
   | {
       readonly kind: "accepted";
       readonly state: Role | "done";
+      readonly checkpoint: Checkpoint;
       readonly effect: readonly Effect[];
       readonly record: TransitionAccepted;
     }
   | {
       readonly kind: "rejected";
       readonly state: Role | "done";
+      readonly checkpoint: Checkpoint;
       readonly reason: RejectReason;
       readonly legal_targets: LegalTargets;
       readonly record: TransitionRejected;
     };
 
-// ─── §12: Reducer + createInitialCheckpoint signatures ──────────────────
+// ─── §12: reduceLifecycle signature (Phase 3) ──────────────────────────
 //
-// Type-level signatures only. Implementations land in Phase 2 (Task 6)
-// and Phase 3 (Tasks 9–10). `declare function` keeps this module
-// runtime-empty while still giving downstream code a real signature to
-// import — the body arrives in Phase 2.
+// Phase 2 implements `reduce` + `createInitialCheckpoint` (src/core/reduce.ts);
+// `reduceLifecycle` lands in Phase 3 (Tasks 9–10). The `declare function`
+// keeps the §12 signature importable today so downstream code and tests can
+// reference it without a forward dependency.
 
 /**
- * §12 `reduce` signature. Pure: no I/O, no ambient config. The declared
- * role set + caps come from `def` (pinned manifest snapshot, §12). The
- * reducer asserts `meta.role === checkpoint.current_role`; a mismatch
- * is rejected/throws rather than silently trusted.
- */
-export declare function reduce(
-  checkpoint: Checkpoint,
-  event: MachineEvent,
-  def: MachineDefinition,
-  meta: { readonly role: Role; readonly sessionFile: string; readonly ts: number },
-): TransitionResult;
-
-/**
- * §12 `reduceLifecycle` signature. Same purity contract. Never advances
- * `current_role` — only `reduce` does. Lifecycle identity is checked
- * against `checkpoint.active_role_session`, not blindly against
- * `current_role` (§12).
+ * §12 `reduceLifecycle` signature. Pure, same contract as `reduce`.
+ * Lifecycle identity is checked against `checkpoint.active_role_session`,
+ * not blindly against `current_role` (§12, §12.1).
  */
 export declare function reduceLifecycle(
   checkpoint: Checkpoint,
@@ -209,13 +206,6 @@ export declare function reduceLifecycle(
     readonly ts: number;
   },
 ): { readonly checkpoint: Checkpoint; readonly record: SessionLifecycleEvent };
-
-/**
- * §12 `createInitialCheckpoint` signature. Implementation lands in
- * Phase 2 (Task 6). The canonical way to mint a Checkpoint; the host
- * must not hand-roll one (otherwise crash-resume diverges).
- */
-export declare function createInitialCheckpoint(def: MachineDefinition): Checkpoint;
 
 // ─── §11.4: Session-lifecycle record ───────────────────────────────────
 

@@ -11,10 +11,10 @@
 
 import { describe, expect, it } from "vitest";
 
+import type { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type {
   ActiveRoleSession,
   Checkpoint,
-  createInitialCheckpoint,
   Effect,
   LegalTargets,
   MachineDefinition,
