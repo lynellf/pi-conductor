@@ -141,3 +141,27 @@ export { listRuns, resumeRun, startRun } from "./api.js";
 // the artifact; worker sessions get the handoff payload instead.
 
 export { formatRunMemorySeed } from "./run-memory.js";
+
+// ─── Boundary errors (Phase 7A.1, §8.1) ──────────────────────────────
+// Three typed errors used by `ProductionHost` for the §8.1 model
+// resolution + prompt loading failure modes. Re-exported here so
+// callers and tests can `import { ModelNotFoundError, … }` from
+// the host barrel.
+
+export {
+  MalformedModelEntryError,
+  ModelNotFoundError,
+  NoMoreModelsError,
+  RoleEscalationError,
+  SystemPromptNotFoundError,
+} from "./errors.js";
+
+// ─── ProductionHost (Phase 7A.1+, §8.1) ──────────────────────────────
+// Production `Host` implementation: resolves `role.models[]`
+// (`provider:id`) against a real `ModelRegistry`, loads
+// `role.system_prompt` from disk, wires a real
+// `DefaultResourceLoader` per role session. The 7A.1 deliverable
+// is the scaffold + boundary errors; 7A.2–7A.4 fill in the wiring.
+
+export type { ProductionHostOptions } from "./production-host.js";
+export { ProductionHost } from "./production-host.js";
