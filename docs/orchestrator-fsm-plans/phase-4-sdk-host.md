@@ -12,7 +12,7 @@
 > Blocked by Checkpoint C and must honor the **Resolved Pre-Phase-4 Hardening
 > Decisions** in the main plan.
 >
-> **Status:** In progress. Tasks 13, 14, 15, 15.5 complete. Tasks 13.5, 16, 16.5
+> **Status:** In progress. Tasks 13, 14, 15, 15.5, 16 complete. Tasks 13.5, 16.5
 > pending. Checkpoint D (the exit gate for this phase) blocked until all seven
 > tasks are green **and reviewed by a human**.
 >
@@ -32,6 +32,11 @@
 >   && pnpm lint && pnpm format:check` all green (264 tests, 20 files;
 >   9 new seal tests covering the §12.1 wrap utility + integration with
 >   Task 14's seam + the bash / handoff ordering acceptance scenarios).
+> - Task 16 (commit `9a377a6`): `pnpm typecheck && pnpm build && pnpm test
+>   && pnpm lint && pnpm format:check` all green (267 tests, 21 files;
+>   3 new E2E tests driving real createAgentSession via the stub
+>   provider — full orch -> worker -> orch -> end run completes with
+>   no network and no API key).
 
 ## Tasks
 
@@ -322,7 +327,7 @@
             marker — proves handoff/end themselves remain unwrapped
             so the §11.3 breach vocabulary is preserved.
 
-- [ ] **Task 16: Stub provider for in-CI end-to-end runs (§15.3)**
+- [x] **Task 16: Stub provider for in-CI end-to-end runs (§15.3)**
   - Description: A deterministic stub model/provider (or a scripted mock `Model` +
     `Provider`) the loop drives end-to-end without API keys, so every host test is a
     real assertion, not a manual run. **Pin the contract first:** before writing any
@@ -347,6 +352,57 @@
   - Dependencies: Task 15.5
   - Files: `src/host/stub-provider.ts`, `tests/host/e2e.test.ts`
   - Scope: M
+  - Status: Complete (commit `9a377a6`). Implementation notes from the work:
+      - **Pinned SDK contract** (recorded as a module-level comment so
+        a future SDK upgrade surfaces drift in CI): Model is data
+        only (`id`/`name`/`api`/`provider`/`baseUrl`/`reasoning`/`input`/
+        `cost`/`contextWindow`/`maxTokens`); Provider.stream is a
+        `StreamFunction` returning an `AssistantMessageEventStream`
+        (a class with `push()`/`end()`/`result()`); the event
+        protocol is a discriminated union of `start` /
+        `text_*` / `thinking_*` / `toolcall_*` / `done` / `error`;
+        `AssistantMessage.usage` carries the SDK Usage shape
+        (camelCase + nested `cost.total` + `totalTokens`).
+      - **Pin the contract first was straightforward.** Task 13's
+        pre-flight already covered the Model / StreamFunction /
+        AssistantMessageEvent shapes; Task 16's work focused on
+        wiring the stub through `ModelRegistry.registerProvider`
+        with the right `api` + `apiKey` fields.
+      - **Stub provider interface.** `makeStubModel()` returns a
+        `Model<any>` with `provider: 'stub'`. `makeStubStreamFunction({
+        steps, usage })` returns a `StreamFunction` that consumes
+        one step per `stream()` call (one step per agent turn) and
+        pushes the corresponding `AssistantMessageEvent` sequence
+        synchronously onto a fresh `AssistantMessageEventStream`.
+        Step kinds: `emit_handoff` / `emit_end` / `emit_text` /
+        `no_emission` / `fail`.
+      - **Wiring pattern.** Production + tests: register the stub
+        on an in-memory ModelRegistry with
+        `registerProvider('stub', { api: 'anthropic-messages',
+        apiKey: '<dummy>', streamSimple })`; pass
+        `modelRegistry` to `createAgentSession`. The agent runtime
+        resolves `model.provider === 'stub'` to the registered
+        provider's streamSimple — no network, no API key.
+      - **StubHost** (test-only minimal real `Host` implementation
+        in `tests/host/e2e.test.ts`) wires `createAgentSession` with
+        the stub provider + Task 14's handoff/end tools + a
+        SessionSeam per session. Used by Tests 2 + 3 to drive the
+        full loop end-to-end.
+      - **§11.4 mapping source** is pinned by Test 1: the stub's
+        `usage: Partial<Usage>` is asserted verbatim against the
+        `message_end` event's `message.usage`. Task 17 (Phase 5)
+        wires the host's accumulation; this test is the source-pin
+        that guards against SDK drift.
+      - **Three E2E tests** cover the plan's acceptance scenarios:
+          - (1) Stub drives one createAgentSession turn with canned
+            usage — asserts the §11.4 SDK mapping source pin.
+          - (2) Full orch -> worker -> orch -> end run via runLoop
+            + StubHost — asserts persisted record shapes (§11.1 +
+            §11.2 + §11.4) and final checkpoint.
+          - (3) no_emission scripted step drives a §11.3 breach —
+            session_failed(no_emission), no reduce, no
+            transition_rejected. Same contract as Task 15's
+            FakeHost tests, end-to-end via the real SDK.
 
 - [ ] **Task 16.5: Orchestrator run-memory seeding per turn (§8.4, §11.8)**
   - Description: Before each orchestrator session's `prompt`, the host rebuilds the
