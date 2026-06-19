@@ -89,3 +89,19 @@ export type {
   ValidatedEmission,
 } from "./seam/validate-emission.js";
 export { validateEmission } from "./seam/validate-emission.js";
+
+// ─── Cost: pure usage roll-up + cap predicates (§11.6, §11.7) ─────────
+// Phase 3 Task 11. The host calls these on every `turn_end` (session
+// cap) and every terminal usage capture (run cap). Reducer does NOT
+// own cost-cap enforcement (§11.7); these are the deterministic
+// building blocks.
+//
+// Rollup is keyed by `run_id` and takes the orchestrator role name
+// (the manifest's `is_orchestrator: true` entry) for the §11.6
+// orchestrator-overhead isolation. Cache caveat (§11.6): the rollup
+// exposes raw `cache_read` / `cache_write` sums; it does NOT
+// synthesize a per-run cache hit rate.
+
+export { runCapExceeded, sessionCapExceeded } from "./cost/caps.js";
+export type { RunRollup, UsageAggregate } from "./cost/rollup.js";
+export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";

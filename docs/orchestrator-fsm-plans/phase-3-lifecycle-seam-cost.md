@@ -72,10 +72,10 @@
     visit_index (it can't, without records) and never inspects usage content
     (seam/§3).
 
-- [ ] **Task 11: Pure usage roll-up + cap predicates (§11.6, §11.7)**
+- [x] **Task 11: Pure usage roll-up + cap predicates (§11.6, §11.7)**
   - Description: Pure functions over a list of persisted records:
-    `rollup(records): { perRun, perRole, perModel, orchestratorOverhead }`, and
-    cap-evaluation predicates `sessionCapExceeded(invocationUsage, cap)` (shared
+    `rollup(records, runId, orchestratorRole): { perRun, perRole, perModel, orchestratorOverhead }`,
+    and cap-evaluation predicates `sessionCapExceeded(invocationUsage, cap)` (shared
     across fallbacks — no `cap × len(models)` loophole) and `runCapExceeded(rollup,
     cap)`. Cache caveat: expose raw `cache_read`/`cache_write` per session; do **not**
     synthesize a per-run cache-hit rate (§11.6).
@@ -83,11 +83,21 @@
     totals per dimension; orchestrator cost isolated as overhead; shared-across-
     fallbacks predicate correctly rejects the multiplier loophole in a test;
     no per-run cache-hit-rate field exists.
-  - Verification: `pnpm test -- rollup`
+  - Verification: 10 rollup tests + 12 cap tests, all green. Hand-computed totals
+    match across perRun/perRole/perModel/orchestratorOverhead; cap boundary
+    (`cost >= cap`) at $5 / $5 = rejected; multiplier-loophole test pins that the
+    predicate does NOT scale by `len(fallbacks)`.
   - Dependencies: Task 10
   - Files: `src/cost/rollup.ts`, `src/cost/caps.ts`, `tests/cost/rollup.test.ts`,
     `tests/cost/caps.test.ts`
   - Scope: M
+  - Status: Complete. **Phase 3 design note:** rollup takes
+    `(records, runId, orchestratorRole)` — the orchestrator role name is needed
+    for §11.6 overhead isolation and is supplied by the host (it knows the
+    manifest). System-default model (null) maps to `SYSTEM_DEFAULT_MODEL_KEY`
+    (`"<system-default>"`) so a real model id never collides. Both predicates
+    use `cost >= cap` (hard stop, matching the reducer's `visit_count >= cap`
+    convention).
 
 - [ ] **Task 12: `RecordLog` interface (in-memory) + run-memory builder (§8.4, §11.1)**
   - Description: A `RecordLog` interface + in-memory impl used by core unit tests. The
