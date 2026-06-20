@@ -87,6 +87,9 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
     expect(seed).toContain("Available workers (visit-capped AND run-budget-uncapped): worker.");
     expect(seed).toContain("(no sessions yet)");
     expect(seed).toContain("(no role cost yet)");
+    // §8.4 last_message: no prior transition on the first orchestrator turn.
+    expect(seed).toContain("last_message:");
+    expect(seed).toContain("(no prior worker message \u2014 this is the first orchestrator turn)");
     expect(seed).toContain("Continue your orchestration");
   });
 
@@ -141,6 +144,12 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
     // current_role is still "orchestrator" — the orchestrator's
     // second visit hasn't transitioned yet.
     expect(secondSeed).toContain("current_role: orchestrator");
+    // §8.4 last_message: the worker's handoff reason is delivered to
+    // the second orchestrator turn so it can act on the worker's status
+    // without reading transcripts.
+    expect(secondSeed).toContain("last_message:");
+    expect(secondSeed).toContain("from: worker");
+    expect(secondSeed).toContain("text: worker done");
     // Worker is still a candidate (visit 1 of max 3).
     expect(secondSeed).toContain("Available workers");
   });

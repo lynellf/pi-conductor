@@ -64,6 +64,21 @@ export function formatRunMemorySeed(memory: RunMemory): string {
       ? `Available workers (visit-capped AND run-budget-uncapped): ${memory.next_candidates.join(", ")}.`
       : "No candidates: all workers are visit-capped or the run budget is exhausted. Call end.";
 
+  const lastMessageText =
+    memory.last_message === null
+      ? "(no prior worker message — this is the first orchestrator turn)"
+      : [
+          `  from: ${memory.last_message.from}`,
+          memory.last_message.text === null
+            ? "  text: (worker omitted reason)"
+            : `  text: ${memory.last_message.text}`,
+          `  suggests_next: ${
+            memory.last_message.suggests_next === null
+              ? "(none)"
+              : memory.last_message.suggests_next
+          }`,
+        ].join("\n");
+
   return [
     "[run memory]",
     `run_id: ${memory.run_id}`,
@@ -71,7 +86,12 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     `current_role: ${memory.current_role}`,
     `state: ${memory.state}`,
     `run_cost_to_date: $${memory.run_cost_to_date.toFixed(4)} (${remaining})`,
-    `run_cost_cap: ${memory.run_cost_cap === null ? "uncapped" : `$${memory.run_cost_cap.toFixed(4)}`}`,
+    `run_cost_cap: ${
+      memory.run_cost_cap === null ? "uncapped" : `$${memory.run_cost_cap.toFixed(4)}`
+    }`,
+    "",
+    "last_message:",
+    lastMessageText,
     "",
     "visit_history:",
     historyText,

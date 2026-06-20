@@ -42,7 +42,12 @@
 
 import { rollup } from "../cost/rollup.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import type { Checkpoint, MachineDefinition, SessionLifecycleEvent } from "./types.js";
+import type {
+  Checkpoint,
+  MachineDefinition,
+  SessionLifecycleEvent,
+  TransitionAccepted,
+} from "./types.js";
 
 // ─── §8.4 shape ────────────────────────────────────────────────────────
 
@@ -61,12 +66,31 @@ export interface RoleCostEntry {
   readonly cost: number;
 }
 
+/**
+ * The previous role's message to the orchestrator (§8.4 `last_message`).
+ *
+ * Sourced from the latest `transition_accepted` record: `from` is the
+ * role that emitted the handoff/end, `text` is its surfaced `reason`
+ * (§5.1 — the free-form, machine-unbounded message channel; null when
+ * the worker omitted `reason`), and `suggests_next` is its advisory
+ * routing hint (§8.3; null when omitted). The machine records these for
+ * observability and never branches on them; the driver surfaces them so
+ * a fresh orchestrator session can act on the previous worker's
+ * verdict/status without reading transcripts.
+ */
+export interface LastMessage {
+  readonly from: string;
+  readonly text: string | null;
+  readonly suggests_next: string | null;
+}
+
 /** §8.4 run memory artifact. */
 export interface RunMemory {
   readonly run_id: string;
   readonly goal: string;
   readonly current_role: Checkpoint["current_role"];
   readonly state: Checkpoint["current_role"];
+  readonly last_message: LastMessage | null;
   readonly visit_history: readonly VisitHistoryEntry[];
   readonly run_cost_to_date: number;
   readonly run_cost_cap: number | null;
@@ -103,6 +127,12 @@ export function buildRunMemory(
   // §11.4). visit_index + model + usage flow from the record.
   const visit_history = buildVisitHistory(records, checkpoint.run_id);
 
+  // §8.4 last_message: the latest transition_accepted's surfaced reason
+  // + suggests_next, so a fresh orchestrator session sees the previous
+  // worker's verdict/status without reading transcripts. Null before
+  // the first transition (the initial orchestrator session).
+  const last_message = buildLastMessage(records, checkpoint.run_id);
+
   // §8.4 per_role_cost: reduce the rollup's per-role aggregate into
   // the {tokens, cost} shape the spec pins (the rollup's per-role
   // shape includes more fields; the artifact is a focused subset).
@@ -127,6 +157,7 @@ export function buildRunMemory(
     goal: opts.goal,
     current_role: checkpoint.current_role,
     state: checkpoint.current_role,
+    last_message: Object.freeze(last_message) as LastMessage | null,
     visit_history: Object.freeze([...visit_history]),
     run_cost_to_date,
     run_cost_cap,
@@ -137,6 +168,32 @@ export function buildRunMemory(
 }
 
 // ─── Internals ──────────────────────────────────────────────────────────
+
+/**
+ * §8.4 `last_message`: scan records for the latest `transition_accepted`
+ * for this run (records are append-ordered, so the last match wins) and
+ * surface the emitting role's `reason` (§5.1 message channel) + advisory
+ * `suggests_next` (§8.3). Returns null before the first transition.
+ *
+ * Pure, read-only over records — the machine stores `reason`/
+ * `suggests_next` for observability and never branches on them (§3/§5.1);
+ * this function only reads them back for the orchestrator's seed.
+ */
+function buildLastMessage(records: readonly PersistedRecord[], runId: string): LastMessage | null {
+  let latest: TransitionAccepted | null = null;
+  for (const record of records) {
+    if (record.type !== "transition_accepted") continue;
+    if (record.run_id !== runId) continue;
+    latest = record; // append-ordered: last match is the latest
+  }
+  if (latest === null) return null;
+  const reason = latest.payload_summary.reason;
+  return {
+    from: latest.role,
+    text: typeof reason === "string" ? reason : null,
+    suggests_next: latest.suggests_next,
+  };
+}
 
 function buildVisitHistory(
   records: readonly PersistedRecord[],

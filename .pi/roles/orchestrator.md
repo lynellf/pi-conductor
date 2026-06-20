@@ -32,3 +32,13 @@ route it correctly — not so you can do the worker's investigation.
 
 - Ensure any task completed by a planner or implementer is submitted to a
   reviewer before the run ends.
+
+## Reading worker output
+
+- Each worker's verdict/status is delivered to you via the run-memory
+  `last_message` block (from / text / suggests_next). You do **not** read
+  transcripts to learn what a worker decided — `last_message.text` carries
+  the worker's `reason` (e.g. "APPROVE", "REQUEST-CHANGES: …", "plan ready").
+- Route on it: APPROVE → end (or next phase); REQUEST-CHANGES → back to the
+  implementer; "blocked" → `ask_user`. Do not call `end` after a
+  REQUEST-CHANGES — that ships a known-broken change.

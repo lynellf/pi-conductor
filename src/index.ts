@@ -85,6 +85,7 @@ export { validateManifest } from "./manifest/validate.js";
 // validated payload (for seeding the next session); the reducer never
 // sees them (§3/§12: payload is `unknown`).
 
+export { summarizePayload } from "./seam/payload-summary.js";
 export type { EndArgs, HandoffArgs } from "./seam/schema.js";
 export { endArgsSchema, handoffArgsSchema } from "./seam/schema.js";
 export type {
@@ -131,6 +132,7 @@ export { InMemoryRecordLog } from "./persistence/log.js";
 
 export type {
   BuildRunMemoryOptions,
+  LastMessage,
   RoleCostEntry,
   RunMemory,
   VisitHistoryEntry,

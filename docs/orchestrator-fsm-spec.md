@@ -91,10 +91,18 @@ decides whether that choice is legal given the hub-and-spoke shape (§7).
 
 `suggests_next` is **advisory, not binding**. A worker may suggest where the orchestrator
 should route next; the machine records it for observability and the driver surfaces it to
-the orchestrator as context, but the machine never validates or branches on it. The
-orchestrator still must emit a legal handoff of its own. This lets roles express intent
-without creating the bilateral-declaration friction that per-role edge contracts would
-impose.
+the orchestrator as context (via the run-memory `last_message`, §8.4), but the machine
+never validates or branches on it. The orchestrator still must emit a legal handoff of
+its own. This lets roles express intent without creating the bilateral-declaration
+friction that per-role edge contracts would impose.
+
+`reason` is the **worker → orchestrator message channel**. A worker puts its
+verdict/status (e.g. "APPROVE", "REQUEST-CHANGES: fix B1 in file X", "plan ready", "blocked
+on Q") in `reason`; the machine stores it for observability and never branches on it, and
+the driver surfaces it to the next orchestrator session via `last_message.text` (§8.4) so
+the orchestrator can route on the worker's outcome without reading transcripts. It is
+**unbounded by the machine**; each role's system prompt instructs the worker to keep its
+`reason` concise (brevity is a prompt convention, not a seam-enforced cap).
 
 ### 5.2 Session-lifecycle events (driver-issued)
 
@@ -344,17 +352,36 @@ orchestrator's externalized memory: bounded, stable, parseable by small models.
 
 ```
 run_id, goal, current_role, state,
+last_message: { from: Role, text: string | null, suggests_next: Role | null } | null,
 visit_history: [{ role, visit_index, model, outcome, usage: { tokens, cost } }],
 run_cost_to_date, run_cost_cap, remaining_budget,
 per_role_cost: { role: { tokens, cost } },
 next_candidates: [role]   # workers not visit-capped, with run budget remaining
 ```
 
+`last_message` is the previous role's message to the orchestrator: `from` is the role
+that emitted the latest `handoff`/`end`, `text` is its surfaced `reason` (§5.1 — null
+when the worker omitted `reason`), and `suggests_next` is its advisory routing hint
+(§8.3; null when omitted). It is `null` before the first transition (the initial
+orchestrator turn). The driver builds it from the latest `transition_accepted` record
+so a fresh orchestrator session can act on the previous worker's verdict/status **without
+reading transcripts** — this is what lets the orchestrator distinguish APPROVE from
+REQUEST-CHANGES and route accordingly. The machine records `reason`/`suggests_next` for
+observability and never branches on them (§3/§5.1); `last_message` only reads them back.
+
+`reason` (and thus `last_message.text`) is **unbounded by the machine**. Brevity is a
+prompt-convention concern — each role's system prompt instructs the worker to keep its
+`reason` concise — not an implementation detail. Capping it at the seam would risk
+dropping a verdict on a length technicality and couple the contract to a
+tokenizer/word count. This is the carve-out §8.4 anticipated: a derived field with a
+declared writer (the previous role) and a bounded *role* (the `reason` string), not
+free-form unbounded notes.
+
 `open_concerns` from earlier drafts is **dropped for v1**: the machine does not inspect
-payload content (§3), so no core code can populate it, and a free-form prose field
-would let a small model drift. If a future version wants it, it must be a derived field
-with a declared writer (e.g. a convention that handoff payloads carry a structured
-`concerns` array) — not added back as prose.
+payload content (§3), so no core code can populate it, and a free-form unbounded prose
+field would let a small model drift. `last_message` is not a reintroduction of
+`open_concerns`: it is a single bounded-role field sourced from the already-persisted
+`reason`/`suggests_next`, not a notes array a worker writes arbitrarily.
 
 Rules:
 - **Single writer: the orchestrator only.** Workers write their handoff payload; the
@@ -496,6 +523,11 @@ across processes.
   // structural fingerprint) so the log is interpretable without storing arbitrary
   // payload content. The full validated payload is retained by the host for seeding
   // the next session but is NOT part of this persisted record.
+  // The seam (`summarizePayload`) enriches `field_names` + `reason` from the
+  // shape-validated payload before the host persists this record (§11.2);
+  // `reduce` emits a placeholder `{ field_names: [] }` because it never inspects
+  // payload content (§3/§12). `reason` feeds the run-memory `last_message`
+  // (§8.4) so the next orchestrator session sees the worker's verdict/status.
   guard: string | null,         // e.g. "visit_count[W] < max_visits[W]"
   effect: string[],             // e.g. ["visit_count[W] += 1"]
   session_file: string,

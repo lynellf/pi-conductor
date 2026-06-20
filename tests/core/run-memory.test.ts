@@ -22,7 +22,12 @@
 import { describe, expect, it } from "vitest";
 import type { RunMemory } from "../../src/core/run-memory.js";
 import { buildRunMemory } from "../../src/core/run-memory.js";
-import type { Checkpoint, MachineDefinition, SessionLifecycleEvent } from "../../src/core/types.js";
+import type {
+  Checkpoint,
+  MachineDefinition,
+  SessionLifecycleEvent,
+  TransitionAccepted,
+} from "../../src/core/types.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
 const DEF: MachineDefinition = Object.freeze({
@@ -347,6 +352,96 @@ describe("buildRunMemory: current_role and state", () => {
     expect(mem.current_role).toBe("done");
     expect(mem.state).toBe("done");
     expect(mem.next_candidates).toEqual([]);
+  });
+});
+
+// ─── last_message (§8.4) ──────────────────────────────────────────────
+// The previous role's verdict/status + advisory routing hint, delivered to
+// the next orchestrator session so it can act without reading transcripts.
+
+function accepted(
+  role: string,
+  opts: { reason?: string; suggestsNext?: string | null; to?: string } = {},
+): TransitionAccepted {
+  return {
+    type: "transition_accepted",
+    run_id: "run-1",
+    from: role as never,
+    to: (opts.to ?? "orchestrator") as never,
+    event: "handoff",
+    target_role: (opts.to ?? "orchestrator") as never,
+    role: role as never,
+    suggests_next: opts.suggestsNext ?? null,
+    payload_summary: {
+      ...(opts.reason !== undefined ? { reason: opts.reason } : {}),
+      field_names: Object.keys(opts.reason !== undefined ? { reason: opts.reason } : {}),
+    },
+    guard: null,
+    effect: [],
+    session_file: `/${role}.jsonl`,
+    ts: TS,
+  };
+}
+
+describe("buildRunMemory: last_message (§8.4)", () => {
+  it("is null before the first transition (initial orchestrator turn)", () => {
+    const cp = ck("orchestrator", {});
+    const mem = buildRunMemory(cp, [], DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message).toBeNull();
+  });
+
+  it("surfaces the latest transition's role + reason + suggests_next", () => {
+    const cp = ck("orchestrator", { reviewer: 1 });
+    const records: PersistedRecord[] = [
+      accepted("reviewer", {
+        reason: "REQUEST-CHANGES: fix B1 in production-host-parity.test.ts",
+        suggestsNext: "implementer",
+      }),
+    ];
+    const mem = buildRunMemory(cp, records, DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message).toEqual({
+      from: "reviewer",
+      text: "REQUEST-CHANGES: fix B1 in production-host-parity.test.ts",
+      suggests_next: "implementer",
+    });
+  });
+
+  it("text is null when the worker omitted reason", () => {
+    const cp = ck("orchestrator", { planner: 1 });
+    const records: PersistedRecord[] = [accepted("planner", { suggestsNext: "implementer" })];
+    const mem = buildRunMemory(cp, records, DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message?.from).toBe("planner");
+    expect(mem.last_message?.text).toBeNull();
+    expect(mem.last_message?.suggests_next).toBe("implementer");
+  });
+
+  it("suggests_next is null when the worker omitted it", () => {
+    const cp = ck("orchestrator", { implementer: 1 });
+    const records: PersistedRecord[] = [accepted("implementer", { reason: "done" })];
+    const mem = buildRunMemory(cp, records, DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message?.text).toBe("done");
+    expect(mem.last_message?.suggests_next).toBeNull();
+  });
+
+  it("uses the LATEST transition when multiple exist (append-ordered records)", () => {
+    const cp = ck("orchestrator", { planner: 1, reviewer: 1 });
+    const records: PersistedRecord[] = [
+      accepted("planner", { reason: "plan ready", suggestsNext: "implementer" }),
+      accepted("reviewer", { reason: "APPROVE", suggestsNext: null }),
+    ];
+    const mem = buildRunMemory(cp, records, DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message?.from).toBe("reviewer");
+    expect(mem.last_message?.text).toBe("APPROVE");
+  });
+
+  it("ignores transition_accepted records from a different run_id", () => {
+    const cp = ck("orchestrator", {});
+    const other: TransitionAccepted = {
+      ...accepted("reviewer", { reason: "other run" }),
+      run_id: "run-other",
+    };
+    const mem = buildRunMemory(cp, [other], DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message).toBeNull();
   });
 });
 

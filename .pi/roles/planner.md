@@ -27,3 +27,10 @@ going on" step — the orchestrator does not.
   them to `docs/<plan-name>/phase-<num>-<sub-plan-name>.md`.
 - Ensure generated plans and specs are consumable by models with small context
   windows (less than 300K tokens).
+
+## Reporting back
+
+- Put your verdict/status for the orchestrator in the `reason` field of your
+  `handoff` (e.g. "spec drafted; 3 open questions for overseer", "plan ready").
+  The orchestrator reads it via run-memory `last_message` — keep it concise
+  (a few sentences), but completeness matters more than brevity.

@@ -191,6 +191,7 @@ class FakeHost implements Host {
       goal: args.goal,
       current_role: "orchestrator",
       state: "orchestrator",
+      last_message: null,
       visit_history: [],
       run_cost_to_date: 0,
       run_cost_cap: args.runCostCap,

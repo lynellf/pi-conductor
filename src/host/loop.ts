@@ -82,6 +82,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import type { CheckpointSnapshot, PersistedRecord } from "../persistence/log.js";
+import { summarizePayload } from "../seam/payload-summary.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import { NoMoreModelsError } from "./errors.js";
 import type {
@@ -478,7 +479,20 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             sessionFile,
             ts: Date.now(),
           });
-          host.persistRecord(reduceResult.record);
+          // §11.2: the reducer emits a placeholder `payload_summary`
+          // (it never inspects payload content, §3/§12). The seam is the
+          // declared writer that enriches it with the real `field_names` +
+          // surfaced `reason` before persistence — so the run-memory
+          // `last_message` (§8.4) can deliver the worker's verdict/status
+          // to the next orchestrator session.
+          const enrichedRecord: typeof reduceResult.record =
+            reduceResult.kind === "accepted"
+              ? {
+                  ...reduceResult.record,
+                  payload_summary: summarizePayload(validated.event.payload),
+                }
+              : reduceResult.record;
+          host.persistRecord(enrichedRecord);
 
           // Clear the capture buffer for the next attempt (whether the
           // reduce was accepted or rejected). For accepted: defensive;
