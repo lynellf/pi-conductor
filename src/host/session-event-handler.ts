@@ -30,8 +30,9 @@
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-
+import type { Role } from "../core/types.js";
 import type { SessionState } from "./cost.js";
+import { type DisplaySink, extractAssistantText, stringifyDisplayValue } from "./display-sink.js";
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -50,8 +51,12 @@ import type { SessionState } from "./cost.js";
 export function attachSessionEventHandler(args: {
   session: AgentSession;
   state: SessionState;
+  role: Role;
+  onDisplay?: DisplaySink;
 }): void {
-  args.session.subscribe((event) => onSessionEvent(args.session, args.state, event));
+  args.session.subscribe((event) =>
+    onSessionEvent(args.session, args.state, args.role, args.onDisplay, event),
+  );
 }
 
 /**
@@ -103,8 +108,28 @@ export function createCaptureRejector(): CaptureRejector {
 function onSessionEvent(
   session: AgentSession,
   state: SessionState,
+  role: Role,
+  onDisplay: DisplaySink | undefined,
   event: AgentSessionEvent,
 ): void {
+  if (event.type === "tool_execution_start") {
+    onDisplay?.({
+      role,
+      kind: "tool_call",
+      text: `${event.toolName}: ${stringifyDisplayValue(event.args)}`,
+    });
+    return;
+  }
+
+  if (event.type === "tool_execution_end") {
+    onDisplay?.({
+      role,
+      kind: "tool_result",
+      text: `${event.toolName}: ${stringifyDisplayValue(event.result)}`,
+    });
+    return;
+  }
+
   if (event.type !== "message_end") return;
   const message = event.message as AssistantMessage;
 
@@ -116,6 +141,17 @@ function onSessionEvent(
   if (message?.role === "assistant" && message.stopReason === "error") {
     state.setTerminalReason("model_error");
     return;
+  }
+
+  if (message?.role === "assistant") {
+    const text = extractAssistantText(message);
+    if (text.length > 0) {
+      onDisplay?.({
+        role,
+        kind: "text",
+        text,
+      });
+    }
   }
 
   if (message?.role === "assistant" && message.usage) {

@@ -48,6 +48,12 @@ export { HostManifestError, loadManifest, loadManifestFromString } from "./manif
 
 export { SessionSeam } from "./seam.js";
 
+// ─── Display tap (Phase 2) ────────────────────────────────────────────
+// Display-only events from role sessions. The host emits them and the
+// extension maps them to custom messages for the TUI.
+
+export type { DisplayEvent, DisplayEventKind, DisplaySink } from "./display-sink.js";
+
 // ─── handoff / end emission tools (Task 14) ────────────────────────
 // defineTool() entries registered via customTools. The factory takes
 // a SessionSeam and closes over it; the loop does not see these

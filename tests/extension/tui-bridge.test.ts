@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createConductDisplaySink } from "../../src/extension/display-sink-wiring.js";
+
 const bridgeMocks = {
   createProductionHost: vi.fn(),
   resumeRun: vi.fn(),
@@ -121,6 +123,7 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
   it("passes ctx.ui through /conduct to createProductionHost", async () => {
     const ctx = makeCtx(cwd);
     const handle = makeCompletionHandle("run-start-ui-1");
+    const displaySink = vi.fn();
     bridgeMocks.createProductionHost.mockReturnValue({} as never);
     bridgeMocks.startRun.mockImplementation(async (_manifestPath, opts) => {
       await opts.hostFactory({
@@ -131,15 +134,19 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
       return handle;
     });
 
-    await handleStart("test goal", ctx, { getFlag: () => undefined });
+    await handleStart("test goal", ctx, { getFlag: () => undefined, displaySink });
 
     expect(bridgeMocks.createProductionHost).toHaveBeenCalledTimes(1);
     expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.uiContext).toBe(ctx.ui);
+    expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.displaySink).toBe(
+      displaySink,
+    );
   });
 
   it("passes ctx.ui through /conduct:resume to createProductionHost", async () => {
     const ctx = makeCtx(cwd);
     const handle = makeCompletionHandle("run-resume-ui-1");
+    const displaySink = vi.fn();
     bridgeMocks.createProductionHost.mockReturnValue({} as never);
     bridgeMocks.resumeRun.mockImplementation(async (_manifestPath, _runId, opts) => {
       await opts.hostFactory({
@@ -150,9 +157,36 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
       return handle;
     });
 
-    await handleResume("run-resume-ui-1", ctx, { getFlag: () => undefined });
+    await handleResume("run-resume-ui-1", ctx, { getFlag: () => undefined, displaySink });
 
     expect(bridgeMocks.createProductionHost).toHaveBeenCalledTimes(1);
     expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.uiContext).toBe(ctx.ui);
+    expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.displaySink).toBe(
+      displaySink,
+    );
+  });
+});
+
+describe("extension shell — Phase 2 display sink wiring", () => {
+  it("wraps display events in custom messages with role-prefixed markdown", () => {
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+
+    sink({ role: "worker", kind: "text", text: "hello world" });
+    sink({ role: "worker", kind: "tool_call", text: 'bash: {"command":"ls"}' });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, {
+      customType: "conduct.role.text",
+      content: "### worker\n\nhello world",
+      display: true,
+      details: { role: "worker", kind: "text" },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, {
+      customType: "conduct.role.tool",
+      content: '### worker\n\nbash: {"command":"ls"}',
+      display: true,
+      details: { role: "worker", kind: "tool_call" },
+    });
   });
 });

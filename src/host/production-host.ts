@@ -54,6 +54,7 @@ import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/t
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { SessionState } from "./cost.js";
+import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import type { Host, RoleSession, SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -85,6 +86,8 @@ export interface ProductionHostOptions {
   readonly cwd: string;
   /** Optional extension UI handle threaded into role sessions. */
   readonly uiContext?: ExtensionUIContext;
+  /** Optional display sink for streamed role output. */
+  readonly displaySink?: DisplaySink;
   /** Host-owned `run_id`-keyed append-only log (Task 13.5). */
   readonly log: RecordLog;
   /** Pinned manifest snapshot (def + role configs + warnings). */
@@ -136,6 +139,8 @@ export class ProductionHost implements Host {
   readonly runId: string;
   /** See {@link ProductionHostOptions.uiContext}. */
   readonly uiContext: ExtensionUIContext | undefined;
+  /** See {@link ProductionHostOptions.displaySink}. */
+  readonly displaySink: DisplaySink | undefined;
   /** See {@link ProductionHostOptions.sessionDir}. */
   readonly sessionDir: string;
   /** See {@link ProductionHostOptions.agentDir}. */
@@ -148,6 +153,7 @@ export class ProductionHost implements Host {
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
     this.uiContext = opts.uiContext;
+    this.displaySink = opts.displaySink;
     this.sessionDir =
       opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
     this.agentDir = opts.agentDir ?? join(opts.cwd, ".pi-conductor", "agent");
@@ -311,7 +317,12 @@ export class ProductionHost implements Host {
     // 9. Subscribe the session to the shared event handler
     //    (Task 17 + 18). The handler accumulates usage, detects
     //    model errors, and enforces the per-session cost cap.
-    attachSessionEventHandler({ session, state });
+    attachSessionEventHandler({
+      session,
+      state,
+      role,
+      ...(this.displaySink !== undefined && { onDisplay: this.displaySink }),
+    });
 
     // 10. Wrap the SDK session in the loop's `RoleSession` seam.
     //     The wrapper explicitly forwards the SDK methods the loop

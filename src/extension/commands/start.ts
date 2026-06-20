@@ -32,7 +32,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-
+import type { DisplaySink } from "../../host/display-sink.js";
 import {
   createProductionHost,
   type Host,
@@ -98,6 +98,7 @@ export type GetFlagValue = (name: string) => boolean | string | undefined;
  *  ctx fields without coupling to `pi`. */
 export interface HandleDeps {
   readonly getFlag: GetFlagValue;
+  readonly displaySink?: DisplaySink;
 }
 
 /**
@@ -151,7 +152,12 @@ export async function handleStart(
 
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
-      extension: { modelRegistry, cwd, uiContext: ctx.ui },
+      extension: {
+        modelRegistry,
+        cwd,
+        uiContext: ctx.ui,
+        ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
+      },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest as LoadedManifest,

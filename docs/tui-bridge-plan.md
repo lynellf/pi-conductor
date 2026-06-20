@@ -20,10 +20,10 @@ single shared bridge: **thread the extension's `ExtensionUIContext`
 
 - **A — streaming:** the host's existing event handler forwards
   selected role-session events (text, tool calls, tool results,
-  handoff/`ask_user` reasons) to a display sink backed by
-  `ctx.ui.sendMessage`. Default `CustomMessage` rendering is themed
-  markdown via pi's existing `CustomMessageComponent` — no renderer
-  code, no reinvention.
+  handoff/`ask_user` reasons) to a display sink backed by the
+  extension factory's `sendMessage` action. Default `CustomMessage`
+  rendering is themed markdown via pi's existing
+  `CustomMessageComponent` — no renderer code, no reinvention.
 - **B — `ask_user`:** a new `defineTool` whose `execute` calls
   `ctx.ui.input/confirm/select` and returns the answer as a normal
   (non-terminating) tool result. FSM-orthogonal: writes nothing to the
@@ -75,7 +75,7 @@ Task 1: Spike (ctx.ui → spawned session; observe)        [de-risks Q5]
    │                              │   text/tool/tool-result; thinking collapsed)
    │                              │       │
    │                              │       └── Task 4: wire displaySink in
-   │                              │           start.ts/resume.ts → ctx.ui.sendMessage
+   │                              │           start.ts/resume.ts → factory sendMessage
    │                              │               (Feature A end-to-end)
    │                              │
    │                              └── Task 5: createAskUserTool (input/confirm/select;
@@ -132,7 +132,7 @@ before display forwarding is wired into the extension handlers.
 
 Exit criteria:
 - [ ] Tasks 3-4 green; manual run shows live streaming.
-- [ ] Full suite green; grep guard green (no `ctx.newSession` / `ctx.fork`).
+- [x] Full suite green; grep guard green (no `ctx.newSession` / `ctx.fork`).
 
 ### Phase 3 — Feature B: `ask_user`
 

@@ -216,7 +216,7 @@ export class StubHost implements Host {
     // ── Task 17: subscribe to the session's events. The shared
     // handler (session-event-handler.ts) accumulates usage,
     // detects model errors, and enforces the per-session cap.
-    attachSessionEventHandler({ session, state });
+    attachSessionEventHandler({ session, state, role });
 
     return {
       role,

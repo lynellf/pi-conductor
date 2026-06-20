@@ -72,6 +72,7 @@ import {
   type HandleDeps,
   handleStart,
 } from "../src/extension/commands/start.js";
+import { createConductDisplaySink } from "../src/extension/display-sink-wiring.js";
 
 /**
  * Manifest path override flag. Default is resolved at
@@ -94,8 +95,13 @@ function withDeps(
     deps: HandleDeps,
   ) => Promise<void>,
   getFlag: GetFlagValue,
+  displaySink: HandleDeps["displaySink"],
 ): (args: string, ctx: Parameters<typeof handleStart>[1]) => Promise<void> {
-  return (args, ctx) => handler(args, ctx, { getFlag });
+  return (args, ctx) =>
+    handler(args, ctx, {
+      getFlag,
+      ...(displaySink !== undefined && { displaySink }),
+    });
 }
 
 /**
@@ -116,24 +122,25 @@ export default function conductExtension(pi: ExtensionAPI): void {
   // time, so a `--flag` set on the pi CLI line flows
   // into the handler invocation.
   const getFlag: GetFlagValue = (name) => pi.getFlag(name);
+  const displaySink = createConductDisplaySink((message) => pi.sendMessage(message));
 
   pi.registerCommand("conduct", {
     description: "Start a pi-conductor run for <goal> using .pi/conductor.yaml.",
-    handler: withDeps(handleStart, getFlag),
+    handler: withDeps(handleStart, getFlag, displaySink),
   });
 
   pi.registerCommand("conduct:resume", {
     description: "Resume a previously-started run by run_id.",
-    handler: withDeps(handleResume, getFlag),
+    handler: withDeps(handleResume, getFlag, displaySink),
   });
 
   pi.registerCommand("conduct:list", {
     description: "List known runs in the conductor log.",
-    handler: withDeps(handleList, getFlag),
+    handler: withDeps(handleList, getFlag, displaySink),
   });
 
   pi.registerCommand("conduct:abort", {
     description: "Abort the active run (no-op if none).",
-    handler: withDeps(handleAbort, getFlag),
+    handler: withDeps(handleAbort, getFlag, displaySink),
   });
 }

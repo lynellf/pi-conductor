@@ -32,6 +32,7 @@
 
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
+import type { DisplaySink } from "./display-sink.js";
 import type { LoadedManifest } from "./manifest.js";
 import { ProductionHost } from "./production-host.js";
 
@@ -49,6 +50,8 @@ export interface ExtensionContextInputs {
   readonly cwd: string;
   /** Extension UI handle threaded into spawned sessions for the TUI bridge. */
   readonly uiContext?: ExtensionUIContext;
+  /** Optional display sink for streamed role output. */
+  readonly displaySink?: DisplaySink;
 }
 
 /**
@@ -111,6 +114,9 @@ export function createProductionHost(inputs: CreateProductionHostInputs): Produc
     modelRegistry: inputs.extension.modelRegistry,
     cwd: inputs.extension.cwd,
     ...(inputs.extension.uiContext !== undefined && { uiContext: inputs.extension.uiContext }),
+    ...(inputs.extension.displaySink !== undefined && {
+      displaySink: inputs.extension.displaySink,
+    }),
     log: inputs.run.log,
     loadedManifest: inputs.run.loadedManifest,
     runId: inputs.run.runId,
