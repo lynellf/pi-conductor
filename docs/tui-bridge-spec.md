@@ -316,10 +316,21 @@ and the suite stays green."
 
 ## Resolved questions (human input 2026-06-20, plus SDK-source verification)
 
-1. **Thinking visibility — APPROVED as proposed.** Text + tool calls +
-   handoff/ask reasons streamed by default; raw thinking available but
-   collapsed/toggleable. (The encrypted thinking blobs from
-   `gpt-5.4-mini` are noisy as a default.)
+1. **Thinking visibility — APPROVED as proposed, then REVERSED 2026-06-20.**
+   Originally: text + tool calls + handoff/ask reasons streamed by default;
+   raw thinking available but collapsed/toggleable (the encrypted thinking
+   blobs from `gpt-5.4-mini` were deemed noisy as a default). **Reversed
+   after Phase 5.5:** the human reviewed the run and found the TUI showed no
+   reasoning at all — reasoning models emit their reasoning as `thinking`
+   content parts (not `text`), and the original extractor skipped thinking,
+   so combined with Phase 5.5's tool-event suppression the stream starved.
+   The human wants to see what the models are thinking at all times and does
+   not care if it floods the session. `extractAssistantText`
+   (`src/host/display-sink.ts`) now surfaces non-redacted `ThinkingContent.thinking`
+   as part of the `text` display event, joined as its own `\n\n`-separated
+   block so reasoning reads as its own paragraph; redacted blocks (opaque
+   `thinkingSignature` only) are skipped. Text-only messages are
+   byte-identical to the pre-reversal behavior.
    - **`read` clarification (raised by the human):** file reads surface as
      `read` tool calls in the stream — verified: `AgentSessionEvent`
      includes `tool_execution_*` events (`AgentSessionEvent = Exclude<

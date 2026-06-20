@@ -66,10 +66,12 @@ const OPTIONS: MessageRenderOptions = { expanded: true };
 /**
  * Build a `CustomMessage<ConductMessageDetails>` for tests.
  * The shape mirrors the SDK's `CustomMessage<T>` (subset the
- * renderer reads).
+ * renderer reads). Phase 5.5 narrowed the sink to `text` events
+ * only, so the only `customType` the renderer is registered for
+ * is `conduct.role.text`.
  */
 function makeMessage(args: {
-  readonly customType: "conduct.role.text" | "conduct.role.tool";
+  readonly customType: "conduct.role.text";
   readonly content: string;
   readonly details: ConductMessageDetails;
 }): CustomMessage<ConductMessageDetails> {
@@ -93,14 +95,18 @@ function getInternalText(component: { readonly text?: unknown }): string {
 }
 
 describe("createConductMessageRenderers", () => {
-  it("returns a renderer for each conduct.role.* customType", () => {
+  it("returns a renderer for conduct.role.text only (tool customType removed in Phase 5.5)", () => {
     const renderers = createConductMessageRenderers();
-    expect(Object.keys(renderers).sort()).toEqual(["conduct.role.text", "conduct.role.tool"]);
+    // Phase 5.5: the sink suppresses tool events, so the
+    // `conduct.role.tool` customType is dead and removed from the
+    // factory's record (YAGNI — re-add if a non-JSON tool-rendering
+    // path is later requested).
+    expect(Object.keys(renderers)).toEqual(["conduct.role.text"]);
     expect(typeof renderers["conduct.role.text"]).toBe("function");
-    expect(typeof renderers["conduct.role.tool"]).toBe("function");
+    expect(renderers["conduct.role.tool"]).toBeUndefined();
   });
 
-  it("renders a conduct.role.text message as a Container with a Text label + Markdown body", () => {
+  it("renders a conduct.role.text message as a Container with a bold role-label Text + a Markdown body carrying the LLM text verbatim", () => {
     const theme = makeStubTheme();
     // Pass a getter that returns the orchestrator role so the
     // worker label gets the worker color (accent); with a null
@@ -111,7 +117,10 @@ describe("createConductMessageRenderers", () => {
 
     const message = makeMessage({
       customType: "conduct.role.text",
-      content: "### worker\n\nhello world",
+      // Phase 5.5: the sink emits the LLM's text verbatim — no
+      // `### role` prefix. The renderer's structural role label
+      // is the only place the role name appears.
+      content: "hello world",
       details: { role: "worker", kind: "text", is_orchestrator: false },
     });
 
@@ -125,27 +134,30 @@ describe("createConductMessageRenderers", () => {
     expect(label).toBeInstanceOf(Text);
     expect(body).toBeInstanceOf(Markdown);
 
-    // The label text is `details.role` wrapped by the theme's
-    // fg() call. The stub theme prefixes with `[<color>]` so
-    // we can assert both the color and the role text in one
-    // string match.
+    // The label text is `details.role` wrapped by `theme.bold`
+    // and then colored by `theme.fg`. The stub theme prefixes
+    // each wrap with its tag (`[bold]`, then `[accent]`), so we
+    // can assert the bold wrap, the color, and the role text in
+    // one string match.
     const labelText = getInternalText(label as unknown as { text?: string });
     expect(labelText).toContain("worker");
     expect(labelText).toContain("[accent]"); // worker color
+    expect(labelText).toContain("[bold]"); // Phase 5.5: label is bolded
 
-    // The Markdown body carries the original message content.
+    // The Markdown body carries the LLM's text verbatim — no
+    // `### worker` prefix, no JSON, no brackets.
     const bodyText = getInternalText(body as unknown as { text?: string });
-    expect(bodyText).toBe("### worker\n\nhello world");
+    expect(bodyText).toBe("hello world");
   });
 
-  it("colors the orchestrator role label with mdHeading (yellow + bold in the default theme)", () => {
+  it("colors the orchestrator role label with mdHeading and bolds it", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => "orchestrator");
     const renderer = renderers["conduct.role.text"];
 
     const message = makeMessage({
       customType: "conduct.role.text",
-      content: "### orchestrator\n\nI am planning",
+      content: "I am planning",
       details: { role: "orchestrator", kind: "text", is_orchestrator: true },
     });
 
@@ -155,16 +167,17 @@ describe("createConductMessageRenderers", () => {
     const labelText = getInternalText(label as unknown as { text?: string });
     expect(labelText).toContain("orchestrator");
     expect(labelText).toContain("[mdHeading]"); // orchestrator color
+    expect(labelText).toContain("[bold]"); // Phase 5.5: label is bolded
   });
 
-  it("uses the muted fallback color when no orchestrator role is known (no active run)", () => {
+  it("uses the muted fallback color (and still bolds the label) when no orchestrator role is known (no active run)", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => null);
     const renderer = renderers["conduct.role.text"];
 
     const message = makeMessage({
       customType: "conduct.role.text",
-      content: "### worker\n\nstranded",
+      content: "stranded",
       details: { role: "worker", kind: "text", is_orchestrator: false },
     });
 
@@ -172,31 +185,7 @@ describe("createConductMessageRenderers", () => {
     const [label] = component.children;
     const labelText = getInternalText(label as unknown as { text?: string });
     expect(labelText).toContain("[muted]"); // unknown fallback
-  });
-
-  it("renders a conduct.role.tool message with the same shape (Text label + Markdown body)", () => {
-    const theme = makeStubTheme();
-    const renderers = createConductMessageRenderers(() => "orchestrator");
-    const renderer = renderers["conduct.role.tool"];
-
-    const message = makeMessage({
-      customType: "conduct.role.tool",
-      content: '### worker\n\nhandoff: {"target_role":"reviewer"}',
-      details: { role: "worker", kind: "tool", is_orchestrator: false },
-    });
-
-    const component = renderer(message, OPTIONS, theme);
-    expect(component).toBeInstanceOf(Container);
-    const [label, body] = component.children;
-    expect(label).toBeInstanceOf(Text);
-    expect(body).toBeInstanceOf(Markdown);
-
-    const labelText = getInternalText(label as unknown as { text?: string });
-    expect(labelText).toContain("worker");
-
-    const bodyText = getInternalText(body as unknown as { text?: string });
-    expect(bodyText).toContain("handoff:");
-    expect(bodyText).toContain('{"target_role":"reviewer"}');
+    expect(labelText).toContain("[bold]"); // Phase 5.5: label is bolded
   });
 
   it("returns undefined on a forced throw (fail-safe to default CustomMessageComponent)", () => {
@@ -250,5 +239,6 @@ describe("createConductMessageRenderers", () => {
     const labelText = getInternalText(label as unknown as { text?: string });
     expect(labelText).toContain("(unknown)");
     expect(labelText).toContain("[muted]");
+    expect(labelText).toContain("[bold]"); // Phase 5.5: label is bolded even in the fallback
   });
 });

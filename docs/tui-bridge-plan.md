@@ -197,7 +197,7 @@ Exit criteria:
       `docs/dev-run-transcripts/`. _(Template with the acceptance
       criteria + reproduction steps; the eyeball-TUI observed-result
       section is the overseer-owned step.)_
-- [ ] **Phase 5.5 follow-up remediation** (Task 10 in the sub-plan):
+- [x] **Phase 5.5 follow-up remediation** (Task 10 in the sub-plan):
       the 2026-06-20 user feedback (`Screenshot 2026-06-20 at
       11.49.09 AM.png`) surfaces three problems the original Phase 5
       acceptance didn't catch — the sink still injects a `### ${role}`
@@ -210,7 +210,12 @@ Exit criteria:
       it adds Task 10 (sink drops the `### ${role}` prefix,
       suppresses all tool events, renderer bolds the role label) and
       reverses the original open question #4 recommendation. The
-      follow-up is the gate to end-of-loop review.
+      follow-up is the gate to end-of-loop review. _(Implementation
+      green: sink emits only `text` events with body = `event.text`
+      verbatim, renderer bolds the role label, `conduct.role.tool`
+      customType removed, 456 tests green, typecheck/build/lint/
+      format:check clean, audit unchanged. The manual eyeball-TUI
+      run in the transcript is the overseer-owned step.)_
 - [ ] Ready for review at the overseer's end-of-loop pass.
 
 ## Risks and mitigations
@@ -221,7 +226,7 @@ Exit criteria:
 | `ask_user` accidentally writes to the capture buffer, breaking single-emission | High | Explicit unit test (Task 5): assert `SessionSeam` buffer length unchanged after an `ask_user` call. |
 | Streaming reopens §9.5 (role messages enter host session history) | High | `sendMessage` produces display-only `CustomMessage`s, not message-history appends; grep guard still rejects `ctx.newSession`/`ctx.fork`; unit test (Task 4) asserts no history mutation. |
 | `tools.ts` exceeds ~400 LOC after adding `ask_user` | Low | Split to `ask-user-tool.ts` (planned in Task 5). |
-| Thinking blobs (encrypted `gpt-5.4-mini` reasoning) flood the TUI | Med | Thinking omitted from the default stream (Task 3); surfaced only behind a later toggle. |
+| Thinking blobs (encrypted `gpt-5.4-mini` reasoning) flood the TUI | Med | ~~Thinking omitted from the default stream (Task 3); surfaced only behind a later toggle.~~ **REVERSED 2026-06-20 (after Phase 5.5):** the human wants to see model reasoning at all times and does not care if it floods the session. `extractAssistantText` now surfaces non-redacted `ThinkingContent.thinking` as part of the `text` display event (joined as its own `\n\n`-separated block); redacted blocks (opaque `thinkingSignature` only) are skipped so the TUI never shows gibberish. See `docs/tui-bridge-spec.md` Resolved Q1 (revised) and `docs/tui-bridge-plans/phase-2-streaming.md` Task 3 (reversal note). |
 | CLI readline for `ask_user` is fiddly (TTY detection, piped stdin) | Low | Task 7 stubs a stdin-backed UI; if fiddly, degrade to `AskUserUnavailableError` in the CLI too (documented; not a blocker — the extension is the primary surface). |
 | Stub-host parity drift (ProductionHost gains uiContext/sink) | Low | Stub-host needs neither (tests inject stub UI via the tool directly); the shared `attachSessionEventHandler` is the parity seam and it gets the optional `onDisplay` (additive). |
 

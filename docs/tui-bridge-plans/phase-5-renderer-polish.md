@@ -329,14 +329,17 @@ against installed dist, not doc-reading.
 ## Phase 5.5 follow-up — TUI content remediation (2026-06-20)
 
 > **Status:** Drafted 2026-06-20 from user feedback after the Phase 5
-> manual run. The structural Phase 5 work (role label, color picking,
-> fail-safe) is correct and the unit tests are green. The user-facing
-> complaint is about the *content* the sink emits, not the renderer's
-> structure: the body still carries the sink's `### ${role}` prefix
-> (duplicating the renderer's role label) and the JSON-shaped tool
-> args + "emission recorded" tool results are noise. This follow-up
-> records the feedback, the diagnosis, and the remediation direction.
-> Implementation lands as Task 10 once the doc is acknowledged.
+> manual run; **Task 10 implemented 2026-06-20.** The structural
+> Phase 5 work (role label, color picking, fail-safe) is correct and
+> the unit tests are green. The user-facing complaint was about the
+> *content* the sink emits, not the renderer's structure: the body
+> still carried the sink's `### ${role}` prefix (duplicating the
+> renderer's role label) and the JSON-shaped tool args + "emission
+> recorded" tool results were noise. Task 10 dropped the prefix,
+> suppressed all tool events in the TUI, bolded the role label, and
+> removed the dead `conduct.role.tool` customType. 456 tests green;
+> the manual eyeball-TUI run in the transcript is the overseer-owned
+> gate.
 
 ### User feedback (verbatim, 2026-06-20)
 
@@ -423,49 +426,49 @@ LLM uses (`` ``` ``) are rendered as code blocks by the SDK's
     the registration is dead code). The LLM's text reasoning
     (`event.text` for `text` events) is the body verbatim.
   - Acceptance:
-    - [ ] The sink emits no `### ${role}` heading in any body. Body
+    - [x] The sink emits no `### ${role}` heading in any body. Body
           is just the LLM's text for `text` events, and nothing for
           `tool_call` / `tool_result` events (no `CustomMessage`
           emitted at all).
-    - [ ] The sink suppresses `tool_call` AND `tool_result` events.
+    - [x] The sink suppresses `tool_call` AND `tool_result` events.
           No `CustomMessage` is emitted for tool activity (calls or
           results) — neither for the conductor's machine tools
           (`handoff`, `end`) nor for built-in tools (`bash`,
           `read`, etc.). Real tool activity remains visible in the
           per-role session JSONL.
-    - [ ] The renderer's role label is bold (`theme.bold` wraps the
+    - [x] The renderer's role label is bold (`theme.bold` wraps the
           role string before `theme.fg`) and colored by role family
           (orchestrator in `mdHeading`, workers in `accent`,
           unknown in `muted`).
-    - [ ] A `conduct.role.text` `CustomMessage` whose content
+    - [x] A `conduct.role.text` `CustomMessage` whose content
           contains ` ```js\nconsole.log("hi")\n``` ` renders as a
           fenced code block in the TUI (verified by the markdown
           theme's native handling via `getMarkdownTheme()`).
-    - [ ] The LLM's text reasoning is shown verbatim. No JSON, no
+    - [x] The LLM's text reasoning is shown verbatim. No JSON, no
           brackets, no `###` heading injected by the sink.
-    - [ ] Only `conduct.role.text` is registered with
+    - [x] Only `conduct.role.text` is registered with
           `pi.registerMessageRenderer`. The `conduct.role.tool`
           customType is removed from
           `createConductMessageRenderers()` (YAGNI; re-add when a
           non-JSON tool-rendering path is requested).
-    - [ ] No FSM spec, reducer, `SessionSeam`, or model-facing tool
+    - [x] No FSM spec, reducer, `SessionSeam`, or model-facing tool
           result changes. The model still gets the full tool result;
           only the TUI's *display* of it changes.
-    - [ ] No new SDK imports in `src/core`/`src/manifest`/
+    - [x] No new SDK imports in `src/core`/`src/manifest`/
           `src/seam`/`src/cost`/`src/persistence` (grep guard).
-    - [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint
+    - [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint
           && pnpm format:check` green; grep guard green.
   - Verification:
-    - [ ] Unit test (sink): `tests/extension/tui-bridge.test.ts`
+    - [x] Unit test (sink): `tests/extension/tui-bridge.test.ts`
           asserts the sink calls `sendMessage` only for `text`
           events, with body = `event.text` (no `###` prefix), and
           does NOT call `sendMessage` for `tool_call` or
           `tool_result` events.
-    - [ ] Unit test (renderer): `tests/extension/conduct-message-renderer.test.ts`
+    - [x] Unit test (renderer): `tests/extension/conduct-message-renderer.test.ts`
           asserts the role label is wrapped by `theme.bold` (the
           stub theme's `[bold]` prefix appears in the label text)
           and the body text matches `event.text` verbatim.
-    - [ ] Unit test (registration): `tests/extension/conduct-registration.test.ts`
+    - [x] Unit test (registration): `tests/extension/conduct-registration.test.ts`
           asserts only `conduct.role.text` is registered with
           `pi.registerMessageRenderer`; the `conduct.role.tool` key
           is no longer present.
@@ -475,9 +478,17 @@ LLM uses (`` ``` ``) are rendered as code blocks by the SDK's
           the TUI shows bolded role labels + LLM text only, with
           no JSON and no `###` headings. Update
           `docs/dev-run-transcripts/2026-06-20-tui-bridge-renderer-polish.md`
-          with the observed result.
-    - [ ] `pnpm audit` clean (or any new advisory explicitly
-          risk-accepted).
+          with the observed result. _(Overseer-owned eyeball-TUI step;
+          the transcript's acceptance criteria are updated to match
+          the remediated behavior, and the unit tests pin the
+          structural shape — bold label, body = `event.text` verbatim,
+          only `conduct.role.text` registered.)_
+    - [x] `pnpm audit` clean (or any new advisory explicitly
+          risk-accepted). _(The 8 pre-existing undici advisories in
+          `@earendil-works/pi-coding-agent`'s transitive dependency
+          tree are SDK-side and were present before Phase 5; this
+          phase adds no new advisories — no new dependencies
+          introduced.)_
   - Dependencies: Task 9 (the renderer) is the structural
     substrate; this task only changes what the sink emits and one
     line of the renderer (label bolding).

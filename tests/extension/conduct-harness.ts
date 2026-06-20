@@ -58,8 +58,9 @@ export interface RecordedExtension {
   >;
   /**
    * Message renderers registered via `pi.registerMessageRenderer`,
-   * keyed by `customType`. Phase 5: the conductor-owned renderers
-   * for `conduct.role.text` and `conduct.role.tool`. The harness
+   * keyed by `customType`. Phase 5.5: the conductor-owned renderer
+   * for `conduct.role.text` only (the `conduct.role.tool` customType
+   * was removed — the sink suppresses tool events). The harness
    * captures the function references; tests can call them
    * directly with a stub theme to assert on the returned
    * `Container` shape.

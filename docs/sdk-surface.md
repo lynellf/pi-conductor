@@ -212,8 +212,9 @@ unknown; it is now pinned.
 
 `ExtensionAPI["sendMessage"]` injects a `CustomMessage` into the host session
 view. For the conductor stream, `message.content` is a plain markdown string,
-`message.display` is `true`, and `message.customType` is a conductor-owned value
-such as `conduct.role.text` or `conduct.role.tool`.
+`message.display` is `true`, and `message.customType` is the conductor-owned
+`conduct.role.text`. (Phase 5.5 removed the `conduct.role.tool` customType —
+the sink suppresses tool events, so it was dead code.)
 
 This is intentionally separate from `ExtensionUIContext`: the UI context carries
 dialog methods for spawned role tools (`input` / `confirm` / `select`), while the
@@ -230,9 +231,13 @@ become normal user / assistant messages in pi's session history.
 The default `CustomMessageComponent` flattens all streamed body content to
 `customMessageText` (light gray) via its `defaultTextStyle.color` override,
 which makes markdown headings read as raw syntax and JSON arguments read as raw
-text. Phase 5 ships a conductor-owned renderer for the two
-`conduct.role.*` `customType`s; it produces a structural role label (`Text`,
-colored by role family) + a properly-themed markdown body.
+text. Phase 5 ships a conductor-owned renderer for the
+`conduct.role.text` `customType`; it produces a bold structural role
+label (`Text`, colored by role family) + a properly-themed markdown
+body carrying the LLM's text verbatim. Phase 5.5 (content
+remediation) narrowed the registration to `conduct.role.text` only
+and dropped the sink's `### ${role}` body prefix; the renderer bolds
+the role label via `theme.bold`.
 
 Pinned surfaces (verified against `dist/` 2026-06-20):
 

@@ -28,12 +28,25 @@
     result text. Thinking is not forwarded by default (collapsed); it can be
     surfaced only by a later toggle task. Existing `message_end`
     usage/cap/model-error behavior is unchanged.
+    > **Reversal (2026-06-20, after Phase 5.5):** the "thinking omitted by
+    > default" decision was reversed by the human. Reasoning models emit
+    > their reasoning as `thinking` content parts (not `text`); with
+    > thinking omitted AND Phase 5.5's tool-event suppression, the TUI
+    > starved — no reasoning, no tool activity, nothing. The human wants
+    > to see model reasoning at all times. `extractAssistantText` now
+    > surfaces non-redacted `ThinkingContent.thinking` as part of the
+    > `text` display event (its own `\n\n`-separated block); redacted
+    > blocks are skipped. See `docs/tui-bridge-spec.md` Resolved Q1
+    > (revised). The acceptance box below is the original Task 3 record;
+    > the reversal supersedes the "thinking omitted by default" clause.
   - Acceptance:
     - [x] `DisplaySink` + `DisplayEvent` types defined and exported from
           `src/host/display-sink.ts`.
     - [x] `attachSessionEventHandler({ session, state, onDisplay? })` emits
           `DisplayEvent`s for text, tool calls, and tool results when
-          `onDisplay` is provided; thinking omitted by default.
+          `onDisplay` is provided; thinking omitted by default. _(Superseded
+          2026-06-20: thinking now included — see the reversal note in the
+          task description above.)_
     - [x] When `onDisplay` is absent, behavior is byte-identical to today (the
           existing stub E2E / cost / fallback tests unaffected).
     - [x] No host session-tree mutation; forwarding is display-only and does not

@@ -8,18 +8,20 @@
  * headings read as raw syntax and JSON arguments read as raw text
  * (see `docs/tui-bridge-plans/phase-5-renderer-polish.md` §Diagnosis).
  *
- * This module registers a conductor-owned renderer for each of the
- * two streamed `customType`s (`conduct.role.text`, `conduct.role.tool`)
- * that takes over the `CustomMessage` rendering for those types. The
- * renderer:
+ * This module registers a conductor-owned renderer for the
+ * streamed `conduct.role.text` `customType` that takes over the
+ * `CustomMessage` rendering for that type. The renderer:
  *
  *   - wraps the body in a `Container` with a structural role label
- *     (`Text`, colored by role family) on top and the body as a
- *     `Markdown` child underneath;
+ *     (`Text`, **bolded** via `theme.bold` and colored by role
+ *     family) on top and the body as a `Markdown` child underneath;
  *   - uses the SDK's `getMarkdownTheme()` directly with no
  *     `defaultTextStyle.color` override, so element-level theme
  *     functions (`theme.heading`, `theme.code`, `theme.codeBlock`,
- *     …) actually style the respective blocks;
+ *     …) actually style the respective blocks. The body is the
+ *     LLM's text verbatim (Phase 5.5 dropped the sink's `### role`
+ *     prefix); any code fences the LLM emits are rendered as code
+ *     blocks by the markdown theme's native handling.
  *   - returns `undefined` on any throw (defense-in-depth — the SDK
  *     already wraps the renderer call in try/catch and falls
  *     through to the default box, see
@@ -28,8 +30,11 @@
  * The `ConductMessageDetails` type is the seam contract the sink
  * (`src/extension/display-sink-wiring.ts`) writes and the renderer
  * reads. `is_orchestrator` is the only field the renderer branches
- * on for color; `role` and `kind` drive the label text and body
- * shape. The sink computes `is_orchestrator` from the active run's
+ * on for color; `role` drives the label text. `kind` is always
+ * `"text"` after the Phase 5.5 sink change (tool events are
+ * suppressed at the sink and never reach the renderer); it is
+ * retained on the contract for grep-ability of the seam shape.
+ * The sink computes `is_orchestrator` from the active run's
  * manifest (see `current-orchestrator.ts`).
  *
  * ## Why a local `CustomMessage` shape
@@ -69,9 +74,12 @@ import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tu
 
 /**
  * Kind discriminator the display sink stamps on every `CustomMessage`.
- * Drives the role-label color in the renderer.
+ * Phase 5.5 narrowed this to `"text"` only — the sink suppresses all
+ * `tool_call`/`tool_result` events and never emits a `"tool"` kind.
+ * The `conduct.role.tool` customType was removed for YAGNI; re-add
+ * both if a non-JSON tool-rendering path is later requested.
  */
-export type ConductMessageKind = "text" | "tool";
+export type ConductMessageKind = "text";
 
 /**
  * Shared `details` payload shape for the two `conduct.role.*`
@@ -141,11 +149,13 @@ function pickLabelColor(is_orchestrator: boolean, orchestratorRole: string | nul
  *
  * The container's children:
  *
- *   1. `Text` — the role label, colored by role family. The label
- *      text is `details.role` (e.g., "orchestrator", "worker").
+ *   1. `Text` — the role label, **bolded** via `theme.bold` and
+ *      colored by role family. The label text is `details.role`
+ *      (e.g., "orchestrator", "worker").
  *   2. `Markdown` — the body, using the SDK's `getMarkdownTheme()`
  *      with no `defaultTextStyle.color` override. Element-level
- *      theme functions style the respective blocks.
+ *      theme functions style the respective blocks. The body is
+ *      the LLM's text verbatim (no `### role` prefix — Phase 5.5).
  *
  * No purple background box. The role label is the sole visual
  * anchor. The default renderer's `customMessageBg` is intentionally
@@ -171,7 +181,14 @@ function buildContainer(
     details === undefined
       ? UNKNOWN_LABEL_COLOR
       : pickLabelColor(details.is_orchestrator, getOrchestratorRole());
-  const labelText = theme.fg(labelColor, details?.role ?? "(unknown)");
+  // Phase 5.5: bold the role label so it reads as a structural
+  // anchor above the body. `theme.bold` produces ANSI bold codes
+  // that compose cleanly inside `theme.fg` (the stub theme in
+  // tests wraps as `[bold]` inside `[<color>]`). Markdown bold
+  // (`**role**`) is not used — the label is a separate `Text`
+  // component, not part of the body's `Markdown`, so the
+  // structural separation the renderer establishes is preserved.
+  const labelText = theme.fg(labelColor, theme.bold(details?.role ?? "(unknown)"));
 
   // `message.content` is the markdown body the sink already
   // emitted. The `getMarkdownTheme()` from the package root
@@ -227,12 +244,17 @@ function createRenderer(
 }
 
 /**
- * Build both conductor-owned renderers, keyed by their `customType`.
+ * Build the conductor-owned renderer, keyed by its `customType`.
  * The factory's caller (`extensions/conduct.ts`) iterates the
  * record and registers each with `pi.registerMessageRenderer`.
  *
- * Exposing the record (vs. two named exports) keeps the registration
- * step a single `for ... of` and matches the SDK's
+ * Phase 5.5 narrowed the record to `conduct.role.text` only — the
+ * sink suppresses tool events, so `conduct.role.tool` is dead and
+ * removed (YAGNI). Re-add the key if a non-JSON tool-rendering
+ * path is later requested.
+ *
+ * Exposing the record (vs. a single named export) keeps the
+ * registration step a single `for ... of` and matches the SDK's
  * `messageRenderers: Map<string, MessageRenderer>` shape
  * (`dist/core/extensions/types.d.ts` L1180).
  *
@@ -249,7 +271,6 @@ export function createConductMessageRenderers(
   const renderer = createRenderer(getOrchestratorRole);
   return {
     "conduct.role.text": renderer,
-    "conduct.role.tool": renderer,
   };
 }
 

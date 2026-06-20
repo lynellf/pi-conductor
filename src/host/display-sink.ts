@@ -6,7 +6,7 @@
  * events, and the extension maps them to custom messages.
  */
 
-import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
 
 import type { Role } from "../core/types.js";
 
@@ -24,14 +24,59 @@ export interface DisplayEvent {
 export type DisplaySink = (event: DisplayEvent) => void;
 
 /**
- * Extract assistant text from the SDK's structured content array.
- * Thinking blocks and tool-call blocks are ignored.
+ * Extract the readable assistant content from the SDK's structured
+ * content array for display in the TUI: `text` parts AND non-redacted
+ * `thinking` parts. Tool-call blocks are ignored (the host forwards
+ * tool activity as separate `tool_call`/`tool_result` display events).
+ *
+ * Reversal of the original Phase 2 Task 3 "thinking omitted by
+ * default" decision (2026-06-20, after Phase 5.5): the human wants
+ * to see model reasoning at all times. Non-redacted `ThinkingContent`
+ * (`.thinking` is a readable string) is now surfaced; redacted blocks
+ * (safety-filtered — only an opaque `thinkingSignature` survives,
+ * `.thinking` is empty) are skipped so the TUI never shows gibberish.
+ *
+ * ## Block joining
+ *
+ * Adjacent `text` parts merge with `""` (they are one logical
+ * utterance the provider split across parts — merging preserves the
+ * single-paragraph rendering). `thinking` parts are emitted as their
+ * own blocks separated from text (and from each other) by `"\n\n"`,
+ * so reasoning reads as its own paragraph above/below the answer.
+ * A message with only text parts is therefore byte-identical to the
+ * pre-reversal behavior; only messages that carry thinking change.
  */
 export function extractAssistantText(message: AssistantMessage): string {
-  return message.content
-    .filter((part): part is TextContent => part.type === "text")
-    .map((part) => part.text)
-    .join("");
+  const blocks: string[] = [];
+  let textBuf = "";
+  for (const part of message.content) {
+    if (part.type === "text") {
+      textBuf += part.text;
+      continue;
+    }
+    if (part.type === "thinking") {
+      const thinking = readableThinking(part);
+      if (thinking.length === 0) continue;
+      if (textBuf.length > 0) {
+        blocks.push(textBuf);
+        textBuf = "";
+      }
+      blocks.push(thinking);
+    }
+  }
+  if (textBuf.length > 0) blocks.push(textBuf);
+  return blocks.join("\n\n");
+}
+
+/**
+ * Read the human-readable text from a `ThinkingContent` part, or `""`
+ * when the block was redacted by safety filters (only an opaque
+ * `thinkingSignature` survives) or carries no thinking text. The
+ * display extractor skips these so the TUI never shows gibberish.
+ */
+function readableThinking(part: ThinkingContent): string {
+  if (part.redacted) return "";
+  return typeof part.thinking === "string" ? part.thinking : "";
 }
 
 /**

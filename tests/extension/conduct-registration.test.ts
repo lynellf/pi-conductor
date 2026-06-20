@@ -94,24 +94,20 @@ describe("extension shell — Task 7B.1: registration", () => {
     }
   });
 
-  it("registers the conductor-owned renderers for both conduct.role.* customTypes", async () => {
+  it("registers only the conductor-owned renderer for conduct.role.text (tool customType removed in Phase 5.5)", async () => {
     // Phase 5: the factory calls
-    // `pi.registerMessageRenderer("conduct.role.text", …)` and
-    // `pi.registerMessageRenderer("conduct.role.tool", …)`. The
-    // harness captures the renderer functions so this test can
-    // assert on the registration shape (customType + function
-    // reference). The renderer's *behavior* is tested in
+    // `pi.registerMessageRenderer("conduct.role.text", …)`. Phase
+    // 5.5 removed the `conduct.role.tool` registration — the sink
+    // suppresses tool events, so the renderer for that customType
+    // was dead code. The harness captures the renderer functions so
+    // this test can assert on the registration shape (customType +
+    // function reference). The renderer's *behavior* is tested in
     // `conduct-message-renderer.test.ts`; this test is the
-    // acceptance that the factory wires the registrations
-    // themselves.
+    // acceptance that the factory wires the registration itself
+    // and does NOT wire a dead tool customType.
     const ext = await loadExtension("<test>", cwd);
     expect(ext.messageRenderers.has("conduct.role.text")).toBe(true);
-    expect(ext.messageRenderers.has("conduct.role.tool")).toBe(true);
-    // The two renderers share a single implementation
-    // (createConductMessageRenderers returns the same function
-    // under both keys) — both keys map to the same reference.
-    expect(ext.messageRenderers.get("conduct.role.text")).toBe(
-      ext.messageRenderers.get("conduct.role.tool"),
-    );
+    expect(ext.messageRenderers.has("conduct.role.tool")).toBe(false);
+    expect(ext.messageRenderers.get("conduct.role.text")).toBeTypeOf("function");
   });
 });

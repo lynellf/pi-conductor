@@ -90,29 +90,38 @@ message (`ModelNotFoundError`, `SystemPromptNotFoundError`, …).
 
 During `/conduct` and `/conduct:resume`, role-session output is also
 streamed into the host TUI as display-only custom messages. The stream
-shows role-prefixed assistant text, tool calls, tool results, and
-handoff / `ask_user` reasons so you can follow the run without opening
-JSONL files.
+shows each role's assistant text **and reasoning** — the LLM's `text`
+content plus its non-redacted `thinking` content, verbatim, headed by a
+bold role label colored by role family (the orchestrator in one hue,
+workers in another). Reasoning models that emit their thinking as
+`thinking` blocks (rather than `text`) are surfaced too; safety-redacted
+thinking (opaque provider signatures) is skipped so the TUI never shows
+gibberish. Tool calls, tool results, and the conductor's `handoff`/`end`
+protocol noise are **not** shown in the TUI; any code fences the LLM
+emits (```` ``` ````) are rendered as styled code blocks.
 
 Streaming does not merge role sessions into pi's session tree and does
 not append extra records to the host-owned run log. The durable record
 remains the per-role session JSONL under
 `<cwd>/.pi-conductor/runs/<run_id>/sessions/`; the TUI stream is an
-observability surface.
+observability surface. Real tool activity (the conductor's machine
+tools and built-in tools like `bash`/`read`) is recorded in that
+JSONL even though it is suppressed from the TUI stream.
 
 ### Renderer
 
 Streamed entries are presented by a conductor-owned `MessageRenderer`
-registered for the two `conduct.role.*` `customType`s. The renderer
-produces a structural role label (colored by role family — the
+registered for the `conduct.role.text` `customType`. The renderer
+produces a bold structural role label (colored by role family — the
 orchestrator in one hue, workers in another) above a properly-themed
-markdown body, so headings are visually distinct and JSON arguments
-read as code rather than as raw text. The renderer takes over
-rendering only for the two conductor-owned `customType`s; every other
-`CustomMessage` falls through to pi's default `CustomMessageComponent`.
-The renderer is fail-safe (returns `undefined` on any throw, so the
-default box takes over) and the streamed content is unchanged — the
-model still gets the full tool result.
+markdown body carrying the LLM's text verbatim, so headings and code
+fences the LLM emits are styled rather than read as raw syntax. The
+renderer takes over rendering only for the `conduct.role.text`
+`customType`; every other `CustomMessage` falls through to pi's
+default `CustomMessageComponent`. The renderer is fail-safe (returns
+`undefined` on any throw, so the default box takes over). The model
+still gets the full tool result — only the TUI's *display* of tool
+activity is suppressed.
 
 ## `ask_user`
 

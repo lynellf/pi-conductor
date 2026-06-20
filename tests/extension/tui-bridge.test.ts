@@ -188,30 +188,54 @@ describe("extension shell — Phase 2 + 5 display sink wiring", () => {
     setCurrentOrchestratorRole(null);
   });
 
-  it("wraps display events in custom messages with role-prefixed markdown", () => {
+  it("emits only text events, with the LLM text verbatim and no role prefix; tool calls and tool results are suppressed", () => {
+    // Phase 5.5 remediation: the sink drops the `### ${role}`
+    // body prefix (the renderer's structural role label already
+    // names the role) and suppresses ALL tool events — both the
+    // conductor's `handoff`/`end` machine tools and built-in
+    // tools (`bash`, `read`, …). The user-meaningful signal in
+    // the TUI is the LLM's text reasoning; real tool activity
+    // remains in the per-role session JSONL.
     const sendMessage = vi.fn();
     const sink = createConductDisplaySink(sendMessage);
 
     sink({ role: "worker", kind: "text", text: "hello world" });
     sink({ role: "worker", kind: "tool_call", text: 'bash: {"command":"ls"}' });
+    sink({ role: "worker", kind: "tool_result", text: "emission recorded: handoff → worker" });
 
-    expect(sendMessage).toHaveBeenCalledTimes(2);
+    // Only the text event emits a CustomMessage.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenNthCalledWith(1, {
       customType: "conduct.role.text",
-      content: "### worker\n\nhello world",
+      // Body is the LLM's text verbatim — no `### worker` prefix.
+      content: "hello world",
       display: true,
       details: { role: "worker", kind: "text", is_orchestrator: false },
     });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, {
-      customType: "conduct.role.tool",
-      content: '### worker\n\nbash: {"command":"ls"}',
-      display: true,
-      // The sink normalizes `DisplayEventKind` (`"tool_call"` /
-      // `"tool_result"`) to the binary `ConductMessageDetails.kind`
-      // (`"tool"`) so the renderer doesn't have to care about the
-      // tool-call vs tool-result distinction.
-      details: { role: "worker", kind: "tool", is_orchestrator: false },
+  });
+
+  it("suppresses tool_call and tool_result events entirely (no CustomMessage emitted for any tool activity)", () => {
+    // Dedicated tool-suppression test (Phase 5.5 Task 10):
+    // neither the conductor's machine tools (`handoff`, `end`)
+    // nor built-in tools (`bash`, `read`, …) surface in the TUI
+    // stream. The sink returns without calling `sendMessage` for
+    // every `tool_call` and `tool_result` kind. Real tool activity
+    // remains in the per-role session JSONL.
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+
+    sink({ role: "orchestrator", kind: "tool_call", text: 'handoff: {"target_role":"worker"}' });
+    sink({
+      role: "orchestrator",
+      kind: "tool_result",
+      text: "emission recorded: handoff → worker",
     });
+    sink({ role: "worker", kind: "tool_call", text: 'bash: {"command":"ls -la"}' });
+    sink({ role: "worker", kind: "tool_result", text: "total 0" });
+    sink({ role: "orchestrator", kind: "tool_call", text: 'end: {"reason":"done"}' });
+    sink({ role: "orchestrator", kind: "tool_result", text: "emission recorded: end" });
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("stamps is_orchestrator=true when the active run's orchestrator emits", () => {

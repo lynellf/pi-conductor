@@ -126,15 +126,17 @@ export default function conductExtension(pi: ExtensionAPI): void {
   const getFlag: GetFlagValue = (name) => pi.getFlag(name);
   const displaySink = createConductDisplaySink((message) => pi.sendMessage(message));
 
-  // Conductor-owned message renderers for the two
-  // `conduct.role.*` `CustomMessage` `customType`s. The
-  // renderers take over `CustomMessage` rendering for
-  // streamed entries and present them with a structural
+  // Conductor-owned message renderer for the
+  // `conduct.role.text` `CustomMessage` `customType`. The
+  // renderer takes over `CustomMessage` rendering for streamed
+  // text entries and presents them with a bold structural
   // role label + a properly-themed markdown body (see
   // `src/extension/conduct-message-renderer.ts` for the
   // design and `docs/tui-bridge-plans/phase-5-renderer-polish.md`
-  // for the rationale). The orchestrator-role getter is
-  // resolved per-render against the live
+  // for the rationale). Phase 5.5 removed the
+  // `conduct.role.tool` registration — the sink suppresses tool
+  // events, so that renderer was dead code. The orchestrator-role
+  // getter is resolved per-render against the live
   // `currentOrchestratorRole` slot, so the same renderer
   // instance works across runs.
   for (const [customType, renderer] of Object.entries(
