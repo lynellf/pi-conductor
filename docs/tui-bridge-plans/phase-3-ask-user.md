@@ -12,9 +12,9 @@
 
 ## Gate
 
-- [ ] Phase 2 complete (green + checkboxes ticked).
-- [ ] Phase 1 bridge path is stable enough for a role tool to reach the UI
-      surface or queue.
+- [x] Phase 2 complete (green + checkboxes ticked).
+- [x] Phase 1 bridge path is stable enough for a role tool to reach the UI
+      surface or queue. (Verified end-to-end by Phase 2's live streaming manual run — the bridge delivers `DisplayEvent`s through the same `uiContext` path a role tool would use.)
 
 ## Tasks
 
@@ -62,6 +62,11 @@
     - [ ] A role calling `ask_user` surfaces an `input` / `confirm` / `select`
           dialog in the host TUI; the run pauses; the answer returns to the
           role; the turn continues.
+    - [ ] `ask_user`'s `reason` (the `prompt` parameter) surfaces in the
+          Feature A stream alongside the dialog, attributable and
+          role-prefixed, the same way handoff reasons already surface (relocated
+          from Phase 2 Task 4 — it was a forward dependency there, since
+          `ask_user` does not exist until this task lands it).
     - [ ] `ask_user` is available to workers as well as the orchestrator.
     - [ ] Abort during an `ask_user` dialog flows through the tool's
           `AbortSignal` -> session ends -> loop sees abort.

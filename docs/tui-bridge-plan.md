@@ -131,7 +131,7 @@ Gate: Phase 1 complete (green + checkboxes ticked). The bridge path is known
 before display forwarding is wired into the extension handlers.
 
 Exit criteria:
-- [ ] Tasks 3-4 green; manual run shows live streaming.
+- [x] Tasks 3-4 green; manual run shows live streaming.
 - [x] Full suite green; grep guard green (no `ctx.newSession` / `ctx.fork`).
 
 ### Phase 3 — Feature B: `ask_user`

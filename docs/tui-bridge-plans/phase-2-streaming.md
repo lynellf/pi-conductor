@@ -4,7 +4,7 @@
 > overview, architecture decisions, dependency graph, risks, open questions, and
 > whole-plan verification. Source spec: `docs/tui-bridge-spec.md` Invariant A.
 >
-> **Status:** In progress — Task 3 is green; manual live TUI run verified; one Task 4 acceptance item is deferred to Task 6.
+> **Status:** Complete — Tasks 3-4 green; manual live TUI run verified. The `ask_user` reason-surfacing acceptance item that was previously deferred here has been relocated to Phase 3 Task 6 (it was a forward dependency — `ask_user` does not exist until Task 6, so verifying its stream behavior belongs in the task that creates the tool, not in Task 4).
 >
 > **Scope:** Add a display-only tap to the existing host event handler and wire
 > it to the extension factory's `sendMessage` action. This phase must not append
@@ -51,8 +51,8 @@
     - `tests/host/display-forwarding.test.ts` (NEW)
   - Estimated scope: M
 
-- [ ] **Task 4: Wire the display sink to factory `sendMessage` in the handlers**
-  - _Remediation needed: one acceptance item (`ask_user`'s `reason` surfacing in the stream) is deferred to Task 6 (Phase 3). Task 4 cannot be closed — and therefore the Phase 2 checkpoint cannot be closed — until `createAskUserTool` lands and this item is re-verified. Handoff reasons already surface; `ask_user` reasons do not, because the tool does not yet exist._
+- [x] **Task 4: Wire the display sink to factory `sendMessage` in the handlers**
+  - _Relocated (2026-06-20): the `ask_user` reason-surfacing acceptance item that previously sat here was a forward dependency on Phase 3 Task 6 — `ask_user` does not exist until Task 6 lands, so verifying its stream behavior cannot gate Task 4. The item is now an acceptance criterion on Task 6 in `docs/tui-bridge-plans/phase-3-ask-user.md`, where the dependency is actually created. Task 4 closes on what it genuinely delivers: handoff reasons stream now, and all other acceptance/verification items are green._
   - Description: In `start.ts` and `resume.ts`, build a `DisplaySink` that
     converts each `DisplayEvent` into a factory `sendMessage` call with a
     conductor-owned `customType` (for example, `"conduct.role.text"` and
@@ -64,8 +64,6 @@
     - [x] A `/conduct` run streams role text + tool calls + tool results into
           the host TUI as attributable, role-prefixed markdown entries.
     - [x] The footer status line + terminal notification still fire unchanged.
-    - [ ] `ask_user`'s `reason` surfaces in the stream after Task 6 lands;
-          handoff reasons surface now.
     - [x] Streamed entries are not appended to `records.jsonl`.
   - Verification:
     - [x] `pnpm test -- extension/tui-bridge` (NEW, stub-driven): a stub
@@ -84,5 +82,5 @@
 
 ## Checkpoint — Feature A end-to-end
 
-- [ ] Tasks 3-4 green; manual run shows live streaming.
+- [x] Tasks 3-4 green; manual run shows live streaming.
 - [x] Full suite green; grep guard green (no `ctx.newSession` / `ctx.fork`).
