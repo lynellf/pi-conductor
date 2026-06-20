@@ -56,6 +56,18 @@ export interface RecordedExtension {
       readonly default?: string | boolean;
     }
   >;
+  /**
+   * Message renderers registered via `pi.registerMessageRenderer`,
+   * keyed by `customType`. Phase 5: the conductor-owned renderers
+   * for `conduct.role.text` and `conduct.role.tool`. The harness
+   * captures the function references; tests can call them
+   * directly with a stub theme to assert on the returned
+   * `Container` shape.
+   */
+  readonly messageRenderers: Map<
+    string,
+    (message: unknown, options: unknown, theme: unknown) => unknown
+  >;
 }
 
 /**
@@ -72,6 +84,7 @@ export async function loadExtension(
   const ext: RecordedExtension = {
     commands: new Map(),
     flags: new Map(),
+    messageRenderers: new Map(),
   };
   const api = {
     registerCommand: (
@@ -97,14 +110,20 @@ export async function loadExtension(
         ...(opts.default !== undefined && { default: opts.default }),
       });
     },
+    registerMessageRenderer: (
+      customType: string,
+      renderer: (message: unknown, options: unknown, theme: unknown) => unknown,
+    ) => {
+      ext.messageRenderers.set(customType, renderer);
+    },
     // No-op stubs for the rest of the API surface the
     // factory might touch. The factory only calls
-    // registerCommand / registerFlag; the other methods
-    // are here only to satisfy the typed shape.
+    // registerCommand / registerFlag / registerMessageRenderer;
+    // the other methods are here only to satisfy the typed
+    // shape.
     on: () => {},
     registerTool: () => {},
     registerShortcut: () => {},
-    registerMessageRenderer: () => {},
     getFlag: () => undefined,
     sendMessage: () => {},
     sendUserMessage: () => {},

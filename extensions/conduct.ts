@@ -72,6 +72,8 @@ import {
   type HandleDeps,
   handleStart,
 } from "../src/extension/commands/start.js";
+import { createConductMessageRenderers } from "../src/extension/conduct-message-renderer.js";
+import { getCurrentOrchestratorRole } from "../src/extension/current-orchestrator.js";
 import { createConductDisplaySink } from "../src/extension/display-sink-wiring.js";
 
 /**
@@ -123,6 +125,23 @@ export default function conductExtension(pi: ExtensionAPI): void {
   // into the handler invocation.
   const getFlag: GetFlagValue = (name) => pi.getFlag(name);
   const displaySink = createConductDisplaySink((message) => pi.sendMessage(message));
+
+  // Conductor-owned message renderers for the two
+  // `conduct.role.*` `CustomMessage` `customType`s. The
+  // renderers take over `CustomMessage` rendering for
+  // streamed entries and present them with a structural
+  // role label + a properly-themed markdown body (see
+  // `src/extension/conduct-message-renderer.ts` for the
+  // design and `docs/tui-bridge-plans/phase-5-renderer-polish.md`
+  // for the rationale). The orchestrator-role getter is
+  // resolved per-render against the live
+  // `currentOrchestratorRole` slot, so the same renderer
+  // instance works across runs.
+  for (const [customType, renderer] of Object.entries(
+    createConductMessageRenderers(getCurrentOrchestratorRole),
+  )) {
+    pi.registerMessageRenderer(customType, renderer);
+  }
 
   pi.registerCommand("conduct", {
     description: "Start a pi-conductor run for <goal> using .pi/conductor.yaml.",

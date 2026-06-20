@@ -93,4 +93,25 @@ describe("extension shell — Task 7B.1: registration", () => {
       expect(cmd?.description?.length ?? 0).toBeGreaterThan(0);
     }
   });
+
+  it("registers the conductor-owned renderers for both conduct.role.* customTypes", async () => {
+    // Phase 5: the factory calls
+    // `pi.registerMessageRenderer("conduct.role.text", …)` and
+    // `pi.registerMessageRenderer("conduct.role.tool", …)`. The
+    // harness captures the renderer functions so this test can
+    // assert on the registration shape (customType + function
+    // reference). The renderer's *behavior* is tested in
+    // `conduct-message-renderer.test.ts`; this test is the
+    // acceptance that the factory wires the registrations
+    // themselves.
+    const ext = await loadExtension("<test>", cwd);
+    expect(ext.messageRenderers.has("conduct.role.text")).toBe(true);
+    expect(ext.messageRenderers.has("conduct.role.tool")).toBe(true);
+    // The two renderers share a single implementation
+    // (createConductMessageRenderers returns the same function
+    // under both keys) — both keys map to the same reference.
+    expect(ext.messageRenderers.get("conduct.role.text")).toBe(
+      ext.messageRenderers.get("conduct.role.tool"),
+    );
+  });
 });
