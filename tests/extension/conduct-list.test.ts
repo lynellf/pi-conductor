@@ -77,4 +77,166 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
     const noRuns = notifyCalls.find((n) => n.type === "info" && /No runs found/i.test(n.msg));
     expect(noRuns).toBeDefined();
   });
+
+  it("appends a transition trace to each per-run line (AC4)", async () => {
+    // Phase 8 / handoff-visibility: `/conduct:list`
+    // renders the run's transition trace after the
+    // existing fields. The trace is sourced from the
+    // `transitionHistory` projection of the
+    // persisted records.
+    //
+    // We seed a synthetic run log with two
+    // `transition_accepted` records (handoff +
+    // end). The handler reads them via
+    // `FileRecordLog.records(runId)` and projects
+    // them through `runStats().transitionHistory`.
+    const piDir = join(cwd, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      join(piDir, "conductor.yaml"),
+      "version: 1\nroles:\n  - name: orchestrator\n    is_orchestrator: true\n    system_prompt: .pi/roles/orchestrator.md\n    tools: [handoff, end]\n  - name: worker\n    max_visits: 3\n    system_prompt: .pi/roles/worker.md\n    tools: [handoff, end]\n",
+      "utf8",
+    );
+    // Create the run log directory + a synthetic
+    // JSONL with a handoff + an end record +
+    // checkpoint snapshot (so `runStats` finds a
+    // current_role for the line).
+    const runsDir = join(cwd, ".pi-conductor", "runs");
+    await mkdir(runsDir, { recursive: true });
+    const runId = "list-trace-test-1";
+    const records = [
+      {
+        type: "transition_accepted",
+        run_id: runId,
+        from: "orchestrator",
+        to: "worker",
+        event: "handoff",
+        target_role: "worker",
+        role: "orchestrator",
+        suggests_next: null,
+        payload_summary: { field_names: [] },
+        guard: null,
+        effect: [],
+        session_file: "stub",
+        ts: 1,
+      },
+      {
+        type: "transition_accepted",
+        run_id: runId,
+        from: "worker",
+        to: "orchestrator",
+        event: "handoff",
+        target_role: "orchestrator",
+        role: "worker",
+        suggests_next: null,
+        payload_summary: { field_names: [] },
+        guard: null,
+        effect: [],
+        session_file: "stub",
+        ts: 2,
+      },
+      {
+        type: "transition_accepted",
+        run_id: runId,
+        from: "orchestrator",
+        to: "done",
+        event: "end",
+        target_role: null,
+        role: "orchestrator",
+        suggests_next: null,
+        payload_summary: { field_names: [] },
+        guard: null,
+        effect: [],
+        session_file: "stub",
+        ts: 3,
+      },
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "done",
+          visit_count: { worker: 1 },
+          active_role_session: null,
+          updated_at: 3,
+        },
+      },
+    ];
+    const lines = records.map((r) => JSON.stringify(r)).join("\n");
+    await writeFile(join(runsDir, `${runId}.jsonl`), `${lines}\n`, "utf8");
+
+    const ext = await loadExtension("<test>", cwd);
+    const list = ext.commands.get("conduct:list");
+    expect(list).toBeDefined();
+    await list?.handler(
+      "",
+      makeCtx({
+        cwd,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+      }),
+    );
+    const summary = notifyCalls.find((n) => n.type === "info" && /Runs in /.test(n.msg));
+    expect(summary).toBeDefined();
+    // The line includes the runId prefix, the
+    // existing fields (state, exitReason, cost), and
+    // the appended transition trace.
+    expect(summary?.msg).toContain(
+      `${runId} · done · running · $0.000 · orchestrator → worker → orchestrator → done`,
+    );
+  });
+
+  it("renders an empty history gracefully (no trailing arrow)", async () => {
+    // A run with no transitions yet (e.g., a
+    // crashed run before any handoff) should NOT
+    // render a trailing `· → …` or stray `→`. The
+    // trace is empty, the existing fields are
+    // preserved, and there's no orphan separator.
+    const piDir = join(cwd, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      join(piDir, "conductor.yaml"),
+      "version: 1\nroles:\n  - name: orchestrator\n    is_orchestrator: true\n    system_prompt: .pi/roles/orchestrator.md\n    tools: [handoff, end]\n  - name: worker\n    max_visits: 3\n    system_prompt: .pi/roles/worker.md\n    tools: [handoff, end]\n",
+      "utf8",
+    );
+    const runsDir = join(cwd, ".pi-conductor", "runs");
+    await mkdir(runsDir, { recursive: true });
+    const runId = "list-empty-trace-1";
+    // Only a checkpoint snapshot — no transitions.
+    const records = [
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "orchestrator",
+          visit_count: {},
+          active_role_session: null,
+          updated_at: 0,
+        },
+      },
+    ];
+    const lines = records.map((r) => JSON.stringify(r)).join("\n");
+    await writeFile(join(runsDir, `${runId}.jsonl`), `${lines}\n`, "utf8");
+
+    const ext = await loadExtension("<test>", cwd);
+    const list = ext.commands.get("conduct:list");
+    expect(list).toBeDefined();
+    await list?.handler(
+      "",
+      makeCtx({
+        cwd,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+      }),
+    );
+    const summary = notifyCalls.find((n) => n.type === "info" && /Runs in /.test(n.msg));
+    expect(summary).toBeDefined();
+    // The line is the existing fields, no
+    // transition trace appended. No `→` anywhere in
+    // the per-run line.
+    expect(summary?.msg).toContain(`${runId} · orchestrator · running · $0.000`);
+    // Strip the prefix `Runs in <baseDir>: ` and
+    // assert no `→` in the per-run portion.
+    const tail = summary?.msg.split(": ")[1] ?? "";
+    expect(tail).not.toMatch(/→/);
+  });
 });
