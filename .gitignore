@@ -143,6 +143,11 @@ dist
 # we don't want to commit the installer's settings state.
 .pi/settings.json
 
+# pi-conductor runtime output: per-run logs + role-session JSONL.
+# Written by the production Host under <cwd>/.pi-conductor/runs/.
+# Runtime data, not source — never commit.
+.pi-conductor/
+
 # Scratch / throwaway sample manifests for hand-testing the extension.
 # Not part of the published package.
 scratch/
