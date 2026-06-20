@@ -18,16 +18,19 @@ roles:
     tools: [read, bash, handoff, end]
 
   - name: planner
+    max_visits: 10
     models: [opencode-go:glm-5.2]
     system_prompt: .pi/roles/planner.md
     tools: [read, edit, write, bash, handoff, end]
 
   - name: implementer
+    max_visits: 10
     models: [opencode-go:minimax-m3]
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, write, bash, handoff, end]
 
   - name: reviewer
+    max_visits: 10
     models: [opencode-go:glm-5.2]
     system_prompt: .pi/roles/reviewer.md
     tools: [read, grep, handoff, end]
