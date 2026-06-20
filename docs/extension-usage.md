@@ -100,6 +100,20 @@ remains the per-role session JSONL under
 `<cwd>/.pi-conductor/runs/<run_id>/sessions/`; the TUI stream is an
 observability surface.
 
+### Renderer
+
+Streamed entries are presented by a conductor-owned `MessageRenderer`
+registered for the two `conduct.role.*` `customType`s. The renderer
+produces a structural role label (colored by role family — the
+orchestrator in one hue, workers in another) above a properly-themed
+markdown body, so headings are visually distinct and JSON arguments
+read as code rather than as raw text. The renderer takes over
+rendering only for the two conductor-owned `customType`s; every other
+`CustomMessage` falls through to pi's default `CustomMessageComponent`.
+The renderer is fail-safe (returns `undefined` on any throw, so the
+default box takes over) and the streamed content is unchanged — the
+model still gets the full tool result.
+
 ## `ask_user`
 
 Every role gets an `ask_user` tool alongside the machine tools

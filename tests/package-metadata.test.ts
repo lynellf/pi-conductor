@@ -17,7 +17,11 @@
  *      contract — see `docs/extensions.md`).
  *   4. The three pi-bundled packages (`@earendil-works/pi-coding-agent`,
  *      `@earendil-works/pi-ai`, `typebox`) are peer dependencies with a
- *      `"*"` range (per `docs/packages.md`).
+ *      `"*"` range (per `docs/packages.md`). `@earendil-works/pi-tui`
+ *      is also a peer dep — the conductor-owned message renderer
+ *      imports `Component`/`Container`/`Markdown`/`Text` from it
+ *      (Phase 5); the SDK uses it internally but does not re-export
+ *      its classes.
  *   5. No runtime imports used by `extensions/conduct.ts` or the host
  *      live only in `devDependencies` (i.e. anything imported by these
  *      files must be in `dependencies` or `peerDependencies`).
@@ -47,6 +51,7 @@ const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
 const PI_BUNDLED_PEERS = [
   "@earendil-works/pi-ai",
   "@earendil-works/pi-coding-agent",
+  "@earendil-works/pi-tui",
   "typebox",
 ] as const;
 

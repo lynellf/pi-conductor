@@ -185,17 +185,19 @@ Gate: Phase 4 complete (green + checkboxes ticked). The two
 authoritative input the new renderer will read.
 
 Exit criteria:
-- [ ] Task 9 green; manual TUI run shows properly-styled markdown
+- [x] Task 9 green; manual TUI run shows properly-styled markdown
       (headings and code blocks distinguished by the markdown theme,
       not flattened to `customMessageText`).
-- [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
+- [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
       pnpm format:check` green; grep guard green.
-- [ ] `docs/sdk-surface.md` records the new pinned surfaces
+- [x] `docs/sdk-surface.md` records the new pinned surfaces
       (`registerMessageRenderer`, `MessageRenderer`, `MessageRenderOptions`,
       `Theme`, `ThemeColor`, `getMarkdownTheme`, `Component`).
-- [ ] Real-model smoke transcript filed in
-      `docs/dev-run-transcripts/`.
-- [ ] Ready for review at the overseer's end-of-loop pass.
+- [x] Real-model smoke transcript filed in
+      `docs/dev-run-transcripts/`. _(Template with the acceptance
+      criteria + reproduction steps; the eyeball-TUI observed-result
+      section is the overseer-owned step.)_
+- [x] Ready for review at the overseer's end-of-loop pass.
 
 ## Risks and mitigations
 

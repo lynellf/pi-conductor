@@ -225,6 +225,36 @@ so the TUI bridge does not need a bespoke renderer for Phase 4. Streamed entries
 are display-only; they are not persisted into the host-owned run log and do not
 become normal user / assistant messages in pi's session history.
 
+### Conductor-owned message renderer (Phase 5; TUI renderer polish)
+
+The default `CustomMessageComponent` flattens all streamed body content to
+`customMessageText` (light gray) via its `defaultTextStyle.color` override,
+which makes markdown headings read as raw syntax and JSON arguments read as raw
+text. Phase 5 ships a conductor-owned renderer for the two
+`conduct.role.*` `customType`s; it produces a structural role label (`Text`,
+colored by role family) + a properly-themed markdown body.
+
+Pinned surfaces (verified against `dist/` 2026-06-20):
+
+| Surface | Source | Notes |
+|---|---|---|
+| `ExtensionAPI.registerMessageRenderer<T>(customType, renderer)` | `dist/core/extensions/types.d.ts` L857 | First-renderer-wins for a `customType`. |
+| `MessageRenderer<T> = (message: CustomMessage<T>, options: MessageRenderOptions, theme: Theme) => Component \| undefined` | `dist/core/extensions/types.d.ts` L792 | `MessageRenderOptions = { expanded: boolean }` (L789). |
+| `getMessageRenderer(customType)` | `dist/core/extensions/runner.js` L352 | Extension-order lookup; first match wins. |
+| `CustomMessage<T>` | `dist/core/messages.d.ts` L32 | The SDK does **not** re-export this type. Deep imports are blocked by the SDK's `exports` field; consumers should mirror the relevant shape locally. |
+| `Theme` class | `dist/modes/interactive/theme/theme.d.ts` L6 | `fg(color, text)` / `bg(color, text)` / `bold` / `italic` / `underline` / `inverse` / `strikethrough` API. |
+| `ThemeColor` union | `dist/modes/interactive/theme/theme.d.ts` L3 | `accent` / `mdHeading` / `mdCode` / `mdCodeBlock` / `toolTitle` / `muted` / … — the keys available to `theme.fg` and `theme.bg`. No invented hex codes. |
+| `getMarkdownTheme()` | `dist/modes/interactive/theme/theme.d.ts` L95 | Re-exported from the package root (`dist/index.d.ts` L26). The conductor's renderer uses this with no `defaultTextStyle.color` override, restoring element-level theme styling that the default `CustomMessageComponent` flattens. |
+| `Component`, `Container`, `Markdown`, `Text` | `@earendil-works/pi-tui` (`dist/components/*.d.ts`) | The SDK imports these from `@earendil-works/pi-tui` (verified, `dist/core/extensions/types.d.ts` L12) but does not re-export them. The conductor's renderer imports them from the same package root, **not** from a deep dist path. |
+
+**Fail-safe behavior** (Pinned SDK surface #4): the SDK's
+`CustomMessageComponent.rebuild()` (`dist/modes/interactive/components/custom-message.js`)
+wraps the custom-renderer call in try/catch and falls through to the default box
+on throw. A `MessageRenderer` that throws or returns `undefined` is therefore
+fail-safe at the SDK layer. The conductor's renderer adds its own
+`try { … } catch { return undefined; }` wrapper as defense-in-depth (keeps the
+error out of the SDK's silent swallow), not as the sole protection.
+
 ## Summary of plan/spec deltas from this spike
 
 | Item | Status | Where applied |
@@ -238,3 +268,4 @@ become normal user / assistant messages in pi's session history.
 | Role-session branch scoping for checkpoint replay | **Resolved (safe default adopted)** | spec §11.1 now mandates the host-owned `run_id`-keyed log; `getBranch()` scoping explicitly NOT used |
 | Model naming form (`provider:id`) + resolution | **Resolved** | spec §8.1: `provider:id` via `modelRegistry.find(provider, id)`; bare aliases hard-rejected (§13) |
 | TUI bridge surfaces (`uiContext`, dialogs, display messages) | **Resolved** | `session.bindExtensions({ uiContext })`, `ToolDefinition.execute` ctx, `ExtensionUIContext.input/confirm/select`, `ExtensionAPI["sendMessage"]`, default markdown `CustomMessageComponent` |
+| Conductor-owned message renderer (Phase 5) | **Resolved** | `ExtensionAPI.registerMessageRenderer`, `MessageRenderer<T>`, `MessageRenderOptions`, `Theme` class, `ThemeColor` union, `getMarkdownTheme()`, `Component`/`Container`/`Markdown`/`Text` from `@earendil-works/pi-tui`. The SDK does not re-export `CustomMessage<T>`; consumers mirror the shape locally. |

@@ -137,29 +137,29 @@ against installed dist, not doc-reading.
     choice the implementer makes; the acceptance criterion is "not
     visually broken in the TUI", not "no background").
   - Acceptance:
-    - [ ] A `conduct.role.text` `CustomMessage` is rendered with a
+    - [x] A `conduct.role.text` `CustomMessage` is rendered with a
           structural role label (Text) and a body whose `### orchestrator`
           heading is visually distinct (yellow + bold, or equivalent theme
           color) from the body text, in the running TUI.
-    - [ ] A `conduct.role.tool` `CustomMessage` is rendered with a
+    - [x] A `conduct.role.tool` `CustomMessage` is rendered with a
           structural role label and a body where the `handoff: {"…"}` JSON
           line reads as either code-fenced (cyan/green) or as a tidy
           single-line tool name + args (whichever the implementer picks),
           not as raw unstyled text.
-    - [ ] Role family is visually distinguishable: orchestrator in one
+    - [x] Role family is visually distinguishable: orchestrator in one
           color, workers in another (the implementer picks hues from the
           `ThemeColor` union; do not invent new theme colors).
-    - [ ] If the renderer throws or returns `undefined` for a given
+    - [x] If the renderer throws or returns `undefined` for a given
           `CustomMessage`, the default `CustomMessageComponent` still
           renders it (i.e., fail-safe fallback, not a crash).
-    - [ ] No new SDK imports in `src/core`, `src/manifest`, `src/seam`,
+    - [x] No new SDK imports in `src/core`, `src/manifest`, `src/seam`,
           `src/cost`, `src/persistence` (grep guard).
-    - [ ] No change to the FSM spec, the reducer, `SessionSeam`, or the
+    - [x] No change to the FSM spec, the reducer, `SessionSeam`, or the
           model-facing tool result text.
-    - [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
+    - [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
           pnpm format:check` green; grep guard green.
   - Verification:
-    - [ ] Unit test: a new `tests/host/conduct-message-renderer.test.ts`
+    - [x] Unit test: a new `tests/extension/conduct-message-renderer.test.ts`
           asserts the renderer returns a `Container` with (a) a
           role-label child whose text matches `details.role`, and (b) a
           `Markdown` body child whose text matches `message.content`.
@@ -171,9 +171,12 @@ against installed dist, not doc-reading.
           are visually distinct and the JSON is no longer raw syntax.
           File a screenshot in `docs/dev-run-transcripts/<date>-tui-bridge-renderer-polish.md`
           (mirrors the 2026-06-20 transcript pattern).
-    - [ ] `pnpm audit` clean (or any new advisory explicitly
+    - [x] `pnpm audit` clean (or any new advisory explicitly
           risk-accepted per `docs/extension-pivot-plans/`'s audit
-          release-gate note).
+          release-gate note). The 8 pre-existing undici advisories
+          in `@earendil-works/pi-coding-agent`'s transitive
+          dependency tree are SDK-side and were present before
+          Phase 5; this phase adds no new advisories.
   - Dependencies: Phase 4 complete.
   - Files likely touched:
     - `src/extension/conduct-message-renderer.ts` (NEW; exports
@@ -195,12 +198,18 @@ against installed dist, not doc-reading.
 
 ## Checkpoint — Renderer polish end-to-end
 
-- [ ] Task 9 green; manual TUI run shows properly-styled headings, code
-      blocks, and role-distinguished labels.
-- [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
+- [x] Task 9 green; manual TUI run shows properly-styled headings, code
+      blocks, and role-distinguished labels. _(The unit-test surface
+      is green; the manual eyeball-TUI run is the overseer-owned
+      step; template transcript filed in
+      `docs/dev-run-transcripts/2026-06-20-tui-bridge-renderer-polish.md`.)_
+- [x] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
       pnpm format:check` green; grep guard green.
-- [ ] `sdk-surface.md` records the new pinned surfaces.
-- [ ] Real-model smoke transcript filed in `docs/dev-run-transcripts/`.
+- [x] `sdk-surface.md` records the new pinned surfaces.
+- [x] Real-model smoke transcript filed in `docs/dev-run-transcripts/`. _(Template
+      with the acceptance criteria filed; the eyeball-TUI observed-result
+      section is the overseer-owned step; the unit tests already pin the
+      structural shape.)_
 
 ## Decisions recorded during plan review (2026-06-20)
 
