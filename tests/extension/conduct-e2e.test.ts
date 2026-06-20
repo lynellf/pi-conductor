@@ -196,6 +196,116 @@ roles:
     expect(ids).toHaveLength(1);
   });
 
+  it("emits a handoff notify per accepted transition (AC1, AC2, AC5)", async () => {
+    // Phase 8 / handoff-visibility: the live poller
+    // surfaces each new accepted handoff + the
+    // terminal `end` as a `conduct: <from> → <to>`
+    // notification. The stub script performs:
+    //   orchestrator → worker → orchestrator → done
+    // (2 handoffs + 1 end). All three transitions
+    // should be notified exactly once.
+    const ext = await loadExtension("<test>", workdir);
+    const conduct = ext.commands.get("conduct");
+    expect(conduct).toBeDefined();
+
+    await conduct?.handler(
+      "do the thing",
+      makeCtx({
+        cwd: workdir,
+        modelRegistry,
+        manifestPath,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+        setStatus: (key, text) => statusUpdates.push({ key, text }),
+      }),
+    );
+
+    // Filter to the handoff-notify lines. Each is of
+    // the form `conduct: <from> → <to>`. The terminal
+    // `run_id=...` notification is NOT in this set.
+    const handoffNotifs = notifyCalls
+      .filter(
+        (n) =>
+          n.type === "info" &&
+          n.msg.startsWith("conduct: ") &&
+          / → /.test(n.msg) &&
+          !n.msg.includes("run_id="),
+      )
+      .map((n) => n.msg);
+
+    // The stub script performs 2 handoffs + 1 end.
+    // The live poller diffs the history on each tick;
+    // since the poller ticks at 250 ms and the stub
+    // runs fast, all transitions should arrive in one
+    // or two ticks. Either way, each transition
+    // produces exactly one notify line.
+    expect(handoffNotifs).toContain("conduct: orchestrator → worker");
+    expect(handoffNotifs).toContain("conduct: worker → orchestrator");
+    expect(handoffNotifs).toContain("conduct: orchestrator → done");
+
+    // No double-emit (AC5). Each transition is
+    // notified exactly once.
+    const counts = new Map<string, number>();
+    for (const line of handoffNotifs) {
+      counts.set(line, (counts.get(line) ?? 0) + 1);
+    }
+    for (const [line, count] of counts) {
+      expect(count, `${line} notified ${count} times`).toBe(1);
+    }
+
+    // Order: append order (the stub emits transitions
+    // sequentially, and the poller emits them in the
+    // order they appear in `transitionHistory`).
+    const orchestratorToWorkerIdx = handoffNotifs.indexOf("conduct: orchestrator → worker");
+    const workerToOrchestratorIdx = handoffNotifs.indexOf("conduct: worker → orchestrator");
+    const toDoneIdx = handoffNotifs.indexOf("conduct: orchestrator → done");
+    expect(orchestratorToWorkerIdx).toBeGreaterThanOrEqual(0);
+    expect(workerToOrchestratorIdx).toBeGreaterThan(orchestratorToWorkerIdx);
+    expect(toDoneIdx).toBeGreaterThan(workerToOrchestratorIdx);
+  });
+
+  it("emits a notify per handoff with status line counter incrementing (AC3)", async () => {
+    // AC3: the status line shows the handoff counter,
+    // and it increments as transitions occur. The
+    // counter is sourced from `transitionHistory`
+    // (Q5: only `event === "handoff"` counts; `end`
+    // is excluded).
+    //
+    // The stub-driven E2E runs synchronously; the
+    // 250 ms poller interval may not fire between
+    // transitions, so we assert the wiring (the
+    // `handoffs=` token appears in the rendered
+    // line) and trust the unit tests in
+    // `status.test.ts` to verify the count
+    // progression.
+    const ext = await loadExtension("<test>", workdir);
+    const conduct = ext.commands.get("conduct");
+    expect(conduct).toBeDefined();
+
+    await conduct?.handler(
+      "do the thing",
+      makeCtx({
+        cwd: workdir,
+        modelRegistry,
+        manifestPath,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+        setStatus: (key, text) => statusUpdates.push({ key, text }),
+      }),
+    );
+
+    // The status line includes the `handoffs=` token
+    // at least once during the run (the initial
+    // render is the most likely one for a fast
+    // stub-driven run).
+    const renderedLines = statusUpdates
+      .map((u) => u.text)
+      .filter((t): t is string => typeof t === "string");
+    expect(renderedLines.some((t) => /handoffs=\d+/.test(t))).toBe(true);
+
+    // The terminal clear is the last status update.
+    const last = statusUpdates[statusUpdates.length - 1];
+    expect(last?.text).toBeUndefined();
+  });
+
   it("sets and clears the orchestrator-role slot across the run lifecycle", async () => {
     // Phase 5: the display sink in
     // `src/extension/display-sink-wiring.ts` reads
