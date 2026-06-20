@@ -41,15 +41,21 @@
  *
  * ## Module size
  *
- * ~120 LOC including the auto-execution guard. The CLI is
+ * ~180 LOC including the auto-execution guard. The CLI is
  * intentionally small; orchestration lives in `src/host/`.
  */
 
 import { access } from "node:fs/promises";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  AuthStorage,
+  type ExtensionUIContext,
+  ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
 
 import {
   createProductionHost,
@@ -84,6 +90,10 @@ export interface CliDeps {
   readonly exit: (code: number) => void;
   /** Working directory for the run. Defaults to `process.cwd()`. */
   readonly cwd: string;
+  /** Input stream for CLI `ask_user` prompts. Defaults to `process.stdin`. */
+  readonly stdin?: Readable;
+  /** Output stream for CLI `ask_user` prompts. Defaults to `process.stdout`. */
+  readonly stdout?: Writable;
 }
 
 // ─── Argv parsing ──────────────────────────────────────────────────────
@@ -104,6 +114,60 @@ function parseArgv(argv: readonly string[]): { manifestPath: string; goal: strin
   return { manifestPath, goal };
 }
 
+/**
+ * Minimal stdin/stdout-backed UI for non-TUI `ask_user` calls.
+ * Only dialog methods are interactive; the rest of the UI surface
+ * is intentionally inert because the CLI has no status bar,
+ * widgets, or custom-message renderer.
+ */
+function createCliUiContext(input: Readable, output: Writable): ExtensionUIContext {
+  const ask = async (prompt: string): Promise<string> => {
+    const rl = createInterface({ input, output });
+    try {
+      return await rl.question(prompt);
+    } finally {
+      rl.close();
+    }
+  };
+
+  return {
+    select: async (title: string, options: string[]) => {
+      output.write(`${title}\n`);
+      for (const [index, option] of options.entries()) {
+        output.write(`${index + 1}. ${option}\n`);
+      }
+      const answer = (await ask("> ")).trim();
+      const selectedIndex = Number.parseInt(answer, 10);
+      if (
+        Number.isInteger(selectedIndex) &&
+        selectedIndex >= 1 &&
+        selectedIndex <= options.length
+      ) {
+        return options[selectedIndex - 1];
+      }
+      return options.find((option: string) => option === answer);
+    },
+    confirm: async (title: string, message: string) => {
+      output.write(`${title}: ${message}\n`);
+      const answer = (await ask("[y/N] ")).trim().toLowerCase();
+      return answer === "y" || answer === "yes";
+    },
+    input: (title: string, placeholder?: string) =>
+      ask(`${title}${placeholder ? ` (${placeholder})` : ""}: `),
+    notify: (message: string, type = "info") => output.write(`[${type}] ${message}\n`),
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWorkingVisible: () => {},
+    setWorkingIndicator: () => {},
+    setHiddenThinkingLabel: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+  } as unknown as ExtensionUIContext;
+}
+
 // ─── runCli ────────────────────────────────────────────────────────────
 
 /**
@@ -114,7 +178,15 @@ function parseArgv(argv: readonly string[]): { manifestPath: string; goal: strin
  * recorded codes.
  */
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<number> {
-  const { startRun: startRunImpl, modelRegistry, console: out, exit, cwd } = deps;
+  const {
+    startRun: startRunImpl,
+    modelRegistry,
+    console: out,
+    exit,
+    cwd,
+    stdin = process.stdin,
+    stdout = process.stdout,
+  } = deps;
 
   const parsed = parseArgv(argv);
   if (parsed === null) {
@@ -141,7 +213,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
   // reused across resumes.
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
-      extension: { modelRegistry, cwd },
+      extension: { modelRegistry, cwd, uiContext: createCliUiContext(stdin, stdout) },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest,
@@ -182,6 +254,8 @@ async function main(): Promise<number> {
     console: globalThis.console,
     exit: (code) => process.exit(code),
     cwd: process.cwd(),
+    stdin: process.stdin,
+    stdout: process.stdout,
   });
 }
 

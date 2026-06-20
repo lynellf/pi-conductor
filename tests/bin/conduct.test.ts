@@ -24,12 +24,18 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable, Writable } from "node:stream";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/bin/conduct.js";
-import type { HostFactoryContext, LoadedManifest, RunHandle } from "../../src/index.js";
+import type {
+  HostFactoryContext,
+  LoadedManifest,
+  RunHandle,
+  StartRunOptions,
+} from "../../src/index.js";
 
 // ─── Test helpers ───────────────────────────────────────────────────────
 
@@ -78,6 +84,18 @@ const stubModelRegistry = {} as ModelRegistry;
 function makeExit(): { fn: (code: number) => void; codes: number[] } {
   const codes: number[] = [];
   return { codes, fn: (code: number) => codes.push(code) };
+}
+
+function makeWritableRecorder(): Writable & { chunks: string[] } {
+  const chunks: string[] = [];
+  const writable = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(String(chunk));
+      callback();
+    },
+  }) as Writable & { chunks: string[] };
+  writable.chunks = chunks;
+  return writable;
 }
 
 /** Make a fresh tmpdir with a fixture manifest at <tmp>/manifest.yaml. */
@@ -281,6 +299,50 @@ describe("runCli delegation to startRun", () => {
         loadedManifest: {} as LoadedManifest,
       };
       expect(() => opts.hostFactory(fakeCtx)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("threads a stdin-backed UI context into the CLI production host for ask_user", async () => {
+    const dir = makeManifestDir();
+    try {
+      const stdin = Readable.from(["blue\n"]);
+      const stdout = makeWritableRecorder();
+      let answer: string | undefined;
+      const startRun = vi.fn(async (_path: string, opts: StartRunOptions) => {
+        const host = opts.hostFactory({
+          runId: "fake",
+          def: {} as HostFactoryContext["def"],
+          log: {} as HostFactoryContext["log"],
+          loadedManifest: {} as LoadedManifest,
+        });
+        const uiContext = (
+          host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
+        ).uiContext;
+        answer = await uiContext?.input("Which color?");
+        return {
+          runId: "test-cli-ui",
+          completion: async () => ({
+            finalCheckpoint: { current_role: "done" },
+            exitReason: "done",
+          }),
+        } as RunHandle;
+      });
+
+      const code = await runCli(["manifest.yaml", "goal"], {
+        startRun: startRun as unknown as Parameters<typeof runCli>[1]["startRun"],
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+        stdin,
+        stdout,
+      });
+
+      expect(code).toBe(0);
+      expect(answer).toBe("blue");
+      expect(stdout.chunks.join("")).toContain("Which color?:");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
