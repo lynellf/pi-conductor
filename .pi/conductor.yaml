@@ -15,7 +15,7 @@ roles:
     models: [opencode-go:minimax-m3]
     max_run_cost_usd: 25.0
     system_prompt: .pi/roles/orchestrator.md
-    tools: [read, bash, handoff, end]
+    tools: [handoff, end]
 
   - name: planner
     max_visits: 10
