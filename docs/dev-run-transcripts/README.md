@@ -12,6 +12,7 @@ Manual real-model smoke transcripts. Per
 | Date | Surface | Transcript |
 |---|---|---|
 | 2026-06-19 | `bin/conduct` (Task 7C.3 CLI fallback) | [`2026-06-19-cli-real-model-smoke.md`](2026-06-19-cli-real-model-smoke.md) |
+| 2026-06-20 | `/conduct` (`ask_user` smoke) | [`2026-06-20-tui-bridge-ask-user-smoke.md`](2026-06-20-tui-bridge-ask-user-smoke.md) |
 
 The first transcript ran the CLI against `openrouter:openrouter/fusion`
 against the developer's configured `~/.pi/agent/auth.json`. Three sessions
@@ -38,6 +39,7 @@ Recommended capture format:
 ## Status
 
 ✅ **Phase 7C.2 smoke captured** (`2026-06-19-cli-real-model-smoke.md`).
+✅ **Phase 3 ask_user smoke captured** (`2026-06-20-tui-bridge-ask-user-smoke.md`).
 The CLI fallback surface from Task 7C.3 was used for the first transcript;
 the extension's `/conduct` is the user-facing equivalent for interactive
 runs (exercised separately during `pi install -l ./` install proof in the

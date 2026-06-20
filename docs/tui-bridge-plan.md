@@ -144,9 +144,9 @@ Gate: Phase 2 complete (green + checkboxes ticked). The tool reaches the chosen 
 without touching the FSM reducer or `SessionSeam` capture buffer.
 
 Exit criteria:
-- [ ] Tasks 5-6 green; manual run shows `ask_user` dialog + answer flow.
-- [ ] Real-model smoke transcript filed.
-- [ ] Full suite green; grep guard green.
+- [x] Tasks 5-6 green; manual run shows `ask_user` dialog + answer flow.
+- [x] Real-model smoke transcript filed.
+- [x] Full suite green; grep guard green.
 
 ### Phase 4 — Degradation and docs
 

@@ -152,3 +152,21 @@ export class RoleEscalationError extends Error {
     this.role = role;
   }
 }
+
+/**
+ * Thrown when `ask_user` runs without dialog-capable UI.
+ * Spec §B.3 keeps this as a typed failure instead of a silent no-op.
+ */
+export class AskUserUnavailableError extends Error {
+  readonly mode: string;
+  readonly hasUI: boolean;
+
+  constructor(mode: string, hasUI = false) {
+    super(
+      `AskUserUnavailableError: ask_user requires dialog-capable UI; mode='${mode}' hasUI=${hasUI}`,
+    );
+    this.name = "AskUserUnavailableError";
+    this.mode = mode;
+    this.hasUI = hasUI;
+  }
+}

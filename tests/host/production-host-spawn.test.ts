@@ -121,22 +121,23 @@ function makeHost(
 // ─── buildToolsAllowlist — pure helper ────────────────────────────────
 
 describe("buildToolsAllowlist — Task 7A.3", () => {
-  it("returns just [handoff, end] when the role declares no tools", () => {
-    expect(buildToolsAllowlist(undefined)).toEqual(["handoff", "end"]);
-    expect(buildToolsAllowlist([])).toEqual(["handoff", "end"]);
+  it("returns just [handoff, end, ask_user] when the role declares no tools", () => {
+    expect(buildToolsAllowlist(undefined)).toEqual(["handoff", "end", "ask_user"]);
+    expect(buildToolsAllowlist([])).toEqual(["handoff", "end", "ask_user"]);
   });
 
-  it("returns the role's tools plus handoff and end, in declared order", () => {
+  it("returns the role's tools plus handoff, end, and ask_user, in declared order", () => {
     const result = buildToolsAllowlist(["read", "edit", "bash"]);
     // Order: declared tools first (in order), then handoff, then end.
-    expect(result).toEqual(["read", "edit", "bash", "handoff", "end"]);
+    expect(result).toEqual(["read", "edit", "bash", "handoff", "end", "ask_user"]);
   });
 
-  it("deduplicates when the role already declares handoff or end exactly once", () => {
-    const result = buildToolsAllowlist(["read", "handoff", "end"]);
-    expect(result).toEqual(["read", "handoff", "end"]);
+  it("deduplicates when the role already declares handoff, end, or ask_user exactly once", () => {
+    const result = buildToolsAllowlist(["read", "handoff", "end", "ask_user"]);
+    expect(result).toEqual(["read", "handoff", "end", "ask_user"]);
     expect(result.filter((n) => n === "handoff")).toHaveLength(1);
     expect(result.filter((n) => n === "end")).toHaveLength(1);
+    expect(result.filter((n) => n === "ask_user")).toHaveLength(1);
   });
 });
 
@@ -199,20 +200,23 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
     await session.dispose();
   });
 
-  it("force-includes handoff and end in the session's active tools exactly once", async () => {
+  it("force-includes handoff, end, and ask_user in the session's active tools exactly once", async () => {
     const host = makeHost(workdir);
     const session = await host.spawnRole("implementer", { modelIndex: 0 });
     const toolNames = asFull(session).getActiveToolNames();
 
     // The session is constructed with the custom handoff + end
-    // tools and the `tools` allowlist. Both should appear in
+    // tools and the `tools` allowlist. All should appear in
     // the active set. The role manifest already declares
     // [read, edit, handoff, end]; the `buildToolsAllowlist`
-    // dedup keeps them exactly once each.
+    // dedup keeps them exactly once each, and force-injects
+    // ask_user for every role.
     expect(toolNames).toContain("handoff");
     expect(toolNames).toContain("end");
+    expect(toolNames).toContain("ask_user");
     expect(toolNames.filter((n) => n === "handoff")).toHaveLength(1);
     expect(toolNames.filter((n) => n === "end")).toHaveLength(1);
+    expect(toolNames.filter((n) => n === "ask_user")).toHaveLength(1);
 
     await session.dispose();
   });

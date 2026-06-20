@@ -185,7 +185,9 @@ export type {
   TransitionRecord,
 } from "./host/index.js";
 export {
+  AskUserUnavailableError,
   buildToolsAllowlist,
+  createAskUserTool,
   createProductionHost,
   FileRecordLog,
   formatRunMemorySeed,

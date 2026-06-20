@@ -47,12 +47,14 @@ import {
   type ExtensionUIContext,
   type ModelRegistry,
   SessionManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
@@ -274,13 +276,15 @@ export class ProductionHost implements Host {
 
     // 6. Build the per-session seam + the handoff/end tools. The
     //    seam's capture buffer is the loop's read surface (§12.1);
-    //    the tools write to it on call. The `rejector` predicate
-    //    is bound to the `SessionState` after construction (the
-    //    state needs the `sessionId`).
+    //    the tools write to it on call. `ask_user` is the
+    //    non-terminating UI tool and does not touch the seam. The
+    //    `rejector` predicate is bound to the `SessionState` after
+    //    construction (the state needs the `sessionId`).
     const seam = new SessionSeam();
     const rejector = createCaptureRejector();
     const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
     const end = createEndTool(seam, rejector.shouldRejectCapture);
+    const askUser = createAskUserTool() as ToolDefinition;
 
     // 7. Spawn the real `AgentSession` via the SDK. `model` is
     //    `undefined` for the system-model path; the SDK uses its
@@ -290,7 +294,7 @@ export class ProductionHost implements Host {
       modelRegistry: this.modelRegistry,
       resourceLoader: loader,
       sessionManager,
-      customTools: [handoff, end],
+      customTools: [handoff, end, askUser],
       tools: [...tools],
     };
     if (model !== undefined) {

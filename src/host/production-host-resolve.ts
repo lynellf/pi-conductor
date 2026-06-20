@@ -126,11 +126,11 @@ export async function loadSystemPrompt(
 // ─── `buildToolsAllowlist` (§8.1) ────────────────────────────────────
 
 /** Build the SDK `tools` allowlist for a role session. Force-injects
- *  `handoff` and `end` (forgetting them here silently disables them
- *  even when they're in `customTools`; sdk-surface.md §1). Dedups
- *  so they appear exactly once even if the role already names them.
- *  Order: declared tools first, then `handoff`, then `end`. */
+ *  `handoff`, `end`, and `ask_user` (forgetting them here silently
+ *  disables them even when they're in `customTools`; sdk-surface.md §1).
+ *  Dedups so they appear exactly once even if the role already names them.
+ *  Order: declared tools first, then `handoff`, `end`, and `ask_user`. */
 export function buildToolsAllowlist(roleTools: readonly string[] | undefined): readonly string[] {
   const declared = roleTools ?? [];
-  return Array.from(new Set([...declared, "handoff", "end"]));
+  return Array.from(new Set([...declared, "handoff", "end", "ask_user"]));
 }

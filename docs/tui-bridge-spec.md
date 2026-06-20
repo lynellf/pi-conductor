@@ -243,8 +243,11 @@ them.
    mid-turn-crash semantics.
 5. **Cost caps unaffected.** The per-session cap fires on `message_end`
    token usage. A paused `ask_user` consumes no tokens, so it cannot
-   trip the cap. Abort flows through the tool's `AbortSignal` → the
-   dialog rejects → session ends → loop sees abort (existing plumbing).
+   trip the cap. Dialog-level cancellation (for example, `Esc`/`Ctrl+C`
+   in the pi TUI prompt) is a normal tool result with no answer/selection;
+   the role decides whether to ask again, hand off, or end. Process-level
+   abort remains host-owned run cancellation, not an `ask_user` machine
+   event.
 
 ### C — Layering unchanged
 
@@ -273,8 +276,8 @@ them.
   `extensions/**/*.ts` `ctx.newSession(`/`ctx.fork(` rejection and the
   core no-pi-imports scan are unchanged.
 - **Extension integration (stub-driven):** a `/conduct`-shaped handler
-  call with a stub `ctx.ui` threads the UI context end-to-end; an
-  `ask_user` call resolves with the stub's canned answer.
+  call with a stub `ctx.ui` threads the UI context end-to-end. Spawned-role
+  tests cover `ask_user` being force-injected and available to every role.
 - **Real-model smoke (manual, filed in `docs/dev-run-transcripts/`):**
   a run where a role asks the user a question, the user answers, and the
   run reaches a terminal state with the answer in the transcript. This
