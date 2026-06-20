@@ -197,7 +197,21 @@ Exit criteria:
       `docs/dev-run-transcripts/`. _(Template with the acceptance
       criteria + reproduction steps; the eyeball-TUI observed-result
       section is the overseer-owned step.)_
-- [x] Ready for review at the overseer's end-of-loop pass.
+- [ ] **Phase 5.5 follow-up remediation** (Task 10 in the sub-plan):
+      the 2026-06-20 user feedback (`Screenshot 2026-06-20 at
+      11.49.09 AM.png`) surfaces three problems the original Phase 5
+      acceptance didn't catch — the sink still injects a `### ${role}`
+      heading into the body (duplicating the renderer's role label),
+      JSON-shaped tool args/results read as raw text, and the
+      "emission recorded" handoff/end tool result is visible
+      protocol noise. The follow-up is recorded in
+      `docs/tui-bridge-plans/phase-5-renderer-polish.md` under
+      "Phase 5.5 follow-up — TUI content remediation (2026-06-20)";
+      it adds Task 10 (sink drops the `### ${role}` prefix,
+      suppresses all tool events, renderer bolds the role label) and
+      reverses the original open question #4 recommendation. The
+      follow-up is the gate to end-of-loop review.
+- [ ] Ready for review at the overseer's end-of-loop pass.
 
 ## Risks and mitigations
 

@@ -325,3 +325,249 @@ against installed dist, not doc-reading.
   a follow-up.
 - Adding new `customType`s. The two existing ones
   (`conduct.role.text`, `conduct.role.tool`) are sufficient.
+
+## Phase 5.5 follow-up — TUI content remediation (2026-06-20)
+
+> **Status:** Drafted 2026-06-20 from user feedback after the Phase 5
+> manual run. The structural Phase 5 work (role label, color picking,
+> fail-safe) is correct and the unit tests are green. The user-facing
+> complaint is about the *content* the sink emits, not the renderer's
+> structure: the body still carries the sink's `### ${role}` prefix
+> (duplicating the renderer's role label) and the JSON-shaped tool
+> args + "emission recorded" tool results are noise. This follow-up
+> records the feedback, the diagnosis, and the remediation direction.
+> Implementation lands as Task 10 once the doc is acknowledged.
+
+### User feedback (verbatim, 2026-06-20)
+
+> "There shouldn't be any brackets or braces... no JSON.. it's all
+> noise in this format. I should see bolded text not '###' either.
+> If there's supposed to be code that's from the LLM's reasoning, it
+> shall be fenced."
+
+Reference screenshot: `Screenshot 2026-06-20 at 11.49.09 AM.png` in
+the repo root.
+
+### Screenshot evidence
+
+The screenshot shows the current Phase 5 output for a multi-role
+orchestrator/worker handoff cycle. Six blocks, all with the same
+problem shape:
+
+- `orchestrator` (label, yellow) + `### orchestrator` (heading, also
+  yellow) + `handoff: {"target_role":"worker", "reason":"..."}`
+  (body, plain text — no code styling)
+- `orchestrator` (label) + `### orchestrator` (heading) + the
+  handoff **tool result** body
+  (`{"content":[{"type":"text","text":"emission recorded: handoff →
+  worker..."}], ...}`) — model-facing protocol noise
+- `worker` (label, cyan) + `### worker` (heading) + worker handoff
+  tool call body
+- `worker` (label) + `### worker` (heading) + worker handoff tool
+  result body
+- `orchestrator` (label) + `### orchestrator` (heading) + end tool
+  call body
+- `orchestrator` (label) + `### orchestrator` (heading) + end tool
+  result body
+
+Three user-facing problems visible:
+
+1. **Duplicate role label.** The body starts with `### ${role}` (a
+   heading baked into the sink's content), stacked directly under the
+   renderer's role label. Two lines saying "orchestrator" for every
+   emission.
+2. **JSON tool args read as raw text.** The `handoff: {...}` lines
+   have no code fences, so the markdown theme's `codeBlock` styling
+   never applies. The `### role` heading is bold, but the JSON body
+   is plain.
+3. **"emission recorded" tool result is visible.** The handoff/end
+   tool result is the model-facing protocol noise ("emission recorded:
+   handoff → worker. Do not call further tools; the loop will end
+   this session"). It is not human-meaningful.
+
+### Root cause — what Phase 5 fixed vs. didn't
+
+| Aspect | Phase 5 status | Visible in screenshot |
+|---|---|---|
+| Role label rendered as a separate component | ✓ | `orchestrator` / `worker` line above body |
+| Role family color (orchestrator vs worker) | ✓ (`mdHeading` vs `accent`) | `orchestrator` in yellow, `worker` in cyan |
+| Heading bold (via `getMarkdownTheme()`) | ✓ (no `defaultTextStyle.color` override) | `### orchestrator` is bold |
+| Fail-safe renderer | ✓ (try/catch → `undefined` → default box) | n/a (no throws in this run) |
+| **No JSON / brackets in body** | ✗ | Tool call + result lines |
+| **No `### role` in body** | ✗ (sink still injects it) | Every body starts with `### role` |
+| **No protocol-noise tool results** | ✗ (open question #4 was deferred) | `emission recorded: ...` lines |
+| **Role label is bold, not a heading** | ✗ (label is plain `Text`, role color only) | The label says "orchestrator" in yellow but is not bold |
+
+The renderer's structure is correct. The sink is the source of the
+JSON, the `###` prefix, and the protocol-noise tool results. The
+role label is structurally separate but is not bolded — a
+one-line renderer change.
+
+### Remediation plan (Task 10)
+
+Three concrete changes — sink drops the `### ${role}` body prefix
+and suppresses all tool events; renderer bolds the role label. The
+LLM's text reasoning passes through verbatim; any code fences the
+LLM uses (`` ``` ``) are rendered as code blocks by the SDK's
+`getMarkdownTheme()` (already in place from Task 9).
+
+- [ ] **Task 10: Drop the `### ${role}` body prefix; suppress tool
+      events; bold the role label**
+  - Description: Update the sink to drop the `### ${role}` prefix
+    from the body and to suppress all `tool_call` and `tool_result`
+    display events (return without emitting a `CustomMessage` for
+    either). Update the renderer to bold the role label via
+    `theme.fg(labelColor, theme.bold(details.role))`. Remove the
+    `conduct.role.tool` customType from
+    `createConductMessageRenderers()` (the sink no longer emits it;
+    the registration is dead code). The LLM's text reasoning
+    (`event.text` for `text` events) is the body verbatim.
+  - Acceptance:
+    - [ ] The sink emits no `### ${role}` heading in any body. Body
+          is just the LLM's text for `text` events, and nothing for
+          `tool_call` / `tool_result` events (no `CustomMessage`
+          emitted at all).
+    - [ ] The sink suppresses `tool_call` AND `tool_result` events.
+          No `CustomMessage` is emitted for tool activity (calls or
+          results) — neither for the conductor's machine tools
+          (`handoff`, `end`) nor for built-in tools (`bash`,
+          `read`, etc.). Real tool activity remains visible in the
+          per-role session JSONL.
+    - [ ] The renderer's role label is bold (`theme.bold` wraps the
+          role string before `theme.fg`) and colored by role family
+          (orchestrator in `mdHeading`, workers in `accent`,
+          unknown in `muted`).
+    - [ ] A `conduct.role.text` `CustomMessage` whose content
+          contains ` ```js\nconsole.log("hi")\n``` ` renders as a
+          fenced code block in the TUI (verified by the markdown
+          theme's native handling via `getMarkdownTheme()`).
+    - [ ] The LLM's text reasoning is shown verbatim. No JSON, no
+          brackets, no `###` heading injected by the sink.
+    - [ ] Only `conduct.role.text` is registered with
+          `pi.registerMessageRenderer`. The `conduct.role.tool`
+          customType is removed from
+          `createConductMessageRenderers()` (YAGNI; re-add when a
+          non-JSON tool-rendering path is requested).
+    - [ ] No FSM spec, reducer, `SessionSeam`, or model-facing tool
+          result changes. The model still gets the full tool result;
+          only the TUI's *display* of it changes.
+    - [ ] No new SDK imports in `src/core`/`src/manifest`/
+          `src/seam`/`src/cost`/`src/persistence` (grep guard).
+    - [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint
+          && pnpm format:check` green; grep guard green.
+  - Verification:
+    - [ ] Unit test (sink): `tests/extension/tui-bridge.test.ts`
+          asserts the sink calls `sendMessage` only for `text`
+          events, with body = `event.text` (no `###` prefix), and
+          does NOT call `sendMessage` for `tool_call` or
+          `tool_result` events.
+    - [ ] Unit test (renderer): `tests/extension/conduct-message-renderer.test.ts`
+          asserts the role label is wrapped by `theme.bold` (the
+          stub theme's `[bold]` prefix appears in the label text)
+          and the body text matches `event.text` verbatim.
+    - [ ] Unit test (registration): `tests/extension/conduct-registration.test.ts`
+          asserts only `conduct.role.text` is registered with
+          `pi.registerMessageRenderer`; the `conduct.role.tool` key
+          is no longer present.
+    - [ ] Manual: re-run the same scenario as the screenshot
+          (`pi install -l ./` + `/conduct <goal>` with the
+          multi-role manifest used in the 2026-06-20 run), confirm
+          the TUI shows bolded role labels + LLM text only, with
+          no JSON and no `###` headings. Update
+          `docs/dev-run-transcripts/2026-06-20-tui-bridge-renderer-polish.md`
+          with the observed result.
+    - [ ] `pnpm audit` clean (or any new advisory explicitly
+          risk-accepted).
+  - Dependencies: Task 9 (the renderer) is the structural
+    substrate; this task only changes what the sink emits and one
+    line of the renderer (label bolding).
+  - Files likely touched:
+    - `src/extension/display-sink-wiring.ts` (sink: drop prefix +
+      suppress tool events)
+    - `src/extension/conduct-message-renderer.ts` (renderer: bold
+      label; remove `conduct.role.tool` from the factory's record)
+    - `tests/extension/tui-bridge.test.ts` (update sink test for
+      new body shape + tool suppression; add a dedicated
+      tool-suppression test)
+    - `tests/extension/conduct-message-renderer.test.ts` (update
+      body assertions to assert body = `event.text`; assert bold
+      on the role label; remove the now-dead `conduct.role.tool`
+      renderer test)
+    - `tests/extension/conduct-registration.test.ts` (assert only
+      `conduct.role.text` is registered)
+    - `docs/extension-usage.md` (Streaming section: describe the
+      TUI now shows only LLM text + bolded role labels, no JSON)
+    - `docs/dev-run-transcripts/2026-06-20-tui-bridge-renderer-polish.md`
+      (update the acceptance criteria to match the new behavior;
+      the eyeball-TUI observed-result section is the human gate)
+  - Estimated scope: S (one sink file, one renderer line, four
+    test files, two doc files).
+
+### Decisions updated by this follow-up
+
+5. **Open question #4 reversed: suppress all tool events in the
+   TUI.** The plan's open question #4 said "Recommendation: *not*
+   in this phase" for filtering the JSON tool args + "emission
+   recorded" results. The 2026-06-20 user feedback reverses this:
+   the user has now seen the JSON in the TUI and confirmed it is
+   noise. The remediation suppresses all `tool_call` and
+   `tool_result` events (regardless of tool). The LLM's text
+   reasoning is the user-meaningful signal. If a future phase wants
+   non-JSON tool rendering (e.g., `→ handoff to worker: <reason>`),
+   it re-introduces the `conduct.role.tool` customType and a
+   structured renderer.
+
+6. **Bold via `theme.bold`, not markdown `**role**`.** The role
+   label is a separate `Text` component (structural), not part of
+   the body's `Markdown`. The `theme.bold(text)` API produces ANSI
+   bold codes that compose with `theme.fg(color, text)` cleanly.
+   Markdown bold (`**role**`) would require putting the role in
+   the body, which collapses the structural separation the Phase 5
+   renderer established.
+
+7. **`conduct.role.tool` is removed for YAGNI.** The sink never
+   emits it after this fix. The registration and the
+   `conduct.role.tool` key in `createConductMessageRenderers()`'s
+   record are dead. Remove them; re-add if a non-JSON tool
+   rendering path is later requested.
+
+### Open questions answered
+
+- **Open question #4 (JSON content visibility):** ANSWERED. The
+  user has now seen the JSON in the TUI and confirmed it is noise.
+  All tool events are suppressed; the LLM's text reasoning is the
+  signal. Real tool activity (`bash`, `read`, etc.) is still
+  visible in the per-role JSONL; surfacing it in a non-JSON
+  format in the TUI is a future phase if the user wants it.
+- **Open question #1 (background box):** IRRELEVANT after the
+  fix. The sink no longer emits enough content for a background
+  box to matter; the body is just the LLM's text.
+- **Open question #2 (collapse threshold):** UNCHANGED. Always-full
+  in v1; revisit if scrolling is too much.
+- **Open question #3 (tool-call body shape):** RESOLVED by
+  suppression. The sink no longer emits tool bodies; the question
+  of "markdown string vs structured details" is moot.
+
+### Risks and mitigations (Task 10 specific)
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Suppressing all tool events hides useful bash/read activity | Med | The per-role session JSONL still records all tool activity; the TUI is one of two views. If the user wants non-JSON tool rendering in the TUI, that's a follow-up. |
+| `theme.bold` not composed with `theme.fg` correctly in some themes | Low | The stub theme composes; the SDK's `Theme` class wraps text in ANSI codes that nest cleanly. If a custom theme breaks the nesting, the visual is degraded but not broken. |
+| LLM text with no body looks like an empty role label | Low | The role label is bold; an empty body is a single bold line, which is visually distinct from a heading. Acceptable; in practice the LLM emits at least one text event per role. |
+| Renderer test for `conduct.role.tool` is removed but a future task re-adds the customType | Low | The factory's record shape is the contract; re-adding is a one-line change. The `registerMessageRenderer` test will fail loudly if a key is missing from the factory. |
+
+### Out of scope (Task 10 explicit)
+
+- Per-role custom palettes (one color per role) — the two-family
+  scheme (orchestrator vs worker) is sufficient.
+- Non-JSON tool rendering (e.g., `→ handoff to worker: <reason>`,
+  `→ bash: ls`) — out of scope for this follow-up. The current
+  fix is "show LLM text only"; if the user wants tool activity in
+  the TUI, that's a separate phase with its own plan and its own
+  acceptance criteria.
+- Any change to the FSM spec, the reducer, or
+  `src/core`/`src/manifest`/`src/seam`/`src/cost`/`src/persistence`
+  (spec Invariant C).
+- Model-facing tool result changes (the model still gets the
+  full tool result; only the TUI's display changes).
