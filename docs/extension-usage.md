@@ -86,6 +86,74 @@ When `/conduct` reaches a terminal state, the handler notifies
 to `ctx.ui.notify`. On failure, the notification is the typed error
 message (`ModelNotFoundError`, `SystemPromptNotFoundError`, …).
 
+## Handoff visibility
+
+During a `/conduct` (or `/conduct:resume`) run, role transitions
+(handoffs) are surfaced to the user in three places. The data
+comes from the run's `transitionHistory` (the `runStats()`
+projection of the persisted `transition_accepted` records); the
+pure formatters live in `src/extension/handoff-view.ts`.
+
+### Live notify
+
+Each accepted handoff emits an info notification as it is
+persisted to the run log:
+
+```text
+conduct: orchestrator → worker
+conduct: worker → orchestrator
+conduct: orchestrator → done
+```
+
+The line uses the `from` / `to` role names from the record. The
+terminal `end` transition naturally renders as `→ done` (the
+record's `to` is `"done"`). The live path reads the narrower
+`transitionHistory` projection; `suggests_next` and
+`payload_summary.reason` are **not** rendered in v1. The poller
+diffs `transitionHistory.length` on each tick and emits one
+callback per tick when new entries appear — no double-notify
+across ticks.
+
+### Status counter
+
+The status line shows the handoff count:
+
+```text
+conduct: worker · running · handoffs=3 · $0.045
+```
+
+`handoffs=<N>` counts `event === "handoff"` entries only; the
+terminal `end` is reflected via `exit_reason` and `state`, not
+this counter. The counter increments as the run progresses; the
+format is owned by `formatConductStatus` in
+`src/extension/status.ts`.
+
+### `/conduct:list` trace
+
+`/conduct:list` appends a transition trace to each per-run line:
+
+```text
+abc123 · done · done · $0.045 · orchestrator → worker → orchestrator → done
+```
+
+The trace is the ordered role sequence in append order
+(`from[0] → to[0] → to[1] → … → to[N-1]`). It is truncated to
+6 visible hops (default) with a trailing `…`; the full timeline
+is a future viewer. An empty history (a run with no
+transitions yet) renders an empty trace, so the per-run line
+stays clean.
+
+### Resume behavior
+
+`/conduct:resume` reconstructs the run from the latest snapshot
+and re-enters the loop at the current role. The poller seeds
+its `lastSeenLength` tracker from the FIRST `runStats()` read,
+so transitions that happened before the resume are **not**
+re-notified — only transitions that occur after the resume
+appears as notifies. The status counter and `/conduct:list`
+trace reflect the full history (including pre-resume
+transitions).
+
 ## Streaming
 
 During `/conduct` and `/conduct:resume`, role-session output is also
