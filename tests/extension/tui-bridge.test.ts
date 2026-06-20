@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { setCurrentOrchestratorRole } from "../../src/extension/current-orchestrator.js";
 import { createConductDisplaySink } from "../../src/extension/display-sink-wiring.js";
 
 const bridgeMocks = {
@@ -167,7 +167,23 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
   });
 });
 
-describe("extension shell — Phase 2 display sink wiring", () => {
+describe("extension shell — Phase 2 + 5 display sink wiring", () => {
+  // Phase 5 derives `is_orchestrator` from the active run's
+  // orchestrator role (a module-level slot in
+  // `current-orchestrator.ts`). The first describe block above
+  // uses `vi.resetModules()` in its beforeEach; the second
+  // describe's tests run AFTER the first describe's afterEach
+  // resets the module registry. Static imports at the top of
+  // this file (resolved at file load, before any reset) are
+  // the only way to ensure `setCurrentOrchestratorRole` and
+  // `createConductDisplaySink` see the same module instance.
+  beforeEach(() => {
+    setCurrentOrchestratorRole(null);
+  });
+  afterEach(() => {
+    setCurrentOrchestratorRole(null);
+  });
+
   it("wraps display events in custom messages with role-prefixed markdown", () => {
     const sendMessage = vi.fn();
     const sink = createConductDisplaySink(sendMessage);
@@ -180,13 +196,39 @@ describe("extension shell — Phase 2 display sink wiring", () => {
       customType: "conduct.role.text",
       content: "### worker\n\nhello world",
       display: true,
-      details: { role: "worker", kind: "text" },
+      details: { role: "worker", kind: "text", is_orchestrator: false },
     });
     expect(sendMessage).toHaveBeenNthCalledWith(2, {
       customType: "conduct.role.tool",
       content: '### worker\n\nbash: {"command":"ls"}',
       display: true,
-      details: { role: "worker", kind: "tool_call" },
+      // The sink normalizes `DisplayEventKind` (`"tool_call"` /
+      // `"tool_result"`) to the binary `ConductMessageDetails.kind`
+      // (`"tool"`) so the renderer doesn't have to care about the
+      // tool-call vs tool-result distinction.
+      details: { role: "worker", kind: "tool", is_orchestrator: false },
     });
+  });
+
+  it("stamps is_orchestrator=true when the active run's orchestrator emits", () => {
+    setCurrentOrchestratorRole("orchestrator");
+
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+    sink({ role: "orchestrator", kind: "text", text: "I am the orchestrator" });
+    sink({ role: "worker", kind: "text", text: "I am the worker" });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        details: expect.objectContaining({ role: "orchestrator", is_orchestrator: true }),
+      }),
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        details: expect.objectContaining({ role: "worker", is_orchestrator: false }),
+      }),
+    );
   });
 });
