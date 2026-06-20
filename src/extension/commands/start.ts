@@ -42,6 +42,7 @@ import {
   startRun,
 } from "../../index.js";
 import { getActiveRun, setActiveRun } from "../active-run.js";
+import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
 import { resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
 
@@ -181,6 +182,13 @@ export async function handleStart(
   }
 
   setActiveRun(handle);
+  // Stash the run's orchestrator role for the display
+  // sink (Phase 5). The sink stamps `is_orchestrator`
+  // on every emitted `CustomMessage` against this
+  // role; the conductor-owned message renderer reads
+  // it for label color. Cleared in the `finally` block
+  // below, mirroring the `setActiveRun(null)` teardown.
+  setCurrentOrchestratorRole(handle.def.orchestrator);
 
   // 4. Start the status poller. It updates the footer
   // line on each tick; cleared on terminal (in the
@@ -204,6 +212,7 @@ export async function handleStart(
     // be started by a subsequent /conduct command.
     if (getActiveRun() === handle) {
       setActiveRun(null);
+      setCurrentOrchestratorRole(null);
     }
   }
 }

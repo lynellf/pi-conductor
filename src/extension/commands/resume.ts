@@ -36,6 +36,7 @@ import {
   resumeRun,
 } from "../../index.js";
 import { getActiveRun, setActiveRun } from "../active-run.js";
+import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
 import { resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
 import { ensureRunBaseDir, type HandleDeps } from "./start.js";
@@ -102,6 +103,9 @@ export async function handleResume(
   }
 
   setActiveRun(handle);
+  // Stash the run's orchestrator role for the display
+  // sink (Phase 5). Mirrors the `/conduct` handler.
+  setCurrentOrchestratorRole(handle.def.orchestrator);
   const stopPoller = startStatusPoller(handle, (text) => {
     ctx.ui.setStatus("conduct", text);
   });
@@ -119,6 +123,7 @@ export async function handleResume(
     stopPoller();
     if (getActiveRun() === handle) {
       setActiveRun(null);
+      setCurrentOrchestratorRole(null);
     }
   }
 }

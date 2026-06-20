@@ -195,4 +195,43 @@ roles:
     const ids = listRuns(resolveRunBaseDir(workdir));
     expect(ids).toHaveLength(1);
   });
+
+  it("sets and clears the orchestrator-role slot across the run lifecycle", async () => {
+    // Phase 5: the display sink in
+    // `src/extension/display-sink-wiring.ts` reads
+    // `getCurrentOrchestratorRole()` at emission time
+    // to stamp `is_orchestrator` on every emitted
+    // `CustomMessage`. The `/conduct` handler is
+    // responsible for setting the slot when the run
+    // starts and clearing it on terminal. This test
+    // asserts the lifecycle.
+    const { getCurrentOrchestratorRole } = await import(
+      "../../src/extension/current-orchestrator.js"
+    );
+    const { setCurrentOrchestratorRole } = await import(
+      "../../src/extension/current-orchestrator.js"
+    );
+    setCurrentOrchestratorRole(null);
+
+    const ext = await loadExtension("<test>", workdir);
+    const conduct = ext.commands.get("conduct");
+    expect(conduct).toBeDefined();
+
+    // Before the run: null.
+    expect(getCurrentOrchestratorRole()).toBeNull();
+
+    await conduct?.handler(
+      "do the thing",
+      makeCtx({
+        cwd: workdir,
+        modelRegistry,
+        manifestPath,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+        setStatus: (key, text) => statusUpdates.push({ key, text }),
+      }),
+    );
+
+    // After the run: null (cleared on terminal).
+    expect(getCurrentOrchestratorRole()).toBeNull();
+  });
 });

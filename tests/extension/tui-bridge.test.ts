@@ -67,6 +67,10 @@ function makeCompletionHandle(runId: string) {
       finalCheckpoint: { current_role: "done" },
     }),
     runId,
+    // Phase 5: the handler reads `handle.def.orchestrator`
+    // to set the current-orchestrator slot for the display
+    // sink's `is_orchestrator` derivation.
+    def: { orchestrator: "orchestrator" },
   };
 }
 
