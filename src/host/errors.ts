@@ -79,24 +79,37 @@ export class MalformedModelEntryError extends Error {
 
 /**
  * Thrown by `ProductionHost.spawnRole` when `role.system_prompt` is
- * declared but the path does not resolve to a file on disk under
- * `cwd` (Phase 7A.1, Task 7A.2, spec §8.1).
+ * declared but the path does not resolve to a file on disk
+ * (Phase 7A.1, Task 7A.2, spec §8.1; Phase 7D: resolution root
+ * depends on manifest version).
  *
  * A role with no `system_prompt` field is valid (§8.1 allows the
  * default); this error fires only when the path IS declared AND
  * missing — the explicit "you said it would be here, it isn't"
  * failure mode, not the implicit default.
+ *
+ * **Phase 7D change:** the error now carries `resolutionRoot`,
+ * the actual directory the loader tried to resolve against.
+ * For v1 manifests that is `cwd`; for v2 manifests that is the
+ * manifest's directory. The previous message ("resolved against
+ * cwd") was correct only for v1 — the new message names the
+ * actual root so the user can diagnose "wrong manifest dir" /
+ * "wrong cwd" without reading the code.
  */
 export class SystemPromptNotFoundError extends Error {
   readonly role: string;
   readonly path: string;
-  constructor(role: string, path: string) {
+  /** Directory the loader tried to resolve against (cwd for v1, manifest dir for v2). */
+  readonly resolutionRoot: string | null;
+  constructor(role: string, path: string, resolutionRoot: string | null = null) {
+    const rootNote = resolutionRoot !== null ? resolutionRoot : "no resolution base";
     super(
-      `SystemPromptNotFoundError: role '${role}' declared system_prompt path '${path}' does not exist on disk (resolved against cwd)`,
+      `SystemPromptNotFoundError: role '${role}' declared system_prompt path '${path}' does not exist on disk (resolved against '${rootNote}')`,
     );
     this.name = "SystemPromptNotFoundError";
     this.role = role;
     this.path = path;
+    this.resolutionRoot = resolutionRoot;
   }
 }
 

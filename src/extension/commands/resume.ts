@@ -25,6 +25,8 @@
  * `resumeRun` call.
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -38,7 +40,7 @@ import {
 import { getActiveRun, setActiveRun } from "../active-run.js";
 import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
 import { formatHandoffNotify } from "../handoff-view.js";
-import { resolveManifestPath } from "../manifest.js";
+import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
 import { ensureRunBaseDir, type HandleDeps } from "./start.js";
 
@@ -59,8 +61,15 @@ export async function handleResume(
     ctx.cwd,
   );
   if (manifestPath === null) {
+    // Mirror the start handler's no-manifest notification —
+    // see start.ts for the rationale on the multi-source
+    // diagnostic. The `homePath` is the user's actual
+    // `os.homedir()` so the message is concrete.
+    const homePath = join(homedir(), HOME_MANIFEST_PATH);
     ctx.ui.notify(
-      `No conductor manifest found. Tried --conduct-manifest="${flagValue ?? ""}" and <cwd>/.pi/conductor.yaml. Write a manifest or pass --conduct-manifest <path>.`,
+      `No conductor manifest found. Tried --conduct-manifest="${
+        flagValue ?? ""
+      }", <cwd>/${DEFAULT_MANIFEST_PATH}, and ${homePath}. Write a manifest, pass --conduct-manifest <path>, or set up ${homePath} for cross-project sharing.`,
       "warning",
     );
     return;

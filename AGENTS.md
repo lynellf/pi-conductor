@@ -37,6 +37,7 @@ behavior is `docs/orchestrator-fsm-spec.md`; sequencing is in
 - **Phase 7A (production `Host`):** complete, human-reviewed, 380 tests green. The 7A.5 real-model smoke was structurally deferred until Phase 7C landed the installable launch surface (relocated to Phase 7C Task 7C.2).
 - **Phase 7B (extension shell):** complete, human-reviewed, 412 tests green. `/conduct`, `/conduct:resume`, `/conduct:list`, `/conduct:abort`, and `--conduct-manifest` are registered.
 - **Phase 7C (packaging + CLI + docs):** complete; final review at loop close. `pi install ./` works, `bin/conduct` ships, README + `AGENTS.md` + main FSM plan + `docs/extension-usage.md` reflect the extension framing. 432 tests green; typecheck/build/lint/format:check clean.
+- **Phase 7D (HOME-scoped manifest + prompt discovery):** complete; pending end-of-loop review. 514 tests green; typecheck/build/lint/format:check clean. Manifest resolution chain (flag → cwd → HOME) and v1/v2 back-compat prompt resolution implemented per the acknowledged spec delta (`docs/home-scoped-discovery-spec.md`). No core modules touched; grep guard green.
 
 See `docs/extension-pivot-plan.md` for the pivot rationale (delivery-shape
 change only; FSM spec §12 invariants untouched) and `docs/extension-usage.md`

@@ -29,6 +29,7 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -44,7 +45,7 @@ import {
 import { getActiveRun, setActiveRun } from "../active-run.js";
 import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
 import { formatHandoffNotify } from "../handoff-view.js";
-import { resolveManifestPath } from "../manifest.js";
+import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
 
 /**
@@ -138,8 +139,18 @@ export async function handleStart(
     ctx.cwd,
   );
   if (manifestPath === null) {
+    // The notification names every source the resolver tried
+    // (flag → cwd → HOME) so the user can diagnose "is my
+    // HOME fallback in the way?" or "is my cwd-local manifest
+    // in the right place?" without re-reading the resolution
+    // chain. The HOME path is the user's actual `os.homedir()`
+    // (mirrors what `resolveManifestPath` uses internally) so
+    // the diagnostic is concrete, not abstract.
+    const homePath = join(homedir(), HOME_MANIFEST_PATH);
     ctx.ui.notify(
-      `No conductor manifest found. Tried --conduct-manifest="${flagValue ?? ""}" and <cwd>/.pi/conductor.yaml. Write a manifest or pass --conduct-manifest <path>.`,
+      `No conductor manifest found. Tried --conduct-manifest="${
+        flagValue ?? ""
+      }", <cwd>/${DEFAULT_MANIFEST_PATH}, and ${homePath}. Write a manifest, pass --conduct-manifest <path>, or set up ${homePath} for cross-project sharing.`,
       "warning",
     );
     return;

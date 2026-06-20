@@ -21,7 +21,7 @@ roles:
     max_visits: 10
     models: [opencode-go:glm-5.2]
     system_prompt: .pi/roles/planner.md
-    tools: [read, edit, write, bash, handoff, end]
+    tools: [read, edit, write, bash, handoff, end, ask_user]
 
   - name: implementer
     max_visits: 10

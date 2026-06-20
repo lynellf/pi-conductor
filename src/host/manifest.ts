@@ -16,12 +16,24 @@
  * Soft warnings are returned alongside the definition so callers can
  * log them; they never block derivation.
  *
+ * **Phase 7D additions:** `LoadedManifest` now carries two extra
+ * fields so downstream code (the §8.1 system-prompt resolver in
+ * `production-host-resolve.ts`) can locate the manifest's directory
+ * (for v2 manifest-base-relative prompt resolution) and read the
+ * `version:` integer (for the v1/v2 back-compat branch) without
+ * re-deriving either. `manifestDir` is the directory containing the
+ * resolved manifest file (`dirname(path)` for the disk path; `null`
+ * when loaded via `loadManifestFromString` without an explicit
+ * `manifestDir` argument). Both fields are additive; existing
+ * callers ignore them.
+ *
  * Host-owned I/O. The pure core (Phase 1) ships the parsers + validators
  * + derivation; this module adds the disk read and the typed-error
  * wrapper. No pi imports.
  */
 
 import { readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 
 import type { MachineDefinition } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
@@ -64,16 +76,34 @@ export class HostManifestError extends Error {
  * needs for per-role cost caps and model-fallback resolution — Task
  * 17 / Task 18). The reducer never sees it (`def` is the reducer's
  * view).
+ *
+ * `manifestDir` (Phase 7D) is the directory containing the resolved
+ * manifest file — `dirname(path)` for the disk path; `null` when
+ * loaded via `loadManifestFromString` without an explicit
+ * `manifestDir` argument (the test/programmatic path). Used by
+ * `loadSystemPrompt` for v2 manifest-base-relative prompt resolution
+ * (§8.1).
+ *
+ * `manifestVersion` (Phase 7D) is the parsed `version:` integer,
+ * surfaced here for convenience so `loadSystemPrompt` does not have
+ * to re-read `loadedManifest.manifest.version`. Used by
+ * `loadSystemPrompt` for the v1/v2 back-compat branch (§8.1).
  */
 export interface LoadedManifest {
   readonly def: MachineDefinition;
   readonly manifest: import("../manifest/types.js").Manifest;
   readonly warnings: readonly ManifestWarning[];
+  readonly manifestDir: string | null;
+  readonly manifestVersion: number;
 }
 
 /**
  * Load `.pi/conductor.yaml` from `path`, validate it against §13, and
  * derive the pinned `MachineDefinition`.
+ *
+ * Phase 7D: also sets `manifestDir = dirname(path)` on the returned
+ * `LoadedManifest` so the §8.1 system-prompt resolver can locate
+ * manifest-base-relative prompt paths for v2 manifests.
  *
  * @throws {HostManifestError} on hard validation errors (errors carry codes).
  * @throws {ManifestParseError} on malformed YAML or shape violations
@@ -81,7 +111,7 @@ export interface LoadedManifest {
  */
 export async function loadManifest(path: string): Promise<LoadedManifest> {
   const raw = await readFile(path, "utf8");
-  return loadManifestFromString(raw);
+  return loadManifestFromString(raw, dirname(path));
 }
 
 /**
@@ -89,10 +119,20 @@ export async function loadManifest(path: string): Promise<LoadedManifest> {
  * and for callers (a future TUI viewer, a test harness) that already
  * have the YAML in hand.
  *
+ * Phase 7D: accepts an optional `manifestDir` (the directory
+ * containing the manifest file, when known). When omitted, defaults
+ * to `null` — the test/programmatic path. v1 manifests ignore
+ * `manifestDir` (cwd-relative prompt resolution); v2 manifests
+ * loaded without `manifestDir` will fail to resolve relative
+ * `system_prompt` paths (a deliberate, test-only error path).
+ *
  * @throws {HostManifestError} on hard validation errors.
  * @throws {ManifestParseError} on malformed YAML or shape violations.
  */
-export function loadManifestFromString(rawYaml: string): LoadedManifest {
+export function loadManifestFromString(
+  rawYaml: string,
+  manifestDir: string | null = null,
+): LoadedManifest {
   // Phase 1 Task 3 — throws ManifestParseError on shape violations.
   // Pass through unchanged: parse errors are a different failure mode
   // (malformed input) than validation errors (semantically broken).
@@ -125,5 +165,7 @@ export function loadManifestFromString(rawYaml: string): LoadedManifest {
     def,
     manifest,
     warnings: Object.freeze([...report.warnings]),
+    manifestDir,
+    manifestVersion: manifest.version,
   }) as LoadedManifest;
 }

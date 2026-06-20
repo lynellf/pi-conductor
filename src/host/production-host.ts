@@ -243,7 +243,22 @@ export class ProductionHost implements Host {
     //    null when the role has no `system_prompt` field; the
     //    `systemPromptOverride` then leaves the SDK default in
     //    place.
-    const rolePrompt = await loadSystemPrompt(role, roleConfig?.system_prompt, this.cwd);
+    //
+    //    Phase 7D: thread the manifest's directory + version
+    //    through so the §8.1 prompt resolver can pick the right
+    //    resolution root. v1 (existing manifests) keeps
+    //    cwd-relative resolution; v2 (HOME-sourced and
+    //    self-contained manifests) resolves against
+    //    `manifestDir`. Both fields ride on `LoadedManifest` —
+    //    added in Task 7D.2, populated by `loadManifest` /
+    //    `loadManifestFromString`.
+    const rolePrompt = await loadSystemPrompt(
+      role,
+      roleConfig?.system_prompt,
+      this.cwd,
+      this.loadedManifest.manifestDir,
+      this.loadedManifest.manifestVersion,
+    );
 
     // 3. Build the `DefaultResourceLoader` with the role's prompt
     //    wired via `systemPromptOverride`. The override is a closure

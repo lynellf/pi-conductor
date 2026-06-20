@@ -69,8 +69,42 @@ roles:
     tools: [read, edit, handoff, end]
 `;
 
+/**
+ * v2 manifest with a manifest-base-relative prompt path. The
+ * path is `roles/implementer.md` (no leading `.pi/`) — the
+ * convention documented in the spec delta for v2. The test
+ * fixture (Task 7D.4) writes the prompt file under the
+ * manifest's directory, not under `<cwd>/.pi/roles/`, and
+ * asserts the v2 resolver finds it via `loadedManifest.manifestDir`.
+ */
+const STUB_V2_MANIFEST = `
+version: 2
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    system_prompt: roles/orchestrator.md
+    tools: [read, handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [stub:stub-model]
+    system_prompt: roles/implementer.md
+    tools: [read, edit, handoff, end]
+`;
+
 function makeLoadedManifest(): LoadedManifest {
   return loadManifestFromString(STUB_MANIFEST);
+}
+
+/**
+ * Build a v2 `LoadedManifest` rooted at `manifestDir` (the
+ * directory the test wrote the prompt files under). The
+ * production host's `loadedManifest.manifestDir` is the load-time
+ * `dirname(path)`; for this test the in-memory YAML has no file
+ * path, so we pass the manifest dir explicitly via
+ * `loadManifestFromString(yaml, manifestDir)`.
+ */
+function makeLoadedV2Manifest(manifestDir: string): LoadedManifest {
+  return loadManifestFromString(STUB_V2_MANIFEST, manifestDir);
 }
 
 function makeModelRegistryWithStub(): ModelRegistry {
@@ -105,13 +139,13 @@ function makeModelRegistryWithStub(): ModelRegistry {
 
 function makeHost(
   cwd: string,
-  overrides: { sessionDir?: string; agentDir?: string } = {},
+  overrides: { sessionDir?: string; agentDir?: string; loadedManifest?: LoadedManifest } = {},
 ): ProductionHost {
   return new ProductionHost({
     modelRegistry: makeModelRegistryWithStub(),
     cwd,
     log: new InMemoryRecordLog(),
-    loadedManifest: makeLoadedManifest(),
+    loadedManifest: overrides.loadedManifest ?? makeLoadedManifest(),
     runId: "test-run-1",
     ...(overrides.sessionDir !== undefined && { sessionDir: overrides.sessionDir }),
     ...(overrides.agentDir !== undefined && { agentDir: overrides.agentDir }),
@@ -270,6 +304,67 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
     const host = makeHost(workdir);
     const session = await host.spawnRole("implementer", { modelIndex: 0 });
     expect(session.sessionFile).toBeTruthy();
+    await session.dispose();
+  });
+});
+
+// ─── Phase 7D Task 7D.4: v2 manifest-base-relative prompt ─────────────
+// The v1 fixture above exercises the back-compat branch (v1 +
+// cwd-relative prompt). This block exercises the new v2 branch
+// (v2 + manifestDir-relative prompt) end-to-end through
+// `ProductionHost.spawnRole`.
+
+describe("ProductionHost.spawnRole — v2 manifest-base-relative prompt (Task 7D.4)", () => {
+  let workdir: string;
+  let manifestDir: string;
+  let rolePromptMarker: string;
+
+  beforeEach(async () => {
+    workdir = await mkdtemp(join(tmpdir(), "pi-conductor-prod-host-spawn-v2-cwd-"));
+    // The v2 manifest lives in its own directory (mimics a
+    // HOME-sourced manifest under `~/.pi/`). The fixture writes
+    // prompts here, not under `<workdir>/.pi/roles/`.
+    manifestDir = await mkdtemp(join(tmpdir(), "pi-conductor-prod-host-spawn-v2-manifest-"));
+    await mkdir(join(manifestDir, "roles"), { recursive: true });
+    rolePromptMarker = "V2_PROMPT_MARKER_7D4";
+    await writeFile(
+      join(manifestDir, "roles", "implementer.md"),
+      `You are the implementer (v2). ${rolePromptMarker}\nFollow the plan.`,
+      "utf8",
+    );
+    // Sanity: the same path under `workdir` (where v1 would have
+    // looked) does NOT contain the marker. This is what makes
+    // the v2 test meaningful: if the resolver fell back to cwd
+    // by mistake, the assertion would fail.
+    await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+    await writeFile(join(workdir, ".pi/roles/implementer.md"), "WRONG v1 content", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(workdir, { recursive: true, force: true });
+    await rm(manifestDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it("v2: loads the system prompt from `manifestDir`, not from `cwd`", async () => {
+    // Build a v2 LoadedManifest rooted at `manifestDir`. The
+    // v2 manifest declares `system_prompt: roles/implementer.md`
+    // (no leading `.pi/`), which the v1 resolver would have
+    // interpreted as a cwd-relative path under `<cwd>/roles/...`.
+    // Under v2, `loadSystemPrompt` resolves against
+    // `loadedManifest.manifestDir` and finds the file in
+    // `<manifestDir>/roles/implementer.md`.
+    const v2Manifest = makeLoadedV2Manifest(manifestDir);
+    const host = makeHost(workdir, { loadedManifest: v2Manifest });
+
+    const session = await host.spawnRole("implementer", { modelIndex: 0 });
+    // The marker is in `<manifestDir>/roles/implementer.md`,
+    // not in `<workdir>/.pi/roles/implementer.md`. If the
+    // resolver accidentally fell back to cwd, the prompt would
+    // be "WRONG v1 content" (no marker).
+    expect(asFull(session).systemPrompt).toContain(rolePromptMarker);
+    expect(asFull(session).systemPrompt).not.toContain("WRONG v1 content");
+
     await session.dispose();
   });
 });

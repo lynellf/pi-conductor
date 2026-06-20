@@ -45,7 +45,7 @@ role sessions are spawned by the production `Host` via the standalone
 
 | Flag | Effect |
 |---|---|
-| `--conduct-manifest <path>` | Override the default manifest path. Default: `<cwd>/.pi/conductor.yaml`. |
+| `--conduct-manifest <path>` | Override the default manifest path. Default: the resolution chain below. |
 
 The flag is read at command time (not at extension-factory time), so a
 `--flag` set on the pi CLI line flows into the handler invocation:
@@ -58,14 +58,64 @@ pi --conduct-manifest ./experiments/quick-fix.yaml
 
 ## Manifest path resolution
 
-The manifest path is resolved by `src/extension/manifest.ts`:
+The manifest path is resolved by `src/extension/manifest.ts` in this
+order (spec §8, Phase 7D):
 
 1. If `--conduct-manifest <path>` is set on the pi CLI line, that path
-   is used (resolved against `ctx.cwd`).
-2. Otherwise, `<ctx.cwd>/.pi/conductor.yaml` is used.
-3. If neither resolves to a file on disk, the handler notifies a
-   warning with both tried paths and returns without touching the
-   active-run tracker. **No run is started.**
+   is used (resolved against `ctx.cwd`). **Set-but-missing is a hard
+   failure** — the chain does not fall through to cwd or HOME. Passing
+   a bad flag is a user error, not an invitation to guess.
+2. Otherwise, `<ctx.cwd>/.pi/conductor.yaml` is used (the project-local
+   default). The project is the authority for its own workflow; a
+   project-local manifest overrides a shared global one.
+3. Otherwise, `<os.homedir()>/.pi/conductor.yaml` is used (the
+   user-global fallback). This lets a user keep one manifest + role-prompt
+   set shared across repos that do not ship their own
+   `.pi/conductor.yaml`.
+4. If none yields a file, the handler notifies a warning listing all
+   three tried paths and returns without touching the active-run
+   tracker. **No run is started.**
+
+### Versioned prompt resolution (spec §8.1, Phase 7D)
+
+The manifest's `version:` field selects how `system_prompt` paths
+inside the manifest are resolved:
+
+- `version: 1` (or omitted in legacy manifests) — relative
+  `system_prompt` paths resolve against `ctx.cwd`. Existing manifests
+  with `system_prompt: .pi/roles/foo.md` keep working unchanged.
+- `version: 2` — relative `system_prompt` paths resolve against the
+  directory containing the manifest file (`manifestDir`). This makes
+  a manifest self-contained: the manifest and its `roles/*.md`
+  prompts move together, whether the manifest lives under
+  `<cwd>/.pi/` or `~/.pi/`. The path convention is
+  `roles/foo.md` (no leading `.pi/`), since the prompts live next
+  to the manifest.
+
+To migrate an existing manifest to v2 (typically because you want to
+share it via the HOME fallback):
+
+```yaml
+# Before (v1, cwd-relative)
+version: 1
+roles:
+  - name: implementer
+    system_prompt: .pi/roles/implementer.md
+```
+
+```yaml
+# After (v2, manifest-base-relative)
+version: 2
+roles:
+  - name: implementer
+    system_prompt: roles/implementer.md
+```
+
+The physical location of `implementer.md` does not change when you
+bump the version (both paths resolve to the same file when the
+manifest is at `<cwd>/.pi/conductor.yaml`); the change is what the
+resolver does when the manifest is somewhere else (e.g. under
+`~/.pi/conductor.yaml`).
 
 ## Status surface
 

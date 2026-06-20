@@ -104,4 +104,31 @@ describe("extension shell — Task 7B.2: /conduct start handler (no-run branches
     const usageWarnings = notifyCalls.filter((n) => n.type === "warning" && /Usage/i.test(n.msg));
     expect(usageWarnings).toHaveLength(1);
   });
+
+  it("notifies with the HOME fallback path in the no-manifest message (Phase 7D Task 7D.5)", async () => {
+    // Phase 7D: the no-manifest notification must list every
+    // source the resolver tried, including the HOME fallback
+    // (~/.pi/conductor.yaml). The user reading the message can
+    // see at a glance that the resolver checked cwd AND HOME.
+    const ext = await loadExtension("<test>", cwd);
+    const conduct = ext.commands.get("conduct");
+    expect(conduct).toBeDefined();
+    await conduct?.handler(
+      "do the thing",
+      makeCtx({
+        cwd,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+      }),
+    );
+    const manifestWarnings = notifyCalls.filter(
+      (n) => n.type === "warning" && /manifest/i.test(n.msg),
+    );
+    expect(manifestWarnings).toHaveLength(1);
+    // The notification names the HOME path so the user can
+    // inspect their actual ~/.pi/ directory.
+    expect(manifestWarnings[0]?.msg).toContain(".pi/conductor.yaml");
+    // And names the cwd default so the user can inspect their
+    // project-local directory.
+    expect(manifestWarnings[0]?.msg).toContain("<cwd>/");
+  });
 });

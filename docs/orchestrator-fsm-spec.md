@@ -196,13 +196,36 @@ Roles are declared in a manifest the host driver reads. The machine core never i
 this; the driver uses it to spawn sessions and derives a `MachineDefinition` (§12) from
 the pinned manifest version — the only manifest surface the reducer ever sees.
 
-**Manifest source (resolved):** a single `.pi/conductor.yaml` file. YAML (not JSON) so
-the role-config blocks below are copy-pasteable, and a single file so the §10 manifest
-version is one value pinned atomically at run-start rather than N per-role files
-that must agree. Per-role system prompts are referenced by path (`system_prompt:`) and
-loaded by the host; they are *not* the manifest's source of truth. (Role Markdown
-frontmatter was considered and rejected for v1: versioning frontmatter across N files
-reintroduces the cross-file agreement problem §10 exists to prevent.)
+**Manifest source (resolved):** a single `conductor.yaml` file, resolved by the host
+in the following order. Each step is a single fixed-path existence check — there is
+**no parent-walk, no globbing, no fuzzy search**.
+
+1. `--conduct-manifest <path>` flag value (string). Relative paths resolve against
+   `cwd`; absolute paths are used as-is. **If the flag is set, the flag path is
+   authoritative**: a missing file at the flag path is a hard "no manifest" (returns
+   `null`) and the chain does **not** fall through to steps 2–3. The user who passes
+   `--conduct-manifest` expects that path to be used, not a silent substitute.
+2. `<cwd>/.pi/conductor.yaml` — the project-local default.
+3. `<home>/.pi/conductor.yaml` — the user-global fallback, where `<home>` is
+   `os.homedir()`. This lets a user keep one manifest + role-prompt set shared
+   across repos that do not ship their own `.pi/conductor.yaml`.
+
+The first step whose file exists wins. If none exists, resolution returns `null` and
+the command handler notifies a warning and starts no run.
+
+**Precedence rationale.** The project is the authority for its own workflow; a
+project-local manifest overrides a shared global one. The global fallback only fills
+the gap when a repo has no conductor manifest of its own. The flag is the explicit
+override and never falls through — passing a bad flag is a user error, not an
+invitation to guess.
+
+YAML (not JSON) so the role-config blocks below are copy-pasteable, and a single
+file so the §10 manifest version is one value pinned atomically at run-start rather
+than N per-role files that must agree. Per-role system prompts are referenced by
+path (`system_prompt:`) and loaded by the host; they are *not* the manifest's
+source of truth. (Role Markdown frontmatter was considered and rejected for v1:
+versioning frontmatter across N files reintroduces the cross-file agreement problem
+§10 exists to prevent.)
 
 ```yaml
 roles:
@@ -242,6 +265,32 @@ the `runConfig()` host function (§11.8) for the current run without editing the
 manifest; the manifest value remains the default.
 
 ### 8.1 Model assignment
+
+**System-prompt path resolution.** A role's `system_prompt` path is resolved against
+the **directory containing the resolved manifest file** (the "manifest base"), not
+against `cwd`. Absolute paths are used as-is. This makes a manifest self-contained:
+the manifest and its `roles/*.md` prompts move together, whether the manifest lives
+under `<cwd>/.pi/` or `<home>/.pi/`.
+
+**Migration.** Existing manifests that write `system_prompt: .pi/roles/foo.md`
+(cwd-relative) must change to `system_prompt: roles/foo.md` (manifest-base-relative)
+when the manifest itself lives at `.../.pi/conductor.yaml`. This is a **breaking
+change to the path convention**, gated by a `version:` bump (§10): a manifest using
+the new convention declares a new `version:` integer.
+
+**Version-gated back-compat.** The path-resolution root is selected by the manifest
+version:
+
+- `version: 1` — relative `system_prompt` paths resolve against `cwd`
+  (back-compat for existing v1 manifests).
+- `version >= 2` — relative `system_prompt` paths resolve against the
+  manifest's directory (`manifestDir`).
+
+This preserves the §10 "config changes are additive and versioned" rule. Existing v1
+manifests keep working unchanged; new manifests (especially HOME-sourced ones) declare
+v2 and use the manifest-base-relative path convention. A v2 manifest loaded without a
+file path (the test/programmatic path) cannot resolve relative prompts and throws
+`SystemPromptNotFoundError` at role-spawn time.
 
 - **User-defined per role.** `models: [primary, ...fallbacks]`, tried in order.
 - **Model naming form is `provider:id`** (e.g. `anthropic:claude-opus-4-5`,
@@ -374,6 +423,11 @@ you're trying to avoid, relocated into the config.
 Every transition — accepted, rejected, and lifecycle — is an immutable persisted event.
 The FSM state is **checkpointed**, never derived from agent output. On crash, resume
 from the checkpoint, not by replaying agent emissions.
+
+The run log (`<cwd>/.pi-conductor/runs/`) is **cwd-scoped** regardless of manifest
+source. The manifest is configuration; the run log is per-project execution state.
+`/conduct:list` enumerates runs per-project. A run is executed *in* a project, even
+if its manifest is shared.
 
 ### 11.1 Checkpoint record (one per run, snapshot-appended per transition)
 
@@ -809,8 +863,9 @@ consumer can render instead.
 ## 13. Static checks on the manifest
 
 Because the manifest is data, it is lintable. Checks run at host load time against the
-`.pi/conductor.yaml` (§8) before a `MachineDefinition` is derived. v1 checks (run at
-load):
+resolved `conductor.yaml` (per the §8 resolution chain), regardless of whether it was
+found under `<cwd>` or `<home>`. No check differs by source location. v1 checks (run
+at load):
 
 - Exactly one role has `is_orchestrator: true`.
 - The orchestrator is reachable as the run entry (it *is* the entry).

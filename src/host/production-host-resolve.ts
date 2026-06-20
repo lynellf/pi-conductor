@@ -97,29 +97,68 @@ function splitProviderId(role: Role, entry: string): { provider: string; id: str
   return { provider, id };
 }
 
-// ─── `loadSystemPrompt` (§8.1) ───────────────────────────────────────
+// ─── `loadSystemPrompt` (§8.1, §8.1 version-gated, Phase 7D) ────────
 
 /** Load a role's system prompt from disk. Returns UTF-8 content,
  *  or `null` when no `system_prompt` is declared. Throws
  *  `SystemPromptNotFoundError` on a declared-but-missing path.
- *  Relative paths resolve against `cwd`; absolute paths are
- *  used as-is. The return type is `string` (not `() => string`)
- *  because `systemPromptOverride` is a closure evaluated by the
- *  loader; the `spawnRole` path wraps it. */
+ *
+ *  **Resolution root (Phase 7D, version-gated).** Relative paths
+ *  resolve against different roots depending on the manifest
+ *  version (per the spec delta's Q2 decision):
+ *
+ *    - `manifestVersion == 1` → resolve against `cwd` (back-compat;
+ *      existing v1 manifests keep working unchanged).
+ *    - `manifestVersion >= 2` → resolve against `manifestDir` (the
+ *      directory containing the resolved manifest file). This makes
+ *      a manifest self-contained: the manifest and its `roles/*.md`
+ *      prompts move together, whether the manifest lives under
+ *      `<cwd>/.pi/` or `<home>/.pi/`.
+ *
+ *  Absolute paths are used as-is regardless of version.
+ *  `path === undefined` returns `null` regardless of version.
+ *  `manifestVersion` defaults to `1` and `manifestDir` defaults to
+ *  `null` so the v1 back-compat path requires no call-site change.
+ *
+ *  v2 with `manifestDir === null` throws `SystemPromptNotFoundError`
+ *  with a "no resolution base" message — this is the test /
+ *  programmatic path where the manifest was loaded from a string
+ *  without a known file path. Production always has a manifestDir.
+ *
+ *  The return type is `string` (not `() => string`) because
+ *  `systemPromptOverride` is a closure evaluated by the loader;
+ *  the `spawnRole` path wraps it. */
 export async function loadSystemPrompt(
   role: Role,
   path: string | undefined,
   cwd: string,
+  manifestDir: string | null = null,
+  manifestVersion: number = 1,
 ): Promise<string | null> {
   if (path === undefined) return null;
-  const fullPath = isAbsolute(path) ? path : resolve(cwd, path);
+
+  // v2 + no manifest base: cannot resolve relative paths. The
+  // test path is the only path that hits this — production
+  // always has `manifestDir` (it's the directory of the loaded
+  // manifest file). The error message names the role + path so
+  // the test can assert on it.
+  if (manifestVersion >= 2 && manifestDir === null) {
+    throw new SystemPromptNotFoundError(role, path, null);
+  }
+
+  // Pick the resolution root: v2 = manifestDir, v1 = cwd.
+  // Absolute paths bypass the root choice (used as-is).
+  const resolutionRoot = manifestVersion >= 2 ? (manifestDir as string) : cwd;
+  const fullPath = isAbsolute(path) ? path : resolve(resolutionRoot, path);
   try {
     return await readFile(fullPath, "utf8");
   } catch {
     // Any read failure (ENOENT, EACCES, EISDIR, symlink loop) is
     // "the prompt isn't loadable as a UTF-8 file." The underlying
-    // `NodeJS.ErrnoException` is intentionally not preserved.
-    throw new SystemPromptNotFoundError(role, path);
+    // `NodeJS.ErrnoException` is intentionally not preserved. The
+    // error carries the resolution root we tried so the user can
+    // diagnose "wrong manifest dir" / "wrong cwd" from the message.
+    throw new SystemPromptNotFoundError(role, path, resolutionRoot);
   }
 }
 
