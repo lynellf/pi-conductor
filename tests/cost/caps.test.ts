@@ -21,10 +21,16 @@
 import { describe, expect, it } from "vitest";
 import type { SessionLifecycleEvent, UsageRecord } from "../../src/core/types.js";
 import { runCapExceeded, sessionCapExceeded } from "../../src/cost/caps.js";
+import type { UsageAggregate } from "../../src/cost/rollup.js";
 import { rollup } from "../../src/cost/rollup.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
-function mkUsage(cost: number): UsageRecord {
+function mkUsage(cost: number): UsageAggregate {
+  return { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost, sessions: 1 };
+}
+
+// `UsageRecord`-shaped usage for `SessionLifecycleEvent.usage` (no `sessions`).
+function mkRecord(cost: number): UsageRecord {
   return { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost };
 }
 
@@ -38,7 +44,7 @@ function ended(role: string, model: string | null, cost: number): SessionLifecyc
     model,
     session_file: `/${role}.jsonl`,
     parent_session: null,
-    usage: mkUsage(cost),
+    usage: mkRecord(cost),
     ts: 1,
   };
 }

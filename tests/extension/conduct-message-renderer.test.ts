@@ -27,12 +27,7 @@
  * output is intentionally NOT asserted.
  */
 
-import type {
-  CustomMessage,
-  MessageRenderOptions,
-  Theme,
-  ThemeColor,
-} from "@earendil-works/pi-coding-agent";
+import type { MessageRenderOptions, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
@@ -51,7 +46,7 @@ function makeStubTheme(): Theme {
   const tag = (color: string | undefined, text: string) => `[${color ?? "?"}]${text}`;
   return {
     fg: (color: ThemeColor, text: string) => tag(color, text),
-    bg: (color, text) => tag(`bg:${color}`, text),
+    bg: (color: ThemeColor, text: string) => tag(`bg:${color}`, text),
     bold: (text: string) => tag("bold", text),
     italic: (text: string) => tag("italic", text),
     underline: (text: string) => tag("underline", text),
@@ -74,12 +69,24 @@ function makeMessage(args: {
   readonly customType: "conduct.role.text";
   readonly content: string;
   readonly details: ConductMessageDetails;
-}): CustomMessage<ConductMessageDetails> {
+}): never {
+  // Cast to `never`: the SDK does not re-export `CustomMessage`, so we
+  // can't name the renderer's exact parameter type. The local
+  // `CustomMessage<T>` shape is structurally equivalent but
+  // `exactOptionalPropertyTypes` rejects the cross-package assignment;
+  // `never` is assignable to the SDK's parameter type without a breach.
   return {
     customType: args.customType,
     content: args.content,
     details: args.details,
-  } as unknown as CustomMessage<ConductMessageDetails>;
+  } as unknown as never;
+}
+
+/** Get the `conduct.role.text` renderer with a runtime guard (no non-null assertion). */
+function textRenderer(renderers: ReturnType<typeof createConductMessageRenderers>) {
+  const r = renderers["conduct.role.text"];
+  if (r === undefined) throw new Error("conduct.role.text renderer not registered");
+  return r;
 }
 
 /**
@@ -113,7 +120,7 @@ describe("createConductMessageRenderers", () => {
     // orchestrator role the renderer falls back to muted for
     // everyone (separate test below).
     const renderers = createConductMessageRenderers(() => "orchestrator");
-    const renderer = renderers["conduct.role.text"];
+    const renderer = textRenderer(renderers);
 
     const message = makeMessage({
       customType: "conduct.role.text",
@@ -153,7 +160,7 @@ describe("createConductMessageRenderers", () => {
   it("colors the orchestrator role label with mdHeading and bolds it", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => "orchestrator");
-    const renderer = renderers["conduct.role.text"];
+    const renderer = textRenderer(renderers);
 
     const message = makeMessage({
       customType: "conduct.role.text",
@@ -173,7 +180,7 @@ describe("createConductMessageRenderers", () => {
   it("uses the muted fallback color (and still bolds the label) when no orchestrator role is known (no active run)", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => null);
-    const renderer = renderers["conduct.role.text"];
+    const renderer = textRenderer(renderers);
 
     const message = makeMessage({
       customType: "conduct.role.text",
@@ -182,7 +189,7 @@ describe("createConductMessageRenderers", () => {
     });
 
     const component = renderer(message, OPTIONS, theme);
-    const [label] = component.children;
+    const [label] = (component as Container).children;
     const labelText = getInternalText(label as unknown as { text?: string });
     expect(labelText).toContain("[muted]"); // unknown fallback
     expect(labelText).toContain("[bold]"); // Phase 5.5: label is bolded
@@ -201,7 +208,7 @@ describe("createConductMessageRenderers", () => {
     // throwing getter and the wrapper catches it.
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => "orchestrator");
-    const renderer = renderers["conduct.role.text"];
+    const renderer = textRenderer(renderers);
 
     const exploding = {
       customType: "conduct.role.text",
@@ -209,7 +216,7 @@ describe("createConductMessageRenderers", () => {
       get details() {
         throw new Error("forced");
       },
-    } as unknown as CustomMessage<ConductMessageDetails>;
+    } as unknown as never;
 
     const result = renderer(exploding, OPTIONS, theme);
     expect(result).toBeUndefined();
@@ -224,16 +231,16 @@ describe("createConductMessageRenderers", () => {
     // reuse.
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => null);
-    const renderer = renderers["conduct.role.text"];
+    const renderer = textRenderer(renderers);
 
     const message = {
       customType: "conduct.role.text",
       content: "body only",
-    } as unknown as CustomMessage<ConductMessageDetails>;
+    } as unknown as never;
 
     const component = renderer(message, OPTIONS, theme);
     expect(component).toBeInstanceOf(Container);
-    const [label, body] = component.children;
+    const [label, body] = (component as Container).children;
     expect(label).toBeInstanceOf(Text);
     expect(body).toBeInstanceOf(Markdown);
     const labelText = getInternalText(label as unknown as { text?: string });

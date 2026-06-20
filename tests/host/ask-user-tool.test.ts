@@ -9,7 +9,6 @@
  *   - The tool does not touch the `SessionSeam` capture buffer.
  */
 
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -32,7 +31,9 @@ type ExecuteFn = (
 }>;
 
 function invoke(
-  tool: ToolDefinition,
+  // `ToolDefinition<...>` widens incorrectly under `exactOptionalPropertyTypes`;
+  // `invoke` only reads `.execute`, so accept the specific tool shape via `unknown`.
+  tool: { execute: unknown },
   params: unknown,
   signal: AbortSignal | undefined,
   ctx: unknown,

@@ -244,6 +244,7 @@ describe("Host interface — type-level sanity check", () => {
       role: "implementer",
       sessionId: "test-session-id",
       sessionFile: "/tmp/test-session.jsonl",
+      model: null,
       readCaptureBuffer: () => [],
       resetCaptureBuffer: () => {},
       subscribe: () => () => {},
@@ -269,6 +270,7 @@ describe("Host interface — type-level sanity check", () => {
           goal: "",
           current_role: "orchestrator",
           state: "orchestrator",
+          last_message: null,
           visit_history: [],
           run_cost_to_date: 0,
           run_cost_cap: null,
@@ -280,6 +282,9 @@ describe("Host interface — type-level sanity check", () => {
       abortSession: async () => {},
       sealSession: () => {},
       nextVisitIndex: () => 1,
+      sessionTerminalReason: () => null,
+      getNextModel: () => null,
+      runCostSoFar: () => 0,
     };
 
     // Smoke: every method is callable on the fake.

@@ -117,7 +117,7 @@ describe("createProductionHost — Task 7A.5", () => {
   });
 
   it("forwards an explicit `uiContext` override", () => {
-    const uiContext = { notify: () => {}, setStatus: () => {} };
+    const uiContext = { notify: () => {}, setStatus: () => {} } as never;
     const host = createProductionHost({
       extension: { modelRegistry: makeModelRegistry(), cwd: workdir, uiContext },
       run: { log: makeLog(), loadedManifest: makeLoadedManifest(), runId: "test-run-1" },

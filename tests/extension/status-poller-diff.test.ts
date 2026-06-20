@@ -135,7 +135,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ transitionHistory: [r1] }), // tick 1
       makeStats({ transitionHistory: [r1, r2] }), // tick 2
     ]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
 
     startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
@@ -169,7 +169,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ transitionHistory: [r1] }), // tick 2: no new
       makeStats({ transitionHistory: [r1] }), // tick 3: no new
     ]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
     startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
@@ -209,7 +209,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
         transitionHistory: [r1, endRecord],
       }), // tick 2: terminal + new end
     ]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
     startStatusPoller(handle, (text) => setStatusCalls.push(text), {
       onNewTransitions: (records) => newTransitions.push(records),
     });
@@ -236,7 +236,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
     // new transitions have appeared, and the callback
     // is not invoked.
     const { handle } = makeFakeHandle([makeStats({ transitionHistory: [] })]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
     startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
@@ -294,7 +294,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ transitionHistory: [hist1, hist2] }), // initial: historical
       makeStats({ transitionHistory: [hist1, hist2, newRecord] }), // tick 1: new
     ]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
     startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
@@ -333,7 +333,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       // fast-run scenario.
       makeStats({ transitionHistory: [r1, r2, r3] }), // final read in stop()
     ]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
     const stop = startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
@@ -358,7 +358,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ transitionHistory: [] }), // initial tick
       makeStats({ transitionHistory: [] }), // final read in stop()
     ]);
-    const newTransitions: TransitionRecord[][] = [];
+    const newTransitions: Array<readonly TransitionRecord[]> = [];
     const stop = startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });

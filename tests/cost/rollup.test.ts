@@ -308,9 +308,9 @@ describe("rollup: cache caveat (§11.6)", () => {
     expect(result.perRun.cache_read).toBe(200);
     expect(result.perRun.cache_write).toBe(50);
     // No "hit rate" field. The structural type only exposes sums.
-    expect((result.perRun as Record<string, unknown>).cacheHitRate).toBeUndefined();
-    expect((result.perRun as Record<string, unknown>).cache_hit_rate).toBeUndefined();
-    expect((result.perRun as Record<string, unknown>).hitRate).toBeUndefined();
+    expect((result.perRun as unknown as Record<string, unknown>).cacheHitRate).toBeUndefined();
+    expect((result.perRun as unknown as Record<string, unknown>).cache_hit_rate).toBeUndefined();
+    expect((result.perRun as unknown as Record<string, unknown>).hitRate).toBeUndefined();
   });
 
   it("perRole and perModel also expose raw cache_read / cache_write sums", () => {

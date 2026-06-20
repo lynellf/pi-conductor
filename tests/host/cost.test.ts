@@ -114,8 +114,8 @@ describe("normalizeUsage (§11.4 SDK mapping)", () => {
     const normalized = normalizeUsage(sdkUsage);
     expect(normalized.cache_write).toBe(0);
     // The §11.4 record has no cacheWrite1h key by design.
-    expect((normalized as Record<string, unknown>).cacheWrite1h).toBeUndefined();
-    expect((normalized as Record<string, unknown>).cache_write_1h).toBeUndefined();
+    expect((normalized as unknown as Record<string, unknown>).cacheWrite1h).toBeUndefined();
+    expect((normalized as unknown as Record<string, unknown>).cache_write_1h).toBeUndefined();
   });
 });
 

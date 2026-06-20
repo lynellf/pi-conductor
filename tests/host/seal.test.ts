@@ -25,11 +25,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   createHandoffTool,
-  type EmissionCapture,
   SessionSeam,
   wrapAllToolsWithSeal,
   wrapToolWithSeal,
 } from "../../src/host/index.js";
+import type { EmissionCapture } from "../../src/seam/validate-emission.js";
 
 // ─── Test helpers ──────────────────────────────────────────────────────
 

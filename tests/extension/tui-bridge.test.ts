@@ -141,8 +141,8 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
     await handleStart("test goal", ctx, { getFlag: () => undefined, displaySink });
 
     expect(bridgeMocks.createProductionHost).toHaveBeenCalledTimes(1);
-    expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.uiContext).toBe(ctx.ui);
-    expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.displaySink).toBe(
+    expect(bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.uiContext).toBe(ctx.ui);
+    expect(bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.displaySink).toBe(
       displaySink,
     );
   });
@@ -164,8 +164,8 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
     await handleResume("run-resume-ui-1", ctx, { getFlag: () => undefined, displaySink });
 
     expect(bridgeMocks.createProductionHost).toHaveBeenCalledTimes(1);
-    expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.uiContext).toBe(ctx.ui);
-    expect(bridgeMocks.createProductionHost.mock.calls[0][0].extension.displaySink).toBe(
+    expect(bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.uiContext).toBe(ctx.ui);
+    expect(bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.displaySink).toBe(
       displaySink,
     );
   });

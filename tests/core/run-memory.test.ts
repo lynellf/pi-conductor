@@ -27,6 +27,7 @@ import type {
   MachineDefinition,
   SessionLifecycleEvent,
   TransitionAccepted,
+  UsageRecord,
 } from "../../src/core/types.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
@@ -53,7 +54,7 @@ function ck(
   };
 }
 
-function mkUsage(cost: number, input = 100, output = 50): SessionLifecycleEvent["usage"] {
+function mkUsage(cost: number, input = 100, output = 50): UsageRecord {
   return {
     input,
     output,
@@ -108,7 +109,7 @@ describe("buildRunMemory: §8.4 field presence", () => {
   it("open_concerns is absent (dropped for v1, §8.4)", () => {
     const cp = ck("orchestrator");
     const mem = buildRunMemory(cp, [], DEF, { goal: "x", runCostCap: null });
-    expect((mem as Record<string, unknown>).open_concerns).toBeUndefined();
+    expect((mem as unknown as Record<string, unknown>).open_concerns).toBeUndefined();
   });
 
   it("run_cost_cap is null when no cap was set (uncapped run)", () => {

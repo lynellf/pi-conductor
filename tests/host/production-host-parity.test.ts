@@ -28,7 +28,11 @@ import type { Usage } from "@earendil-works/pi-ai";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runLoop } from "../../src/host/loop.js";
-import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
+import {
+  makeStubModel,
+  makeStubStreamFunction,
+  type StubStep,
+} from "../../src/host/stub-provider.js";
 import {
   type Checkpoint,
   createInitialCheckpoint,
@@ -95,7 +99,7 @@ const CANNED_USAGE: Partial<Usage> = {
   cost: { input: 0.0015, output: 0.0075, cacheRead: 0, cacheWrite: 0, total: 0.009 },
 };
 
-function makeStubStream(steps: readonly { kind: string; [k: string]: unknown }[]) {
+function makeStubStream(steps: readonly StubStep[]) {
   return makeStubStreamFunction({ steps, usage: CANNED_USAGE });
 }
 
@@ -269,24 +273,25 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
     const session_started = {
       type: "session_started" as const,
       run_id: runId,
-      session_id: "sess-1",
       session_file: "/tmp/sess-1.jsonl",
       role: "worker" as const,
       visit_index: 1,
+      state: "worker" as const,
       model: null,
       parent_session: null,
-      timestamp: 0,
+      ts: 0,
     };
     const session_ended = {
       type: "session_ended" as const,
       run_id: runId,
-      session_id: "sess-1",
       session_file: "/tmp/sess-1.jsonl",
       role: "worker" as const,
       visit_index: 1,
+      state: "worker" as const,
       model: null,
+      parent_session: null,
       usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
-      timestamp: 0,
+      ts: 0,
     };
     host.persistRecord(session_started);
     host.persistRecord(session_ended);
@@ -332,36 +337,39 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
     host.persistRecord({
       type: "session_ended",
       run_id: runId,
-      session_id: "s1",
       session_file: "/tmp/s1.jsonl",
       role: "worker",
       visit_index: 1,
+      state: "worker",
       model: null,
+      parent_session: null,
       usage: { ...baseUsage, cost: 0.5 },
-      timestamp: 0,
+      ts: 0,
     });
     host.persistRecord({
       type: "session_failed",
       run_id: runId,
-      session_id: "s2",
       session_file: "/tmp/s2.jsonl",
       role: "worker",
       visit_index: 2,
+      state: "worker",
       model: null,
+      parent_session: null,
       failure_reason: "model_error",
       usage: { ...baseUsage, cost: 0.25 },
-      timestamp: 0,
+      ts: 0,
     });
     host.persistRecord({
       type: "session_ended",
       run_id: runId,
-      session_id: "s3",
       session_file: "/tmp/s3.jsonl",
       role: "orchestrator",
       visit_index: 1,
+      state: "orchestrator",
       model: null,
+      parent_session: null,
       usage: { ...baseUsage, cost: 0.1 },
-      timestamp: 0,
+      ts: 0,
     });
 
     // 0.5 + 0.25 + 0.1 = 0.85. Both terminals cost.
@@ -435,13 +443,13 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
     host.persistRecord({
       type: "session_started",
       run_id: runId,
-      session_id: "s1",
       session_file: "/tmp/s1.jsonl",
       role: "orchestrator",
       visit_index: 1,
+      state: "orchestrator",
       model: null,
       parent_session: null,
-      timestamp: 0,
+      ts: 0,
     });
     expect(log.records(runId)).toHaveLength(1);
   });

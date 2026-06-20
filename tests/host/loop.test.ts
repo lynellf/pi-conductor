@@ -40,6 +40,7 @@ import {
   type PersistedRecord,
   type Role,
   type RoleSession,
+  type RunMemory,
   type SessionLifecycleEvent,
   type SpawnRoleOptions,
   type TransitionAccepted,
@@ -184,7 +185,7 @@ class FakeHost implements Host {
     def: MachineDefinition;
     goal: string;
     runCostCap: number | null;
-  }): unknown {
+  }): RunMemory {
     this.seedRunMemoryCalls += 1;
     return {
       run_id: "fake-run",

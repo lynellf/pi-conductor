@@ -89,7 +89,7 @@ describe("ProductionHost — uiContext bridge", () => {
   });
 
   it("binds the provided uiContext onto a spawned session", async () => {
-    const uiContext = { notify: vi.fn(), setStatus: vi.fn() };
+    const uiContext = { notify: vi.fn(), setStatus: vi.fn() } as never;
     const session = makeSession();
     agentSessionMocks.createAgentSession.mockResolvedValue({
       session,

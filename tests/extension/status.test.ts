@@ -93,7 +93,8 @@ describe("formatConductStatus", () => {
 
   it("formats the cost to 3 decimal places", () => {
     const stats = makeStats();
-    stats.costRollup.perRun.cost = 0.012345;
+    // `RunStats` marks rollup fields readonly; cast to a writable view for the test fixture.
+    (stats.costRollup.perRun as { cost: number }).cost = 0.012345;
     expect(formatConductStatus(stats)).toBe(
       "conduct: orchestrator · running · handoffs=0 · $0.012",
     );

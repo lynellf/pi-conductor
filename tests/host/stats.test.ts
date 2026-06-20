@@ -134,7 +134,7 @@ function makeTransitionAccepted(opts: {
     target_role: opts.targetRole as never,
     role: opts.role as never,
     suggests_next: null,
-    payload_summary: { kind: "none" },
+    payload_summary: { field_names: [] },
     guard: null,
     effect: [],
     session_file: "/tmp/test.jsonl",
@@ -274,7 +274,7 @@ describe("runStats (§11.6) — perRun.cost reconciles with terminal usage.cost"
     expect(stats.costRollup.perRun.cache_read).toBe(100);
     expect(stats.costRollup.perRun.cache_write).toBe(50);
     // No synthesized hit rate field — cache caveat §11.6.
-    const rollup = stats.costRollup.perRun as Record<string, unknown>;
+    const rollup = stats.costRollup.perRun as unknown as Record<string, unknown>;
     expect(rollup.hit_rate).toBeUndefined();
     expect(rollup.cache_hit_rate).toBeUndefined();
   });

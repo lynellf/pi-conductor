@@ -223,7 +223,10 @@ spec review: a new spec must be acknowledged by the overseer before
 implementation against it starts (specs are the overseer's concern).
 
 - `pnpm typecheck` — clean (strict + `noUncheckedIndexedAccess`); uses
-  `tsconfig.test.json` so tests are type-checked too.
+  `tsconfig.test.json` so tests are type-checked too. `tsconfig.test.json`
+  overrides `exclude` to drop `"tests"` (inherited from the base
+  `tsconfig.json`) — without this override, no test file enters the
+  program and the gate is a false signal.
 - `pnpm build` — emits `dist/` with `.d.ts`.
 - `pnpm test` — all green; `tests/grep-guard.test.ts` passes.
 - `pnpm lint` (`biome check .`) / `pnpm format:check` — clean.
