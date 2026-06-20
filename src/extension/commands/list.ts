@@ -39,6 +39,7 @@ import {
   type PersistedRecord,
   type RunStats,
 } from "../../index.js";
+import { formatTransitionTrace } from "../handoff-view.js";
 import { resolveManifestPath } from "../manifest.js";
 import { type HandleDeps, resolveRunBaseDir } from "./start.js";
 
@@ -95,14 +96,24 @@ export async function handleList(
   // per-`runId`); each call is a `readFileSync` over
   // the JSONL file, which is cheap for the small
   // files the host produces in v1.
+  //
+  // Phase 8 / handoff-visibility: each per-run line
+  // gains a transition trace (R3 / AC4). The trace is
+  // sourced from `stats.transitionHistory` (the
+  // narrower projection; the raw record's
+  // `suggests_next` is Q1-deferred). The trace is
+  // appended after the existing fields. An empty
+  // history (a run with no transitions yet) renders
+  // an empty string, so the line stays clean
+  // (no trailing ` · → …` or stray `→`).
   const log = new FileRecordLog({ baseDir });
   const lines: string[] = [];
   for (const runId of runIds.slice(0, MAX_RENDERED_RUNS)) {
     const records: readonly PersistedRecord[] = log.records(runId);
     const stats: RunStats = runStats(records, runId, loaded.def, "running");
-    lines.push(
-      `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}`,
-    );
+    const trace = formatTransitionTrace(stats.transitionHistory);
+    const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}`;
+    lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
   }
   const overflow = runIds.length - lines.length;
   const summary = lines.join(" | ") + (overflow > 0 ? ` (+${overflow} more in ${baseDir})` : "");
