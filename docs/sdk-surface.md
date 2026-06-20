@@ -42,6 +42,20 @@ The single factory for one `AgentSession`. Confirmed option surface (from
   `"handoff"`/`"end"` to `tools` silently disables them even though they're in
   `customTools`. Task 15 now states this explicitly.
 
+### TUI bridge addendum (verified against SDK dist 2026-06-20)
+
+`uiContext` is not passed directly to `createAgentSession` in the current
+conductor implementation. Instead, the host creates the standalone role session
+and then calls:
+
+```ts
+await session.bindExtensions({ uiContext });
+```
+
+That binding makes `ctx.ui` available to role-session tools while preserving the
+§9.5 boundary: role sessions are still standalone `createAgentSession` calls,
+not children in pi's session tree.
+
 ## 2. Custom tools — `defineTool` (TypeBox, confirmed)
 
 ```ts
@@ -67,6 +81,20 @@ const handoffTool = defineTool({
 This validates the plan's TypeBox decision (Architecture Decisions): `defineTool`
 params are TypeBox, so the same schema derives the `MachineEvent` payload type via
 `Static<>` and is the seam `validateEmission` checks. **No Zod anywhere.**
+
+### Tool execute context for `ask_user`
+
+`ToolDefinition.execute` receives an extension execution context. The conductor's
+`ask_user` tool reads `ctx.hasUI`, `ctx.mode`, and `ctx.ui` from that context:
+
+- `ctx.hasUI === true` means dialog-capable UI is available.
+- `ctx.ui.input(title, placeholder?, opts?)` returns text or `undefined`.
+- `ctx.ui.confirm(title, message, opts?)` returns `boolean`.
+- `ctx.ui.select(title, options, opts?)` returns the selected string or
+  `undefined`.
+
+When the host has not bound a UI context, `ask_user` throws
+`AskUserUnavailableError` rather than no-oping.
 
 ### Tool ≠ session termination (critical for plan Tasks 14/15)
 
@@ -180,6 +208,23 @@ unknown; it is now pinned.
   future TUI viewer wants branch-tree navigation, it can layer on top; v1 does not
   need it.)
 
+## 7. Extension display surfaces (TUI bridge)
+
+`ExtensionAPI["sendMessage"]` injects a `CustomMessage` into the host session
+view. For the conductor stream, `message.content` is a plain markdown string,
+`message.display` is `true`, and `message.customType` is a conductor-owned value
+such as `conduct.role.text` or `conduct.role.tool`.
+
+This is intentionally separate from `ExtensionUIContext`: the UI context carries
+dialog methods for spawned role tools (`input` / `confirm` / `select`), while the
+extension factory's `sendMessage` action backs the display sink used by
+`/conduct` and `/conduct:resume`.
+
+The default `CustomMessageComponent` renders string content as themed markdown,
+so the TUI bridge does not need a bespoke renderer for Phase 4. Streamed entries
+are display-only; they are not persisted into the host-owned run log and do not
+become normal user / assistant messages in pi's session history.
+
 ## Summary of plan/spec deltas from this spike
 
 | Item | Status | Where applied |
@@ -192,3 +237,4 @@ unknown; it is now pinned.
 | Forced-`end` on run-cap breach mechanism | **Resolved** | spec §11.7 / plan Task 17: synthesized `end` event through `reduce`; direct checkpoint mutation forbidden |
 | Role-session branch scoping for checkpoint replay | **Resolved (safe default adopted)** | spec §11.1 now mandates the host-owned `run_id`-keyed log; `getBranch()` scoping explicitly NOT used |
 | Model naming form (`provider:id`) + resolution | **Resolved** | spec §8.1: `provider:id` via `modelRegistry.find(provider, id)`; bare aliases hard-rejected (§13) |
+| TUI bridge surfaces (`uiContext`, dialogs, display messages) | **Resolved** | `session.bindExtensions({ uiContext })`, `ToolDefinition.execute` ctx, `ExtensionUIContext.input/confirm/select`, `ExtensionAPI["sendMessage"]`, default markdown `CustomMessageComponent` |

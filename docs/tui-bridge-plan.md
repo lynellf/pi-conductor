@@ -158,13 +158,14 @@ Gate: Phase 3 complete (green + checkboxes ticked). User-facing behavior exists 
 claim it.
 
 Exit criteria:
-- [ ] CLI fallback either works through stdin readline or is explicitly
+- [x] CLI fallback either works through stdin readline or is explicitly
       documented as `AskUserUnavailableError` if readline proves too fiddly.
-- [ ] User-facing docs describe streaming and `ask_user`.
-- [ ] `sdk-surface.md` records the pinned TUI bridge surfaces.
-- [ ] Sample role tool allowlists match the intended review/fix workflows.
-- [ ] Full suite green; grep guard green.
-- [ ] Ready for final review at loop close and the pre-push hook
+      Stdin readline works (Task 7 + 2026-06-20 smoke transcript).
+- [x] User-facing docs describe streaming and `ask_user`.
+- [x] `sdk-surface.md` records the pinned TUI bridge surfaces.
+- [x] Sample role tool allowlists match the intended review/fix workflows.
+- [x] Full suite green; grep guard green (446 tests, 47 files).
+- [x] Ready for final review at loop close and the pre-push hook
       (`pnpm lint && pnpm typecheck && pnpm test`).
 
 ## Risks and mitigations

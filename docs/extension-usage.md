@@ -86,19 +86,49 @@ When `/conduct` reaches a terminal state, the handler notifies
 to `ctx.ui.notify`. On failure, the notification is the typed error
 message (`ModelNotFoundError`, `SystemPromptNotFoundError`, …).
 
+## Streaming
+
+During `/conduct` and `/conduct:resume`, role-session output is also
+streamed into the host TUI as display-only custom messages. The stream
+shows role-prefixed assistant text, tool calls, tool results, and
+handoff / `ask_user` reasons so you can follow the run without opening
+JSONL files.
+
+Streaming does not merge role sessions into pi's session tree and does
+not append extra records to the host-owned run log. The durable record
+remains the per-role session JSONL under
+`<cwd>/.pi-conductor/runs/<run_id>/sessions/`; the TUI stream is an
+observability surface.
+
+## `ask_user`
+
+Every role gets an `ask_user` tool alongside the machine tools
+(`handoff` / `end`). A role can use it to ask for free-text input,
+confirmation, or a selection. In the pi TUI, the tool opens the
+corresponding dialog, waits for your response, and returns that answer
+to the role as a normal non-terminating tool result. It is not a
+machine event and does not change the reducer state by itself.
+
+Dialog-level cancellation returns no answer / no selection as a normal
+tool result; the role may ask again, hand off, or end. Process-level
+run cancellation remains owned by `/conduct:abort` or pi process
+termination.
+
 ## Run log location
 
 Role session files land under `<cwd>/.pi-conductor/runs/<runId>/sessions/`,
-not under pi's session directory. The conductor's run-keyed log is
-written to the same directory:
+not under pi's session directory. The conductor's run-keyed log is a
+flat `<runId>.jsonl` file under `<cwd>/.pi-conductor/runs/`, sibling
+to the per-run session directory:
 
 ```
 <cwd>/.pi-conductor/
   runs/
+    <run-id-1>.jsonl       # host-owned run log (one file per run)
     <run-id-1>/
-      records.jsonl        # host-owned run log (one file per run)
       sessions/            # per-role session files (the SDK's JSONL)
         <timestamp>_<session-id>.jsonl
+    <run-id-2>.jsonl
     <run-id-2>/
       ...
 ```
@@ -109,7 +139,7 @@ This convention matches the production host's session-dir default
 
 `/conduct:list` enumerates the `run_id`s known to this directory.
 `/conduct:resume <run_id>` resumes a run by reading the latest
-checkpoint snapshot for `<run_id>` from `records.jsonl` and
+checkpoint snapshot for `<run_id>` from `<run_id>.jsonl` and
 re-entering the loop at `current_role`.
 
 ## Worker role sessions are NOT `/switch` targets
@@ -155,7 +185,13 @@ codes:
 - `2` — usage error (missing argv)
 - `3` — manifest file does not exist on disk
 
-See `src/bin/conduct.ts` for the 100-line implementation.
+If a role calls `ask_user` through this CLI, the tool degrades to
+stdin/stdout: the prompt is printed to stdout, the answer is read from
+stdin, and the run continues. Future non-TUI surfaces such as
+rpc/json/print should surface `AskUserUnavailableError` rather than
+silently ignoring `ask_user`.
+
+See `src/bin/conduct.ts` for the compact implementation.
 
 ## Library use (advanced)
 
