@@ -43,6 +43,7 @@ import {
 } from "../../index.js";
 import { getActiveRun, setActiveRun } from "../active-run.js";
 import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
+import { formatHandoffNotify } from "../handoff-view.js";
 import { resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
 
@@ -193,9 +194,31 @@ export async function handleStart(
   // 4. Start the status poller. It updates the footer
   // line on each tick; cleared on terminal (in the
   // finally block below) or handler failure.
-  const stopPoller = startStatusPoller(handle, (text) => {
-    ctx.ui.setStatus("conduct", text);
-  });
+  //
+  // The `onNewTransitions` callback (Phase 8 /
+  // handoff-visibility, spec R1) maps each new
+  // `TransitionRecord` through `formatHandoffNotify`
+  // and emits an info notification. The poller
+  // diffs `transitionHistory.length` and emits one
+  // callback per tick when new entries appear, so
+  // there is no double-notify across ticks. On a
+  // resume, the poller seeds the tracker from the
+  // current history length, so transitions that
+  // happened before the resume are NOT re-notified
+  // (AC6).
+  const stopPoller = startStatusPoller(
+    handle,
+    (text) => {
+      ctx.ui.setStatus("conduct", text);
+    },
+    {
+      onNewTransitions: (records) => {
+        for (const record of records) {
+          ctx.ui.notify(formatHandoffNotify(record), "info");
+        }
+      },
+    },
+  );
 
   try {
     const { finalCheckpoint, exitReason } = await handle.completion();

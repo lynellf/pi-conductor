@@ -37,6 +37,7 @@ import {
 } from "../../index.js";
 import { getActiveRun, setActiveRun } from "../active-run.js";
 import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
+import { formatHandoffNotify } from "../handoff-view.js";
 import { resolveManifestPath } from "../manifest.js";
 import { startStatusPoller } from "../status.js";
 import { ensureRunBaseDir, type HandleDeps } from "./start.js";
@@ -106,9 +107,25 @@ export async function handleResume(
   // Stash the run's orchestrator role for the display
   // sink (Phase 5). Mirrors the `/conduct` handler.
   setCurrentOrchestratorRole(handle.def.orchestrator);
-  const stopPoller = startStatusPoller(handle, (text) => {
-    ctx.ui.setStatus("conduct", text);
-  });
+  // Status poller + live handoff notify (Phase 8 /
+  // handoff-visibility). The `onNewTransitions`
+  // callback emits a notify per new transition. The
+  // poller seeds its tracker from the FIRST
+  // `runStats()` read, so transitions that happened
+  // before the resume are NOT re-notified (AC6).
+  const stopPoller = startStatusPoller(
+    handle,
+    (text) => {
+      ctx.ui.setStatus("conduct", text);
+    },
+    {
+      onNewTransitions: (records) => {
+        for (const record of records) {
+          ctx.ui.notify(formatHandoffNotify(record), "info");
+        }
+      },
+    },
+  );
 
   try {
     const { finalCheckpoint, exitReason } = await handle.completion();

@@ -68,32 +68,68 @@ describe("formatConductStatus", () => {
 
   it("renders the running-orchestrator case", () => {
     const line = formatConductStatus(makeStats());
-    expect(line).toBe("conduct: orchestrator · running · $0.000");
+    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000");
   });
 
   it("renders the worker-state transition", () => {
     const line = formatConductStatus(makeStats({ state: "worker" }));
-    expect(line).toBe("conduct: worker · running · $0.000");
+    expect(line).toBe("conduct: worker · running · handoffs=0 · $0.000");
   });
 
   it("renders the done terminal", () => {
     const line = formatConductStatus(makeStats({ state: "done", exitReason: "done" }));
-    expect(line).toBe("conduct: done · done · $0.000");
+    expect(line).toBe("conduct: done · done · handoffs=0 · $0.000");
   });
 
   it("renders the session_failed terminal", () => {
     const line = formatConductStatus(makeStats({ state: "worker", exitReason: "session_failed" }));
-    expect(line).toBe("conduct: worker · session_failed · $0.000");
+    expect(line).toBe("conduct: worker · session_failed · handoffs=0 · $0.000");
   });
 
   it("renders the aborted terminal", () => {
     const line = formatConductStatus(makeStats({ state: "implementer", exitReason: "aborted" }));
-    expect(line).toBe("conduct: implementer · aborted · $0.000");
+    expect(line).toBe("conduct: implementer · aborted · handoffs=0 · $0.000");
   });
 
   it("formats the cost to 3 decimal places", () => {
     const stats = makeStats();
     stats.costRollup.perRun.cost = 0.012345;
-    expect(formatConductStatus(stats)).toBe("conduct: orchestrator · running · $0.012");
+    expect(formatConductStatus(stats)).toBe(
+      "conduct: orchestrator · running · handoffs=0 · $0.012",
+    );
+  });
+
+  it("includes the handoff count in the line", () => {
+    // Two handoff events + one end event. Q5 default:
+    // `end` is NOT counted in `handoffs=N` (it is
+    // reflected via `exit_reason`).
+    const transitionHistory = [
+      {
+        type: "transition_accepted" as const,
+        event: "handoff" as const,
+        from: "orchestrator" as const,
+        to: "worker" as const,
+        targetRole: "worker" as const,
+        ts: 1,
+      },
+      {
+        type: "transition_accepted" as const,
+        event: "handoff" as const,
+        from: "worker" as const,
+        to: "orchestrator" as const,
+        targetRole: "orchestrator" as const,
+        ts: 2,
+      },
+      {
+        type: "transition_accepted" as const,
+        event: "end" as const,
+        from: "orchestrator" as const,
+        to: "done" as const,
+        targetRole: null,
+        ts: 3,
+      },
+    ];
+    const line = formatConductStatus(makeStats({ transitionHistory }));
+    expect(line).toBe("conduct: orchestrator · running · handoffs=2 · $0.000");
   });
 });
