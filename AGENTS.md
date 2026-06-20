@@ -36,7 +36,7 @@ behavior is `docs/orchestrator-fsm-spec.md`; sequencing is in
 - **Phases 1–5 (pure core + stub-driven E2E):** complete, human-reviewed, 276 → 329 tests green.
 - **Phase 7A (production `Host`):** complete, human-reviewed, 380 tests green. The 7A.5 real-model smoke was structurally deferred until Phase 7C landed the installable launch surface (relocated to Phase 7C Task 7C.2).
 - **Phase 7B (extension shell):** complete, human-reviewed, 412 tests green. `/conduct`, `/conduct:resume`, `/conduct:list`, `/conduct:abort`, and `--conduct-manifest` are registered.
-- **Phase 7C (packaging + CLI + docs):** complete, awaiting human review. `pi install ./` works, `bin/conduct` ships, README + `AGENTS.md` + main FSM plan + `docs/extension-usage.md` reflect the extension framing. 432 tests green; typecheck/build/lint/format:check clean.
+- **Phase 7C (packaging + CLI + docs):** complete; final review at loop close. `pi install ./` works, `bin/conduct` ships, README + `AGENTS.md` + main FSM plan + `docs/extension-usage.md` reflect the extension framing. 432 tests green; typecheck/build/lint/format:check clean.
 
 See `docs/extension-pivot-plan.md` for the pivot rationale (delivery-shape
 change only; FSM spec §12 invariants untouched) and `docs/extension-usage.md`
@@ -214,7 +214,12 @@ pnpm-workspace.yaml     # pnpm config + supply-chain hardening (camelCase keys)
 ## Verification
 
 Phase gates are real gates — don't start the next phase until the current one is
-green **and reviewed by a human**.
+green (verification below) and its plan checkboxes are ticked. **Per-phase
+human review is not a gate.** The overseer owns specs and high-level direction
+up front and gives feedback at the end of the loop, not between phases; see
+*Operating model* under *Working in this repo* below. The one exception is a
+spec review: a new spec must be acknowledged by the overseer before
+implementation against it starts (specs are the overseer's concern).
 
 - `pnpm typecheck` — clean (strict + `noUncheckedIndexedAccess`); uses
   `tsconfig.test.json` so tests are type-checked too.
@@ -242,6 +247,23 @@ those exactly. The grep guard is part of `pnpm test`, not an afterthought.
   gaps.
 - **One phase at a time.** Phases gate each other (Checkpoint A before reducer
   work, B before lifecycle/cost, C before the SDK host). Don't jump ahead.
+- **Tick plan checkboxes as you go.** When a task has a plan artifact with
+  Markdown checkboxes (`docs/**/phase-*.md` task lists, checkpoints, gates,
+  exit-criteria blocks), tick `[x]` every box whose acceptance/verification
+  step you actually performed in the same change that implements it — including
+  parent-plan summary blocks that mirror the sub-plan. Leave a box `[ ]` only
+  when its step is genuinely not done (e.g. a deferred manual run, an item
+  owned by someone else). Do not tick a box for work you did not do, and do not
+  leave a completed step unticked. This keeps the overseer from having to
+  re-derive progress from commits.
+- **Operating model — overseer + agent.** The human is an overseer: they own
+  specs and high-level direction and give feedback at the **end of the loop**,
+  not between phases. Do not block on per-phase human review; once a phase is
+  green and its checkboxes are ticked, proceed to the next. The two things
+  that *do* wait on the human: (1) a brand-new spec before implementation
+  against it starts, and (2) the final end-of-loop review. Surface assumptions
+  and open questions in plan docs so the overseer can spot them at a glance;
+  don't silently resolve them.
 - **No pi imports creep into the core.** If you reach for
   `@earendil-works/pi-coding-agent` in
   `src/core`/`src/manifest`/`src/seam`/`src/cost`, stop — that code belongs in

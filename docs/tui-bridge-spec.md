@@ -1,7 +1,7 @@
 # Spec: TUI bridge — role output streaming + human-in-the-loop (`ask_user`)
 
-> **Status:** Draft, Phase 1 (Specify) of `spec-driven-development`. Not yet
-> human-reviewed. Authority for behavior once reviewed; the FSM spec
+> **Status:** Human-reviewed 2026-06-20 (Phase 1 Specify of
+> `spec-driven-development`). Authority for behavior; the FSM spec
 > (`docs/orchestrator-fsm-spec.md`) remains authority for the reducer /
 > lifecycle / cost machinery, which this spec does **not** modify.
 >

@@ -74,7 +74,7 @@ export async function handleResume(
   const cwd = ctx.cwd;
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
-      extension: { modelRegistry, cwd },
+      extension: { modelRegistry, cwd, uiContext: ctx.ui },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest as LoadedManifest,

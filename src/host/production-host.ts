@@ -44,6 +44,7 @@ import {
   type AgentSessionEvent,
   createAgentSession,
   DefaultResourceLoader,
+  type ExtensionUIContext,
   type ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -82,6 +83,8 @@ export interface ProductionHostOptions {
   readonly modelRegistry: ModelRegistry;
   /** Working directory for prompt-path resolution and session cwd. */
   readonly cwd: string;
+  /** Optional extension UI handle threaded into role sessions. */
+  readonly uiContext?: ExtensionUIContext;
   /** Host-owned `run_id`-keyed append-only log (Task 13.5). */
   readonly log: RecordLog;
   /** Pinned manifest snapshot (def + role configs + warnings). */
@@ -131,6 +134,8 @@ export class ProductionHost implements Host {
   readonly loadedManifest: LoadedManifest;
   /** See {@link ProductionHostOptions.runId}. */
   readonly runId: string;
+  /** See {@link ProductionHostOptions.uiContext}. */
+  readonly uiContext: ExtensionUIContext | undefined;
   /** See {@link ProductionHostOptions.sessionDir}. */
   readonly sessionDir: string;
   /** See {@link ProductionHostOptions.agentDir}. */
@@ -142,6 +147,7 @@ export class ProductionHost implements Host {
     this.log = opts.log;
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
+    this.uiContext = opts.uiContext;
     this.sessionDir =
       opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
     this.agentDir = opts.agentDir ?? join(opts.cwd, ".pi-conductor", "agent");
@@ -289,6 +295,9 @@ export class ProductionHost implements Host {
       (createOpts as { model?: Model<never> }).model = model;
     }
     const { session } = await createAgentSession(createOpts);
+    if (this.uiContext !== undefined) {
+      await session.bindExtensions({ uiContext: this.uiContext });
+    }
 
     // 8. Track per-session state (Task 17 / 7A.4). The host's
     //    `captureUsage` and `sessionTerminalReason` read from

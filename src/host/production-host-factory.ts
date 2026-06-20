@@ -30,7 +30,7 @@
  * reverse: "no host imports from the extension types".)
  */
 
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
 import type { LoadedManifest } from "./manifest.js";
 import { ProductionHost } from "./production-host.js";
@@ -47,6 +47,8 @@ export interface ExtensionContextInputs {
   readonly modelRegistry: ModelRegistry;
   /** Extension's working directory (typically `ctx.cwd`). */
   readonly cwd: string;
+  /** Extension UI handle threaded into spawned sessions for the TUI bridge. */
+  readonly uiContext?: ExtensionUIContext;
 }
 
 /**
@@ -99,7 +101,7 @@ export interface CreateProductionHostInputs {
  *
  * ```ts
  * const host = createProductionHost({
- *   extension: { modelRegistry: ctx.modelRegistry, cwd: ctx.cwd },
+ *   extension: { modelRegistry: ctx.modelRegistry, cwd: ctx.cwd, uiContext: ctx.ui },
  *   run: { log, loadedManifest, runId, ... },
  * });
  * ```
@@ -108,6 +110,7 @@ export function createProductionHost(inputs: CreateProductionHostInputs): Produc
   return new ProductionHost({
     modelRegistry: inputs.extension.modelRegistry,
     cwd: inputs.extension.cwd,
+    ...(inputs.extension.uiContext !== undefined && { uiContext: inputs.extension.uiContext }),
     log: inputs.run.log,
     loadedManifest: inputs.run.loadedManifest,
     runId: inputs.run.runId,

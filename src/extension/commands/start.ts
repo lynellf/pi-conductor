@@ -151,7 +151,7 @@ export async function handleStart(
 
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
-      extension: { modelRegistry, cwd },
+      extension: { modelRegistry, cwd, uiContext: ctx.ui },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest as LoadedManifest,

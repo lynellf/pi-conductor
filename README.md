@@ -448,7 +448,10 @@ directly.
 ### Phases gate each other
 
 Work is sequenced in phases; don't start the next phase until the
-current one is green **and reviewed by a human**. Touch only what your
+current one is green and its plan checkboxes are ticked. Per-phase human
+review is not a gate — the overseer reviews specs up front and gives
+feedback at the end of the loop (see *Operating model* in `AGENTS.md`).
+Touch only what your
 task asks for; surface assumptions before implementing; if a task is
 non-trivial and no spec exists, write one. See `AGENTS.md` for the
 full working agreement.

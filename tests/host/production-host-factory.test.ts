@@ -113,6 +113,16 @@ describe("createProductionHost — Task 7A.5", () => {
     // through; the production host's job is to derive.
     expect(host.sessionDir).toBe(join(workdir, ".pi-conductor", "runs", "test-run-1", "sessions"));
     expect(host.agentDir).toBe(join(workdir, ".pi-conductor", "agent"));
+    expect(host.uiContext).toBeUndefined();
+  });
+
+  it("forwards an explicit `uiContext` override", () => {
+    const uiContext = { notify: () => {}, setStatus: () => {} };
+    const host = createProductionHost({
+      extension: { modelRegistry: makeModelRegistry(), cwd: workdir, uiContext },
+      run: { log: makeLog(), loadedManifest: makeLoadedManifest(), runId: "test-run-1" },
+    });
+    expect(host.uiContext).toBe(uiContext);
   });
 
   it("forwards an explicit `sessionDir` override", () => {
