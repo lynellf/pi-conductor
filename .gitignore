@@ -142,3 +142,7 @@ dist
 # Project-local installs (`pi install -l ./`) modify this;
 # we don't want to commit the installer's settings state.
 .pi/settings.json
+
+# Scratch / throwaway sample manifests for hand-testing the extension.
+# Not part of the published package.
+scratch/

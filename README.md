@@ -155,11 +155,94 @@ with the run_id.
 | `max_session_cost_usd` | any role | Per-invocation cap, **shared across model fallbacks** within that invocation (§8.1, §11.7). |
 | `max_run_cost_usd` | orchestrator only | Run-level cap. Rejected on workers (§13). |
 | `system_prompt` | any role | Path to a per-role system-prompt file the host loads. Plain prose, not frontmatter. |
-| `tools` | any role | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. |
+| `tools` | any role | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. See [Tools available to roles](#tools-available-to-roles) below for the full tool model and the `tools:`-omission footgun. |
 
 `version` is a human-bumped integer, **pinned at run-start and never
 mutated mid-run** (spec §10). `resumeRun` rejects a manifest whose
 version disagrees with the snapshot's pinned version.
+
+### Tools available to roles
+
+Each role session gets tools from **two sources**, and the manifest's
+`tools:` field is an **explicit allowlist**, not an extension of pi's
+defaults:
+
+**1. Conductor-defined machine-event tools — always on, force-injected.**
+
+`handoff` and `end` are defined by pi-conductor (TypeBox schemas in
+`src/seam/`, factories in `src/host/tools.ts`) and registered as
+`customTools` on every role session. They are added to the allowlist
+**regardless of what `tools:` declares** (§8.1); omitting them from
+`tools:` emits a §13 warning but does not disable them.
+
+- **`handoff`** — terminate this role's session and route to another
+  declared role. Workers may only hand off to the orchestrator; the
+  orchestrator may hand off to any declared worker (subject to visit
+  caps, §7.3). Args: `target_role: Role` (required, non-empty), plus
+  optional `reason: string` and `suggests_next: Role` (workers only,
+  non-binding — the orchestrator still emits its own legal handoff).
+- **`end`** — terminate this role's session and declare the run
+  complete. Legal only from the orchestrator (§7.2); a worker calling
+  `end` produces a `transition_rejected` record with `legal_targets`
+  surfaced. Args: optional `reason: string`.
+
+Both tools only **validate and record intent** into a per-session capture
+buffer and return a terminating message; they do **not** call `reduce`
+and do **not** persist — the loop owns those exclusively (§12.1).
+After a role's first valid `handoff`/`end` capture, the session is
+**sealed**: every other tool short-circuits, so work-after-handoff
+cannot mutate the workspace.
+
+**2. Built-in + custom tools — pass-through to pi's tool registry.**
+
+Every other name in `tools:` is resolved by pi's SDK, not pi-conductor.
+pi-conductor does not construct or restrict these — it passes the
+declared names straight through to `createAgentSession({ tools: [...] })`.
+
+pi's built-in tool set (the authoritative reference is **pi's own
+documentation** — see the links below; pi-conductor does not redefine
+it) is, as of pi 0.79.x:
+
+- **On by default (4):** `read`, `write`, `edit`, `bash`.
+- **Additional built-in read-only tools, opt-in via `tools:` (3):**
+  `grep`, `find`, `ls`.
+
+Extension-registered or custom tool names the host pi session makes
+available may also be named in `tools:`.
+
+> **Note the interaction with the `tools:`-allowlist footgun below:**
+> because pi-conductor treats `tools:` as an explicit allowlist (not an
+> extension of pi's defaults), a role that wants the standard file/shell
+> access must **name** `read`/`write`/`edit`/`bash` explicitly — they are
+> not inherited just because pi enables them by default in a plain
+> `pi` session. `grep`/`find`/`ls` likewise must be named to be available.
+
+**Reference — pi's tool documentation (the authority on the built-in
+set; pi-conductor is a pass-through consumer):**
+
+- [pi Quickstart — tools](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/quickstart.md)
+  (the "By default, pi gives the model four tools" statement + the
+  opt-in read-only tools).
+- [pi SDK reference — tools](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/sdk.md)
+  (the `createReadTool` / `createWriteTool` / `createEditTool` /
+  `createBashTool` / `createGrepTool` / `createFindTool` /
+  `createLsTool` factories, the `tools` / `excludeTools` / `noTools`
+  options, and custom-tool registration via `customTools` /
+  `pi.registerTool`).
+
+If those links 404 (pi's repo may be a monorepo at
+`earendil-works/pi` under `packages/coding-agent/docs/`), the same files
+ship inside the installed `@earendil-works/pi-coding-agent` package at
+`docs/quickstart.md` and `docs/sdk.md`.
+
+**Footgun — `tools:` is an explicit allowlist, not a default-extension.**
+A role receives **exactly** the names it declares plus `handoff`+`end` —
+not pi's four-tool default (`read`/`write`/`edit`/`bash`) on top.
+**Omitting `tools:` entirely gives the role only `handoff`+`end`** — no
+file or shell access, and no §13 warning fires (the §13 check only
+triggers when `tools:` is present but missing `handoff`/`end`). Such a
+role can emit machine events but cannot do work. Declare every tool a
+role actually needs.
 
 ---
 
