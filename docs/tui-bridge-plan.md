@@ -96,6 +96,11 @@ Task 7: CLI fallback degradation (stdin readline for ask_user)   [after Task 6]
    │
    └── Task 8: docs (extension-usage.md streaming+ask_user + records.jsonl
        layout fix; sdk-surface.md pinned surfaces) + real-model smoke transcript
+            │
+            └── Task 9: conductor-owned MessageRenderer for conduct.role.{text,tool}
+                (replaces the default CustomMessageComponent's flattened markdown
+                 rendering with structural role label + properly-themed markdown
+                 body; pinned in spec Resolved Q4 as the documented follow-up)
 ```
 
 The no-issues branch is the expected path; the issues branch is the
@@ -168,6 +173,30 @@ Exit criteria:
 - [x] Ready for final review at loop close and the pre-push hook
       (`pnpm lint && pnpm typecheck && pnpm test`).
 
+### Phase 5 — TUI renderer polish
+
+➡️ Sub-plan:
+[`docs/tui-bridge-plans/phase-5-renderer-polish.md`](tui-bridge-plans/phase-5-renderer-polish.md)
+(Task 9)
+
+Gate: Phase 4 complete (green + checkboxes ticked). The two
+`conduct.role.{text,tool}` `customType`s are stable, and the existing
+`{ role, kind }` `details` payload from the display sink is the
+authoritative input the new renderer will read.
+
+Exit criteria:
+- [ ] Task 9 green; manual TUI run shows properly-styled markdown
+      (headings and code blocks distinguished by the markdown theme,
+      not flattened to `customMessageText`).
+- [ ] `pnpm typecheck && pnpm build && pnpm test && pnpm lint &&
+      pnpm format:check` green; grep guard green.
+- [ ] `docs/sdk-surface.md` records the new pinned surfaces
+      (`registerMessageRenderer`, `MessageRenderer`, `MessageRenderOptions`,
+      `Theme`, `ThemeColor`, `getMarkdownTheme`, `Component`).
+- [ ] Real-model smoke transcript filed in
+      `docs/dev-run-transcripts/`.
+- [ ] Ready for review at the overseer's end-of-loop pass.
+
 ## Risks and mitigations
 
 | Risk | Impact | Mitigation |
@@ -196,10 +225,12 @@ Exit criteria:
    transcript filed; proceed to Phase 4.
 4. **After Phase 4 (Task 8):** docs + sample fixes, ready for final review
    at loop close + the pre-push hook (`pnpm lint && pnpm typecheck && pnpm test`).
+5. **After Phase 5 (Task 9):** TUI renderer polish end-to-end, manual
+   TUI run shows properly-styled markdown; ready for the overseer's
+   end-of-loop pass.
 
 ## Out of scope (explicit)
 
-- Bespoke message renderer / collapsible role sections (follow-up).
 - Persisting streamed entries to `records.jsonl` (display-only, per
   spec Resolved Q3).
 - `open_concerns` / findings-relay through the orchestrator (separate
