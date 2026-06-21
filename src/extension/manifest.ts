@@ -38,7 +38,7 @@
 
 import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, isAbsolute as pathIsAbsolute, win32 } from "node:path";
 
 /**
  * Default project-local manifest path, relative to the
@@ -100,7 +100,7 @@ export function resolveManifestPath(
   homeDir: string = homedir(),
 ): ResolvedManifestPath {
   if (typeof flagValue === "string" && flagValue.length > 0) {
-    const candidate = isAbsolute(flagValue) ? flagValue : join(cwd, flagValue);
+    const candidate = isAbsolutePath(flagValue) ? flagValue : join(cwd, flagValue);
     if (fileExists(candidate)) return candidate;
     return null;
   }
@@ -120,13 +120,13 @@ export function resolveManifestPath(
 }
 
 /**
- * `path.isAbsolute` re-implemented locally to avoid importing
- * `node:path` twice in this file (the join above is the only
- * `node:path` use). One-line abstraction; the win is that
- * tests can read the rule inline without a path-doc lookup.
+ * Absolute-path check for both native and Windows-style strings.
+ * `path.isAbsolute` covers the current platform; `win32.isAbsolute`
+ * keeps Windows drive-letter / UNC inputs from being treated as
+ * relative when the tests run on non-Windows platforms.
  */
-function isAbsolute(p: string): boolean {
-  return p.startsWith("/");
+function isAbsolutePath(p: string): boolean {
+  return pathIsAbsolute(p) || win32.isAbsolute(p);
 }
 
 /**

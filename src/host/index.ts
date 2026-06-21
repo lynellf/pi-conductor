@@ -125,6 +125,7 @@ export {
   getDefaultWorkerPrompt,
 } from "./defaults.js";
 export type {
+  ActiveSessionStats,
   ConfigOverrideContainer,
   RunConfigOverride,
   RunExecutionStatus,

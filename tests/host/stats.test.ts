@@ -423,6 +423,174 @@ describe("runStats (§11.8) — state and exitReason are distinct fields", () =>
   });
 });
 
+// ─── runStats: active session projection ───────────────────────────────
+
+describe("runStats (§11.8) — activeSession reflects the live same-role session", () => {
+  type ActiveSessionFixture = {
+    readonly role: string;
+    readonly sessionFile: string;
+    readonly model: string | null;
+  };
+
+  function readActiveSession(stats: RunStats): ActiveSessionFixture | null | undefined {
+    return (stats as { readonly activeSession?: ActiveSessionFixture | null }).activeSession;
+  }
+
+  it("returns the matching session_started model for an active declared-model session", () => {
+    const runId = "r1";
+    const def = makeDef();
+    const sessionFile = "/tmp/worker-r1.jsonl";
+    const records: PersistedRecord[] = [
+      {
+        type: "session_started",
+        run_id: runId,
+        role: "worker",
+        visit_index: 1,
+        state: "worker",
+        model: "stub:primary",
+        session_file: sessionFile,
+        parent_session: null,
+        ts: 100,
+      },
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "worker",
+          visit_count: { worker: 1 },
+          active_role_session: {
+            id: "session-1",
+            role: "worker",
+            session_file: sessionFile,
+          },
+          updated_at: 101,
+        },
+      },
+    ];
+    const stats = runStats(records, runId, def, "running");
+    expect(readActiveSession(stats)).toEqual({
+      role: "worker",
+      sessionFile,
+      model: "stub:primary",
+    });
+  });
+
+  it("returns model=<default> data when the active session_started.model is null", () => {
+    const runId = "r1";
+    const def = makeDef();
+    const sessionFile = "/tmp/worker-r1.jsonl";
+    const records: PersistedRecord[] = [
+      {
+        type: "session_started",
+        run_id: runId,
+        role: "worker",
+        visit_index: 1,
+        state: "worker",
+        model: null,
+        session_file: sessionFile,
+        parent_session: null,
+        ts: 100,
+      },
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "worker",
+          visit_count: { worker: 1 },
+          active_role_session: {
+            id: "session-1",
+            role: "worker",
+            session_file: sessionFile,
+          },
+          updated_at: 101,
+        },
+      },
+    ];
+    const stats = runStats(records, runId, def, "running");
+    expect(readActiveSession(stats)).toEqual({
+      role: "worker",
+      sessionFile,
+      model: null,
+    });
+  });
+
+  it("returns null when there is no latest checkpoint", () => {
+    const runId = "r1";
+    const def = makeDef();
+    const stats = runStats([], runId, def, "running");
+    expect(readActiveSession(stats)).toBeNull();
+  });
+
+  it("returns null when the latest checkpoint has no active_role_session", () => {
+    const runId = "r1";
+    const def = makeDef();
+    const records: PersistedRecord[] = [makeCheckpoint({ runId, currentRole: "worker" })];
+    const stats = runStats(records, runId, def, "running");
+    expect(readActiveSession(stats)).toBeNull();
+  });
+
+  it("returns null for the stale post-handoff transient when active_role_session.role differs", () => {
+    const runId = "r1";
+    const def = makeDef();
+    const records: PersistedRecord[] = [
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "worker",
+          visit_count: { worker: 1 },
+          active_role_session: {
+            id: "session-1",
+            role: "orchestrator",
+            session_file: "/tmp/orchestrator-r1.jsonl",
+          },
+          updated_at: 100,
+        },
+      },
+      {
+        type: "session_started",
+        run_id: runId,
+        role: "orchestrator",
+        visit_index: 1,
+        state: "orchestrator",
+        model: "stub:primary",
+        session_file: "/tmp/orchestrator-r1.jsonl",
+        parent_session: null,
+        ts: 99,
+      },
+    ];
+    const stats = runStats(records, runId, def, "running");
+    expect(readActiveSession(stats)).toBeNull();
+  });
+
+  it("returns null when the matching session_started record is missing", () => {
+    const runId = "r1";
+    const def = makeDef();
+    const records: PersistedRecord[] = [
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "worker",
+          visit_count: { worker: 1 },
+          active_role_session: {
+            id: "session-1",
+            role: "worker",
+            session_file: "/tmp/worker-r1.jsonl",
+          },
+          updated_at: 100,
+        },
+      },
+    ];
+    const stats = runStats(records, runId, def, "running");
+    expect(readActiveSession(stats)).toBeNull();
+  });
+});
+
 // ─── applyRunConfigOverride: validation ─────────────────────────────────
 
 describe("applyRunConfigOverride (§11.8) — non-positive override throws RunConfigError", () => {

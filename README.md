@@ -141,8 +141,10 @@ Inside any pi session in a project with `.pi/conductor.yaml`:
 ```
 
 You'll see the conductor's status line update as the orchestrator
-dispatches to workers; the run reaches a terminal state and notifies
-with the run_id.
+dispatches to workers; while a role session is active, the footer may
+also show `model=<provider:id>` or `model=<default>` for the current
+worker. The run reaches a terminal state and notifies with the
+run_id, and `/conduct:list` shows the same model token for active runs.
 
 ### `RoleConfig` fields
 

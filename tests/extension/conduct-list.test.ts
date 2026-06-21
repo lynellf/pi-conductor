@@ -185,6 +185,126 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
     );
   });
 
+  it("renders the active declared model token in list output", async () => {
+    const piDir = join(cwd, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      join(piDir, "conductor.yaml"),
+      "version: 1\nroles:\n  - name: orchestrator\n    is_orchestrator: true\n    system_prompt: .pi/roles/orchestrator.md\n    tools: [handoff, end]\n  - name: worker\n    max_visits: 3\n    system_prompt: .pi/roles/worker.md\n    tools: [handoff, end]\n",
+      "utf8",
+    );
+    const runsDir = join(cwd, ".pi-conductor", "runs");
+    await mkdir(runsDir, { recursive: true });
+    const runId = "list-model-test-1";
+    const sessionFile = "/tmp/list-model-test-1.jsonl";
+    const records = [
+      {
+        type: "session_started",
+        run_id: runId,
+        role: "worker",
+        visit_index: 1,
+        state: "worker",
+        model: "stub:primary",
+        session_file: sessionFile,
+        parent_session: null,
+        ts: 1,
+      },
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "worker",
+          visit_count: { worker: 1 },
+          active_role_session: {
+            id: "session-1",
+            role: "worker",
+            session_file: sessionFile,
+          },
+          updated_at: 2,
+        },
+      },
+    ];
+    await writeFile(
+      join(runsDir, `${runId}.jsonl`),
+      `${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const ext = await loadExtension("<test>", cwd);
+    const list = ext.commands.get("conduct:list");
+    expect(list).toBeDefined();
+    await list?.handler(
+      "",
+      makeCtx({
+        cwd,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+      }),
+    );
+    const summary = notifyCalls.find((n) => n.type === "info" && /Runs in /.test(n.msg));
+    expect(summary?.msg).toContain(`${runId} · worker · running · $0.000 · model=stub:primary`);
+  });
+
+  it("renders model=<default> for an active session with a null model", async () => {
+    const piDir = join(cwd, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      join(piDir, "conductor.yaml"),
+      "version: 1\nroles:\n  - name: orchestrator\n    is_orchestrator: true\n    system_prompt: .pi/roles/orchestrator.md\n    tools: [handoff, end]\n  - name: worker\n    max_visits: 3\n    system_prompt: .pi/roles/worker.md\n    tools: [handoff, end]\n",
+      "utf8",
+    );
+    const runsDir = join(cwd, ".pi-conductor", "runs");
+    await mkdir(runsDir, { recursive: true });
+    const runId = "list-default-model-test-1";
+    const sessionFile = "/tmp/list-default-model-test-1.jsonl";
+    const records = [
+      {
+        type: "session_started",
+        run_id: runId,
+        role: "worker",
+        visit_index: 1,
+        state: "worker",
+        model: null,
+        session_file: sessionFile,
+        parent_session: null,
+        ts: 1,
+      },
+      {
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: runId,
+          manifest_version: "1",
+          current_role: "worker",
+          visit_count: { worker: 1 },
+          active_role_session: {
+            id: "session-1",
+            role: "worker",
+            session_file: sessionFile,
+          },
+          updated_at: 2,
+        },
+      },
+    ];
+    await writeFile(
+      join(runsDir, `${runId}.jsonl`),
+      `${records.map((r) => JSON.stringify(r)).join("\n")}\n`,
+      "utf8",
+    );
+
+    const ext = await loadExtension("<test>", cwd);
+    const list = ext.commands.get("conduct:list");
+    expect(list).toBeDefined();
+    await list?.handler(
+      "",
+      makeCtx({
+        cwd,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+      }),
+    );
+    const summary = notifyCalls.find((n) => n.type === "info" && /Runs in /.test(n.msg));
+    expect(summary?.msg).toContain(`${runId} · worker · running · $0.000 · model=<default>`);
+  });
+
   it("renders an empty history gracefully (no trailing arrow)", async () => {
     // A run with no transitions yet (e.g., a
     // crashed run before any handoff) should NOT

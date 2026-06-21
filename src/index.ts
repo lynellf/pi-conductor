@@ -157,6 +157,7 @@ export { buildRunMemory } from "./core/run-memory.js";
 
 // ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
 export type {
+  ActiveSessionStats,
   applyRunConfigOverride,
   CreateProductionHostInputs,
   DefaultBundle,

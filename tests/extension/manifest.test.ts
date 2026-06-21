@@ -93,6 +93,18 @@ describe("resolveManifestPath", () => {
     await writeFile(absolutePath, "version: 1\nroles: []\n", "utf8");
     expect(resolveManifestPath(absolutePath, cwd, homeDir)).toBe(absolutePath);
   });
+
+  it("returns a Windows-style absolute flag value unchanged", async () => {
+    const windowsAbsolutePath = `C:\\tmp\\pi-conductor\\manifest.yaml`;
+    const previousCwd = process.cwd();
+    process.chdir(cwd);
+    try {
+      await writeFile(windowsAbsolutePath, "version: 1\nroles: []\n", "utf8");
+      expect(resolveManifestPath(windowsAbsolutePath, cwd, homeDir)).toBe(windowsAbsolutePath);
+    } finally {
+      process.chdir(previousCwd);
+    }
+  });
 });
 
 // ─── Phase 7D: HOME fallback (Task 7D.1) ────────────────────────────

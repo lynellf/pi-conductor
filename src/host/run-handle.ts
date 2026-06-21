@@ -45,7 +45,12 @@ import { type RunStats, runStats, type TransitionRecord } from "./stats.js";
 
 // Re-export the public types so existing consumers
 // (`src/index.ts`, external callers) keep working.
-export type { RunExecutionStatus, RunStats, TransitionRecord } from "./stats.js";
+export type {
+  ActiveSessionStats,
+  RunExecutionStatus,
+  RunStats,
+  TransitionRecord,
+} from "./stats.js";
 
 /**
  * Run config override payload. `maxRunCostUsd` is the only field

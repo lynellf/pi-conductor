@@ -45,6 +45,10 @@ import { formatTransitionTrace } from "../handoff-view.js";
 import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "../manifest.js";
 import { type HandleDeps, resolveRunBaseDir } from "./start.js";
 
+function formatActiveModelToken(model: string | null): string {
+  return model === null ? "<default>" : model;
+}
+
 /**
  * Max number of runs to render in a single notify.
  * `ctx.ui.notify` shows a single line in most TUI
@@ -121,7 +125,12 @@ export async function handleList(
     const records: readonly PersistedRecord[] = log.records(runId);
     const stats: RunStats = runStats(records, runId, loaded.def, "running");
     const trace = formatTransitionTrace(stats.transitionHistory);
-    const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}`;
+    const activeSession = stats.activeSession;
+    const modelPart =
+      activeSession === undefined || activeSession === null
+        ? ""
+        : ` · model=${formatActiveModelToken(activeSession.model)}`;
+    const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}${modelPart}`;
     lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
   }
   const overflow = runIds.length - lines.length;

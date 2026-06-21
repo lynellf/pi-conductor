@@ -39,6 +39,10 @@
 import type { RunHandle, RunStats, TransitionRecord } from "../host/index.js";
 import { countHandoffs } from "./handoff-view.js";
 
+function formatActiveModelToken(model: string | null): string {
+  return model === null ? "<default>" : model;
+}
+
 /** The status-line key used by `ctx.ui.setStatus`. The
  *  extension is the single owner of this key — no other
  *  extension in this package should `setStatus` under
@@ -54,7 +58,12 @@ export function formatConductStatus(stats: RunStats): string {
   const reason = stats.exitReason;
   const handoffs = countHandoffs(stats.transitionHistory);
   const cost = stats.costRollup.perRun.cost.toFixed(3);
-  return `conduct: ${state} · ${reason} · handoffs=${handoffs} · $${cost}`;
+  const activeSession = stats.activeSession;
+  const modelPart =
+    activeSession === undefined || activeSession === null
+      ? ""
+      : ` · model=${formatActiveModelToken(activeSession.model)}`;
+  return `conduct: ${state} · ${reason}${modelPart} · handoffs=${handoffs} · $${cost}`;
 }
 
 /**

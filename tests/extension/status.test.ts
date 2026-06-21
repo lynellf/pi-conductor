@@ -13,11 +13,19 @@ import { describe, expect, it } from "vitest";
 import { CONDUCT_STATUS_KEY, formatConductStatus } from "../../src/extension/status.js";
 import type { RunStats } from "../../src/host/index.js";
 
+type RunStatsFixture = RunStats & {
+  readonly activeSession?: {
+    readonly role: string;
+    readonly sessionFile: string;
+    readonly model: string | null;
+  } | null;
+};
+
 /** Build a `RunStats` literal with only the fields the
  *  formatter reads. Keeps the test focused — `RunStats`
  *  has ~10 fields, but `formatConductStatus` reads three. */
-function makeStats(overrides: Partial<RunStats> = {}): RunStats {
-  const base: RunStats = {
+function makeStats(overrides: Partial<RunStatsFixture> = {}): RunStatsFixture {
+  const base: RunStatsFixture = {
     runId: "test-run",
     manifestVersion: "1",
     state: "orchestrator",
@@ -132,5 +140,45 @@ describe("formatConductStatus", () => {
     ];
     const line = formatConductStatus(makeStats({ transitionHistory }));
     expect(line).toBe("conduct: orchestrator · running · handoffs=2 · $0.000");
+  });
+
+  it("renders the active declared model between the reason and handoffs", () => {
+    const line = formatConductStatus(
+      makeStats({
+        state: "worker",
+        activeSession: {
+          role: "worker",
+          sessionFile: "/tmp/worker-test.jsonl",
+          model: "anthropic:claude-sonnet-4-5",
+        },
+      }),
+    );
+    expect(line).toBe(
+      "conduct: worker · running · model=anthropic:claude-sonnet-4-5 · handoffs=0 · $0.000",
+    );
+  });
+
+  it("renders the default model token when the active session model is null", () => {
+    const line = formatConductStatus(
+      makeStats({
+        state: "worker",
+        activeSession: {
+          role: "worker",
+          sessionFile: "/tmp/worker-test.jsonl",
+          model: null,
+        },
+      }),
+    );
+    expect(line).toBe("conduct: worker · running · model=<default> · handoffs=0 · $0.000");
+  });
+
+  it("keeps the legacy line unchanged when activeSession is explicitly null", () => {
+    const line = formatConductStatus(makeStats({ activeSession: null }));
+    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000");
+  });
+
+  it("keeps the legacy line unchanged when activeSession is omitted", () => {
+    const line = formatConductStatus(makeStats());
+    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000");
   });
 });

@@ -47,6 +47,16 @@ import type { PersistedRecord } from "../persistence/log.js";
 export type RunExecutionStatus = "done" | "session_failed" | "aborted" | "running";
 
 /**
+ * The currently active role session visible to status/list while the
+ * checkpoint still points at the same role session.
+ */
+export interface ActiveSessionStats {
+  readonly role: Role;
+  readonly sessionFile: string;
+  readonly model: string | null;
+}
+
+/**
  * A single transition record as projected for the run stats.
  * Derived from `TransitionAccepted` / `TransitionRejected` records
  * — the same fields, in a narrower shape for the public surface.
@@ -78,6 +88,7 @@ export interface RunStats {
   readonly costRollup: RunRollup;
   readonly latestCheckpoint: Checkpoint | null;
   readonly recordsCount: number;
+  readonly activeSession?: ActiveSessionStats | null;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -101,10 +112,11 @@ export function runStats(
   def: MachineDefinition,
   exitReason: RunExecutionStatus,
 ): RunStats {
-  const latestCheckpoint = findLatestCheckpoint(records);
+  const latestCheckpoint = findLatestCheckpoint(records, runId);
   const costRollup = rollup(records, runId, def.orchestrator);
   const transitionHistory = extractTransitionHistory(records, runId);
   const recordsCount = countRecordsForRun(records, runId);
+  const activeSession = findActiveSession(records, runId, latestCheckpoint);
 
   // §11.8: `state` is the current role from the latest checkpoint.
   // If no checkpoint exists yet (the run hasn't started), fall
@@ -121,6 +133,7 @@ export function runStats(
     costRollup,
     latestCheckpoint,
     recordsCount,
+    activeSession,
   }) as RunStats;
 }
 
@@ -132,11 +145,106 @@ export function runStats(
  * `RecordLog.latestCheckpoint` (same pattern, separate impl so
  * `runStats` is pure over its `records` argument).
  */
-function findLatestCheckpoint(records: readonly PersistedRecord[]): Checkpoint | null {
+function findLatestCheckpoint(
+  records: readonly PersistedRecord[],
+  runId: string,
+): Checkpoint | null {
   for (let i = records.length - 1; i >= 0; i--) {
     const record = records[i];
-    if (record !== undefined && record.type === "checkpoint_snapshot") {
+    if (
+      record !== undefined &&
+      record.type === "checkpoint_snapshot" &&
+      record.checkpoint.run_id === runId
+    ) {
       return record.checkpoint;
+    }
+  }
+  return null;
+}
+
+/**
+ * Find the active session record that matches the checkpoint's live
+ * role session. Returns null when the checkpoint and lifecycle data
+ * are inconsistent.
+ */
+function findActiveSession(
+  records: readonly PersistedRecord[],
+  runId: string,
+  latestCheckpoint: Checkpoint | null,
+): ActiveSessionStats | null {
+  if (latestCheckpoint === null) {
+    return null;
+  }
+  const activeRoleSession = latestCheckpoint.active_role_session;
+  if (activeRoleSession === null) {
+    return null;
+  }
+  if (activeRoleSession.role !== latestCheckpoint.current_role) {
+    return null;
+  }
+
+  const started = findMatchingSessionStarted(
+    records,
+    runId,
+    activeRoleSession.role,
+    activeRoleSession.session_file,
+  );
+  if (started === null) {
+    return null;
+  }
+  return Object.freeze({
+    role: started.role,
+    sessionFile: started.session_file,
+    model: started.model,
+  });
+}
+
+/**
+ * `session_started` record projected to the fields the active-session
+ * derivation needs.
+ */
+type SessionStartedRecord = {
+  readonly type: "session_started";
+  readonly run_id: string;
+  readonly role: Role;
+  readonly visit_index: number;
+  readonly state: Role | "done";
+  readonly model: string | null;
+  readonly session_file: string;
+  readonly parent_session: string | null;
+  readonly ts: number;
+};
+
+/**
+ * Find the most recent `session_started` record for the active role
+ * session, matching by run, role, and session file.
+ */
+function findMatchingSessionStarted(
+  records: readonly PersistedRecord[],
+  runId: string,
+  role: Role,
+  sessionFile: string,
+): SessionStartedRecord | null {
+  for (let i = records.length - 1; i >= 0; i--) {
+    const record = records[i];
+    if (
+      record !== undefined &&
+      record.type === "session_started" &&
+      record.run_id === runId &&
+      record.role === role &&
+      record.session_file === sessionFile
+    ) {
+      return {
+        type: "session_started",
+        run_id: record.run_id,
+        role: record.role,
+        visit_index: record.visit_index,
+        state: record.state,
+        model: record.model,
+        session_file: record.session_file,
+        parent_session: record.parent_session,
+        ts: record.ts,
+      };
     }
   }
   return null;
