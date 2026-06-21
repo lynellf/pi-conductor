@@ -6,11 +6,11 @@
   "author": "Ezell <lynellf@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "github:earendil-works/pi-conductor"
+    "url": "github:lynellf/pi-conductor"
   },
-  "homepage": "https://github.com/earendil-works/pi-conductor#readme",
+  "homepage": "https://github.com/lynellf/pi-conductor#readme",
   "bugs": {
-    "url": "https://github.com/earendil-works/pi-conductor/issues"
+    "url": "https://github.com/lynellf/pi-conductor/issues"
   },
   "type": "module",
   "engines": {

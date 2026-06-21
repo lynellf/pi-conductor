@@ -30,7 +30,7 @@ It ships as a [pi](https://github.com/earendil-works/pi-coding-agent) package:
 pi install ./           # from this checkout (dev)
 # or, once published:
 pi install npm:pi-conductor
-pi install git:github.com/earendil-works/pi-conductor
+pi install git:github.com/lynellf/pi-conductor
 ```
 
 After install, four slash commands are available inside any pi session:
