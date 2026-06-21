@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.0] - 2026-06-21
+
+### Extension shell
+- Press `Escape` to abort the active conductor run (with a confirmation prompt). Status footer shows an `Esc abort` hint while a session is running.
+
 ## [0.1.1] - 2026-06-21
 
 ### Chore
