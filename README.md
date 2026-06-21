@@ -73,7 +73,9 @@ The extension layer (`extensions/conduct.ts` + `src/extension/`) is the UX shell
 that wraps the engine. It does not become the engine: worker role sessions are
 still spawned by the production `Host` via the standalone `createAgentSession`,
 not via `ctx.newSession()` / `ctx.fork()`. A grep guard on `extensions/**/*.ts`
-rejects those two calls — the §9.5 boundary holds.
+rejects those two calls — the §9.5 boundary holds. While a conduct run is
+active in the TUI, press `Esc` and confirm to abort it; the standalone `conduct`
+CLI does not add that Escape interrupt.
 
 For the full architecture rationale, see
 [`docs/orchestrator-fsm-spec.md`](docs/orchestrator-fsm-spec.md) (the
@@ -147,7 +149,8 @@ You'll see the conductor's status line update as the orchestrator dispatches to
 workers; while a role session is active, the footer may also show
 `model=<provider:id>` or `model=<default>` for the current worker. The run
 reaches a terminal state and notifies with the run_id, and `/conduct:list` shows
-the same model token for active runs.
+the same model token for active runs. While the run is active, `Esc` opens a
+confirmation dialog; confirming aborts the run just like `/conduct:abort`.
 
 ### `RoleConfig` fields
 

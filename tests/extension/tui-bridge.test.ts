@@ -55,6 +55,8 @@ function makeCtx(cwd: string) {
     ui: {
       notify: vi.fn(),
       setStatus: vi.fn(),
+      confirm: vi.fn().mockResolvedValue(true),
+      onTerminalInput: () => () => {},
     },
   } as unknown as Parameters<StartHandler>[1];
 }

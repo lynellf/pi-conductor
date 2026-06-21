@@ -61,7 +61,7 @@ import { createInitialCheckpoint } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type { Checkpoint, MachineDefinition, Role, SessionLifecycleEvent } from "../core/types.js";
 import type { CheckpointSnapshot, RecordLog } from "../persistence/log.js";
-import type { Host } from "./host.js";
+import type { Host, RoleSession } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
@@ -249,21 +249,42 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
   // The initial orchestrator session is seeded with `goal` via the
   // runLoop's initialGoal parameter. Task 16.5 replaces this with a
   // per-turn run-memory injection.
+  let activeSession: RoleSession | null = null;
+  let pendingAbortReason: string | null = null;
+  let abortRequested = false;
+  const abortControl = {
+    async setActiveSession(session: RoleSession | null): Promise<void> {
+      activeSession = session;
+      if (session === null) return;
+      if (!abortRequested || pendingAbortReason === null) return;
+      await host.abortSession(session, pendingAbortReason);
+    },
+    async requestAbort(reason: string): Promise<void> {
+      if (abortRequested) return;
+      abortRequested = true;
+      pendingAbortReason = reason;
+      if (activeSession === null) return;
+      await host.abortSession(activeSession, reason);
+    },
+  };
+
   const completionPromise = runLoop({
     def,
     initialCheckpoint,
     host,
     initialGoal: goal,
     getRunCostCap,
+    abortControl,
   });
   return new RunHandle({
     runId,
     def,
     log,
     configOverrideContainer,
+    requestAbort: abortControl.requestAbort,
     completionPromise: completionPromise.then((r) => ({
       finalCheckpoint: r.finalCheckpoint,
-      exitReason: r.exitReason === "done" ? "done" : ("session_failed" as const),
+      exitReason: r.exitReason,
     })),
   });
 }

@@ -28,6 +28,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { SessionTerminalReason } from "../../src/host/host.js";
 import { runLoop } from "../../src/host/loop.js";
 import {
   type Checkpoint,
@@ -74,6 +75,7 @@ class FakeSession {
   script: ScriptedEmission[];
   captureBuffer: EmissionCapture[] = [];
   sealed = false;
+  aborted = false;
   prompts: string[] = [];
   /** Subscribers for `subscribe()` — exercised in Task 17; here we just
    *  record them so we can assert the loop subscribes once. */
@@ -106,6 +108,8 @@ class FakeSession {
       },
       prompt: async (text) => {
         this.prompts.push(text);
+        await Promise.resolve();
+        if (this.aborted) return;
         const next = this.script.shift();
         if (next === undefined || next.kind === "no_emission") return;
         if (next.kind === "emit_handoff" || next.kind === "emit_illegal_handoff") {
@@ -146,7 +150,9 @@ class FakeHost implements Host {
   readonly sessionQueue: FakeSession[] = [];
   sessionCounter = 0;
   spawnedSessions: FakeSession[] = [];
+  spawnedById = new Map<string, FakeSession>();
   aborted: Array<{ sessionId: string; reason: string }> = [];
+  terminalReasons = new Map<string, SessionTerminalReason>();
   sealed: string[] = [];
   // Captures for assertions about what was called.
   seedRunMemoryCalls: number = 0;
@@ -169,6 +175,7 @@ class FakeHost implements Host {
       throw new Error(`scripted session queue exhausted for role '${role}'`);
     }
     this.spawnedSessions.push(next);
+    this.spawnedById.set(next.sessionId, next);
     return next.toRoleSession();
   }
 
@@ -204,18 +211,21 @@ class FakeHost implements Host {
 
   async abortSession(session: RoleSession, reason: string): Promise<void> {
     this.aborted.push({ sessionId: session.sessionId, reason });
+    const fake = this.spawnedById.get(session.sessionId);
+    if (fake !== undefined) {
+      fake.aborted = true;
+    }
+    if (!this.terminalReasons.has(session.sessionId)) {
+      this.terminalReasons.set(session.sessionId, "user_aborted");
+    }
   }
 
   sealSession(session: RoleSession): void {
     this.sealed.push(session.sessionId);
   }
 
-  sessionTerminalReason(_session: RoleSession): null {
-    // Loop-test default: no host-driven termination. Loop tests
-    // exercise the contract-breach path (no_emission /
-    // extra_emission / schema_invalid), not the cap/model_error
-    // paths (Task 17 / Task 18). Cost tests cover the latter.
-    return null;
+  sessionTerminalReason(session: RoleSession): SessionTerminalReason {
+    return this.terminalReasons.get(session.sessionId) ?? null;
   }
 
   runCostSoFar(): number {
@@ -274,12 +284,20 @@ function makeDef(): MachineDefinition {
   }) as MachineDefinition;
 }
 
-function makeRun(initialCheckpoint: Checkpoint, host: FakeHost) {
+function makeRun(
+  initialCheckpoint: Checkpoint,
+  host: FakeHost,
+  abortControl?: {
+    setActiveSession(session: RoleSession | null): Promise<void>;
+    requestAbort(reason: string): Promise<void>;
+  },
+) {
   return runLoop({
     def: makeDef(),
     initialCheckpoint,
     host,
     initialGoal: "do the thing",
+    ...(abortControl !== undefined && { abortControl }),
   });
 }
 
@@ -799,5 +817,42 @@ describe("runLoop — host hook usage", () => {
 
     expect(host.sealed).toEqual([]);
     expect(host.aborted).toEqual([]);
+  });
+
+  it("returns aborted after a user abort interrupts the active prompt and records session_failed(user_aborted)", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    host.enqueue(new FakeSession("orchestrator", "sess-1", [{ kind: "emit_end" }]));
+
+    let activeSession: RoleSession | null = null;
+    const abortControl = {
+      async setActiveSession(session: RoleSession | null): Promise<void> {
+        activeSession = session;
+      },
+      async requestAbort(reason: string): Promise<void> {
+        if (activeSession === null) return;
+        await host.abortSession(activeSession, reason);
+      },
+    };
+
+    const run = makeRun(initialCheckpoint, host, abortControl);
+    await Promise.resolve();
+    await Promise.resolve();
+    await abortControl.requestAbort("user confirmed Escape interrupt");
+
+    const result = await run;
+    expect(result.exitReason).toBe("aborted");
+    expect(host.aborted).toEqual([
+      { sessionId: "sess-1", reason: "user confirmed Escape interrupt" },
+    ]);
+
+    const records = log.records(initialCheckpoint.run_id);
+    const failed = records.find((r) => r.type === "session_failed");
+    expect(failed).toMatchObject({
+      type: "session_failed",
+      failure_reason: "user_aborted",
+    });
+    expect(records.some((r) => r.type === "transition_accepted")).toBe(false);
   });
 });

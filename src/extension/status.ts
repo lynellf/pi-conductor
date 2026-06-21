@@ -63,7 +63,8 @@ export function formatConductStatus(stats: RunStats): string {
     activeSession === undefined || activeSession === null
       ? ""
       : ` · model=${formatActiveModelToken(activeSession.model)}`;
-  return `conduct: ${state} · ${reason}${modelPart} · handoffs=${handoffs} · $${cost}`;
+  const escapeHint = reason === "running" ? " · Esc abort" : "";
+  return `conduct: ${state} · ${reason}${modelPart} · handoffs=${handoffs} · $${cost}${escapeHint}`;
 }
 
 /**

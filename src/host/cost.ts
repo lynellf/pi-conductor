@@ -104,6 +104,8 @@ export function addUsage(a: UsageRecord, b: UsageRecord): UsageRecord {
  *      `message_end`, the listener calls `addMessageUsage`. On
  *      `turn_end`, the listener calls `evaluateCap` and may call
  *      `session.abort()` + `setTerminalReason` if the cap fires.
+ *      The external abort path uses the same terminal-reason seam
+ *      with `user_aborted`.
  *   3. After `prompt()` resolves, the loop calls
  *      `host.captureUsage(session)` (= `state.usage()`) and
  *      `host.sessionTerminalReason(session)` (= `state.terminalReason`).

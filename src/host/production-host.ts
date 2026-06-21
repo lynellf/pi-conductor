@@ -475,13 +475,14 @@ export class ProductionHost implements Host {
     return total;
   }
 
-  async abortSession(_session: RoleSession, _reason: string): Promise<void> {
-    // No-op: the per-session cap abort is driven from the
-    // session-event subscription in `attachSessionEventHandler`,
-    // which has direct access to the `AgentSession`. This method
-    // is reserved for explicit external aborts (e.g.,
-    // user-initiated run abort via `RunHandle.abort`) — those
-    // would also call `session.abort()` here in a future task.
+  async abortSession(session: RoleSession, _reason: string): Promise<void> {
+    const state = this.sessionStates.get(session.sessionId);
+    const agent = this.agentsBySessionId.get(session.sessionId);
+    if (state === undefined || agent === undefined) return;
+    if (state.terminalReason !== null) return;
+    state.markAborted();
+    state.setTerminalReason("user_aborted");
+    await agent.abort();
   }
 
   sealSession(_session: RoleSession): void {

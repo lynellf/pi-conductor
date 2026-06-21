@@ -82,6 +82,7 @@ export class RunHandle {
     finalCheckpoint: Checkpoint;
     exitReason: "done" | "session_failed" | "aborted";
   }>;
+  private readonly requestAbort: (reason: string) => Promise<void>;
   private aborted = false;
   private abortedReason: string | null = null;
   /**
@@ -98,6 +99,7 @@ export class RunHandle {
     def: MachineDefinition;
     log: RecordLog;
     configOverrideContainer: ConfigOverrideContainer;
+    requestAbort: (reason: string) => Promise<void>;
     completionPromise: Promise<{
       finalCheckpoint: Checkpoint;
       exitReason: "done" | "session_failed" | "aborted";
@@ -107,6 +109,7 @@ export class RunHandle {
     this.def = opts.def;
     this.log = opts.log;
     this.configOverrideContainer = opts.configOverrideContainer;
+    this.requestAbort = opts.requestAbort;
     this.completionPromise = opts.completionPromise;
   }
 
@@ -120,15 +123,19 @@ export class RunHandle {
   }
 
   /**
-   * Request the loop to abort. Sets the `aborted` flag; the loop
-   * notices on its next prompt-resolution path and exits with
-   * `exitReason: "aborted"`. The flag is host state (not reducer
-   * state), so a crashed run that resumes does NOT inherit an
-   * old abort signal — the user re-issues `abort()` if needed.
+   * Request the loop to abort while the run is still running. Sets the
+   * `aborted` flag once and forwards the abort to the active session bridge.
+   * The loop notices on its next prompt-resolution path and exits with
+   * `exitReason: "aborted"`. A terminal run is a no-op here. The flag is
+   * host state (not reducer state), so a crashed run that resumes does NOT
+   * inherit an old abort signal — the user re-issues `abort()` if needed.
    */
   async abort(reason: string): Promise<void> {
+    if (this.aborted) return;
+    if (this.computeExitReason() !== "running") return;
     this.aborted = true;
     this.abortedReason = reason;
+    await this.requestAbort(reason);
   }
 
   /**

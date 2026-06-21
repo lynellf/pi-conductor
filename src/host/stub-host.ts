@@ -320,12 +320,14 @@ export class StubHost implements Host {
     return next ?? null;
   }
 
-  async abortSession(_session: RoleSession, _reason: string): Promise<void> {
-    // No-op: the cap abort is driven from the session-event
-    // subscription in `spawnRole`, which has direct access to
-    // the AgentSession. The Host interface method is reserved
-    // for explicit external aborts (e.g., user-initiated run
-    // abort via RunHandle.abort).
+  async abortSession(session: RoleSession, _reason: string): Promise<void> {
+    const state = this.sessionStates.get(session.sessionId);
+    const agent = this.agentsBySessionId.get(session.sessionId);
+    if (state === undefined || agent === undefined) return;
+    if (state.terminalReason !== null) return;
+    state.markAborted();
+    state.setTerminalReason("user_aborted");
+    await agent.abort();
   }
 
   sealSession(_session: RoleSession): void {

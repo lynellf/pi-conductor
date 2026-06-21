@@ -315,6 +315,8 @@ export interface Host {
    *    `models[]` list (Task 18, §8.2). On list exhaustion, the
    *    loop records `session_failed(model_error)` and dispatches
    *    the orchestrator with a "role unavailable" payload.
+   *  - `user_aborted` — the user explicitly aborted the run via
+   *    `/conduct:abort` or confirmed Escape.
    *
    * The host's contract: this method returns a non-null value iff
    * the session terminated abnormally AND the host knows the
@@ -358,4 +360,8 @@ export interface Host {
  * See `Host.sessionTerminalReason`. `null` is represented as the
  * absence of a string — the function returns a union with `null`.
  */
-export type SessionTerminalReason = "session_cost_cap_exceeded" | "model_error" | null;
+export type SessionTerminalReason =
+  | "session_cost_cap_exceeded"
+  | "model_error"
+  | "user_aborted"
+  | null;

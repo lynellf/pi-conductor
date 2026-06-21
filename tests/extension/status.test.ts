@@ -76,12 +76,12 @@ describe("formatConductStatus", () => {
 
   it("renders the running-orchestrator case", () => {
     const line = formatConductStatus(makeStats());
-    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000");
+    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000 · Esc abort");
   });
 
   it("renders the worker-state transition", () => {
     const line = formatConductStatus(makeStats({ state: "worker" }));
-    expect(line).toBe("conduct: worker · running · handoffs=0 · $0.000");
+    expect(line).toBe("conduct: worker · running · handoffs=0 · $0.000 · Esc abort");
   });
 
   it("renders the done terminal", () => {
@@ -104,7 +104,7 @@ describe("formatConductStatus", () => {
     // `RunStats` marks rollup fields readonly; cast to a writable view for the test fixture.
     (stats.costRollup.perRun as { cost: number }).cost = 0.012345;
     expect(formatConductStatus(stats)).toBe(
-      "conduct: orchestrator · running · handoffs=0 · $0.012",
+      "conduct: orchestrator · running · handoffs=0 · $0.012 · Esc abort",
     );
   });
 
@@ -139,7 +139,7 @@ describe("formatConductStatus", () => {
       },
     ];
     const line = formatConductStatus(makeStats({ transitionHistory }));
-    expect(line).toBe("conduct: orchestrator · running · handoffs=2 · $0.000");
+    expect(line).toBe("conduct: orchestrator · running · handoffs=2 · $0.000 · Esc abort");
   });
 
   it("renders the active declared model between the reason and handoffs", () => {
@@ -154,7 +154,7 @@ describe("formatConductStatus", () => {
       }),
     );
     expect(line).toBe(
-      "conduct: worker · running · model=anthropic:claude-sonnet-4-5 · handoffs=0 · $0.000",
+      "conduct: worker · running · model=anthropic:claude-sonnet-4-5 · handoffs=0 · $0.000 · Esc abort",
     );
   });
 
@@ -169,16 +169,18 @@ describe("formatConductStatus", () => {
         },
       }),
     );
-    expect(line).toBe("conduct: worker · running · model=<default> · handoffs=0 · $0.000");
+    expect(line).toBe(
+      "conduct: worker · running · model=<default> · handoffs=0 · $0.000 · Esc abort",
+    );
   });
 
   it("keeps the legacy line unchanged when activeSession is explicitly null", () => {
     const line = formatConductStatus(makeStats({ activeSession: null }));
-    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000");
+    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000 · Esc abort");
   });
 
   it("keeps the legacy line unchanged when activeSession is omitted", () => {
     const line = formatConductStatus(makeStats());
-    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000");
+    expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000 · Esc abort");
   });
 });

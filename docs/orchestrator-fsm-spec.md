@@ -411,8 +411,12 @@ The gap signal. Required for "prevent unexpected behavior from gaps" to hold.
 `usage` is captured on **both** terminals. A session that crashed after consuming 50k
 tokens still cost those tokens; recording usage only on `session_ended` would make the
 run total silently fail to reconcile. `visit_index` makes "implementer ran 3 times"
-reconstructable from records alone. `failure_reason` gains `"session_cost_cap_exceeded"`
-and `"model_error"`. `session_failed` triggers recovery (§8.2, §9.4). The session tree
+reconstructable from records alone. `failure_reason` gains `"session_cost_cap_exceeded"`,
+`"model_error"`, and driver-owned `"user_aborted"`. User abort is host state: when an
+active role session is aborted by the user, the driver records `session_failed` with
+`failure_reason: "user_aborted"`, clears `active_role_session` through the lifecycle
+reducer, and returns an aborted run result without routing through reducer `handoff` or
+`end`. Other `session_failed` causes trigger recovery (§8.2, §9.4). The session tree
 formed by `parent_session` is the execution trace; drilling into a role's actual turns
 is pi's `/tree`, not the machine's concern.
 

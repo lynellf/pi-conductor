@@ -674,6 +674,7 @@ describe("RunHandle.runConfig (§11.8) — updates the shared configOverride con
       def: makeDef(),
       log: new InMemoryRecordLog(),
       configOverrideContainer: container,
+      requestAbort: async () => {},
       completionPromise: new Promise(() => {
         // never resolves — the test doesn't await `completion()`.
       }),

@@ -99,6 +99,13 @@ import { formatRunMemorySeed } from "./run-memory.js";
 // ─── Public API ────────────────────────────────────────────────────────
 
 /** Options for `runLoop`. */
+export interface RunAbortControl {
+  /** Register the session currently awaiting prompt() or cleanup. */
+  setActiveSession(session: RoleSession | null): Promise<void>;
+  /** Request abort for the active session (if any). */
+  requestAbort(reason: string): Promise<void>;
+}
+
 export interface RunLoopOptions {
   /** Pinned manifest snapshot the reducer consumes as `def` (§12). */
   readonly def: MachineDefinition;
@@ -137,6 +144,8 @@ export interface RunLoopOptions {
    * cap without constructing a RunHandle.
    */
   readonly runCostCap?: number | null;
+  /** Optional abort bridge used by `RunHandle.abort()` / Escape. */
+  readonly abortControl?: RunAbortControl;
 }
 
 /** Result of `runLoop`. */
@@ -144,7 +153,7 @@ export interface RunLoopResult {
   /** Final checkpoint (state may be `"done"` or the role that hit a breach). */
   readonly finalCheckpoint: Checkpoint;
   /** Why the loop returned. */
-  readonly exitReason: "done" | "session_failed";
+  readonly exitReason: "done" | "session_failed" | "aborted";
 }
 
 /**
@@ -341,10 +350,51 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         // Track this session as parent for the next session_started.
         parentSessionId = sessionId;
 
+        const finishUserAbort = (usage: UsageRecord): RunLoopResult => {
+          const failed = reduceLifecycle(checkpoint, "session_failed", def, {
+            role,
+            sessionId,
+            sessionFile,
+            ts: Date.now(),
+            visit_index: visitIndex,
+            parent_session: sessionParentId,
+            usage,
+            failureReason: "user_aborted",
+            model: session.model,
+          });
+          checkpoint = failed.checkpoint;
+          host.persistRecord(failed.record);
+          host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+          return { finalCheckpoint: checkpoint, exitReason: "aborted" };
+        };
+
         // ── Inner loop: prompt → validate → reduce (with retry on rejection) ──
         while (true) {
-          await session.prompt(nextSeed);
+          await opts.abortControl?.setActiveSession(session);
+          const prePromptHostReason = host.sessionTerminalReason(session);
+          if (prePromptHostReason === "user_aborted") {
+            capturedUsage = host.captureUsage(session);
+            inner = { kind: "failed" };
+            return finishUserAbort(capturedUsage);
+          }
+
+          let promptError: unknown = null;
+          try {
+            await session.prompt(nextSeed);
+          } catch (err) {
+            promptError = err;
+          }
           capturedUsage = host.captureUsage(session);
+
+          const hostReasonOnPrompt = host.sessionTerminalReason(session);
+          if (hostReasonOnPrompt === "user_aborted") {
+            sessionHostReason = hostReasonOnPrompt;
+            inner = { kind: "failed" };
+            return finishUserAbort(capturedUsage);
+          }
+          if (promptError !== null && hostReasonOnPrompt === null) {
+            throw promptError;
+          }
 
           const captures = session.readCaptureBuffer();
           const validated = validateEmission(captures);
@@ -602,6 +652,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         await session.dispose().catch((disposeError) => {
           void disposeError;
         });
+        await opts.abortControl?.setActiveSession(null);
       }
 
       // ── Task 18: model_error → fallback to next model ──────────

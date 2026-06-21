@@ -37,6 +37,18 @@ export interface StatusUpdate {
   readonly text: string | undefined;
 }
 
+export interface ConfirmCall {
+  readonly title: string;
+  readonly message: string;
+  readonly options?: { readonly signal?: AbortSignal; readonly timeout?: number };
+}
+
+export interface TestUiHarness {
+  readonly confirmCalls: ConfirmCall[];
+  triggerTerminalInput(data: string): void;
+  readonly terminalInputListenerCount: () => number;
+}
+
 /**
  * What the harness records from the factory.
  * Mirrors pi's `Extension` shape (only the fields the
@@ -183,14 +195,55 @@ export function makeCtx(opts: {
   manifestPath?: string;
   notify?: (msg: string, type: "info" | "warning" | "error") => void;
   setStatus?: (key: string, text: string | undefined) => void;
-}): ExtensionCommandContext {
+  confirm?: (
+    title: string,
+    message: string,
+    options?: { readonly signal?: AbortSignal; readonly timeout?: number },
+  ) => Promise<boolean>;
+}): ExtensionCommandContext & { __testUi: TestUiHarness } {
   const modelRegistry = opts.modelRegistry ?? ModelRegistry.inMemory(AuthStorage.inMemory());
   const notify = opts.notify ?? (() => {});
   const setStatus = opts.setStatus ?? (() => {});
+  const confirm = opts.confirm ?? (async () => true);
+  const confirmCalls: ConfirmCall[] = [];
+  const terminalInputHandlers: Array<
+    (data: string) => { readonly consume?: boolean; readonly data?: string } | undefined
+  > = [];
+  const testUi: TestUiHarness = {
+    confirmCalls,
+    triggerTerminalInput(data: string): void {
+      for (const handler of [...terminalInputHandlers]) {
+        const result = handler(data);
+        if (result?.consume === true) break;
+      }
+    },
+    terminalInputListenerCount: () => terminalInputHandlers.length,
+  };
   return {
     cwd: opts.cwd,
     modelRegistry,
-    ui: { notify, setStatus } as unknown as ExtensionCommandContext["ui"],
+    ui: {
+      notify,
+      setStatus,
+      confirm: async (title: string, message: string, options?: ConfirmCall["options"]) => {
+        confirmCalls.push({ title, message, ...(options !== undefined && { options }) });
+        return await confirm(title, message, options);
+      },
+      input: async () => undefined,
+      select: async () => undefined,
+      onTerminalInput: (
+        handler: (
+          data: string,
+        ) => { readonly consume?: boolean; readonly data?: string } | undefined,
+      ) => {
+        terminalInputHandlers.push(handler);
+        return () => {
+          const index = terminalInputHandlers.indexOf(handler);
+          if (index >= 0) terminalInputHandlers.splice(index, 1);
+        };
+      },
+    } as unknown as ExtensionCommandContext["ui"],
     getFlag: (name: string) => (name === "conduct-manifest" ? opts.manifestPath : undefined),
-  } as unknown as ExtensionCommandContext;
+    __testUi: testUi,
+  } as unknown as ExtensionCommandContext & { __testUi: TestUiHarness };
 }

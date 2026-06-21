@@ -11,10 +11,10 @@
 > they apply on top of this file.
 >
 > After that, read the rest of this file, then the spec
-> (`docs/orchestrator-fsm-spec.md`) before making changes. When a task
-> matches a skill's phase (define → plan → build → verify → review → ship), load
-> that skill and follow its steps in order, including its verification step —
-> skills are workflows, not suggestions.
+> (`docs/orchestrator-fsm-spec.md`) before making changes. When a task matches a
+> skill's phase (define → plan → build → verify → review → ship), load that
+> skill and follow its steps in order, including its verification step — skills
+> are workflows, not suggestions.
 >
 > Quick map for this repo: spec-driven-development (no spec yet) →
 > planning-and-task-breakdown → incremental-implementation →
@@ -25,17 +25,6 @@
 Guidance for any agent (human or LLM) working in this repo. Read this first; it
 restates only what the spec/plan assume as standing context. Source of truth for
 behavior is `docs/orchestrator-fsm-spec.md`.
-
-## Current status (post-Phase 7C)
-
-- **Phases 1–5 (pure core + stub-driven E2E):** complete, human-reviewed, 276 → 329 tests green.
-- **Phase 7A (production `Host`):** complete, human-reviewed, 380 tests green. The 7A.5 real-model smoke was structurally deferred until Phase 7C landed the installable launch surface (relocated to Phase 7C Task 7C.2).
-- **Phase 7B (extension shell):** complete, human-reviewed, 412 tests green. `/conduct`, `/conduct:resume`, `/conduct:list`, `/conduct:abort`, and `--conduct-manifest` are registered.
-- **Phase 7C (packaging + CLI + docs):** complete; final review at loop close. `pi install ./` works, `bin/conduct` ships. 432 tests green; typecheck/build/lint/format:check clean.
-- **Phase 7D (HOME-scoped manifest + prompt discovery):** complete; pending end-of-loop review. 514 tests green; typecheck/build/lint/format:check clean. Manifest resolution chain (flag → cwd → HOME) and v1/v2 back-compat prompt resolution implemented per the acknowledged spec delta. No core modules touched; grep guard green.
-
-See the spec for the pivot rationale (delivery-shape
-change only; FSM spec §12 invariants untouched).
 
 ## What this is
 
@@ -50,14 +39,15 @@ layers, kept strictly apart:
   TypeBox emission schemas + cost roll-up. Zero pi imports. Zero I/O.
 - **SDK host driver** (`src/host`, Phase 4+): owns the orchestration loop,
   spawns role sessions via `createAgentSession`, persists records, enforces cost
-  caps. The only place in the engine layer that imports `@earendil-works/pi-coding-agent`.
+  caps. The only place in the engine layer that imports
+  `@earendil-works/pi-coding-agent`.
 - **Extension UX shell** (`extensions/conduct.ts` + `src/extension/`): thin
   handlers that resolve the manifest, build a production `Host` via
-  `createProductionHost`, and forward to `startRun` / `resumeRun` / `listRuns`
-  / `RunHandle.abort`. The extension layer may import pi (same posture as
-  `src/host/`); the grep guard does NOT scan `src/extension/` or
-  `extensions/`. The shell does NOT call `ctx.newSession()` /
-  `ctx.fork()` — a grep guard on `extensions/**/*.ts` rejects those calls.
+  `createProductionHost`, and forward to `startRun` / `resumeRun` / `listRuns` /
+  `RunHandle.abort`. The extension layer may import pi (same posture as
+  `src/host/`); the grep guard does NOT scan `src/extension/` or `extensions/`.
+  The shell does NOT call `ctx.newSession()` / `ctx.fork()` — a grep guard on
+  `extensions/**/*.ts` rejects those calls.
 
 The core is imported by the host; the host is never imported by the core.
 
@@ -99,15 +89,15 @@ explicit decision recorded in `docs/`.
    same schema is the seam contract and derives the TS type via `Static<>`. No
    Zod. The runtime `typebox` package (pi bundles `typebox@1.1.38`) is the
    peer-dependency declaration in `package.json`; do not swap back to
-   `@sinclair/typebox` (different package, would break tool-arg validation
-   at runtime — the seam and the SDK would use distinct TypeBox instances).
-10. **No `ctx.newSession()` / `ctx.fork()` in `extensions/`.** Role sessions
-    are spawned by the production `Host` via the standalone `createAgentSession`
+   `@sinclair/typebox` (different package, would break tool-arg validation at
+   runtime — the seam and the SDK would use distinct TypeBox instances).
+10. **No `ctx.newSession()` / `ctx.fork()` in `extensions/`.** Role sessions are
+    spawned by the production `Host` via the standalone `createAgentSession`
     only. The grep guard on `extensions/**/*.ts` rejects `ctx.newSession(` and
-    `ctx.fork(` substrings. This is the §9.5 boundary — putting role sessions
-    in pi's session tree would break the host-owned `run_id`-keyed log (§11.1).
-    The extension pivot plan §1 documents why this is a delivery-shape change
-    only, not a re-architecture.
+    `ctx.fork(` substrings. This is the §9.5 boundary — putting role sessions in
+    pi's session tree would break the host-owned `run_id`-keyed log (§11.1). The
+    extension pivot plan §1 documents why this is a delivery-shape change only,
+    not a re-architecture.
 
 ## Code conventions
 
@@ -201,18 +191,18 @@ pnpm-workspace.yaml     # pnpm config + supply-chain hardening (camelCase keys)
 ## Verification
 
 Phase gates are real gates — don't start the next phase until the current one is
-green (verification below) and its plan checkboxes are ticked. **Per-phase
-human review is not a gate.** The overseer owns specs and high-level direction
-up front and gives feedback at the end of the loop, not between phases; see
-*Operating model* under *Working in this repo* below. The one exception is a
+green (verification below) and its plan checkboxes are ticked. **Per-phase human
+review is not a gate.** The overseer owns specs and high-level direction up
+front and gives feedback at the end of the loop, not between phases; see
+_Operating model_ under _Working in this repo_ below. The one exception is a
 spec review: a new spec must be acknowledged by the overseer before
 implementation against it starts (specs are the overseer's concern).
 
 - `pnpm typecheck` — clean (strict + `noUncheckedIndexedAccess`); uses
   `tsconfig.test.json` so tests are type-checked too. `tsconfig.test.json`
   overrides `exclude` to drop `"tests"` (inherited from the base
-  `tsconfig.json`) — without this override, no test file enters the
-  program and the gate is a false signal.
+  `tsconfig.json`) — without this override, no test file enters the program and
+  the gate is a false signal.
 - `pnpm build` — emits `dist/` with `.d.ts`.
 - `pnpm test` — all green; `tests/grep-guard.test.ts` passes.
 - `pnpm lint` (`biome check .`) / `pnpm format:check` — clean.
@@ -239,21 +229,21 @@ those exactly. The grep guard is part of `pnpm test`, not an afterthought.
   work, B before lifecycle/cost, C before the SDK host). Don't jump ahead.
 - **Tick plan checkboxes as you go.** When a task has a plan artifact with
   Markdown checkboxes (`docs/**/phase-*.md` task lists, checkpoints, gates,
-  exit-criteria blocks), tick `[x]` every box whose acceptance/verification
-  step you actually performed in the same change that implements it — including
+  exit-criteria blocks), tick `[x]` every box whose acceptance/verification step
+  you actually performed in the same change that implements it — including
   parent-plan summary blocks that mirror the sub-plan. Leave a box `[ ]` only
-  when its step is genuinely not done (e.g. a deferred manual run, an item
-  owned by someone else). Do not tick a box for work you did not do, and do not
-  leave a completed step unticked. This keeps the overseer from having to
-  re-derive progress from commits.
+  when its step is genuinely not done (e.g. a deferred manual run, an item owned
+  by someone else). Do not tick a box for work you did not do, and do not leave
+  a completed step unticked. This keeps the overseer from having to re-derive
+  progress from commits.
 - **Operating model — overseer + agent.** The human is an overseer: they own
   specs and high-level direction and give feedback at the **end of the loop**,
   not between phases. Do not block on per-phase human review; once a phase is
-  green and its checkboxes are ticked, proceed to the next. The two things
-  that *do* wait on the human: (1) a brand-new spec before implementation
-  against it starts, and (2) the final end-of-loop review. Surface assumptions
-  and open questions in plan docs so the overseer can spot them at a glance;
-  don't silently resolve them.
+  green and its checkboxes are ticked, proceed to the next. The two things that
+  _do_ wait on the human: (1) a brand-new spec before implementation against it
+  starts, and (2) the final end-of-loop review. Surface assumptions and open
+  questions in plan docs so the overseer can spot them at a glance; don't
+  silently resolve them.
 - **No pi imports creep into the core.** If you reach for
   `@earendil-works/pi-coding-agent` in
   `src/core`/`src/manifest`/`src/seam`/`src/cost`, stop — that code belongs in
