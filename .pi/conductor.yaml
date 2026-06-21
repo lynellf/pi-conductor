@@ -18,7 +18,7 @@ roles:
 
   - name: assistant
     max_visits: 10
-    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
+    models: [openai-codex:gpt-5.4-mini, opencode-go:deepseek-v4-flash]
     system_prompt: roles/assistant.md
     tools: [read, grep, ask_user, handoff, end]
 
@@ -36,7 +36,7 @@ roles:
 
   - name: implementer
     max_visits: 10
-    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
+    models: [opencode-go:deepseek-v4-flash, openai-codex:gpt-5.4-mini]
     system_prompt: roles/implementer.md
     tools: [read, edit, write, bash, handoff, end]
 
