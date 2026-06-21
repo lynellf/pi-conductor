@@ -151,3 +151,6 @@ dist
 # Scratch / throwaway sample manifests for hand-testing the extension.
 # Not part of the published package.
 scratch/
+
+# Agent orchestration
+.pi/
