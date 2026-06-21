@@ -388,12 +388,40 @@ describe("runLoop — happy path", () => {
 // ─── §11.3 contract breach: NO reduce call ────────────────────────────
 
 describe("runLoop — contract breach (§11.3)", () => {
-  it("zero captures → session_failed(no_emission), no reduce, no transition_rejected", async () => {
+  it("zero captures → recovery prompt can emit a valid transition", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const sess = new FakeSession("orchestrator", "sess-1", [
+      { kind: "no_emission" },
+      { kind: "emit_end", reason: "approved after recovery" },
+    ]);
+
+    host.enqueue(sess);
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("done");
+    expect(result.finalCheckpoint.current_role).toBe("done");
+    expect(sess.prompts).toHaveLength(2);
+    expect(sess.prompts[1]).toContain("did not call `handoff` or `end`");
+
+    const records = log.records(initialCheckpoint.run_id);
+    const accepted = records.find((r): r is TransitionAccepted => r.type === "transition_accepted");
+    expect(accepted?.event).toBe("end");
+    expect(records.some((r) => r.type === "session_failed")).toBe(false);
+  });
+
+  it("zero captures after recovery → session_failed(no_emission), no reduce, no transition_rejected", async () => {
     const log = new InMemoryRecordLog();
     const host = new FakeHost("run-1", log);
     const initialCheckpoint = createInitialCheckpoint(makeDef());
 
-    host.enqueue(new FakeSession("orchestrator", "sess-1", [{ kind: "no_emission" }]));
+    const sess = new FakeSession("orchestrator", "sess-1", [
+      { kind: "no_emission" },
+      { kind: "no_emission" },
+    ]);
+    host.enqueue(sess);
 
     const result = await makeRun(initialCheckpoint, host);
 
@@ -407,6 +435,7 @@ describe("runLoop — contract breach (§11.3)", () => {
     expect(failed).toBeDefined();
     expect(failed?.failure_reason).toBe("no_emission");
     expect(failed?.role).toBe("orchestrator");
+    expect(sess.prompts).toHaveLength(2);
 
     // CRITICAL: no transition_rejected record and no checkpoint_snapshot
     // for this session (the reducer was never called).

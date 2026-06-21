@@ -17,11 +17,13 @@
  *      yields one of: `ok`, `breach: no_emission`,
  *      `breach: extra_emission`, `breach: schema_invalid`.
  *
- *   6. On `breach`: fires `reduceLifecycle(session_failed)` with the
- *      breach reason, persists exactly one `session_failed` record, and
- *      **does not call `reduce`** (§11.3: contract breaches are
- *      `session_failed`, not `transition_rejected`). The run ends here;
- *      escalation is out of scope for v1 (§9.4 / Task 18).
+ *   6. On `breach`: `no_emission` gets one in-session recovery prompt.
+ *      If recovery also breaches, or if the first breach is
+ *      `extra_emission` / `schema_invalid`, fires
+ *      `reduceLifecycle(session_failed)` with the breach reason,
+ *      persists exactly one `session_failed` record, and **does not
+ *      call `reduce`** (§11.3: contract breaches are `session_failed`,
+ *      not `transition_rejected`).
  *
  *   7. On `ok`: calls `reduce` (Phase 2) and persists the resulting
  *      `transition_accepted` / `transition_rejected` record. The canonical
@@ -310,6 +312,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       let sessionHostReason: SessionTerminalReason = null;
       let capturedUsage: UsageRecord = ZERO_USAGE;
       let nextSeed = seed;
+      let recoveringFromNoEmission = false;
 
       try {
         const sessionId = session.sessionId;
@@ -357,6 +360,15 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             // applies — the host's reason reflects the upstream cause.
             const hostReason = host.sessionTerminalReason(session);
             sessionHostReason = hostReason;
+            if (
+              hostReason === null &&
+              validated.reason === "no_emission" &&
+              !recoveringFromNoEmission
+            ) {
+              recoveringFromNoEmission = true;
+              nextSeed = formatNoEmissionRecoveryMessage(role, def);
+              continue;
+            }
             const failureReason: string = hostReason ?? validated.reason;
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
@@ -508,6 +520,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             // rejected record (above), then surface legal_targets to the
             // model and re-prompt.
             nextSeed = formatRejectionMessage(reduceResult);
+            recoveringFromNoEmission = false;
             continue;
           }
 
@@ -700,6 +713,25 @@ const ZERO_USAGE: UsageRecord = Object.freeze({
   tokens: 0,
   cost: 0,
 }) as UsageRecord;
+
+/**
+ * Format a recovery prompt for a role turn that returned without a
+ * captured `handoff` or `end`. This stays in the same live session so
+ * the model can convert its just-produced natural-language conclusion
+ * into the required conductor tool call. If this prompt also produces
+ * no emission, the normal `session_failed(no_emission)` path fires.
+ */
+function formatNoEmissionRecoveryMessage(role: Role, def: MachineDefinition): string {
+  const action =
+    role === def.orchestrator
+      ? "call exactly one conductor tool now: `handoff` to a legal next role, or `end` if the run is complete."
+      : `call exactly one conductor tool now: \`handoff\` to \`${def.orchestrator}\` with your verdict or status in \`reason\`.`;
+  return [
+    "Your previous response did not call `handoff` or `end`, so the conductor cannot advance.",
+    "Do not do more investigation or call any non-conductor tools.",
+    action,
+  ].join(" ");
+}
 
 /**
  * Format a `transition_rejected` result into a follow-up user message

@@ -12,25 +12,25 @@ version: 1
 roles:
   - name: orchestrator
     is_orchestrator: true
-    models: [opencode-go:minimax-m3]
+    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
     max_run_cost_usd: 25.0
     system_prompt: .pi/roles/orchestrator.md
-    tools: [handoff, end]
+    tools: [handoff, end, ask_user]
 
   - name: planner
     max_visits: 10
-    models: [opencode-go:glm-5.2]
+    models: [openai-codex:gpt-5.5, opencode-go:glm-5.2]
     system_prompt: .pi/roles/planner.md
     tools: [read, edit, write, bash, handoff, end, ask_user]
 
   - name: implementer
     max_visits: 10
-    models: [opencode-go:minimax-m3]
+    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, write, bash, handoff, end]
 
   - name: reviewer
     max_visits: 10
-    models: [opencode-go:glm-5.2]
+    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
     system_prompt: .pi/roles/reviewer.md
     tools: [read, grep, handoff, end]
