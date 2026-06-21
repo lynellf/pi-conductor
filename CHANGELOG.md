@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] - 2026-06-21
+
+### Chore
+- Allow build scripts for `@google/genai` and `protobufjs` (transitive deps of `@earendil-works/pi-coding-agent@0.79.1`) so CI's `pnpm install --frozen-lockfile` passes under `strictDepBuilds: true`.
+
 ## [0.1.0] - 2026-06-20
 
 ### Core
