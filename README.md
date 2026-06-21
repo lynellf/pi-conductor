@@ -346,7 +346,7 @@ The full authority is
 
 ### Prerequisites
 
-- Node.js ≥ 20, pnpm (matches the pi ecosystem). No npm/yarn.
+- Node.js ≥ 22.19.0, pnpm (matches the pi ecosystem). No npm/yarn.
 - Install: `pnpm install` (also installs Lefthook git hooks via an allowlisted
   postinstall).
 

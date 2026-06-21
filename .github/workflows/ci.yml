@@ -27,9 +27,11 @@ jobs:
         with:
           version: 10.33.1
 
+      # Node 22.19.0 is the minimum supported runtime for the locked pi SDK
+      # stack (`@earendil-works/pi-*` / `undici@8.3.0`).
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22.19.0
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile

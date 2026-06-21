@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1] - 2026-06-21
+
+### Chore
+- Bump minimum supported Node.js to 22.19.0 in CI (`.github/workflows/ci.yml`) and the `engines` field; required by the locked pi SDK stack (`@earendil-works/pi-*` / `undici@8.3.0`).
+
 ## [0.2.0] - 2026-06-21
 
 ### Extension shell
