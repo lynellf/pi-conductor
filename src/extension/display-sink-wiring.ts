@@ -33,7 +33,7 @@
  * it via the SDK's `getMarkdownTheme()` with no
  * `defaultTextStyle.color` override (the bug the default
  * `CustomMessageComponent` has — see
- * `docs/tui-bridge-plans/phase-5-renderer-polish.md` §Diagnosis).
+ * `the TUI bridge polish spec Diagnosis).
  * Any code fences the LLM emits (```…```) are rendered as code
  * blocks by the markdown theme's native handling.
  */

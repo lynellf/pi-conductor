@@ -102,6 +102,14 @@ export type GetFlagValue = (name: string) => boolean | string | undefined;
 export interface HandleDeps {
   readonly getFlag: GetFlagValue;
   readonly displaySink?: DisplaySink;
+  /**
+   * Override for the home directory used in the manifest
+   * resolution chain's HOME fallback step. Undefined in
+   * production (defaults to `os.homedir()`). An empty
+   * string disables the HOME fallback — useful for
+   * hermetic tests.
+   */
+  readonly homeDir?: string;
 }
 
 /**
@@ -137,16 +145,20 @@ export async function handleStart(
   const manifestPath = resolveManifestPath(
     typeof flagValue === "string" ? flagValue : undefined,
     ctx.cwd,
+    deps.homeDir,
   );
   if (manifestPath === null) {
     // The notification names every source the resolver tried
     // (flag → cwd → HOME) so the user can diagnose "is my
     // HOME fallback in the way?" or "is my cwd-local manifest
     // in the right place?" without re-reading the resolution
-    // chain. The HOME path is the user's actual `os.homedir()`
-    // (mirrors what `resolveManifestPath` uses internally) so
-    // the diagnostic is concrete, not abstract.
-    const homePath = join(homedir(), HOME_MANIFEST_PATH);
+    // chain. The HOME path uses `deps.homeDir` when available
+    // (hermetic tests); production defaults to `os.homedir()`
+    // inside `resolveManifestPath`.
+    const homePath =
+      deps.homeDir !== undefined
+        ? join(deps.homeDir, HOME_MANIFEST_PATH)
+        : join(homedir(), HOME_MANIFEST_PATH);
     ctx.ui.notify(
       `No conductor manifest found. Tried --conduct-manifest="${
         flagValue ?? ""

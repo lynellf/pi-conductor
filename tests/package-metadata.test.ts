@@ -14,10 +14,10 @@
  *   2. The `keywords` field includes `pi-package` (discoverability).
  *   3. Each declared extension path resolves to an existing file and
  *      the file exports a default function (the `ExtensionFactory`
- *      contract — see `docs/extensions.md`).
+ *      contract — see `the pi extensions spec`).
  *   4. The three pi-bundled packages (`@earendil-works/pi-coding-agent`,
  *      `@earendil-works/pi-ai`, `typebox`) are peer dependencies with a
- *      `"*"` range (per `docs/packages.md`). `@earendil-works/pi-tui`
+ *      `"*"` range (per `the pi packages spec`). `@earendil-works/pi-tui`
  *      is also a peer dep — the conductor-owned message renderer
  *      imports `Component`/`Container`/`Markdown`/`Text` from it
  *      (Phase 5); the SDK uses it internally but does not re-export
@@ -26,8 +26,8 @@
  *      live only in `devDependencies` (i.e. anything imported by these
  *      files must be in `dependencies` or `peerDependencies`).
  *
- * The real-model smoke + manual `pi install ./` proof are documented
- * in `docs/dev-run-transcripts/` (relocated from Phase 7A.5).
+ * Phase 7A.5 real-model smoke is structurally deferred; not yet run.
+ * The package surface is validated by CI-level structural assertions.
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -97,7 +97,7 @@ describe("package metadata (pi extension surface)", () => {
     const peers = pkg.peerDependencies ?? {};
     expect(peers[peerName]).toBeDefined();
     // pi bundles the package; we pin a wildcard range so the consumer's
-    // installed version satisfies the peer (matches docs/packages.md).
+    // installed version satisfies the peer (matches the pi packages spec).
     expect(peers[peerName]).toBe("*");
   });
 
@@ -122,7 +122,7 @@ describe("extension entrypoints (pi extension surface)", () => {
     expect(existsSync(abs)).toBe(true);
     const stat = statSync(abs);
     // Either a single .ts file (loaded directly by jiti) or a
-    // directory pi walks for *.ts files (per docs/packages.md).
+    // directory pi walks for *.ts files (per the pi packages spec).
     expect(stat.isFile() || stat.isDirectory()).toBe(true);
   });
 

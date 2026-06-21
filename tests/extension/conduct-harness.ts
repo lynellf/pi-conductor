@@ -21,6 +21,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import conductFactory from "../../extensions/conduct.js";
+import { handleList } from "../../src/extension/commands/list.js";
+import { handleResume } from "../../src/extension/commands/resume.js";
+import { type GetFlagValue, handleStart } from "../../src/extension/commands/start.js";
 
 /** Notification record captured by the fake ctx. */
 export interface NotifyCall {
@@ -81,6 +84,7 @@ export interface RecordedExtension {
 export async function loadExtension(
   _extensionPath: string,
   _cwd: string,
+  homeDir?: string,
 ): Promise<RecordedExtension> {
   const ext: RecordedExtension = {
     commands: new Map(),
@@ -145,6 +149,24 @@ export async function loadExtension(
     events: { on: () => {}, emit: () => {} },
   };
   await conductFactory(api as unknown as Parameters<typeof conductFactory>[0]);
+
+  if (homeDir !== undefined) {
+    const getFlag: GetFlagValue = () => undefined;
+    for (const [name, handlerFn] of [
+      ["conduct", handleStart],
+      ["conduct:resume", handleResume],
+      ["conduct:list", handleList],
+    ] as const) {
+      const cmd = ext.commands.get(name);
+      if (cmd) {
+        ext.commands.set(name, {
+          ...cmd,
+          handler: (args, ctx) => handlerFn(args, ctx, { getFlag, homeDir }),
+        });
+      }
+    }
+  }
+
   return ext;
 }
 

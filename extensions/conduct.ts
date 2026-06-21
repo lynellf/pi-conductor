@@ -33,7 +33,7 @@
  *
  * ## Factory discipline
  *
- * `docs/extensions.md` is explicit: the factory may run in
+ * `the pi extensions spec` is explicit: the factory may run in
  * invocations that never start a session (e.g. `pi --help`).
  * No `startRun` / `resumeRun` / file I/O / polling starts
  * from this function. The factory only registers commands
@@ -45,7 +45,7 @@
  *
  * ## `default` export (the explicit exception to AGENTS.md)
  *
- * AGENTS.md says "named exports only". `docs/extensions.md`
+ * AGENTS.md says "named exports only". `the pi extensions spec`
  * + pi's `ExtensionFactory` type require the entrypoint to
  * be the module's `default` export — pi's loader calls
  * `await jiti.import(extensionPath, { default: true })` and
@@ -98,11 +98,13 @@ function withDeps(
   ) => Promise<void>,
   getFlag: GetFlagValue,
   displaySink: HandleDeps["displaySink"],
+  homeDir?: string,
 ): (args: string, ctx: Parameters<typeof handleStart>[1]) => Promise<void> {
   return (args, ctx) =>
     handler(args, ctx, {
       getFlag,
       ...(displaySink !== undefined && { displaySink }),
+      ...(homeDir !== undefined && { homeDir }),
     });
 }
 
@@ -132,7 +134,7 @@ export default function conductExtension(pi: ExtensionAPI): void {
   // text entries and presents them with a bold structural
   // role label + a properly-themed markdown body (see
   // `src/extension/conduct-message-renderer.ts` for the
-  // design and `docs/tui-bridge-plans/phase-5-renderer-polish.md`
+  // design and `the TUI bridge polish spec`
   // for the rationale). Phase 5.5 removed the
   // `conduct.role.tool` registration — the sink suppresses tool
   // events, so that renderer was dead code. The orchestrator-role

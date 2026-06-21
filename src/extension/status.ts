@@ -1,7 +1,7 @@
 /**
  * Status line formatter for the live run — Phase 7B, with
  * the handoff-visibility augmentation (Phase 8 / spec
- * `docs/handoff-visibility-spec.md` R2).
+ * `the handoff-visibility spec R2).
  *
  * `ctx.ui.setStatus` takes a short string shown in the TUI
  * footer. The plan's 7B.4 acceptance is "the status line

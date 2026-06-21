@@ -13,9 +13,9 @@
  * **What this test does NOT do.** The plan's 7A.5 acceptance
  * also lists "A real-model run against the developer's pi
  * auth/config reaches a terminal state" — that requires API
- * keys, runs outside CI, and produces a transcript under
- * `docs/dev-run-transcripts/`. Until those land, the factory is
- * validated by the unit tests + the parity tests in
+ * keys and runs outside CI. Phase 7A.5 real-model smoke is
+ * structurally deferred; not yet run. The factory is validated
+ * by the unit tests + the parity tests in
  * `production-host-parity.test.ts` (which drive a real
  * `runLoop` via the stub provider and exercise the same code
  * paths the factory constructs).

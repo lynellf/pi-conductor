@@ -63,7 +63,9 @@ describe("extension shell — Task 7B.2: /conduct start handler (no-run branches
     // path `<cwd>/.pi/conductor.yaml` is absent. The
     // plan's 7B.2 acceptance: "Missing manifest
     // produces a user-facing notification and no run."
-    const ext = await loadExtension("<test>", cwd);
+    // Pass homeDir: "" to disable the HOME fallback —
+    // hermetic test; no real ~/.pi/conductor.yaml.
+    const ext = await loadExtension("<test>", cwd, "");
     const conduct = ext.commands.get("conduct");
     expect(conduct).toBeDefined();
 
@@ -110,7 +112,10 @@ describe("extension shell — Task 7B.2: /conduct start handler (no-run branches
     // source the resolver tried, including the HOME fallback
     // (~/.pi/conductor.yaml). The user reading the message can
     // see at a glance that the resolver checked cwd AND HOME.
-    const ext = await loadExtension("<test>", cwd);
+    // Pass homeDir: "" to disable the actual HOME fallback;
+    // the notification message still mentions .pi/conductor.yaml
+    // and <cwd>/ by convention.
+    const ext = await loadExtension("<test>", cwd, "");
     const conduct = ext.commands.get("conduct");
     expect(conduct).toBeDefined();
     await conduct?.handler(

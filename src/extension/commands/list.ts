@@ -69,13 +69,19 @@ export async function handleList(
   const manifestPath = resolveManifestPath(
     typeof flagValue === "string" ? flagValue : undefined,
     ctx.cwd,
+    deps.homeDir,
   );
   if (manifestPath === null) {
     // Mirror the start + resume handlers' no-manifest
     // notification (see start.ts for the rationale on the
-    // multi-source diagnostic). The `homePath` is the
-    // user's actual `os.homedir()`.
-    const homePath = join(homedir(), HOME_MANIFEST_PATH);
+    // multi-source diagnostic). The HOME path uses
+    // `deps.homeDir` when available (hermetic tests);
+    // production defaults to `os.homedir()` inside
+    // `resolveManifestPath`.
+    const homePath =
+      deps.homeDir !== undefined
+        ? join(deps.homeDir, HOME_MANIFEST_PATH)
+        : join(homedir(), HOME_MANIFEST_PATH);
     ctx.ui.notify(
       `No conductor manifest found. Tried --conduct-manifest="${
         flagValue ?? ""

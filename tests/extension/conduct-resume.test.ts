@@ -53,7 +53,8 @@ describe("extension shell — Task 7B.3: /conduct:resume validation", () => {
   });
 
   it("notifies when the manifest is missing (same rule as /conduct)", async () => {
-    const ext = await loadExtension("<test>", cwd);
+    // Pass homeDir: "" to disable the HOME fallback — hermetic test.
+    const ext = await loadExtension("<test>", cwd, "");
     const resume = ext.commands.get("conduct:resume");
     expect(resume).toBeDefined();
     await resume?.handler(

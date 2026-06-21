@@ -6,7 +6,7 @@
  * `CustomMessage` body content to `customMessageText` (light gray)
  * via its `defaultTextStyle.color` override, which makes markdown
  * headings read as raw syntax and JSON arguments read as raw text
- * (see `docs/tui-bridge-plans/phase-5-renderer-polish.md` §Diagnosis).
+ * (see `the TUI bridge polish spec Diagnosis).
  *
  * This module registers a conductor-owned renderer for the
  * streamed `conduct.role.text` `customType` that takes over the

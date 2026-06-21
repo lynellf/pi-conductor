@@ -11,8 +11,7 @@
 > they apply on top of this file.
 >
 > After that, read the rest of this file, then the spec
-> (`docs/orchestrator-fsm-spec.md`) and the current phase sub-plan
-> (`docs/orchestrator-fsm-plans/phase-*.md`) before making changes. When a task
+> (`docs/orchestrator-fsm-spec.md`) before making changes. When a task
 > matches a skill's phase (define → plan → build → verify → review → ship), load
 > that skill and follow its steps in order, including its verification step —
 > skills are workflows, not suggestions.
@@ -21,35 +20,29 @@
 > planning-and-task-breakdown → incremental-implementation →
 > test-driven-development → code-review-and-quality →
 > git-workflow-and-versioning. High-stakes / unfamiliar core code →
-> doubt-driven-development. UI/SDK host work → source-driven-development (verify
-> against pinned SDK surfaces in `docs/sdk-surface.md`).
+> doubt-driven-development. UI/SDK host work → source-driven-development.
 
 Guidance for any agent (human or LLM) working in this repo. Read this first; it
 restates only what the spec/plan assume as standing context. Source of truth for
-behavior is `docs/orchestrator-fsm-spec.md`; sequencing is in
-`docs/orchestrator-fsm-plan.md` + `docs/orchestrator-fsm-plans/*`. Delivery plan
-(shipping as a pi extension) is in `docs/extension-pivot-plan.md` +
-`docs/extension-pivot-plans/*`.
+behavior is `docs/orchestrator-fsm-spec.md`.
 
 ## Current status (post-Phase 7C)
 
 - **Phases 1–5 (pure core + stub-driven E2E):** complete, human-reviewed, 276 → 329 tests green.
 - **Phase 7A (production `Host`):** complete, human-reviewed, 380 tests green. The 7A.5 real-model smoke was structurally deferred until Phase 7C landed the installable launch surface (relocated to Phase 7C Task 7C.2).
 - **Phase 7B (extension shell):** complete, human-reviewed, 412 tests green. `/conduct`, `/conduct:resume`, `/conduct:list`, `/conduct:abort`, and `--conduct-manifest` are registered.
-- **Phase 7C (packaging + CLI + docs):** complete; final review at loop close. `pi install ./` works, `bin/conduct` ships, README + `AGENTS.md` + main FSM plan + `docs/extension-usage.md` reflect the extension framing. 432 tests green; typecheck/build/lint/format:check clean.
-- **Phase 7D (HOME-scoped manifest + prompt discovery):** complete; pending end-of-loop review. 514 tests green; typecheck/build/lint/format:check clean. Manifest resolution chain (flag → cwd → HOME) and v1/v2 back-compat prompt resolution implemented per the acknowledged spec delta (`docs/home-scoped-discovery-spec.md`). No core modules touched; grep guard green.
+- **Phase 7C (packaging + CLI + docs):** complete; final review at loop close. `pi install ./` works, `bin/conduct` ships. 432 tests green; typecheck/build/lint/format:check clean.
+- **Phase 7D (HOME-scoped manifest + prompt discovery):** complete; pending end-of-loop review. 514 tests green; typecheck/build/lint/format:check clean. Manifest resolution chain (flag → cwd → HOME) and v1/v2 back-compat prompt resolution implemented per the acknowledged spec delta. No core modules touched; grep guard green.
 
-See `docs/extension-pivot-plan.md` for the pivot rationale (delivery-shape
-change only; FSM spec §12 invariants untouched) and `docs/extension-usage.md`
-for the user-facing surface.
+See the spec for the pivot rationale (delivery-shape
+change only; FSM spec §12 invariants untouched).
 
 ## What this is
 
 `pi-conductor` orchestrates multi-role LLM workflows on
 [pi](https://github.com/earendil-works/pi-coding-agent) via a **guarded,
 observable handoff state machine**. It ships as a pi extension exposing
-`/conduct`, `/conduct:resume`, `/conduct:list`, and `/conduct:abort`
-(`docs/extension-usage.md` walks through the surface end-to-end). Three
+`/conduct`, `/conduct:resume`, `/conduct:list`, and `/conduct:abort`. Three
 layers, kept strictly apart:
 
 - **Pure core** (`src/core`, `src/manifest`, `src/seam`, `src/cost`,
@@ -202,13 +195,6 @@ biome.json               # linter + formatter (replaces ESLint + Prettier)
 lefthook.yml             # git hooks: pre-push runs lint + typecheck + tests
 docs/
   orchestrator-fsm-spec.md            # the spec (authority)
-  orchestrator-fsm-plan.md            # task index + checkpoints A–E
-  orchestrator-fsm-plans/phase-*.md   # per-phase task detail
-  extension-pivot-plan.md             # pivot delivery plan (parent of 7A/7B/7C)
-  extension-pivot-plans/phase-7*.md   # per-pivot-phase task detail
-  extension-usage.md                  # user-facing extension surface (/conduct, resume/list/abort, etc.)
-  sdk-surface.md                      # pinned SDK primitives (Phase 4)
-  dev-run-transcripts/                # manual real-model smoke transcripts
 pnpm-workspace.yaml     # pnpm config + supply-chain hardening (camelCase keys)
 ```
 

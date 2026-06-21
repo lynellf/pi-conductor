@@ -38,7 +38,8 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
   });
 
   it("notifies when the manifest is missing (same rule as /conduct)", async () => {
-    const ext = await loadExtension("<test>", cwd);
+    // Pass homeDir: "" to disable the HOME fallback — hermetic test.
+    const ext = await loadExtension("<test>", cwd, "");
     const list = ext.commands.get("conduct:list");
     expect(list).toBeDefined();
     await list?.handler(

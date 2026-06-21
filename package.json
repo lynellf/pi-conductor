@@ -1,8 +1,17 @@
 {
   "name": "pi-conductor",
   "version": "0.1.0",
-  "private": true,
   "description": "Multi-role LLM orchestration via a guarded, observable handoff state machine — installs as a pi extension exposing `/conduct`.",
+  "license": "MIT",
+  "author": "Ezell <lynellf@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "github:earendil-works/pi-conductor"
+  },
+  "homepage": "https://github.com/earendil-works/pi-conductor#readme",
+  "bugs": {
+    "url": "https://github.com/earendil-works/pi-conductor/issues"
+  },
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -10,7 +19,10 @@
   "files": [
     "dist",
     "extensions",
-    "README.md"
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -30,7 +42,16 @@
     ]
   },
   "keywords": [
-    "pi-package"
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "orchestration",
+    "llm-workflow",
+    "state-machine",
+    "fsm",
+    "multi-agent",
+    "agent-workflow",
+    "claude"
   ],
   "scripts": {
     "build": "tsc",
@@ -43,6 +64,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "audit": "pnpm audit --prod",
+    "prepare": "pnpm build",
     "prepublishOnly": "pnpm typecheck && pnpm build && pnpm test"
   },
   "peerDependencies": {
