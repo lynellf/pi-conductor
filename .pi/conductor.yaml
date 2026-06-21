@@ -1,36 +1,47 @@
-# pi-conductor manifest — spec §8 example.
-#
-# Source of truth for the orchestrator FSM in this repo. The host
-# driver reads this file at run-start, validates it (Phase 1 Task 4),
-# derives a pinned MachineDefinition (Phase 1 Task 4), and the pure
-# FSM core consumes that definition as `def`.
-#
-# This file mirrors the §8 example in the spec verbatim. Validation
-# and tests assert against this fixture; edit both together.
-#
-version: 1
+# Live conductor manifest for pi-conductor.
+# Keep this file aligned with docs/role-panel-review-flow-spec.md and
+# docs/role-panel-review-flow-plan.md.
+version: 2
 roles:
   - name: orchestrator
     is_orchestrator: true
     models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
     max_run_cost_usd: 25.0
-    system_prompt: .pi/roles/orchestrator.md
+    system_prompt: roles/orchestrator.md
     tools: [handoff, end, ask_user]
 
   - name: planner
     max_visits: 10
     models: [openai-codex:gpt-5.5, opencode-go:glm-5.2]
-    system_prompt: .pi/roles/planner.md
+    system_prompt: roles/planner.md
     tools: [read, edit, write, bash, handoff, end, ask_user]
+
+  - name: assistant
+    max_visits: 10
+    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
+    system_prompt: roles/assistant.md
+    tools: [read, grep, ask_user, handoff, end]
+
+  - name: plan-reviewer-a
+    max_visits: 10
+    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
+    system_prompt: roles/plan-reviewer-a.md
+    tools: [read, grep, handoff, end]
+
+  - name: plan-reviewer-b
+    max_visits: 10
+    models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
+    system_prompt: roles/plan-reviewer-b.md
+    tools: [read, grep, handoff, end]
 
   - name: implementer
     max_visits: 10
     models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
-    system_prompt: .pi/roles/implementer.md
+    system_prompt: roles/implementer.md
     tools: [read, edit, write, bash, handoff, end]
 
   - name: reviewer
     max_visits: 10
     models: [openai-codex:gpt-5.4-mini, opencode-go:minimax-m3]
-    system_prompt: .pi/roles/reviewer.md
+    system_prompt: roles/reviewer.md
     tools: [read, grep, handoff, end]
