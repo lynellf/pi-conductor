@@ -138,13 +138,13 @@ describe("ProductionHost — full orch → worker → orch → end via runLoop (
             {
               name: "orchestrator",
               is_orchestrator: true,
-              models: ["stub:stub-model"],
+              models: [{ model: "stub:stub-model", effort: "high" }],
               system_prompt: ".pi/roles/orchestrator.md",
             },
             {
               name: "worker",
               max_visits: 3,
-              models: ["stub:stub-model"],
+              models: [{ model: "stub:stub-model", effort: "medium" }],
               system_prompt: ".pi/roles/worker.md",
             },
           ],
@@ -220,6 +220,11 @@ describe("ProductionHost — full orch → worker → orch → end via runLoop (
         cost: 0.009,
       });
     }
+
+    const started = records.filter((r): r is SessionLifecycleEvent => r.type === "session_started");
+    expect(started).toHaveLength(3);
+    expect(started.map((ev) => ev.model_effort)).toEqual(["high", "medium", "high"]);
+    expect(ended.map((ev) => ev.model_effort)).toEqual(["high", "medium", "high"]);
   });
 });
 
@@ -394,7 +399,10 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
             {
               name: "worker",
               max_visits: 3,
-              models: ["stub:stub-model", "stub:fallback"],
+              models: [
+                { model: "stub:stub-model", effort: "medium" },
+                { model: "stub:fallback", effort: "high" },
+              ],
               system_prompt: ".pi/roles/worker.md",
             },
           ],

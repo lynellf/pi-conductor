@@ -44,6 +44,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { buildRunMemory } from "../core/run-memory.js";
+import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import type {
   Checkpoint,
   Host,
@@ -162,23 +163,24 @@ export class StubHost implements Host {
     const roleConfig = this.lookupRoleConfig(role);
     const modelIndex = opts.modelIndex ?? 0;
     let logicalModel: string | null = null;
+    let effort: ModelEffort = DEFAULT_MODEL_EFFORT;
     if (roleConfig?.models !== undefined) {
-      if (modelIndex >= roleConfig.models.length) {
-        // List exhausted — mark the role unavailable so the next
-        // re-dispatch escalates (§9.4 v1 default). The loop
-        // catches `NoMoreModelsError`, records the final
-        // session_failed(model_error), and synthesizes a handoff
-        // to the orchestrator.
-        this.unavailableRole = role;
-        throw new NoMoreModelsError(role, modelIndex, roleConfig.models.length);
+      if (roleConfig.models.length > 0) {
+        if (modelIndex >= roleConfig.models.length) {
+          // List exhausted — mark the role unavailable so the next
+          // re-dispatch escalates (§9.4 v1 default). The loop
+          // catches `NoMoreModelsError`, records the final
+          // session_failed(model_error), and synthesizes a handoff
+          // to the orchestrator.
+          this.unavailableRole = role;
+          throw new NoMoreModelsError(role, modelIndex, roleConfig.models.length);
+        }
+        const entry = roleConfig.models[modelIndex];
+        if (entry !== undefined) {
+          logicalModel = entry.model;
+          effort = entry.effort;
+        }
       }
-      const entry = roleConfig.models[modelIndex];
-      if (entry !== undefined) logicalModel = entry;
-    } else if (modelIndex > 0) {
-      // No fallback list declared, but the loop asked for index >0.
-      // Same exhaustion semantics.
-      this.unavailableRole = role;
-      throw new NoMoreModelsError(role, modelIndex, 0);
     }
 
     // ── Task 17: per-session cap. Read from the role's
@@ -195,13 +197,15 @@ export class StubHost implements Host {
     const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
     const end = createEndTool(seam, rejector.shouldRejectCapture);
 
-    const { session } = await createAgentSession({
+    const createOpts: Parameters<typeof createAgentSession>[0] = {
       model: this.model,
       modelRegistry: this.modelRegistry,
       tools: ["handoff", "end"],
       customTools: [handoff, end],
       sessionManager: this.sessionManager,
-    });
+    };
+    (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
+    const { session } = await createAgentSession(createOpts);
 
     this.stubSessionCounter += 1;
     const stubId = `stub-session-${this.stubSessionCounter}`;
@@ -223,6 +227,7 @@ export class StubHost implements Host {
       sessionId: session.sessionId,
       sessionFile: session.sessionFile ?? `/tmp/${stubId}.jsonl`,
       model: logicalModel,
+      effort,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
       subscribe: (listener) => session.subscribe(listener),
@@ -317,7 +322,7 @@ export class StubHost implements Host {
     const roleConfig = this.lookupRoleConfig(role);
     if (roleConfig?.models === undefined) return null;
     const next = roleConfig.models[currentModelIndex + 1];
-    return next ?? null;
+    return next?.model ?? null;
   }
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {

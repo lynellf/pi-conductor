@@ -50,7 +50,7 @@ import {
  * Typed error for hard manifest validation failures.
  *
  * `errors` is the structured list from `validateManifest` — callers
- * can render rule codes (`uncapped-worker`, `bare-model-alias`, …)
+ * can render rule codes (`uncapped-worker`, `bare-model-alias`, `invalid-model-effort`, …)
  * rather than scraping the message string. `cause` preserves the
  * underlying error for `parseManifest` failures and for any nested
  * throw from `toMachineDefinition` (which itself calls

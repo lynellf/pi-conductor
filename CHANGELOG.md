@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.3.0] - 2026-06-21
+
+### Manifest
+- Per-model `effort` configuration in `roles[].models` — new object form `{ model, effort }` alongside the existing string shorthand (backward compatible).
+- `effort` accepts pi's `thinkingLevel` values (`off | minimal | low | medium | high | xhigh`); omitted `effort` defaults to `medium`, including the system/default model path.
+- New `invalid-model-effort` validation code (rejected at parse / validate boundary).
+
+### Core
+- New host-agnostic `ModelEffort` type and `DEFAULT_MODEL_EFFORT` constant.
+- `RoleConfig.models` is now a normalized `readonly ModelConfig[]` — the string shorthand is preserved at the YAML boundary and normalized to `{ model, effort: "medium" }` during parse. **Breaking for TypeScript library consumers** that read `RoleConfig.models` as `string[]`; runtime and YAML behavior are unchanged.
+
+### Host driver
+- `ProductionHost.spawnRole()` passes the selected effort to `createAgentSession({ thinkingLevel })` and returns it on `RoleSession.effort`.
+- `StubHost.spawnRole()` mirrors the same normalized selection so loop tests stay deterministic.
+- Lifecycle records (`session_started` and terminal events) carry `model_effort`; `RunStats.activeSession` exposes `effort` and defaults to `medium` for older records that lack the field.
+
+### Extension shell
+- Status footer shows `effort=<level>` alongside `model=<…>` while a role session is active; `/conduct:list` renders the same tokens.
+
+### Docs
+- README updated to document the new `effort` field, the object form of `models:`, and the `effort=` token in the status / list output.
+- `docs/orchestrator-fsm-spec.md` §8 / §8.1 / §11.4 / §11.8 / §12 / §13 updated to reflect the new manifest shape, lifecycle metadata, and reducer meta field.
+
 ## [0.2.1] - 2026-06-21
 
 ### Chore

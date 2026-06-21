@@ -180,11 +180,29 @@ describe("ProductionHost — boundary errors", () => {
 describe("selectModelEntry — model-list selector (§8.1)", () => {
   it("returns the entry at the requested index when the role has a `models` list", () => {
     expect(
-      selectModelEntry("implementer", { models: ["anthropic:claude-x", "openai:gpt-4o"] }, 0),
-    ).toBe("anthropic:claude-x");
+      selectModelEntry(
+        "implementer",
+        {
+          models: [
+            { model: "anthropic:claude-x", effort: "high" },
+            { model: "openai:gpt-4o", effort: "medium" },
+          ],
+        },
+        0,
+      ),
+    ).toEqual({ model: "anthropic:claude-x", effort: "high" });
     expect(
-      selectModelEntry("implementer", { models: ["anthropic:claude-x", "openai:gpt-4o"] }, 1),
-    ).toBe("openai:gpt-4o");
+      selectModelEntry(
+        "implementer",
+        {
+          models: [
+            { model: "anthropic:claude-x", effort: "high" },
+            { model: "openai:gpt-4o", effort: "medium" },
+          ],
+        },
+        1,
+      ),
+    ).toEqual({ model: "openai:gpt-4o", effort: "medium" });
   });
 
   it("returns null when the role's RoleConfig is undefined (system model path)", () => {

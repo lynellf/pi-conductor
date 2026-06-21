@@ -31,10 +31,10 @@
  * (`tests/core/reducer-composition.test.ts`) pins the seam before the host
  * is built.
  *
- * Phase 3 extension: meta carries `usage`, `visit_index`, `parent_session`
- * (documented on `ReduceLifecycleMeta` in ./types.ts). These come from
- * the host's record log, not the checkpoint. The reducer is the
- * single-source-of-truth plumb: it doesn't compute visit_index (it can't,
+ * Phase 3 extension: meta carries `usage`, `visit_index`, `parent_session`,
+ * and `model_effort` (documented on `ReduceLifecycleMeta` in ./types.ts).
+ * These come from the host's record log, not the checkpoint. The reducer is
+ * the single-source-of-truth plumb: it doesn't compute visit_index (it can't,
  * without records) and doesn't inspect usage content (seam/§3).
  *
  * Host-agnostic. No pi imports, no I/O.
@@ -125,6 +125,7 @@ function sessionStarted(
     visit_index: meta.visit_index,
     state: checkpoint.current_role,
     model: meta.model ?? null,
+    ...(meta.model_effort !== undefined ? { model_effort: meta.model_effort } : {}),
     session_file: meta.sessionFile,
     parent_session: meta.parent_session,
     // intentionally NO usage / failure_reason on session_started (§11.4)
@@ -197,6 +198,7 @@ function sessionTerminal(
     visit_index: meta.visit_index,
     state: checkpoint.current_role,
     model: meta.model ?? null,
+    ...(meta.model_effort !== undefined ? { model_effort: meta.model_effort } : {}),
     session_file: meta.sessionFile,
     parent_session: meta.parent_session,
     usage: meta.usage,

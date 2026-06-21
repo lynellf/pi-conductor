@@ -1,8 +1,8 @@
 /**
  * `ProductionHost` — Phase 7A production `Host` (Tasks 7A.1–7A.4).
  *
- * Production `Host` implementation that resolves
- * `role.models[modelIndex]` (`provider:id`) against a real
+ * Production `Host` implementation that resolves the normalized
+ * `role.models[modelIndex]` entry (`model` + `effort`) against a real
  * `ModelRegistry`, loads `role.system_prompt` from disk, wires
  * a real `DefaultResourceLoader` + file-backed `SessionManager`
  * for each role session, and matches `StubHost`'s event-handling
@@ -51,8 +51,15 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
-import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
-import type { RoleConfig } from "../manifest/types.js";
+import type {
+  Checkpoint,
+  MachineDefinition,
+  ModelEffort,
+  Role,
+  UsageRecord,
+} from "../core/types.js";
+import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
+import type { ModelConfig, RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
@@ -222,7 +229,7 @@ export class ProductionHost implements Host {
     // miss (`NoMoreModelsError` for out-of-range index), the role
     // is marked unavailable so the next re-dispatch escalates
     // (§9.4 v1 default).
-    let entry: string | null = null;
+    let entry: ModelConfig | null = null;
     try {
       entry = selectModelEntry(role, roleConfig, modelIndex);
     } catch (e) {
@@ -233,8 +240,9 @@ export class ProductionHost implements Host {
     }
     let model: Model<never> | undefined;
     let logical: string | null = null;
+    const effort: ModelEffort = entry?.effort ?? DEFAULT_MODEL_EFFORT;
     if (entry !== null) {
-      const resolved = resolveModel(role, entry, this.modelRegistry);
+      const resolved = resolveModel(role, entry.model, this.modelRegistry);
       model = resolved.model;
       logical = resolved.logical;
     }
@@ -319,6 +327,7 @@ export class ProductionHost implements Host {
       // models via its discriminated `api` field.
       (createOpts as { model?: Model<never> }).model = model;
     }
+    (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
     if (this.uiContext !== undefined) {
       await session.bindExtensions({ uiContext: this.uiContext });
@@ -358,6 +367,7 @@ export class ProductionHost implements Host {
       sessionId,
       sessionFile: session.sessionFile ?? `${this.sessionDir}/${sessionId}.jsonl`,
       model: logical,
+      effort,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
       subscribe: (listener: (event: AgentSessionEvent) => void) => session.subscribe(listener),
@@ -456,7 +466,7 @@ export class ProductionHost implements Host {
     const roleConfig = this.lookupRoleConfig(role);
     if (roleConfig?.models === undefined) return null;
     const next = roleConfig.models[currentModelIndex + 1];
-    return next ?? null;
+    return next?.model ?? null;
   }
 
   runCostSoFar(): number {

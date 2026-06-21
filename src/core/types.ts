@@ -19,6 +19,14 @@ export type Role = string;
 /** Machine state = the currently active role, plus the terminal marker. */
 export type State = Role | "done";
 
+// ─── Host-agnostic model effort ────────────────────────────────────────
+
+/** pi thinking level / model effort token (§8.1, manifest layer). */
+export type ModelEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/** conductor-owned default effort when a manifest omits it (§8.1). */
+export const DEFAULT_MODEL_EFFORT: ModelEffort = "medium";
+
 // ─── §12: Pinned manifest snapshot ──────────────────────────────────────
 
 /**
@@ -208,12 +216,16 @@ export type TransitionResult =
  *  - `parent_session: string | null` — the parent role session in the
  *    execution tree (§11.4). `null` for the first orchestrator session.
  *    Host knows the parent from its log.
+ *  - `model_effort?: ModelEffort` — the conductor-selected thinking
+ *    level for the session (§8.1). Host reads it from the manifest and
+ *    defaults omitted efforts to `medium`.
  */
 export interface ReduceLifecycleMeta {
   readonly role: Role;
   readonly sessionId: string;
   readonly sessionFile: string;
   readonly model?: string | null;
+  readonly model_effort?: ModelEffort;
   readonly failureReason?: string;
   readonly ts: number;
   // Phase 3 extensions (see JSDoc above).
@@ -249,6 +261,7 @@ export interface SessionLifecycleEvent {
   readonly visit_index: number;
   readonly state: Role | "done";
   readonly model: string | null;
+  readonly model_effort?: ModelEffort;
   readonly session_file: string;
   readonly parent_session: string | null;
   readonly usage?: UsageRecord;

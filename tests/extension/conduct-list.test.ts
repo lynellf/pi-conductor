@@ -206,6 +206,7 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
         visit_index: 1,
         state: "worker",
         model: "stub:primary",
+        model_effort: "high",
         session_file: sessionFile,
         parent_session: null,
         ts: 1,
@@ -243,7 +244,9 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
       }),
     );
     const summary = notifyCalls.find((n) => n.type === "info" && /Runs in /.test(n.msg));
-    expect(summary?.msg).toContain(`${runId} · worker · running · $0.000 · model=stub:primary`);
+    expect(summary?.msg).toContain(
+      `${runId} · worker · running · $0.000 · model=stub:primary · effort=high`,
+    );
   });
 
   it("renders model=<default> for an active session with a null model", async () => {
@@ -303,7 +306,9 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
       }),
     );
     const summary = notifyCalls.find((n) => n.type === "info" && /Runs in /.test(n.msg));
-    expect(summary?.msg).toContain(`${runId} · worker · running · $0.000 · model=<default>`);
+    expect(summary?.msg).toContain(
+      `${runId} · worker · running · $0.000 · model=<default> · effort=medium`,
+    );
   });
 
   it("renders an empty history gracefully (no trailing arrow)", async () => {

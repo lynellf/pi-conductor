@@ -80,7 +80,13 @@ describe("validateManifest: hard errors (§13)", () => {
   });
 
   it("bare-model-alias: rejects a models entry that is not provider:id", () => {
-    const manifest = m([{ name: "orch", is_orchestrator: true, models: ["claude-sonnet"] }]);
+    const manifest = m([
+      {
+        name: "orch",
+        is_orchestrator: true,
+        models: [{ model: "claude-sonnet", effort: "medium" }],
+      },
+    ]);
     const r = validateManifest(manifest);
     expect(r.errors.map((e) => e.code)).toContain("bare-model-alias");
   });
@@ -108,7 +114,7 @@ describe("validateManifest: soft warnings (§13)", () => {
         name: "w",
         max_visits: 3,
         max_session_cost_usd: 5,
-        models: ["anthropic:claude-opus-4-5"],
+        models: [{ model: "anthropic:claude-opus-4-5", effort: "medium" }],
       },
     ]);
     const r = validateManifest(manifest);
@@ -122,7 +128,10 @@ describe("validateManifest: soft warnings (§13)", () => {
         name: "w",
         max_visits: 3,
         max_session_cost_usd: 5,
-        models: ["anthropic:claude-opus-4-5", "openai:gpt-4o"],
+        models: [
+          { model: "anthropic:claude-opus-4-5", effort: "medium" },
+          { model: "openai:gpt-4o", effort: "high" },
+        ],
       },
     ]);
     const r = validateManifest(manifest);
@@ -144,6 +153,18 @@ describe("validateManifest: soft warnings (§13)", () => {
     const manifest = m([{ name: "orch", is_orchestrator: true, tools: ["read"] }]);
     const r = validateManifest(manifest);
     expect(r.warnings.map((w) => w.code)).toContain("missing-required-tool");
+  });
+
+  it("invalid-model-effort: rejects a models entry with an invalid effort token", () => {
+    const manifest = m([
+      {
+        name: "orch",
+        is_orchestrator: true,
+        models: [{ model: "anthropic:claude-opus-4-5", effort: "turbo" as never }],
+      },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).toContain("invalid-model-effort");
   });
 });
 

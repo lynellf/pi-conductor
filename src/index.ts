@@ -26,6 +26,7 @@ export type {
   LegalTargets,
   MachineDefinition,
   MachineEvent,
+  ModelEffort,
   ModelFallback,
   PayloadSummary,
   ReduceLifecycleMeta,
@@ -38,6 +39,7 @@ export type {
   TransitionResult,
   UsageRecord,
 } from "./core/types.js";
+export { DEFAULT_MODEL_EFFORT } from "./core/types.js";
 
 // ─── Cap-aware legal-target helpers (§7.2 / §7.4) ─────────────────────
 // Phase 2 Task 5. Pure; used by the reducer for `legal_targets` on a
@@ -59,7 +61,7 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
 export { parseManifest } from "./manifest/parse.js";
-export type { Manifest, RoleConfig } from "./manifest/types.js";
+export type { Manifest, ModelConfig, RoleConfig } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
 
 // ─── Manifest validation + derivation (§13, §12) ──────────────────────

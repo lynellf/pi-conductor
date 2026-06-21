@@ -95,6 +95,7 @@ class FakeSession {
       sessionId: this.sessionId,
       sessionFile: this.sessionFile,
       model: null,
+      effort: "medium",
       readCaptureBuffer: () => Object.freeze([...this.captureBuffer]),
       resetCaptureBuffer: () => {
         this.captureBuffer.length = 0;

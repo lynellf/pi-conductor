@@ -430,6 +430,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
     readonly role: string;
     readonly sessionFile: string;
     readonly model: string | null;
+    readonly effort: string;
   };
 
   function readActiveSession(stats: RunStats): ActiveSessionFixture | null | undefined {
@@ -448,6 +449,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
         visit_index: 1,
         state: "worker",
         model: "stub:primary",
+        model_effort: "high",
         session_file: sessionFile,
         parent_session: null,
         ts: 100,
@@ -473,6 +475,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
       role: "worker",
       sessionFile,
       model: "stub:primary",
+      effort: "high",
     });
   });
 
@@ -513,6 +516,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
       role: "worker",
       sessionFile,
       model: null,
+      effort: "medium",
     });
   });
 
@@ -557,6 +561,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
         visit_index: 1,
         state: "orchestrator",
         model: "stub:primary",
+        model_effort: "medium",
         session_file: "/tmp/orchestrator-r1.jsonl",
         parent_session: null,
         ts: 99,

@@ -47,7 +47,13 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
-import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
+import type {
+  Checkpoint,
+  MachineDefinition,
+  ModelEffort,
+  Role,
+  UsageRecord,
+} from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 
@@ -91,6 +97,8 @@ export interface RoleSession {
    * the `model` field on the persisted record (§11.4).
    */
   readonly model: string | null;
+  /** The effort / thinking level this session ran with (§8.1, §11.4). */
+  readonly effort: ModelEffort;
 
   /**
    * Read the per-session machine-event capture buffer (Task 14).

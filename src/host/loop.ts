@@ -337,6 +337,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           visit_index: visitIndex,
           parent_session: sessionParentId,
           model: session.model,
+          model_effort: session.effort,
         });
         checkpoint = started.checkpoint;
         host.persistRecord(started.record);
@@ -361,6 +362,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             usage,
             failureReason: "user_aborted",
             model: session.model,
+            model_effort: session.effort,
           });
           checkpoint = failed.checkpoint;
           host.persistRecord(failed.record);
@@ -430,6 +432,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               usage: capturedUsage,
               failureReason,
               model: session.model,
+              model_effort: session.effort,
             });
             checkpoint = failed.checkpoint;
             host.persistRecord(failed.record);
@@ -527,6 +530,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               usage: capturedUsage,
               failureReason: hostReasonOnOk,
               model: session.model,
+              model_effort: session.effort,
             });
             checkpoint = failed.checkpoint;
             host.persistRecord(failed.record);
@@ -597,6 +601,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             parent_session: sessionParentId,
             usage: capturedUsage,
             model: session.model,
+            model_effort: session.effort,
           });
           checkpoint = ended.checkpoint;
           host.persistRecord(ended.record);

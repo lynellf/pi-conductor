@@ -26,7 +26,10 @@ roles:
   - name: implementer
     max_visits: 3
     max_session_cost_usd: 5.0
-    models: [anthropic:claude-opus-4-5, openai:gpt-4o]
+    models:
+      - model: anthropic:claude-opus-4-5
+        effort: high
+      - model: openai:gpt-4o
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, write, bash, handoff, end]
   - name: reviewer
@@ -47,10 +50,14 @@ describe("parseManifest", () => {
     expect(orch?.is_orchestrator).toBe(true);
     expect(orch?.max_run_cost_usd).toBe(25.0);
     expect(orch?.system_prompt).toBe(".pi/roles/orchestrator.md");
-    expect(orch?.models).toEqual(["anthropic:claude-sonnet-4-5"]);
+    expect(orch?.models).toEqual([{ model: "anthropic:claude-sonnet-4-5", effort: "medium" }]);
 
     expect(impl?.name).toBe("implementer");
     expect(impl?.max_visits).toBe(3);
+    expect(impl?.models).toEqual([
+      { model: "anthropic:claude-opus-4-5", effort: "high" },
+      { model: "openai:gpt-4o", effort: "medium" },
+    ]);
     expect(impl?.max_session_cost_usd).toBe(5.0);
 
     expect(reviewer?.name).toBe("reviewer");
@@ -67,5 +74,13 @@ describe("parseManifest", () => {
 
   it("throws ManifestParseError when roles[] is missing", () => {
     expect(() => parseManifest("version: 1\n")).toThrow(ManifestParseError);
+  });
+
+  it("throws ManifestParseError on invalid model effort", () => {
+    expect(() =>
+      parseManifest(
+        `version: 1\nroles:\n  - name: orchestrator\n    is_orchestrator: true\n    models:\n      - model: anthropic:claude-sonnet-4-5\n        effort: turbo\n`,
+      ),
+    ).toThrow(ManifestParseError);
   });
 });

@@ -245,6 +245,7 @@ describe("Host interface — type-level sanity check", () => {
       sessionId: "test-session-id",
       sessionFile: "/tmp/test-session.jsonl",
       model: null,
+      effort: "medium",
       readCaptureBuffer: () => [],
       resetCaptureBuffer: () => {},
       subscribe: () => () => {},

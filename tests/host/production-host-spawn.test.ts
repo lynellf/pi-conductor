@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
+
 import {
   buildToolsAllowlist,
   InMemoryRecordLog,
@@ -64,7 +65,9 @@ roles:
     tools: [read, handoff, end]
   - name: implementer
     max_visits: 3
-    models: [stub:stub-model]
+    models:
+      - model: stub:stub-model
+        effort: high
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, handoff, end]
 `;
@@ -86,7 +89,9 @@ roles:
     tools: [read, handoff, end]
   - name: implementer
     max_visits: 3
-    models: [stub:stub-model]
+    models:
+      - model: stub:stub-model
+        effort: high
     system_prompt: roles/implementer.md
     tools: [read, edit, handoff, end]
 `;
@@ -255,14 +260,37 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
     await session.dispose();
   });
 
-  it("exposes the logical provider:id on the returned RoleSession for the §11.4 lifecycle record", async () => {
+  it("exposes the logical provider:id and effort on the returned RoleSession for the §11.4 lifecycle record", async () => {
     const host = makeHost(workdir);
     const session = await host.spawnRole("implementer", { modelIndex: 0 });
 
-    // The role's manifest declares `models: [stub:stub-model]`.
-    // The `logical` field is the original `provider:id` string
-    // the loop records on `session_started` (§11.4).
+    // The role's manifest declares `models: [{ model: 'stub:stub-model', effort: 'high' }]`.
+    // The `logical` field is the original `provider:id` string the loop records
+    // on `session_started` (§11.4); `effort` is the manifest's thinking level.
     expect(session.model).toBe("stub:stub-model");
+    expect(session.effort).toBe("high");
+
+    await session.dispose();
+  });
+
+  it("defaults the system/default model path to effort=medium", async () => {
+    const loadedManifest = loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    system_prompt: .pi/roles/orchestrator.md
+    tools: [read, handoff, end]
+  - name: implementer
+    max_visits: 3
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, edit, handoff, end]
+`);
+    const host = makeHost(workdir, { loadedManifest });
+    const session = await host.spawnRole("implementer", { modelIndex: 0 });
+
+    expect(session.model).toBeNull();
+    expect(session.effort).toBe("medium");
 
     await session.dispose();
   });

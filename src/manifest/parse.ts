@@ -18,7 +18,8 @@
 
 import { parse as parseYaml } from "yaml";
 
-import type { Manifest, RoleConfig } from "./types.js";
+import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
+import type { Manifest, ModelConfig, RoleConfig } from "./types.js";
 import { ManifestParseError } from "./types.js";
 
 /**
@@ -89,7 +90,7 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
       max_visits: toFiniteInt(entry.max_visits, `${path}.max_visits`),
     }),
     ...(entry.models !== undefined && {
-      models: toStringArray(entry.models, `${path}.models`),
+      models: toModelConfigArray(entry.models, `${path}.models`),
     }),
     ...(entry.max_session_cost_usd !== undefined && {
       max_session_cost_usd: toFiniteNumber(
@@ -143,12 +144,54 @@ function toNonEmptyString(value: unknown, path: string): string {
 
 function toStringArray(value: unknown, path: string): readonly string[] {
   if (!Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be an array of strings`);
+  }
+  const out: string[] = [];
+  for (const [index, item] of value.entries()) {
+    out.push(toNonEmptyString(item, `${path}[${index}]`));
+  }
+  return Object.freeze(out);
+}
+
+function toModelConfigArray(value: unknown, path: string): readonly ModelConfig[] {
+  if (!Array.isArray(value)) {
     throw new ManifestParseError(`${path} must be an array`);
   }
+  const models: ModelConfig[] = [];
   for (const [i, v] of value.entries()) {
-    if (typeof v !== "string") {
-      throw new ManifestParseError(`${path}[${i}] must be a string`);
-    }
+    models.push(parseModelConfig(v, `${path}[${i}]`));
   }
-  return Object.freeze([...value]);
+  return Object.freeze(models.map((model) => Object.freeze(model)));
+}
+
+function parseModelConfig(value: unknown, path: string): ModelConfig {
+  if (typeof value === "string") {
+    return Object.freeze({ model: value, effort: DEFAULT_MODEL_EFFORT }) as ModelConfig;
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be a string or a YAML mapping (object)`);
+  }
+  const entry = value as Record<string, unknown>;
+  const model = toNonEmptyString(entry.model, `${path}.model`);
+  const effort =
+    entry.effort === undefined
+      ? DEFAULT_MODEL_EFFORT
+      : toModelEffort(entry.effort, `${path}.effort`);
+  return Object.freeze({ model, effort }) as ModelConfig;
+}
+
+function toModelEffort(value: unknown, path: string): ModelEffort {
+  if (
+    value !== "off" &&
+    value !== "minimal" &&
+    value !== "low" &&
+    value !== "medium" &&
+    value !== "high" &&
+    value !== "xhigh"
+  ) {
+    throw new ManifestParseError(
+      `${path} must be one of off, minimal, low, medium, high, or xhigh`,
+    );
+  }
+  return value as ModelEffort;
 }

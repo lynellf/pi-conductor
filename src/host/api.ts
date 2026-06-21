@@ -60,6 +60,7 @@ import { join } from "node:path";
 import { createInitialCheckpoint } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type { Checkpoint, MachineDefinition, Role, SessionLifecycleEvent } from "../core/types.js";
+import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import type { CheckpointSnapshot, RecordLog } from "../persistence/log.js";
 import type { Host, RoleSession } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
@@ -369,6 +370,7 @@ function reconcileCrash(
     parent_session: sessionStarted.parent_session,
     usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
     model: sessionStarted.model,
+    model_effort: sessionStarted.model_effort ?? DEFAULT_MODEL_EFFORT,
   });
   log.append(result.record);
   // Persist the cleared checkpoint.

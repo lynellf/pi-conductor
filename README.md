@@ -110,7 +110,10 @@ roles:
   - name: implementer
     max_visits: 3
     max_session_cost_usd: 5.0
-    models: [anthropic:claude-opus-4-5, openai:gpt-4o] # primary + fallbacks
+    models:
+      - model: anthropic:claude-opus-4-5
+        effort: high                       # explicit; effort defaults to "medium" when omitted
+      - openai:gpt-4o                     # legacy shorthand → { model, effort: "medium" }
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, write, bash, handoff, end]
 
@@ -146,10 +149,11 @@ Inside any pi session in a project with `.pi/conductor.yaml`:
 ```
 
 You'll see the conductor's status line update as the orchestrator dispatches to
-workers; while a role session is active, the footer may also show
-`model=<provider:id>` or `model=<default>` for the current worker. The run
-reaches a terminal state and notifies with the run_id, and `/conduct:list` shows
-the same model token for active runs. While the run is active, `Esc` opens a
+workers; while a role session is active, the footer also shows
+`model=<provider:id> · effort=<level>` (or `model=<default> · effort=medium` on
+the system/default model path) for the current worker. The run reaches a
+terminal state and notifies with the run_id, and `/conduct:list` shows the same
+model and effort tokens for active runs. While the run is active, `Esc` opens a
 confirmation dialog; confirming aborts the run just like `/conduct:abort`.
 
 ### `RoleConfig` fields
@@ -159,7 +163,7 @@ confirmation dialog; confirming aborts the run just like `/conduct:abort`.
 | `name`                 | all roles         | Role identity (the `Role` the reducer keys on).                                                                                                                                                                                                           |
 | `is_orchestrator`      | exactly one role  | Marks the hub. Workers hand back to it; only it may emit `end`.                                                                                                                                                                                           |
 | `max_visits`           | workers           | Per-worker visit cap (finite). **Uncapped workers are a hard manifest error (§13).**                                                                                                                                                                      |
-| `models`               | any role          | Ordered `[primary, ...fallbacks]`, each `provider:id`. Bare aliases are rejected (§13). Fallbacks are tried on `session_failed(model_error)`.                                                                                                             |
+| `models`               | any role          | Ordered `[primary, ...fallbacks]`. Each entry is a `provider:id` string (shorthand for `{ model, effort: "medium" }`) or an object `{ model, effort }`. Bare aliases are rejected (§13). Effort values: `off | minimal | low | medium | high | xhigh` (maps to pi's `thinkingLevel`); omitted effort defaults to `medium`, including the system/default model path. Fallbacks are tried on `session_failed(model_error)`. |
 | `max_session_cost_usd` | any role          | Per-invocation cap, **shared across model fallbacks** within that invocation (§8.1, §11.7).                                                                                                                                                               |
 | `max_run_cost_usd`     | orchestrator only | Run-level cap. Rejected on workers (§13).                                                                                                                                                                                                                 |
 | `system_prompt`        | any role          | Path to a per-role system-prompt file the host loads. Plain prose, not frontmatter.                                                                                                                                                                       |

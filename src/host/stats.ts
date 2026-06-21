@@ -32,7 +32,8 @@
  * Host-agnostic. No SDK runtime imports.
  */
 
-import type { Checkpoint, MachineDefinition, Role } from "../core/types.js";
+import type { Checkpoint, MachineDefinition } from "../core/types.js";
+import { DEFAULT_MODEL_EFFORT, type ModelEffort, type Role } from "../core/types.js";
 import { type RunRollup, rollup } from "../cost/rollup.js";
 import type { PersistedRecord } from "../persistence/log.js";
 
@@ -48,12 +49,14 @@ export type RunExecutionStatus = "done" | "session_failed" | "aborted" | "runnin
 
 /**
  * The currently active role session visible to status/list while the
- * checkpoint still points at the same role session.
+ * checkpoint still points at the same role session. Includes the
+ * resolved model effort for user-facing visibility (§11.8).
  */
 export interface ActiveSessionStats {
   readonly role: Role;
   readonly sessionFile: string;
   readonly model: string | null;
+  readonly effort: ModelEffort;
 }
 
 /**
@@ -196,6 +199,7 @@ function findActiveSession(
     role: started.role,
     sessionFile: started.session_file,
     model: started.model,
+    effort: started.model_effort ?? DEFAULT_MODEL_EFFORT,
   });
 }
 
@@ -210,6 +214,7 @@ type SessionStartedRecord = {
   readonly visit_index: number;
   readonly state: Role | "done";
   readonly model: string | null;
+  readonly model_effort?: ModelEffort;
   readonly session_file: string;
   readonly parent_session: string | null;
   readonly ts: number;
@@ -241,6 +246,7 @@ function findMatchingSessionStarted(
         visit_index: record.visit_index,
         state: record.state,
         model: record.model,
+        ...(record.model_effort !== undefined ? { model_effort: record.model_effort } : {}),
         session_file: record.session_file,
         parent_session: record.parent_session,
         ts: record.ts,

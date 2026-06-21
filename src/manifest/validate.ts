@@ -11,7 +11,7 @@
  * present but semantically broken.
  */
 
-import type { Role } from "../core/types.js";
+import type { ModelEffort, Role } from "../core/types.js";
 import type { Manifest } from "./types.js";
 
 // ─── Result types ──────────────────────────────────────────────────────
@@ -26,7 +26,9 @@ export type ManifestErrorCode =
   /** `max_run_cost_usd` is on a worker; run-level cap lives only on orchestrator (§8). */
   | "max-run-cost-on-worker"
   /** A `models:` entry is not in `provider:id` form (§8.1). */
-  | "bare-model-alias";
+  | "bare-model-alias"
+  /** A `models:` entry has an invalid effort token (§8.1). */
+  | "invalid-model-effort";
 
 export type ManifestWarningCode =
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
@@ -54,6 +56,17 @@ export interface ManifestReport {
 // `provider:id` form (§8.1). Provider starts with a letter; ID allows
 // the common model-name characters including `/` and `:` for paths/namespaces.
 const PROVIDER_ID_FORM = /^[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9._:/-]+$/;
+
+function isModelEffort(value: unknown): value is ModelEffort {
+  return (
+    value === "off" ||
+    value === "minimal" ||
+    value === "low" ||
+    value === "medium" ||
+    value === "high" ||
+    value === "xhigh"
+  );
+}
 
 /**
  * Validate a parsed `Manifest` against every §13 rule.
@@ -101,11 +114,18 @@ export function validateManifest(m: Manifest): ManifestReport {
 
     // §13: every model entry uses `provider:id`.
     if (role.models) {
-      for (const model of role.models) {
-        if (!PROVIDER_ID_FORM.test(model)) {
+      for (const [i, model] of role.models.entries()) {
+        if (!PROVIDER_ID_FORM.test(model.model)) {
           errors.push({
             code: "bare-model-alias",
-            message: `role '${role.name}' has model entry '${model}' which is not in 'provider:id' form; bare aliases are ambiguous and defeat \`manifest_version\` (§8.1)`,
+            message: `role '${role.name}' has models[${i}].model '${model.model}' which is not in 'provider:id' form; bare aliases are ambiguous and defeat \`manifest_version\` (§8.1)`,
+            role: role.name,
+          });
+        }
+        if (!isModelEffort(model.effort)) {
+          errors.push({
+            code: "invalid-model-effort",
+            message: `role '${role.name}' has models[${i}].effort '${model.effort}' which is not a valid thinking level (§8.1)`,
             role: role.name,
           });
         }

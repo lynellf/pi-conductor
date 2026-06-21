@@ -9,15 +9,15 @@
  * This module renders a one-line summary of the run's
  * `runStats()` projection.
  *
- * The line is intentionally narrow — the footer is shared
+ * The line is intentionally compact — the footer is shared
  * with other extensions (model status, etc.) and a long
  * string would crowd it. The format is:
  *
- *   `conduct: <state> · <exit_reason> · handoffs=<N> · $<cost>`
+ *   `conduct: <state> · <exit_reason> · [model=<...> · effort=<...>] · handoffs=<N> · $<cost>`
  *
  * Examples:
  *   `conduct: orchestrator · running · handoffs=0 · $0.000`
- *   `conduct: worker · running · handoffs=1 · $0.012`
+ *   `conduct: worker · running · model=anthropic:claude-sonnet-4-5 · effort=high · handoffs=1 · $0.012`
  *   `conduct: done · done · handoffs=3 · $0.045`
  *   `conduct: worker · session_failed · handoffs=2 · $0.030`
  *
@@ -43,6 +43,10 @@ function formatActiveModelToken(model: string | null): string {
   return model === null ? "<default>" : model;
 }
 
+function formatEffortToken(effort: string): string {
+  return effort;
+}
+
 /** The status-line key used by `ctx.ui.setStatus`. The
  *  extension is the single owner of this key — no other
  *  extension in this package should `setStatus` under
@@ -50,9 +54,9 @@ function formatActiveModelToken(model: string | null): string {
 export const CONDUCT_STATUS_KEY = "conduct";
 
 /** Format the run's `RunStats` into a single status line.
- *  Pure; no I/O; no `ctx`. The line is bounded (~60
- *  chars) to fit in the TUI footer alongside other
- *  extensions' status lines. */
+ *  Pure; no I/O; no `ctx`. The line stays compact enough
+ *  for the TUI footer alongside other extensions' status
+ *  lines. */
 export function formatConductStatus(stats: RunStats): string {
   const state = stats.state;
   const reason = stats.exitReason;
@@ -62,7 +66,7 @@ export function formatConductStatus(stats: RunStats): string {
   const modelPart =
     activeSession === undefined || activeSession === null
       ? ""
-      : ` · model=${formatActiveModelToken(activeSession.model)}`;
+      : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
   const escapeHint = reason === "running" ? " · Esc abort" : "";
   return `conduct: ${state} · ${reason}${modelPart} · handoffs=${handoffs} · $${cost}${escapeHint}`;
 }

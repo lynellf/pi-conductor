@@ -18,6 +18,7 @@ type RunStatsFixture = RunStats & {
     readonly role: string;
     readonly sessionFile: string;
     readonly model: string | null;
+    readonly effort: string;
   } | null;
 };
 
@@ -150,11 +151,12 @@ describe("formatConductStatus", () => {
           role: "worker",
           sessionFile: "/tmp/worker-test.jsonl",
           model: "anthropic:claude-sonnet-4-5",
+          effort: "high",
         },
       }),
     );
     expect(line).toBe(
-      "conduct: worker · running · model=anthropic:claude-sonnet-4-5 · handoffs=0 · $0.000 · Esc abort",
+      "conduct: worker · running · model=anthropic:claude-sonnet-4-5 · effort=high · handoffs=0 · $0.000 · Esc abort",
     );
   });
 
@@ -166,11 +168,12 @@ describe("formatConductStatus", () => {
           role: "worker",
           sessionFile: "/tmp/worker-test.jsonl",
           model: null,
+          effort: "medium",
         },
       }),
     );
     expect(line).toBe(
-      "conduct: worker · running · model=<default> · handoffs=0 · $0.000 · Esc abort",
+      "conduct: worker · running · model=<default> · effort=medium · handoffs=0 · $0.000 · Esc abort",
     );
   });
 

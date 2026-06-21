@@ -13,7 +13,13 @@
  * is a semantic concern.
  */
 
-import type { Role } from "../core/types.js";
+import type { ModelEffort, Role } from "../core/types.js";
+
+/** Parsed manifest model entry: logical model id plus conductor-owned effort. */
+export interface ModelConfig {
+  readonly model: string;
+  readonly effort: ModelEffort;
+}
 
 /** §8 / §10: raw manifest shape parsed from `.pi/conductor.yaml`. */
 export interface Manifest {
@@ -31,8 +37,10 @@ export interface Manifest {
  * Optional fields:
  * - `max_visits`: per-worker visit cap (finite, §7.4). Workers missing
  *   this are uncapped — §13 rejects uncapped workers as a hard error.
- * - `models`: ordered `[primary, ...fallbacks]`, each `provider:id`
- *   (§8.1). Bare aliases are rejected by §13.
+ * - `models`: ordered `[primary, ...fallbacks]`, normalized to
+ *   `{ model, effort }` by the parser (§8.1). Bare aliases are
+ *   rejected by §13; the parser still accepts string shorthand in
+ *   the raw YAML.
  * - `max_session_cost_usd`: per-invocation cap, shared across model
  *   fallbacks within that invocation (§8.1, §11.7).
  * - `max_run_cost_usd`: run-level cap, lives ONLY on the orchestrator's
@@ -46,7 +54,7 @@ export interface RoleConfig {
   readonly name: Role;
   readonly is_orchestrator?: boolean;
   readonly max_visits?: number;
-  readonly models?: readonly string[];
+  readonly models?: readonly ModelConfig[];
   readonly max_session_cost_usd?: number;
   readonly max_run_cost_usd?: number;
   readonly system_prompt?: string;

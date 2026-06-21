@@ -49,6 +49,10 @@ function formatActiveModelToken(model: string | null): string {
   return model === null ? "<default>" : model;
 }
 
+function formatEffortToken(effort: string): string {
+  return effort;
+}
+
 /**
  * Max number of runs to render in a single notify.
  * `ctx.ui.notify` shows a single line in most TUI
@@ -135,7 +139,7 @@ export async function handleList(
     const modelPart =
       activeSession === undefined || activeSession === null
         ? ""
-        : ` · model=${formatActiveModelToken(activeSession.model)}`;
+        : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
     const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}${modelPart}`;
     lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
   }

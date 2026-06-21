@@ -24,7 +24,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { Role } from "../core/types.js";
-import type { RoleConfig } from "../manifest/types.js";
+import type { ModelConfig, RoleConfig } from "../manifest/types.js";
 import {
   MalformedModelEntryError,
   ModelNotFoundError,
@@ -42,7 +42,7 @@ export function selectModelEntry(
   role: Role,
   roleConfig: Pick<RoleConfig, "models"> | undefined,
   modelIndex: number,
-): string | null {
+): ModelConfig | null {
   if (roleConfig === undefined) return null;
   const models = roleConfig.models;
   if (models === undefined || models.length === 0) return null;

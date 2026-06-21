@@ -198,7 +198,11 @@ validation (declared role names, `is_orchestrator`, `max_visits`).
 roles:
   - name: orchestrator
     is_orchestrator: true
-    models: [claude-sonnet]      # optional; omit to use pi's current model
+    # models entries accept either shorthand strings or object form:
+    models:
+      - model: anthropic:claude-sonnet-4-5   # object form with explicit effort
+        effort: medium
+      - openai:gpt-5.5                       # shorthand → { model: "openai:gpt-5.5", effort: medium }
     max_run_cost_usd: 25.0       # run-level cap; lives here, no separate run config
     system_prompt: .pi/roles/orchestrator.md
     tools: [read, bash, handoff]
@@ -206,7 +210,11 @@ roles:
   - name: implementer
     max_visits: 3
     max_session_cost_usd: 5.0    # per-invocation cap, shared across model fallbacks
-    models: [claude-opus, gpt-4o]  # ordered: primary, then fallbacks
+    models:                          # ordered: primary, then fallbacks
+      - model: anthropic:claude-opus-4-5
+        effort: high
+      - model: openai:gpt-4o
+        effort: medium
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, write, bash, handoff]
 
@@ -227,15 +235,21 @@ value remains the default.
 ### 8.1 Model assignment
 
 - **User-defined per role.** `models: [primary, ...fallbacks]`, tried in order.
-- **Omit the field → use pi's current/system model.** No fallback; a model failure just
-  escalates as `session_failed`.
+- **Each entry carries a model + effort.** Models accept either shorthand strings
+  (`provider:id` form; effort defaults to `medium`) or object entries
+  (`{ model: "provider:id", effort: "high" }`). Effort maps to pi's `thinkingLevel`
+  setting (off, minimal, low, medium, high, xhigh). Omitted effort defaults to
+  `medium` — conductor owns the default, not pi settings.
+- **Omit the field → use pi's current/system model at effort `medium`.**
+  No fallback; a model failure just escalates as `session_failed`.
 - **Driver-owned, not machine-owned.** On an accepted transition to role X, the driver
-  reads `X.models[0]` (or the system model) and spawns the session with it. The reducer
-  is unchanged; it only names the next role.
-- **The orchestrator does not pick models.** Model selection stays deterministic config,
-  keeping routing (the orchestrator's job) and execution (the driver's job) separate.
-  Re-concentrating model choice in the orchestrator would re-introduce flakiness in the
-  one role we want reliable.
+  reads `X.models[0]` (or the system model) and spawns the session with its configured
+  effort passed to `createAgentSession({ thinkingLevel })`. The reducer is unchanged;
+  it only names the next role.
+- **The orchestrator does not pick models or effort.** Model assignment + effort stay
+  deterministic config, keeping routing (the orchestrator's job) and execution (the
+  driver's job) separate. Re-concentrating model/effort choice in the orchestrator
+  would re-introduce flakiness in the one role we want reliable.
 
 ### 8.2 Model fallback as `session_failed` recovery
 
@@ -396,6 +410,7 @@ The gap signal. Required for "prevent unexpected behavior from gaps" to hold.
   visit_index: number,          // which visit of this role in the run (1-based)
   state: Role | "done",
   model: string | null,          // which model this session ran on (null if system default)
+  model_effort?: string,         // conductor-selected thinking level (off/minimal/low/medium/high/xhigh)
   session_file: string,
   parent_session: string | null, // links role sessions into a tree
   usage?: {                      // present on session_ended AND session_failed (both terminals cost)
@@ -503,7 +518,9 @@ Two surfaces, both driver/extension concerns; the machine is uninvolved.
   - `/run-config` slash command overrides `max_run_cost_usd` for the current run
     without editing frontmatter (the frontmatter value remains the default).
   - A live status line/widget (extension `setStatus`/`setWidget`) shows run cost and
-    remaining budget, updated on each usage capture.
+    remaining budget, updated on each usage capture. The status line also shows the
+    active role's current model and effort (e.g.
+    `conduct: worker · running · model=anthropic:claude-sonnet-4-5 · effort=high · handoffs=1 · $0.012`).
 
 `/run-stats` and `/run-config` are the only run-level config/visibility entry points;
 there is no run config file.
@@ -534,17 +551,18 @@ function reduce(
 function reduceLifecycle(
   checkpoint: Checkpoint,
   lifecycle: "session_started" | "session_ended" | "session_failed",
-  meta: { role: Role; sessionFile: string; model?: string | null; failureReason?: string; ts: number },
+  meta: { role: Role; sessionId: string; sessionFile: string; model?: string | null; model_effort?: ModelEffort; failureReason?: string; usage?: UsageRecord; visit_index: number; parent_session: string | null; ts: number },
 ): { checkpoint: Checkpoint; record: SessionLifecycleEvent };
 ```
 
 Driver responsibilities (impure, host-specific): persist records, read role config,
-select the model (§8.1), spawn role sessions, seed the next session from the accepted
-handoff's payload (including `suggests_next` as orchestrator context), maintain and seed
-the run memory artifact for orchestrator sessions (§8.4), enforce schema at the seam
-before calling `reduce`, execute model fallback on `session_failed` (§8.2), enforce
-cost caps (§11.7), and expose `/run-stats` + `/run-config` + the live status line
-(§11.8).
+select the model + effort (§8.1 — each model entry carries both; effort defaults to
+`medium` when omitted), spawn role sessions with `createAgentSession({ thinkingLevel })`,
+seed the next session from the accepted handoff's payload (including `suggests_next` as
+orchestrator context), maintain and seed the run memory artifact for orchestrator
+sessions (§8.4), enforce schema at the seam before calling `reduce`, execute model
+fallback on `session_failed` (§8.2), enforce cost caps (§11.7), and expose `/run-stats`
++ `/run-config` + the live status line (§11.8).
 
 ## 13. Static checks on the manifest
 
@@ -566,6 +584,10 @@ Because the manifest is data, it is lintable. v1 checks (run at load):
   workers). Hard reject if found on a worker.
 - No undeclared role appears as a `target_role` in any persisted event at validation
   time (runtime check, not load-time).
+- Every model entry in `models` uses `provider:id` form; bare aliases are a hard reject
+  (§8.1).
+- Every model entry's `effort`, if present, is a valid pi thinking level (off, minimal,
+  low, medium, high, xhigh). Invalid effort is a hard reject (§8.1).
 
 These checks are what "simple to reason about regardless of how complex the workflow
 becomes" actually cashes out to: the config is machine-checkable, not just human-readable.

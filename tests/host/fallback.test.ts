@@ -113,6 +113,11 @@ describe("Model fallback (§8.2) — primary fails, fallback succeeds", () => {
     expect(workerVisits.size).toBe(1);
     expect(workerVisits.has(1)).toBe(true);
 
+    const workerStarted = workerSessions.filter(
+      (r): r is SessionLifecycleEvent => r.type === "session_started",
+    );
+    expect(workerStarted.map((s) => s.model_effort)).toEqual(["medium", "medium"]);
+
     // The primary session ends with `model_error`; the fallback
     // session ends normally (session_ended).
     const workerFailed = workerSessions.filter(
