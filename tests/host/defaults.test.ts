@@ -23,6 +23,9 @@
  * provider.
  */
 
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 import {
   getDefaultBundle,
@@ -45,6 +48,31 @@ import {
 } from "../../src/index.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
+
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+function hasExitStatus(error: unknown): error is { status: number } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "status" in error &&
+    typeof (error as { status?: unknown }).status === "number"
+  );
+}
+
+function gitCheckIgnore(path: string): boolean {
+  try {
+    execFileSync("git", ["check-ignore", "-q", path], {
+      cwd: REPO_ROOT,
+    });
+    return true;
+  } catch (error: unknown) {
+    if (hasExitStatus(error) && error.status === 1) {
+      return false;
+    }
+    throw error;
+  }
+}
 
 /** Load the default manifest and return the parsed `LoadedManifest`. */
 function loadDefaultManifest(): LoadedManifest {
@@ -89,6 +117,19 @@ roles:
     // Sanity: the individual accessors return the same content.
     expect(getDefaultOrchestratorPrompt()).toBe(bundle.prompts.orchestrator);
     expect(getDefaultWorkerPrompt()).toBe(bundle.prompts.worker);
+  });
+});
+
+// ─── Test 1b: default fixture keeps runtime `.pi/` state ignored ───────
+
+describe("Default v1 bundle (§15.4) — fixture is tracked while runtime .pi stays ignored", () => {
+  it("unignores the shipped default-conductor fixture but still ignores .pi/settings.json", () => {
+    expect(gitCheckIgnore("tests/fixtures/default-conductor/.pi/conductor.yaml")).toBe(false);
+    expect(gitCheckIgnore("tests/fixtures/default-conductor/.pi/roles/orchestrator.md")).toBe(
+      false,
+    );
+    expect(gitCheckIgnore("tests/fixtures/default-conductor/.pi/roles/worker.md")).toBe(false);
+    expect(gitCheckIgnore(".pi/settings.json")).toBe(true);
   });
 });
 

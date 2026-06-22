@@ -154,3 +154,10 @@ scratch/
 
 # Agent orchestration
 .pi/
+
+# Keep runtime/local `.pi/` state ignored, but allow the committed
+# default-conductor fixture used by tests.
+!tests/fixtures/default-conductor/.pi/
+!tests/fixtures/default-conductor/.pi/conductor.yaml
+!tests/fixtures/default-conductor/.pi/roles/
+!tests/fixtures/default-conductor/.pi/roles/*.md
