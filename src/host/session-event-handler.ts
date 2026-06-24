@@ -13,6 +13,12 @@
  *   - cap exceeded → mark aborted, flip terminal reason to
  *     `"session_cost_cap_exceeded"`, call `session.abort()`
  *     (§11.7).
+ * - **Progressive assistant-text streaming (Phase 1).**
+ *   `message_update` with an assistant message → recompute
+ *   `extractAssistantText(partial)` and emit the new suffix
+ *   (delta since the last flush) to the display sink every
+ *   `STREAM_FLUSH_THRESHOLD_CHARS` accumulated chars.
+ *   `message_end` flushes the unflushed tail.
  *
  * Without this module the two hosts would each carry a ~50-line
  * copy of the same handler — a textbook drift hazard. With it,
@@ -26,6 +32,12 @@
  * `@earendil-works/pi-coding-agent` for `AgentSession` /
  * `AgentSessionEvent`). It's in `src/host/`, which is the only
  * directory the grep-guard allows pi runtime imports.
+ *
+ * **Public-surface change (Phase 1).** This module now exports one
+ * additional non-breaking `export const number`
+ * (`STREAM_FLUSH_THRESHOLD_CHARS`) and defines one local interface
+ * (`StreamState`) — no new imports, no new dependencies, no new
+ * exported types.
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -34,6 +46,35 @@ import type { Role } from "../core/types.js";
 import type { SessionState } from "./cost.js";
 import { type DisplaySink, extractAssistantText } from "./display-sink.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
+
+// ─── Streaming constants ────────────────────────────────────────────
+
+/**
+ * Minimum number of NEW formatted assistant-text characters that must
+ * accumulate before an intermediate streaming flush (spec:
+ * progressive-text-streaming). Char-driven, not time-driven, so the
+ * cadence is deterministic and unit-testable without fake timers. The
+ * final `message_end` always flushes whatever tail remains regardless
+ * of this threshold, so no text is ever held forever.
+ *
+ * Exported (rather than module-private) deliberately: it is the test
+ * seam for `tests/host/display-forwarding.test.ts` (so fixtures derive
+ * the threshold instead of hardcoding 200) and the hook for the
+ * future config-flag follow-up (spec Open concern 4) that will expose
+ * it via host config. No runtime/public-API surface beyond this one
+ * `export const number` — a non-breaking addition to the module.
+ */
+export const STREAM_FLUSH_THRESHOLD_CHARS = 200;
+
+/**
+ * Per-session mutable holder for the count of formatted assistant-text
+ * characters already flushed during the in-flight message (spec:
+ * progressive-text-streaming). Passed by reference into `onSessionEvent`
+ * and mutated in place, mirroring how `pending` is threaded.
+ */
+interface StreamState {
+  len: number;
+}
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -63,8 +104,13 @@ export function attachSessionEventHandler(args: {
   // onSessionEvent via attachSessionEventHandler.
   const pending = new Map<string, string>();
 
+  // Per-session streamed-len holder. Reset on message_start and after
+  // message_end. Same scoping rationale as `pending`: each role
+  // session gets its own onSessionEvent via attachSessionEventHandler.
+  const stream: StreamState = { len: 0 };
+
   args.session.subscribe((event) =>
-    onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending),
+    onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending, stream),
   );
 }
 
@@ -121,6 +167,7 @@ function onSessionEvent(
   onDisplay: DisplaySink | undefined,
   event: AgentSessionEvent,
   pending: Map<string, string>,
+  stream: StreamState,
 ): void {
   if (event.type === "tool_execution_start") {
     // Buffer the invocation summary; do NOT emit a tool_call
@@ -145,6 +192,30 @@ function onSessionEvent(
     return;
   }
 
+  // ─── Streaming: message_start ────────────────────────────────
+  // Reset the per-session streamed-len. Defensive — harmless for
+  // user-prompt message_start (spec: progressive-text-streaming).
+  if (event.type === "message_start") {
+    stream.len = 0;
+    return;
+  }
+
+  // ─── Streaming: message_update ───────────────────────────────
+  // Recompute the formatted assistant text; emit only the suffix
+  // since the last flush when the accumulated delta crosses the
+  // threshold (spec: progressive-text-streaming).
+  if (event.type === "message_update") {
+    const msg = event.message as AssistantMessage;
+    if (msg?.role === "assistant") {
+      const formatted = extractAssistantText(msg);
+      if (formatted.length - stream.len >= STREAM_FLUSH_THRESHOLD_CHARS) {
+        onDisplay?.({ role, kind: "text", text: formatted.slice(stream.len) });
+        stream.len = formatted.length;
+      }
+    }
+    return;
+  }
+
   if (event.type !== "message_end") return;
   const message = event.message as AssistantMessage;
 
@@ -160,13 +231,13 @@ function onSessionEvent(
 
   if (message?.role === "assistant") {
     const text = extractAssistantText(message);
-    if (text.length > 0) {
-      onDisplay?.({
-        role,
-        kind: "text",
-        text,
-      });
+    // Tail-flush: emit only the unflushed portion (all of it when
+    // no message_update fired, because stream.len stays 0).
+    // Reset stream.len for the next message.
+    if (text.length > stream.len) {
+      onDisplay?.({ role, kind: "text", text: text.slice(stream.len) });
     }
+    stream.len = 0;
   }
 
   if (message?.role === "assistant" && message.usage) {
