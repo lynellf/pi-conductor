@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.5.0] - 2026-06-24
+
+### Host driver
+- **Progressive assistant-text streaming.** `onSessionEvent` (`src/host/session-event-handler.ts`) now recomputes `extractAssistantText` on every `message_update` and emits the new suffix to the display sink once the accumulated delta crosses `STREAM_FLUSH_THRESHOLD_CHARS` (200 chars); `message_end` always flushes the unflushed tail regardless of threshold. Char-driven cadence (not time-driven) keeps the loop deterministic and unit-testable without fake timers. The threshold is exported as the test seam and the future config-flag follow-up. Spec: `docs/archive/tool-ux-refinement/phase-1-suffix-chunk-streaming.md` (new), `docs/archive/progressive-text-streaming/spec.md` (new).
+- **`ask_user` tool serialization (closes the fceb3964 double-dialog hang).** Two guards now prevent the race when a role emits multiple `ask_user` calls in one assistant turn: (1) `executionMode: "sequential"` on the tool definition, which the SDK dispatcher reads; (2) a per-instance promise-chain mutex inside `execute` in `src/host/ask-user-tool.ts`, the belt-and-suspenders backstop for direct-execute paths (unit tests, forked CLI UIs). The `finally` block releases the lock on rejection so a failed dialog never leaks the mutex. Spec §B (in-file).
+- **Tool summary formatters.** New `src/host/tool-summary.ts` exposes `formatToolCallSummary`, `formatToolResultSummary`, and the combined `formatToolCompletedLine` (`(✓|✗) <summary>: <error first line>`). All three return `null` for conductor machine tools (`handoff` / `end` / `ask_user`) and for unknown tools — protocol noise and JSON floods stay out of the TUI. Constants: `MAX_BASH_COMMAND_DISPLAY_LENGTH = 60` (tail-truncated with `…`), `MAX_ERROR_LINE_DISPLAY_LENGTH = 80`. Spec: `docs/archive/tool-display-combine-status/phase-1-combine-tool-line.md` (new).
+- **Display-sink: blockquote reasoning.** `extractAssistantText` in `src/host/display-sink.ts` now `> `-prefixes every line of a non-redacted `ThinkingContent` block so reasoning reads as markdown blockquote in the TUI — visually de-emphasized relative to direct user communication. Redacted thinking still returns `""` and is filtered upstream. The `stringifyDisplayValue` helper was removed: it was only used by the tool path that's now formatter-mediated.
+
+### Extension shell
+- **Tool observability restored.** The display sink in `src/extension/display-sink-wiring.ts` re-emits tool events as a second `CustomMessage` customType — `conduct.role.tool`, `details.kind: "tool"`. The body is the formatter-produced summary (`bash: pnpm test`, `✓`, `✗ <first error line>`), not the raw JSON. Conductor machine tools never reach the sink. Full tool bodies remain in the per-role session JSONL — the TUI stream is the observability surface, not the durable record. Spec: `docs/archive/tool-observability-and-spinner-spec.md`.
+- **`conduct.role.tool` message renderer.** New `buildToolContainer` in `src/extension/conduct-message-renderer.ts` produces a compact two-child `Container`: a role label colored with `TOOL_LABEL_COLOR` (dim, not bold; not `pickLabelColor`) and a `Markdown` body wrapping the formatter output in `> `-prefixed blockquote lines (M1 amended from plain `Text`). The renderer reuses the same `details` shape as the text renderer plus `kind: "tool"`. Spec: `docs/archive/tool-ux-refinement/phase-1-error-and-quote-block.md` (new).
+- **Status line spinner.** `startStatusPoller` in `src/extension/status.ts` prepends a braille frame (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) to the status line while `exitReason === "running"`; the frame cycles on the 250ms poll tick and clears on terminal ticks. Spinner is prepended at the poller level — `formatConductStatus` stays pure and its 11 string-equality tests are unchanged. Spec: `docs/archive/tool-observability-and-spinner/phase-7b-ux-tool-observability.md` (new).
+
+### Tests
+- `tests/host/tool-summary.test.ts` (new, ~209 lines): `bash` command formatting with the 60-char truncation boundary, error-line truncation at 80, machine-tool suppression (`handoff` / `end` / `ask_user`), unknown-tool `null`, success/error status lines, and the combined-line model.
+- `tests/extension/conduct-tool-renderer.test.ts` (new, ~254 lines): `conduct.role.tool` renderer for `tool_call` / `tool_result`, label-color contract (`TOOL_LABEL_COLOR`, not `pickLabelColor`), Markdown blockquote wrap.
+- `tests/extension/status-spinner.test.ts` (new, ~187 lines): frame cycling, terminal-tick clear, initial render.
+- `tests/extension/tui-bridge.test.ts` (~140 lines updated): confirms correct event forwarding for `text` and `tool` events through the TUI bridge.
+- `tests/host/display-forwarding.test.ts` (~415 lines net, ~284 new): chunk-streaming suffix emission, threshold boundary, machine-tool suppression, formatter integration, blockquote on thinking.
+- `tests/host/ask-user-tool.test.ts` (~132 lines added): sequential-execution mutex, `executionMode` flag, `signal` cancellation propagation through the chain.
+- `tests/host/e2e.test.ts` (~188 lines added): the two-`select`-in-one-turn concurrency scenario no longer hangs.
+- `tests/extension/conduct-message-renderer.test.ts` and `tests/extension/conduct-registration.test.ts` (~30 lines updated): cover the new `conduct.role.tool` renderer return + registration path.
+
+### Docs
+- Five implemented specs moved from `docs/` to `docs/archive/`: `orchestrator-fsm-spec.md`, `manifest-model-effort-spec.md`, `publishing-readiness-spec.md`, `default-fixture-ci-fix/`, `tool-observability-and-spinner/`, `tool-observability-and-spinner-spec.md`.
+- Four new archive spec entries — the work above is now spec-backed:
+  - `docs/archive/tool-ux-refinement/phase-1-suffix-chunk-streaming.md` — chunk streaming.
+  - `docs/archive/tool-ux-refinement/phase-1-error-and-quote-block.md` — display-sink thinking blockquote + tool-body blockquote (M1).
+  - `docs/archive/tool-display-combine-status/phase-1-combine-tool-line.md` + `spec.md` — combined `formatToolCompletedLine`.
+  - `docs/archive/tool-ux-refinement-spec.md` — tool UX refinement umbrella.
+  - `docs/archive/progressive-text-streaming/spec.md` — streaming umbrella.
+
+### Notes
+- No breaking changes to the public API surface. One new `export const number` (`STREAM_FLUSH_THRESHOLD_CHARS`) and one removed internal helper (`stringifyDisplayValue` — host-internal, never re-exported from `src/index.ts`). Library consumers are unaffected. The grep-guard test (`tests/grep-guard.test.ts`) and the `no-ctx.newSession`/`no-ctx.fork` extension grep guard continue to pass — the new code stays in `src/host/` and `src/extension/`.
+- The status-spinner cycle (250ms) and the chunk-streaming threshold (200 chars) are spec'd defaults; a follow-up exposes them via host config (open concern 4 in the chunk-streaming spec).
+
 ## [0.4.1] - 2026-06-23
 
 ### Bug fixes
