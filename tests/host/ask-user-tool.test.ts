@@ -82,18 +82,25 @@ describe("createAskUserTool", () => {
     const tool = createAskUserTool();
     const controller = new AbortController();
 
-    ui.input.mockImplementation(
-      () =>
-        new Promise<string | undefined>((_resolve, reject) => {
-          controller.signal.addEventListener(
-            "abort",
-            () => {
-              reject(new Error("dialog aborted"));
-            },
-            { once: true },
-          );
-        }),
-    );
+    // The mutex's `await prev` may yield before the dialog mock
+    // is called. If the signal is already aborted at that point,
+    // attaching a listener won't fire (the event has passed).
+    // Handle both the live-abort and already-aborted cases so
+    // the reject-or-never guarantee holds regardless of timing.
+    ui.input.mockImplementation(() => {
+      if (controller.signal.aborted) {
+        return Promise.reject(new Error("dialog aborted"));
+      }
+      return new Promise<string | undefined>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("dialog aborted"));
+          },
+          { once: true },
+        );
+      });
+    });
 
     const execution = invoke(tool, { kind: "input", prompt: "What now?" }, controller.signal, {
       hasUI: true,
@@ -203,6 +210,107 @@ describe("createAskUserTool", () => {
         ui,
       } as never),
     ).rejects.toThrow("ask_user: 'select' kind requires a non-empty 'options' array");
+  });
+
+  // ─── run fceb3964 fix: executionMode + mutex serialization ───────────
+
+  it("declares executionMode: 'sequential' (spec §B, run fceb3964)", () => {
+    const tool = createAskUserTool();
+    expect(tool.executionMode).toBe("sequential");
+  });
+
+  it("serializes two concurrent execute calls via the in-tool mutex", async () => {
+    // Two deferred promises — the test controls when each dialog resolves.
+    let resolveFirst!: (v: string | undefined) => void;
+    let resolveSecond!: (v: string) => void;
+
+    const ui = makeUi();
+    ui.input.mockReturnValue(
+      new Promise<string | undefined>((res) => {
+        resolveFirst = res;
+      }),
+    );
+    ui.select.mockReturnValue(
+      new Promise<string>((res) => {
+        resolveSecond = res;
+      }),
+    );
+
+    const tool = createAskUserTool();
+
+    // Fire both concurrently — second must queue behind first.
+    const p1 = invoke(tool, { kind: "input", prompt: "Q1" }, undefined, {
+      hasUI: true,
+      mode: "tui",
+      ui,
+    } as never);
+    const p2 = invoke(tool, { kind: "select", prompt: "Q2", options: ["a", "b"] }, undefined, {
+      hasUI: true,
+      mode: "tui",
+      ui,
+    } as never);
+
+    // Yield so p1's execute runs through the mutex acquire and enters
+    // its dialog; p2's execute reaches the mutex and blocks on `await prev`.
+    await new Promise<void>((res) => setTimeout(res, 0));
+
+    // p1's dialog is now in-flight; p2 is queued on the mutex.
+    // Only p1's ui.input should have been called.
+    expect(ui.input).toHaveBeenCalledTimes(1);
+    expect(ui.select).toHaveBeenCalledTimes(0);
+
+    // Resolve p1.
+    resolveFirst("answer1");
+    const r1 = await p1;
+    expect(r1.details).toEqual({ kind: "input", answer: "answer1" });
+
+    // Now p2's mutex should be released and its dialog invoked.
+    // Yield again to let p2's execute run.
+    await new Promise<void>((res) => setTimeout(res, 0));
+    expect(ui.select).toHaveBeenCalledTimes(1);
+    expect(ui.select).toHaveBeenCalledWith("Q2", ["a", "b"], undefined);
+
+    // Resolve p2.
+    resolveSecond("a");
+    const r2 = await p2;
+    expect(r2.details).toEqual({ kind: "select", answer: "a" });
+  });
+
+  it("mutex is released on rejection so next caller proceeds", async () => {
+    // If the first call throws, the mutex must release and the
+    // second call must proceed (not hang).
+    const ui = makeUi();
+    ui.input.mockRejectedValue(new Error("dialog aborted"));
+    let selectResolve!: (v: string) => void;
+    ui.select.mockReturnValue(
+      new Promise<string>((res) => {
+        selectResolve = res;
+      }),
+    );
+
+    const tool = createAskUserTool();
+
+    const p1 = invoke(tool, { kind: "input", prompt: "Q1" }, undefined, {
+      hasUI: true,
+      mode: "tui",
+      ui,
+    } as never);
+    const p2 = invoke(tool, { kind: "select", prompt: "Q2", options: ["x"] }, undefined, {
+      hasUI: true,
+      mode: "tui",
+      ui,
+    } as never);
+
+    // p1 rejected — the finally block releases the mutex.
+    await expect(p1).rejects.toThrow("dialog aborted");
+
+    // p2's mutex should be released — yield so p2's execute runs.
+    await new Promise<void>((res) => setTimeout(res, 0));
+    expect(ui.select).toHaveBeenCalledTimes(1);
+
+    selectResolve("x");
+    const r2 = await p2;
+    expect(r2.details).toEqual({ kind: "select", answer: "x" });
   });
 });
 

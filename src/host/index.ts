@@ -93,7 +93,7 @@ export { wrapAllToolsWithSeal, wrapToolWithSeal } from "./tool-wrapper.js";
 // scripted steps (handoff, end, no_emission, fail) to drive the
 // loop end-to-end in CI.
 
-export type { StubStep, StubStreamOptions } from "./stub-provider.js";
+export type { StubStep, StubStreamOptions, StubToolCall } from "./stub-provider.js";
 export { makeStubModel, makeStubStreamFunction } from "./stub-provider.js";
 
 // ─── StubHost (Task 13.5 / Task 16) ───────────────────────────────────

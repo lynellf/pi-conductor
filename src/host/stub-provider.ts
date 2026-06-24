@@ -107,8 +107,23 @@ export type StubStep =
       readonly text: string;
       readonly usage?: Partial<Usage>;
     }
+  | {
+      /** Multiple tool calls in one assistant message (run fceb3964 regression coverage).
+       *  Each call names the registered tool and carries its TypeBox-shaped arguments.
+       *  The stub emits all toolcall_* events then one `done { reason: "toolUse" }`.
+       *  The SDK runtime dispatches them in order per `executionMode`. */
+      readonly kind: "emit_tool_calls";
+      readonly calls: readonly StubToolCall[];
+      readonly usage?: Partial<Usage>;
+    }
   | { readonly kind: "no_emission" }
   | { readonly kind: "fail"; readonly errorMessage: string };
+
+/** A single tool call in a multi-tool stub step. */
+export interface StubToolCall {
+  readonly name: string;
+  readonly arguments: Record<string, unknown>;
+}
 
 export interface StubStreamOptions {
   /** Per-turn scripted emissions. Consumed in order; past the last
@@ -122,7 +137,7 @@ export interface StubStreamOptions {
 
 /** A single-tool-call record the stub pushes through the event protocol. */
 interface ScriptedToolCall {
-  readonly name: "handoff" | "end";
+  readonly name: string;
   readonly arguments: Record<string, unknown>;
 }
 
@@ -243,35 +258,52 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
       return stream;
     }
 
-    // emit_handoff or emit_end: emit a single tool call event sequence.
-    const tc: ScriptedToolCall =
-      step.kind === "emit_handoff"
-        ? {
-            name: "handoff",
-            arguments: {
-              target_role: step.target_role,
-              ...(step.reason !== undefined && { reason: step.reason }),
-              ...(step.suggests_next !== undefined && { suggests_next: step.suggests_next }),
-            },
-          }
-        : {
-            name: "end",
-            arguments: step.reason !== undefined ? { reason: step.reason } : {},
-          };
-
-    const argsStr = JSON.stringify(tc.arguments);
-    const toolCall: ToolCall = {
-      type: "toolCall",
-      id: `tc-${stepIndex}`,
-      name: tc.name,
-      arguments: tc.arguments,
-    };
+    // Build the tool calls for this step.
+    let tcs: readonly ScriptedToolCall[];
+    if (step.kind === "emit_handoff") {
+      tcs = [
+        {
+          name: "handoff",
+          arguments: {
+            target_role: step.target_role,
+            ...(step.reason !== undefined && { reason: step.reason }),
+            ...(step.suggests_next !== undefined && { suggests_next: step.suggests_next }),
+          },
+        },
+      ];
+    } else if (step.kind === "emit_end") {
+      tcs = [
+        {
+          name: "end",
+          arguments: step.reason !== undefined ? { reason: step.reason } : {},
+        },
+      ];
+    } else {
+      // emit_tool_calls: multiple generic tool calls in one turn.
+      tcs = step.calls.map((c) => ({ name: c.name, arguments: c.arguments }));
+    }
 
     stream.push({ type: "start", partial: finalMessage });
-    stream.push({ type: "toolcall_start", contentIndex: 0, partial: finalMessage });
-    finalMessage.content.push(toolCall);
-    stream.push({ type: "toolcall_delta", contentIndex: 0, delta: argsStr, partial: finalMessage });
-    stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: finalMessage });
+    for (let ci = 0; ci < tcs.length; ci++) {
+      const tc = tcs[ci];
+      if (tc === undefined) continue;
+      const argsStr = JSON.stringify(tc.arguments);
+      const toolCall: ToolCall = {
+        type: "toolCall",
+        id: `tc-${stepIndex}-${ci}`,
+        name: tc.name,
+        arguments: tc.arguments,
+      };
+      stream.push({ type: "toolcall_start", contentIndex: ci, partial: finalMessage });
+      finalMessage.content.push(toolCall);
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: ci,
+        delta: argsStr,
+        partial: finalMessage,
+      });
+      stream.push({ type: "toolcall_end", contentIndex: ci, toolCall, partial: finalMessage });
+    }
     finalMessage.stopReason = "toolUse";
     stream.push({ type: "done", reason: "toolUse", message: finalMessage });
     stream.end();

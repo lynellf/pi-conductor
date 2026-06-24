@@ -16,6 +16,7 @@
  */
 
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
+import type { ExtensionUIContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   type AgentSessionEvent,
   AuthStorage,
@@ -25,7 +26,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 
-import { createEndTool, createHandoffTool, SessionSeam, StubHost } from "../../src/host/index.js";
+import {
+  createAskUserTool,
+  createEndTool,
+  createHandoffTool,
+  SessionSeam,
+  StubHost,
+} from "../../src/host/index.js";
 import { runLoop } from "../../src/host/loop.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
 import {
@@ -283,4 +290,183 @@ describe("stub provider — no_emission drives a §11.3 breach (no_emission)", (
     );
     expect(records.some((r) => r.type === "transition_accepted")).toBe(false);
   });
+});
+
+// ─── run fceb3964 regression: multi-ask_user sequential E2E ───────────
+
+/**
+ * A serializing `ExtensionUIContext` mock that records
+ * `performance.now()` at entry and exit of each `select` call.
+ * Each invocation blocks on a deferred promise the test resolves
+ * manually, so the test can prove non-overlapping windows and
+ * control the order of resolution.
+ */
+function makeSerializingUi(): {
+  ui: ExtensionUIContext;
+  entries: () => readonly { callIndex: number; entry: number; exit: number; answer: string }[];
+  resolveCall: (index: number, answer: string) => void;
+  waitForCall: (index: number) => Promise<void>;
+} {
+  const timeline: { callIndex: number; entry: number; exit: number; answer: string }[] = [];
+  const resolvers = new Map<number, (v: string | undefined) => void>();
+  const callGate = new Map<number, () => void>();
+  let callIndex = 0;
+
+  // Stub for every method that ask_user does NOT call. The full
+  // ExtensionUIContext interface is large; only `select` matters here.
+  // biome-ignore lint/suspicious/noExplicitAny: ExtensionUIContext mock — the real interface carries complex overloads and TUI component types that we intentionally leave untyped in the stub.
+  const noopUi: any = {
+    confirm: async () => false,
+    input: async () => undefined,
+    notify: () => {},
+    onTerminalInput: () => () => {},
+    setStatus: () => {},
+    setWorkingMessage: () => {},
+    setWorkingVisible: () => {},
+    setWorkingIndicator: () => {},
+    setHiddenThinkingLabel: () => {},
+    setWidget: () => {},
+    setFooter: () => {},
+    setHeader: () => {},
+    setTitle: () => {},
+    custom: async () => undefined as never,
+    pasteToEditor: () => {},
+    setEditorText: () => {},
+    getEditorText: () => "",
+    editor: async () => undefined,
+    addAutocompleteProvider: () => {},
+    setCustomEditor: () => {},
+    getCustomEditor: () => undefined,
+    setMessageRenderer: () => {},
+    getMessageRenderer: () => undefined,
+    requestEditorFocus: () => {},
+    requestTerminalFocus: () => {},
+    setInputMode: () => {},
+    getInputMode: () => "prompt" as const,
+  };
+
+  const ui: ExtensionUIContext = {
+    ...noopUi,
+    select: async (_title: string, _options: string[], _opts?: unknown) => {
+      const ci = callIndex++;
+      const entry = performance.now();
+
+      // Signal that this call has been entered.
+      callGate.get(ci)?.();
+
+      // Block on the test-provided resolver.
+      const answer = await new Promise<string | undefined>((resolve) => {
+        resolvers.set(ci, resolve);
+      });
+
+      const exit = performance.now();
+      timeline.push({ callIndex: ci, entry, exit, answer: answer ?? "" });
+      return answer;
+    },
+  };
+
+  return {
+    ui,
+    entries: () => timeline,
+    resolveCall: (index: number, answer: string) => {
+      const r = resolvers.get(index);
+      if (r) r(answer);
+    },
+    waitForCall: (index: number) =>
+      new Promise<void>((resolve) => {
+        callGate.set(index, resolve);
+      }),
+  };
+}
+
+describe("stub provider — multi ask_user sequential E2E (run fceb3964 regression)", () => {
+  it("serializes two ask_user select calls in one turn, no hang", async () => {
+    const authStorage = AuthStorage.inMemory();
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    const stubModel = makeStubModel();
+
+    // Stub steps: two ask_user calls in one turn, then handoff.
+    modelRegistry.registerProvider("stub", {
+      api: "anthropic-messages" as const,
+      apiKey: "stub-dummy-key-not-used",
+      streamSimple: makeStubStreamFunction({
+        steps: [
+          {
+            kind: "emit_tool_calls",
+            calls: [
+              {
+                name: "ask_user",
+                arguments: { kind: "select", prompt: "Q1?", options: ["a1", "b1"] },
+              },
+              {
+                name: "ask_user",
+                arguments: { kind: "select", prompt: "Q2?", options: ["a2", "b2"] },
+              },
+            ],
+          },
+          { kind: "emit_handoff", target_role: "worker", reason: "done" },
+        ],
+      }),
+    });
+
+    const seam = new SessionSeam();
+    const handoffTool = createHandoffTool(seam);
+    const endTool = createEndTool(seam);
+    const askUser = createAskUserTool() as ToolDefinition;
+    const serializing = makeSerializingUi();
+
+    const { session } = await createAgentSession({
+      model: stubModel,
+      modelRegistry,
+      tools: ["handoff", "end", "ask_user"],
+      customTools: [handoffTool, endTool, askUser],
+      sessionManager: SessionManager.inMemory(),
+    });
+
+    await session.bindExtensions({ uiContext: serializing.ui, mode: "tui" });
+
+    const events: AgentSessionEvent[] = [];
+    session.subscribe((e) => events.push(e));
+
+    // Start the prompt — it will block on our deferred UI promises.
+    const promptDone = session.prompt("please ask two questions then hand off");
+
+    // Wait for the first ask_user call, then answer it.
+    await serializing.waitForCall(0);
+    serializing.resolveCall(0, "a1");
+
+    // Wait for the second ask_user call, then answer it.
+    await serializing.waitForCall(1);
+    serializing.resolveCall(1, "a2");
+
+    // Now prompt() should complete (handoff terminates the turn).
+    await promptDone;
+
+    // ── Assertions ──────────────────────────────────────────
+
+    // 1. Both calls ran — the session didn't hang.
+    const timeline = serializing.entries();
+    expect(timeline).toHaveLength(2);
+
+    // 2. Non-overlapping windows: second entry >= first exit.
+    expect(timeline[0]).toBeDefined();
+    expect(timeline[1]).toBeDefined();
+    const c0 = timeline[0] as NonNullable<(typeof timeline)[number]>;
+    const c1 = timeline[1] as NonNullable<(typeof timeline)[number]>;
+    expect(c1.entry).toBeGreaterThanOrEqual(c0.exit);
+
+    // 3. Both answers were returned to the model (via toolResult events).
+    const toolResults = events.filter(
+      (e) => e.type === "message_end" && e.message.role === "toolResult",
+    );
+    expect(toolResults.length).toBeGreaterThanOrEqual(2);
+
+    // 4. The session reached the handoff and is sealed.
+    expect(seam.isSealed).toBe(true);
+    const captures = seam.read();
+    expect(captures).toHaveLength(1);
+    expect(captures[0]?.toolName).toBe("handoff");
+
+    await session.dispose();
+  }, 10_000);
 });
