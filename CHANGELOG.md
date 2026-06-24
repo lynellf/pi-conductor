@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.1] - 2026-06-23
+
+### Bug fixes
+- **`ask_user` tool parameter handling** (closes Issue #1): replaced the `Type.Union([...])` schema with a flat `Type.Object` whose `kind` field is a `Type.Unsafe({ type: "string", enum: [...] })` — the same primitive pi-ai's `StringEnum` uses. The previous union-rooted schema was rejected by some model providers (the agent received `{}` despite providing structured params). The `execute` switch is now exhaustive — a `default` arm throws a typed error on unknown `kind` — and the `select` branch defensively validates that `options` is present and non-empty. No silent fallbacks.
+- **`/conduct:list` exitReason attribution** (closes Issue #2): extracted a new pure helper `computeListedExitReason(records, latestCheckpoint)` in `src/extension/commands/list-stats.ts` and wired it into `handleList`. The helper mirrors `RunHandle.computeExitReason`'s rule order (`done` → `session_failed` → `running`), minus the in-process `aborted` branch (unreachable from a file log; a run aborted by `Esc` that never persisted a `session_failed` reads as `running`, which is the honest fallback). Previously `handleList` hard-coded `"running"` for every run, misattributing the exit reason of terminal runs.
+
+### Tests
+- `tests/host/ask-user-tool.test.ts`: 12 new tests (3 runtime validation + 9 schema-level). The schema-level tests use `Value.Check` from `typebox/value` (the same subpath `tests/seam/validate-emission.test.ts` uses) and include a regression guard asserting the serialized schema has no `anyOf`/`const` at the root.
+- `tests/extension/list-stats.test.ts` (new): 7 table-driven tests covering all five plan scenarios (A–E) plus the done-precedence-over-session_failed case. The helper is unit-testable without driving the pi extension UI harness.
+- `tests/extension/conduct-list.test.ts`: updated the bug-baking assertion in the "appends a transition trace" case (`done · running` → `done · done`) to reflect the corrected attribution. The 3 other `· running ·` assertions in the same file are correctly preserved (they seed scenarios where `running` is genuinely correct: `worker` / `orchestrator` checkpoints with no terminal record).
+
 ## [0.4.0] - 2026-06-23
 
 ### Public API

@@ -43,6 +43,7 @@ import {
 } from "../../index.js";
 import { formatTransitionTrace } from "../handoff-view.js";
 import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "../manifest.js";
+import { computeListedExitReason } from "./list-stats.js";
 import { type HandleDeps, resolveRunBaseDir } from "./start.js";
 
 function formatActiveModelToken(model: string | null): string {
@@ -133,7 +134,9 @@ export async function handleList(
   const lines: string[] = [];
   for (const runId of runIds.slice(0, MAX_RENDERED_RUNS)) {
     const records: readonly PersistedRecord[] = log.records(runId);
-    const stats: RunStats = runStats(records, runId, loaded.def, "running");
+    const latestCheckpoint = log.latestCheckpoint(runId);
+    const exitReason = computeListedExitReason(records, latestCheckpoint);
+    const stats: RunStats = runStats(records, runId, loaded.def, exitReason);
     const trace = formatTransitionTrace(stats.transitionHistory);
     const activeSession = stats.activeSession;
     const modelPart =

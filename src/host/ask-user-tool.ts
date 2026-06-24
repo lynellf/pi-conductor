@@ -8,42 +8,38 @@
  */
 
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 
 import { AskUserUnavailableError } from "./errors.js";
 
-const askUserInputSchema = Type.Object(
+/**
+ * Flat parameter schema — spec §B / Issue #1.
+ *
+ * Uses `Type.Unsafe` for the `kind` enum to emit a portable
+ * `{type:"string", enum:[…]}` JSON-Schema (no `anyOf`/`const`)
+ * accepted by all model providers including Google Gemini.
+ */
+export const askUserArgsSchema = Type.Object(
   {
-    kind: Type.Literal("input"),
+    kind: Type.Unsafe({ type: "string", enum: ["input", "confirm", "select"] }),
     prompt: Type.String({ minLength: 1 }),
+    options: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })),
   },
   { additionalProperties: false },
 );
 
-const askUserConfirmSchema = Type.Object(
-  {
-    kind: Type.Literal("confirm"),
-    prompt: Type.String({ minLength: 1 }),
-  },
-  { additionalProperties: false },
-);
+type AskUserKind = "input" | "confirm" | "select";
 
-const askUserSelectSchema = Type.Object(
-  {
-    kind: Type.Literal("select"),
-    prompt: Type.String({ minLength: 1 }),
-    options: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
-  },
-  { additionalProperties: false },
-);
-
-const askUserArgsSchema = Type.Union([
-  askUserInputSchema,
-  askUserConfirmSchema,
-  askUserSelectSchema,
-]);
-
-type AskUserArgs = Static<typeof askUserArgsSchema>;
+/**
+ * Hand-typed interface mirroring the flat schema so the `execute`
+ * discriminated switch is narrow. Allowed by AGENTS.md invariant #9
+ * because `ask_user` is a regular non-emission tool.
+ */
+interface AskUserArgs {
+  readonly kind: AskUserKind;
+  readonly prompt: string;
+  readonly options?: string[];
+}
 
 interface AskUserToolDetailsInput {
   readonly kind: "input";
@@ -65,7 +61,7 @@ type AskUserToolDetails =
   | AskUserToolDetailsConfirm
   | AskUserToolDetailsSelect;
 
-function formatAnswer(kind: AskUserArgs["kind"], answer: string | boolean | undefined): string {
+function formatAnswer(kind: AskUserKind, answer: string | boolean | undefined): string {
   if (kind === "confirm") {
     return String(answer);
   }
@@ -127,6 +123,9 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
           };
         }
         case "select": {
+          if (params.options === undefined || params.options.length < 1) {
+            throw new Error("ask_user: 'select' kind requires a non-empty 'options' array");
+          }
           const answer = await ctx.ui.select(params.prompt, params.options, dialogOptions);
           return {
             content: [
@@ -142,6 +141,8 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
             terminate: false,
           };
         }
+        default:
+          throw new Error(`ask_user: unknown kind '${(params as AskUserArgs).kind}'`);
       }
     },
   });

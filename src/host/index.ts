@@ -65,7 +65,7 @@ export { createEndTool, createHandoffTool } from "./tools.js";
 // ─── ask_user tool (Phase 3) ──────────────────────────────────────────
 // Normal, non-terminating tool that asks the user for clarification.
 
-export { createAskUserTool } from "./ask-user-tool.js";
+export { askUserArgsSchema, createAskUserTool } from "./ask-user-tool.js";
 
 // ─── Orchestration loop (Task 15) ─────────────────────────────────────
 // The synchronous loop over role sessions. Owns `reduce` /

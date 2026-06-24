@@ -7,12 +7,18 @@
  *   - When no dialog-capable UI is available, it throws
  *     `AskUserUnavailableError`.
  *   - The tool does not touch the `SessionSeam` capture buffer.
+ *
+ * Issue #1 — schema-level tests pin the flat JSON-Schema shape
+ * (no `anyOf` root, portable enum) and the `default` / select-guard
+ * runtime validation.
  */
 
+import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   type AskUserUnavailableError,
+  askUserArgsSchema,
   createAskUserTool,
   SessionSeam,
 } from "../../src/host/index.js";
@@ -156,5 +162,107 @@ describe("createAskUserTool", () => {
     expect(ui.input).not.toHaveBeenCalled();
     expect(ui.confirm).not.toHaveBeenCalled();
     expect(ui.select).not.toHaveBeenCalled();
+  });
+
+  // ─── Issue #1: runtime validation ──────────────────────────
+
+  it("throws on unknown kind (default arm)", async () => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind: "bogus", prompt: "anything" }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: unknown kind 'bogus'");
+  });
+
+  it("throws on select without options (defensive guard)", async () => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind: "select", prompt: "choose" }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: 'select' kind requires a non-empty 'options' array");
+  });
+
+  it("throws on select with empty options (defensive guard)", async () => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind: "select", prompt: "choose", options: [] }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: 'select' kind requires a non-empty 'options' array");
+  });
+});
+
+// ─── Issue #1: flat schema validation (portable provider JSON-Schema) ───
+
+describe("askUserArgsSchema (flat, portable)", () => {
+  it("validates input kind", () => {
+    expect(Value.Check(askUserArgsSchema, { kind: "input", prompt: "?" })).toBe(true);
+  });
+
+  it("validates confirm kind", () => {
+    expect(Value.Check(askUserArgsSchema, { kind: "confirm", prompt: "?" })).toBe(true);
+  });
+
+  it("validates select kind with options", () => {
+    expect(Value.Check(askUserArgsSchema, { kind: "select", prompt: "?", options: ["a"] })).toBe(
+      true,
+    );
+  });
+
+  it("rejects empty object (the issue #1 reported call)", () => {
+    expect(Value.Check(askUserArgsSchema, {})).toBe(false);
+  });
+
+  it("rejects input without prompt", () => {
+    expect(Value.Check(askUserArgsSchema, { kind: "input" })).toBe(false);
+  });
+
+  it("rejects select with empty options", () => {
+    expect(
+      Value.Check(askUserArgsSchema, {
+        kind: "select",
+        prompt: "?",
+        options: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects unknown kind enum value", () => {
+    expect(Value.Check(askUserArgsSchema, { kind: "bogus", prompt: "?" })).toBe(false);
+  });
+
+  it("rejects unknown field (additionalProperties: false)", () => {
+    expect(
+      Value.Check(askUserArgsSchema, {
+        kind: "input",
+        prompt: "?",
+        bogus: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("serializes without anyOf at the top level (provider portability guard)", () => {
+    const serialized = JSON.parse(JSON.stringify(askUserArgsSchema));
+    // Root must not have `anyOf` (the pre-change union form did).
+    expect(serialized).not.toHaveProperty("anyOf");
+    // The kind property is the portable {type:"string",enum:[…]} shape.
+    expect(serialized.properties.kind).toEqual({
+      type: "string",
+      enum: ["input", "confirm", "select"],
+    });
   });
 });

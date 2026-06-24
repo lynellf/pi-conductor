@@ -182,7 +182,7 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
     // existing fields (state, exitReason, cost), and
     // the appended transition trace.
     expect(summary?.msg).toContain(
-      `${runId} · done · running · $0.000 · orchestrator → worker → orchestrator → done`,
+      `${runId} · done · done · $0.000 · orchestrator → worker → orchestrator → done`,
     );
   });
 
