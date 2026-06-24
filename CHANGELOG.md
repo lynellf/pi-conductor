@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0] - 2026-06-23
+
+### Public API
+- New `subscribeToRecords(listener)` function exported from `pi-conductor`'s public barrel — a typed, in-process fan-out of every `PersistedRecord` the host driver appends to a run log. Returns an idempotent unsubscribe handle. Listeners fire in FIFO subscription order; sync throws and async rejections are isolated and do not affect the engine or other listeners.
+- New `PersistedRecord` type re-exported from the public barrel for consumer convenience.
+
+### Host driver
+- `ProductionHost.persistRecord` and `StubHost.persistRecord` call `notifyListeners(record)` after every successful log append. The loop is unchanged; the host's persist call is the single chokepoint for fan-out.
+- New host-internal module `src/host/record-emitter.ts` (~117 LOC) — module-level `Set<Listener>`, fire-and-forget, sync/async error isolation, re-entrant subscribe/unsubscribe (effects take place on the next record), idempotent unsubscribe, empty-set no-op fast path.
+
+### Extension shell
+- Optional `pi.events` bridge in `extensions/conduct.ts` — re-emits every record on `pi.events.emit("conductor:record", record)` for consumers that prefer the documented `pi.events` bus. Thin wrapper over `subscribeToRecords`; the bridge is not required for the API to work.
+
+### Tests
+- New `tests/host/record-emitter.test.ts` covers all 9 spec §9 behaviors: listener fires on every persist, multiple listeners in FIFO order, sync-throw isolation, async-rejection isolation, re-entrant subscribe (next record), re-entrant unsubscribe (next record), idempotent unsubscribe, empty-set no-op, and consumer-side `run_id` filtering.
+
+### Docs
+- README: new "Hooking into the record stream" section documents the public API, a consumer-extension sketch (adapted from spec §10), the optional `pi.events` bridge, and the explicit "what this is not" boundaries. "Status & what's left" now references both the FSM and the record-emitter specs.
+- `docs/record-emitter-spec.md` is the authority on the full contract (FIFO ordering, async fire-and-forget, error isolation, re-entrancy, durable backstop pattern, security posture).
+
+### Notes
+- The emitter covers loop-time `host.persistRecord` calls only. Direct `log.append` call-sites in `src/host/api.ts` (initial snapshot in `startRun`, crash reconciliation records in `reconcileCrash`) are out of scope; consumers needing those records can replay from the durable log per the spec.
+- No new dependencies added. No new I/O surface. The grep-guard test (`tests/grep-guard.test.ts`) continues to pass — the new module is in `src/host/`, which the guard explicitly allows. The `no-ctx.newSession`/no-`ctx.fork` extension grep guard continues to pass — the bridge uses `pi.events.emit`, not session-tree APIs.
+
 ## [0.3.0] - 2026-06-21
 
 ### Manifest

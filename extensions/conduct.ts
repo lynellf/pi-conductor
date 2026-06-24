@@ -75,6 +75,7 @@ import {
 import { createConductMessageRenderers } from "../src/extension/conduct-message-renderer.js";
 import { getCurrentOrchestratorRole } from "../src/extension/current-orchestrator.js";
 import { createConductDisplaySink } from "../src/extension/display-sink-wiring.js";
+import { subscribeToRecords } from "../src/host/index.js";
 
 /**
  * Manifest path override flag. Default is resolved at
@@ -165,5 +166,24 @@ export default function conductExtension(pi: ExtensionAPI): void {
   pi.registerCommand("conduct:abort", {
     description: "Abort the active run (no-op if none).",
     handler: withDeps(handleAbort, getFlag, displaySink),
+  });
+
+  /**
+   * Opt-in `pi.events` bridge (spec §8.5, record-emitter-spec.md).
+   *
+   * Re-emits every PersistedRecord to the pi process event bus as
+   * `"conductor:record"`.  Consumers that prefer the documented
+   * `pi.events` API (`pi.events.on("conductor:record", ...)`) get
+   * automatic delivery without importing `subscribeToRecords`
+   * directly.  Consumers that call `subscribeToRecords` directly
+   * don't need this bridge.
+   *
+   * This is a thin listener — it does not affect the engine.
+   * The bridge delegates to `pi.events.emit`; the pi runtime
+   * handles listener dispatch.  No `ctx.newSession` or
+   * `ctx.fork` — `pi.events` is a lightweight pub/sub bus.
+   */
+  subscribeToRecords((record) => {
+    pi.events.emit("conductor:record", record);
   });
 }

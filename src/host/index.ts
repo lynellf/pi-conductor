@@ -200,3 +200,12 @@ export type {
   RunContextInputs,
 } from "./production-host-factory.js";
 export { createProductionHost } from "./production-host-factory.js";
+
+// ─── Record emitter (spec §3, §4) ─────────────────────────────────
+// In-process fan-out of every PersistedRecord the host appends.
+// Consumers (separately installed extensions) subscribe to receive
+// records for shipping to external systems. The host's persistRecord
+// is the chokepoint; the loop is unchanged. Fire-and-forget, best-
+// effort; the durable JSONL log is the system of record.
+
+export { subscribeToRecords } from "./record-emitter.js";

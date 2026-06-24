@@ -61,6 +61,7 @@ import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import type { SessionTerminalReason } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
+import { notifyListeners } from "./record-emitter.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
@@ -254,6 +255,7 @@ export class StubHost implements Host {
 
   persistRecord(record: PersistedRecord): void {
     this.log.append(record);
+    notifyListeners(record); // spec §4.1 — fan-out after durable append
   }
 
   nextVisitIndex(role: Role): number {

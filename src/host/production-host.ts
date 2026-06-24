@@ -73,6 +73,7 @@ import {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
+import { notifyListeners } from "./record-emitter.js";
 import { SessionSeam } from "./seam.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
@@ -421,6 +422,7 @@ export class ProductionHost implements Host {
     // this exactly once per reduce / reduceLifecycle result,
     // plus once per checkpoint snapshot).
     this.log.append(record);
+    notifyListeners(record); // spec §4.1 — fan-out after durable append
   }
 
   seedRunMemory(args: {

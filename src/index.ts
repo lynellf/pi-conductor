@@ -213,4 +213,5 @@ export {
   SystemPromptNotFoundError,
   selectModelEntry,
   startRun,
+  subscribeToRecords,
 } from "./host/index.js";
