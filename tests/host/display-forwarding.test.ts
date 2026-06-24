@@ -2,8 +2,14 @@
  * Phase 2 Task 3 — host display forwarding.
  *
  * Pins the additive display tap on `attachSessionEventHandler`:
- * assistant text, tool calls, and tool results flow to the optional
- * display sink without changing the cost / terminal-reason logic.
+ * assistant text and combined tool-completed lines flow to the
+ * optional display sink without changing the cost / terminal-reason
+ * logic.
+ *
+ * Updated for tool-display-combine-status (Phase 1): the host
+ * buffers the start summary and emits a single combined line at
+ * `tool_execution_end`. Start events emit nothing; orphaned ends
+ * emit nothing; machine tools remain suppressed.
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -79,7 +85,7 @@ function makeSession() {
 }
 
 describe("attachSessionEventHandler — display sink", () => {
-  it("forwards assistant text, compact tool summaries, and success/error indicators to the display sink", () => {
+  it("emits a single combined line at tool_execution_end (no separate tool_call)", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
@@ -106,7 +112,11 @@ describe("attachSessionEventHandler — display sink", () => {
       isError: false,
     });
 
-    expect(onDisplay).toHaveBeenCalledTimes(3);
+    // The handler emits TWO display events:
+    // 1. The assistant text (from message_end).
+    // 2. The combined tool-completed line (from tool_execution_end).
+    // No separate tool_call event is emitted (buffered).
+    expect(onDisplay).toHaveBeenCalledTimes(2);
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "orchestrator",
       kind: "text",
@@ -119,19 +129,11 @@ describe("attachSessionEventHandler — display sink", () => {
       // all times (2026-06-20, after Phase 5.5).
       text: "Hello \n\n> planning the response\n\nworld",
     });
-    // Compact tool summary (formatToolCallSummary):
-    // "bash: ls" instead of the old JSON flood
+    // Combined line: "✓ bash: ls" — no separate "✓" indicator.
     expect(onDisplay).toHaveBeenNthCalledWith(2, {
       role: "orchestrator",
-      kind: "tool_call",
-      text: "bash: ls",
-    });
-    // Success indicator (formatToolResultSummary):
-    // "✓" instead of the old JSON flood
-    expect(onDisplay).toHaveBeenNthCalledWith(3, {
-      role: "orchestrator",
       kind: "tool_result",
-      text: "✓",
+      text: "✓ bash: ls",
     });
   });
 
@@ -229,7 +231,7 @@ describe("attachSessionEventHandler — display sink", () => {
     });
   });
 
-  it("forwards tool_error with a ✗ <first line> indicator for error results", () => {
+  it("emits combined ✗ bash: ls: <first line> for error with string result", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
@@ -241,7 +243,13 @@ describe("attachSessionEventHandler — display sink", () => {
       onDisplay,
     });
 
-    // Multi-line string error result
+    // Matching start (buffer the summary) + end with multi-line string error
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-err",
+      toolName: "bash",
+      args: { command: "ls" },
+    });
     session.emit({
       type: "tool_execution_end",
       toolCallId: "call-err",
@@ -254,11 +262,11 @@ describe("attachSessionEventHandler — display sink", () => {
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "worker",
       kind: "tool_result",
-      text: "✗ permission denied",
+      text: "✗ bash: ls: permission denied",
     });
   });
 
-  it("forwards tool_error with an object result coerced to ✗ <first line>", () => {
+  it("emits combined ✗ bash: ls: <message> for error with object result", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
@@ -270,8 +278,13 @@ describe("attachSessionEventHandler — display sink", () => {
       onDisplay,
     });
 
-    // Object result (Open concern A): the error path stringifies
-    // the object and takes the first line.
+    // Matching start (buffer the summary) + end with object error
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-err-obj",
+      toolName: "bash",
+      args: { command: "ls" },
+    });
     session.emit({
       type: "tool_execution_end",
       toolCallId: "call-err-obj",
@@ -284,8 +297,57 @@ describe("attachSessionEventHandler — display sink", () => {
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "worker",
       kind: "tool_result",
-      text: expect.stringMatching(/^✗ /),
+      text: "✗ bash: ls: command not found",
     });
+  });
+
+  it("buffers start and emits nothing until end", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      onDisplay,
+    });
+
+    // Emit only the start event; nothing should be displayed yet
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "bash",
+      args: { command: "ls" },
+    });
+
+    expect(onDisplay).not.toHaveBeenCalled();
+  });
+
+  it("orphaned end (no matching start) emits nothing", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      onDisplay,
+    });
+
+    // Emit only the end event with no prior start; orphaned end
+    // has undefined summary -> formatToolCompletedLine returns
+    // null -> no emit.
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-orphan",
+      toolName: "bash",
+      result: "permission denied",
+      isError: true,
+    });
+
+    expect(onDisplay).not.toHaveBeenCalled();
   });
 
   it("suppresses handoff tool_call and tool_result events (protocol noise)", () => {

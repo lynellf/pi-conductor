@@ -33,7 +33,7 @@ import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-
 import type { Role } from "../core/types.js";
 import type { SessionState } from "./cost.js";
 import { type DisplaySink, extractAssistantText } from "./display-sink.js";
-import { formatToolCallSummary, formatToolResultSummary } from "./tool-summary.js";
+import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -55,8 +55,16 @@ export function attachSessionEventHandler(args: {
   role: Role;
   onDisplay?: DisplaySink;
 }): void {
+  // Per-session buffer: toolCallId → invocation summary. The
+  // shared displaySink is wired into every role session;
+  // toolCallId is unique within a session, so a closure-scoped
+  // Map avoids cross-session collisions without needing the
+  // sessionId — fine because each session gets its own
+  // onSessionEvent via attachSessionEventHandler.
+  const pending = new Map<string, string>();
+
   args.session.subscribe((event) =>
-    onSessionEvent(args.session, args.state, args.role, args.onDisplay, event),
+    onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending),
   );
 }
 
@@ -112,19 +120,27 @@ function onSessionEvent(
   role: Role,
   onDisplay: DisplaySink | undefined,
   event: AgentSessionEvent,
+  pending: Map<string, string>,
 ): void {
   if (event.type === "tool_execution_start") {
+    // Buffer the invocation summary; do NOT emit a tool_call
+    // event (spec: tool-display-combine-status — combine at end).
     const summary = formatToolCallSummary(event.toolName, event.args);
     if (summary !== null) {
-      onDisplay?.({ role, kind: "tool_call", text: summary });
+      pending.set(event.toolCallId, summary);
     }
     return;
   }
 
   if (event.type === "tool_execution_end") {
-    const result = formatToolResultSummary(event.toolName, event.result, event.isError);
-    if (result !== null) {
-      onDisplay?.({ role, kind: "tool_result", text: result });
+    // Look up the buffered summary from the matching start event
+    // (if any). Orphaned ends (no matching start) get undefined
+    // and formatToolCompletedLine returns null → no emit.
+    const summary = pending.get(event.toolCallId);
+    pending.delete(event.toolCallId);
+    const line = formatToolCompletedLine(summary, event.result, event.isError);
+    if (line !== null) {
+      onDisplay?.({ role, kind: "tool_result", text: line });
     }
     return;
   }

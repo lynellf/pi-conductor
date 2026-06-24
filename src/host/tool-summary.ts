@@ -1,13 +1,21 @@
 /**
  * Tool summary formatters for the TUI tool-observability stream.
  *
- * Two pure functions — one per SDK event:
+ * Three pure functions:
  *   - `formatToolCallSummary` — compact one-line summary of a
- *     `tool_execution_start` event (args).
- *   - `formatToolResultSummary` — compact one-line indicator
- *     of a `tool_execution_end` event (result / error).
+ *     `tool_execution_start` event (args). The host now buffers
+ *     this summary keyed by `toolCallId` and does NOT emit it on
+ *     its own (spec: tool-display-combine-status).
+ *   - `formatToolResultSummary` — legacy end-only indicator;
+ *     retained for unit tests and as a fallback but no longer
+ *     used by the host handler (the handler uses
+ *     `formatToolCompletedLine` instead).
+ *   - `formatToolCompletedLine` — the **single combined line**
+ *     the handler now emits at `tool_execution_end`: the
+ *     buffered invocation summary combined with the success/
+ *     error status. `(✓|✗) <summary>: <error first line>`.
  *
- * Both return `null` for conductor machine tools (`handoff`,
+ * All three return `null` for conductor machine tools (`handoff`,
  * `end`, `ask_user`) — these are protocol noise surfaced
  * elsewhere — and for unknown tools (safer than raw JSON).
  *
@@ -17,7 +25,8 @@
  * relocation to `src/seam/` or `src/extension/` would be
  * non-breaking.
  *
- * Spec: §1, Decisions Q1/Q2, Nit 4, Nit 6.
+ * Spec: §1, Decisions Q1/Q2, Nit 4, Nit 6. Combined-line model:
+ * tool-display-combine-status spec.
  */
 
 // ─── Constants ──────────────────────────────────────────────────────
@@ -33,6 +42,30 @@
  * verbatim (the `>` boundary, so exactly-60 is as-is).
  */
 export const MAX_BASH_COMMAND_DISPLAY_LENGTH = 60;
+
+/**
+ * Maximum length of a rendered error line in the TUI
+ * tool-observability line. Long error lines are tail-truncated
+ * to keep the line readable.
+ *
+ * Truncation rule: when `line.length` > MAX, slice to
+ * `MAX - 1` (119) chars and append `…` (U+2026) for a total of
+ * 120 chars including the ellipsis. Lines <= MAX render verbatim.
+ */
+export const MAX_ERROR_LINE_DISPLAY_LENGTH = 120;
+
+/**
+ * Maximum length of the combined tool-completed line (buffer-and-
+ * combine flow, spec: tool-display-combine-status). The whole
+ * combined line `(✓|✗) <summary>: <error>` is tail-truncated to
+ * this length with `…` when it exceeds the limit.
+ *
+ * Truncation rule identical to `truncateLine`: when
+ * `line.length > MAX`, slice to `MAX - 1` (99) chars and append
+ * `…` (U+2026) for a total of 100 chars including the ellipsis.
+ * Lines <= MAX render verbatim.
+ */
+export const MAX_TOOL_LINE_DISPLAY_LENGTH = 100;
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -60,6 +93,51 @@ function safeArray(obj: unknown, key: string): readonly unknown[] | undefined {
   if (!isObject(obj)) return undefined;
   const v = obj[key];
   return Array.isArray(v) ? v : undefined;
+}
+
+/**
+ * Extract an error message from an unknown `result` value (spec §1,
+ * D1 extraction order).
+ *
+ * Extraction order:
+ *   1. `typeof result === "string"` → return directly.
+ *   2. Object: `safeString(result, "message") ?? safeString(result, "error")`
+ *   3. Object with nested `error` object: `safeString(result.error, "message") ?? safeString(result.error, "error")`
+ *   4. Object: `safeString(result, "stderr")`
+ *   5. Fallback: `JSON.stringify(result) ?? String(result)`.
+ */
+function extractErrorMessage(result: unknown): string {
+  if (typeof result === "string") return result;
+
+  if (isObject(result)) {
+    // 2. Direct message / error fields
+    const direct = safeString(result, "message") ?? safeString(result, "error");
+    if (direct !== undefined) return direct;
+
+    // 3. Nested error object
+    const nested = result.error;
+    if (isObject(nested)) {
+      const nestedMsg = safeString(nested, "message") ?? safeString(nested, "error");
+      if (nestedMsg !== undefined) return nestedMsg;
+    }
+
+    // 4. stderr field
+    const stderr = safeString(result, "stderr");
+    if (stderr !== undefined) return stderr;
+  }
+
+  // 5. Fallback: JSON.stringify
+  const json = JSON.stringify(result);
+  return json !== undefined ? json : String(result);
+}
+
+/**
+ * Tail-truncate a single line to `max` characters, appending `…`
+ * (U+2026) when the line exceeds `max`.
+ */
+function truncateLine(line: string, max: number): string {
+  if (line.length <= max) return line;
+  return `${line.slice(0, max - 1)}…`;
 }
 
 /**
@@ -166,12 +244,16 @@ export function formatToolCallSummary(toolName: string, args: unknown): string |
  * suppress set as `formatToolCallSummary`).
  *
  * Success (`!isError`) → `'✓'` (ignores `result` content).
- * Error (`isError`) → `'✗ <first line>'` where `firstLine` is
- * extracted from `result`:
- *   1. If `typeof result === "string"`, take the substring up to
- *      the first `\n` (or the entire string if no newline).
- *   2. Otherwise, stable-stringify via `JSON.stringify` (or
- *      `String(...)` fallback), then take the first line.
+ * Error (`isError`) → `'✗ <first line>'` where the error message is
+ * extracted via `extractErrorMessage` (D1 extraction order: string
+ * result → `message` field → `error` field → nested `error.message`
+ * → `stderr` → stringified JSON/fallback), then the first line is
+ * taken (substring up to the first `\n`), and finally tail-truncated
+ * to `MAX_ERROR_LINE_DISPLAY_LENGTH` chars with `…` (D2).
+ *
+ * Note: the host handler no longer calls this function; it uses
+ * `formatToolCompletedLine` instead. Retained for unit tests and
+ * as a fallback.
  *
  * @param toolName - The tool name from the SDK event.
  * @param result - The `result` field (`ToolExecutionEndEvent.result`).
@@ -190,19 +272,46 @@ export function formatToolResultSummary(
 
   if (!isError) return "✓";
 
-  // Error path: extract the first line of the error content.
-  // Coerce `result` to a string first.
-  const raw: string =
-    typeof result === "string"
-      ? result
-      : (() => {
-          const json = JSON.stringify(result);
-          return json !== undefined ? json : String(result);
-        })();
-
-  // First line = substring up to the first `\n`.
+  // Error path: extract the error message using the D1 extraction
+  // order (string → message → error → nested error.message →
+  // stderr → JSON/fallback), take the first line, and tail-truncate
+  // to MAX_ERROR_LINE_DISPLAY_LENGTH (D2).
+  const raw = extractErrorMessage(result);
   const newlineIdx = raw.indexOf("\n");
   const firstLine = newlineIdx === -1 ? raw : raw.slice(0, newlineIdx);
+  const truncated = truncateLine(firstLine, MAX_ERROR_LINE_DISPLAY_LENGTH);
 
-  return `✗ ${firstLine}`;
+  return `✗ ${truncated}`;
+}
+
+/**
+ * Build the single combined Tool-observability line emitted at
+ * `tool_execution_end` (spec: tool-display-combine-status). The host
+ * buffers the invocation summary (from `formatToolCallSummary` at
+ * `tool_execution_start`) keyed by `toolCallId` and passes it here.
+ *
+ * @param summary - The buffered invocation summary (e.g. "bash: ls"),
+ *                  or `undefined` when the start was suppressed (machine
+ *                  tool / unknown tool / orphaned end-without-start).
+ *                  `undefined` → returns `null` (no emit).
+ * @param result - The end event `result` (used only for the error line).
+ * @param isError - The end event `isError` flag.
+ * @returns The combined line, `null` to suppress.
+ */
+export function formatToolCompletedLine(
+  summary: string | undefined,
+  result: unknown,
+  isError: boolean,
+): string | null {
+  if (summary === undefined) return null;
+  let line: string;
+  if (!isError) {
+    line = `✓ ${summary}`;
+  } else {
+    const raw = extractErrorMessage(result);
+    const nl = raw.indexOf("\n");
+    const first = nl === -1 ? raw : raw.slice(0, nl);
+    line = first.length > 0 ? `✗ ${summary}: ${first}` : `✗ ${summary}`;
+  }
+  return truncateLine(line, MAX_TOOL_LINE_DISPLAY_LENGTH);
 }

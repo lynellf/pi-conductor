@@ -234,21 +234,28 @@ function buildContainer(
   return container;
 }
 
+/** Wrap text in markdown blockquote syntax (`> `-prefixed lines). */
+function blockquote(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+}
+
 /**
  * Build the `Container` for a `conduct.role.tool` message (Phase 7B.UX).
  * Compact one-line layout: a role label colored with `TOOL_LABEL_COLOR`
- * (NOT `pickLabelColor`) and the body as a `Text` child (NOT `Markdown`),
- * because the formatter's output is a single-line summary or indicator,
- * not markdown text.
+ * (NOT `pickLabelColor`) and the body as a `Markdown` child
+ * (blockquote-wrapped for visual de-emphasis; M1 amended).
  *
  * The container's children:
  *
  *   1. `Text` — the role label, colored with `TOOL_LABEL_COLOR` ("dim").
  *      The label text is `details.role` (e.g., "orchestrator", "worker").
  *      The label is NOT bolded (contrast with the text renderer).
- *   2. `Text` — the body, carrying the formatter-produced summary
- *      (e.g., "bash: ls", "✓", "✗ error: permission denied"). Plain text,
- *      not markdown.
+ *   2. `Markdown` — the body, carrying the formatter-produced summary
+ *      (e.g., "bash: ls", "✓", "✗ error: permission denied"), wrapped
+ *      in `> `-prefixed markdown blockquote lines for visual de-emphasis.
  *
  * The tool renderer does NOT use `pickLabelColor`, `ORCHESTRATOR_LABEL_COLOR`,
  * `WORKER_LABEL_COLOR`, or `UNKNOWN_LABEL_COLOR` — the tool label is always
@@ -279,7 +286,7 @@ function buildToolContainer(
 
   const container = new Container();
   container.addChild(new Text(labelText, 0, 0));
-  container.addChild(new Text(bodyText, 0, 0));
+  container.addChild(new Markdown(blockquote(bodyText), 0, 0, getMarkdownTheme()));
   return container;
 }
 

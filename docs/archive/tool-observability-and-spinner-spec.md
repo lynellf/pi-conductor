@@ -6,6 +6,12 @@ This revision resolves five findings from `plan-reviewer-b`'s second-pass
 review. All five are concrete (each has a discrete acceptance signal); none
 is stylistic.
 
+- **M1 amended (tool-UX-refinement phase):** The body component for
+  `conduct.role.tool` was a **`Text`** child. The tool-UX-refinement phase
+  reverses this to **`Markdown`** (blockquote-wrapped, using
+  `getMarkdownTheme()`) for visual de-emphasis. This amendment is
+  incorporated into §4 and task 7B.UX.4 below.
+
 - **C1 — spinner placement internally contradictory + breaks 7+ existing
   `formatConductStatus` tests.** §5's narrative already says "Prepend the
   frame to the status line when the run is active (poller-level)," but the
@@ -334,11 +340,11 @@ with a **new** `TOOL_LABEL_COLOR` constant — distinct from
 `ORCHESTRATOR_LABEL_COLOR` / `WORKER_LABEL_COLOR` / `UNKNOWN_LABEL_COLOR`
 so a test can discriminate it. Do NOT reuse the existing
 `pickLabelColor` color logic; the tool renderer's label is muted (a
-secondary surface, not a structural body anchor). **Body (M1):** the
-summary/indicator text is a single line, not markdown, so the body child
-is a **`Text`** component, NOT `Markdown` (the existing `buildContainer`
-for `conduct.role.text` wraps the body in `Markdown` — the tool renderer
-does not).
+secondary surface, not a structural body anchor). **Body (M1, amended):**
+the summary/indicator text is rendered as a markdown blockquote for visual
+de-emphasis, so the body child is a **`Markdown`** component (using
+`getMarkdownTheme()`), with `> `-prefixed content to render as a markdown
+blockquote.
 
 ### 5. `src/extension/status.ts` (MODIFY — add spinner frame)
 
@@ -477,9 +483,10 @@ that re-enables a suppressed path and adds a formatter + spinner.
 - [ ] Renderer: compact one-line `Container`. The label is `details.role`
   (the role name) colored with `TOOL_LABEL_COLOR` — NOT `pickLabelColor`
   and NOT any of `ORCHESTRATOR`/`WORKER`/`UNKNOWN` colors (M2). The body is
-  a `Text` child (the formatter-produced text), NOT `Markdown` (M1): for
-  `tool_call` the summary line (e.g., `bash: pnpm test`); for `tool_result`
-  the indicator (`✓` or `✗ <first error line>`, Open Q1).
+  a `Markdown` child (blockquote-wrapped, using `getMarkdownTheme()`),
+  not `Text` (M1, amended): for `tool_call` the summary line
+  (e.g., `bash: pnpm test`); for `tool_result` the indicator (`✓` or
+  `✗ <first error line>`, Open Q1).
 - [ ] Tests in `tests/extension/conduct-tool-renderer.test.ts`:
   - Renderer returns a `Container` for a `tool_call` summary
   - Renderer returns a `Container` for a `tool_result` indicator
@@ -487,11 +494,13 @@ that re-enables a suppressed path and adds a formatter + spinner.
   - Renderer returns `undefined` on throw (defense-in-depth)
   - `createConductMessageRenderers` returns BOTH `conduct.role.text`
     and `conduct.role.tool` keys
-  - **Body is `Text`, not `Markdown` (M1):** assert the tool renderer's
-    returned `Container` has a `Text` child carrying the summary text and
-    NO `Markdown` child (contrast with the `conduct.role.text` renderer,
-    whose `Container` has a `Markdown` child). Discriminate by `child
-    instanceof Markdown` being false for the tool case.
+  - **Body is `Markdown` (blockquote-wrapped), not `Text` (M1, amended):**
+    assert the tool renderer's returned `Container` has a `Markdown` child
+    (blockquote-wrapped, using `getMarkdownTheme()`) and NO `Text` child
+    (contrast with the `conduct.role.text` renderer, whose `Container` also
+    has a `Markdown` child — the tool renderer now uses the same component
+    type but with blockquote-prefixed content). Discriminate by `child
+    instanceof Text` being false for the tool body.
   - **Role label uses `TOOL_LABEL_COLOR` (M2):** assert the tool
     renderer's label is colored with the `TOOL_LABEL_COLOR` constant
     (distinct from `ORCHESTRATOR_LABEL_COLOR` / `WORKER_LABEL_COLOR` /

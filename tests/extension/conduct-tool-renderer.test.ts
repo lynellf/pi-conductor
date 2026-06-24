@@ -7,7 +7,7 @@
  *   - Renderer returns `undefined` on throw (defense-in-depth).
  *   - `createConductMessageRenderers` returns BOTH `conduct.role.text`
  *     and `conduct.role.tool` keys.
- *   - M1: body is `Text`, not `Markdown`.
+ *   - M1 (amended): body is `Markdown` (blockquote-wrapped), not `Text`.
  *   - M2: role label uses `TOOL_LABEL_COLOR`, not orchestrator colors.
  */
 
@@ -85,7 +85,7 @@ describe("createConductMessageRenderers — tool renderer", () => {
     expect(typeof renderers["conduct.role.tool"]).toBe("function");
   });
 
-  it("renders a tool_call summary (e.g. 'bash: ls') as a Container", () => {
+  it("renders a tool_call summary (e.g. 'bash: ls') as a Container (blockquote-wrapped Markdown body)", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers();
     const renderer = toolRenderer(renderers);
@@ -104,10 +104,12 @@ describe("createConductMessageRenderers — tool renderer", () => {
 
     const [label, body] = container.children;
     expect(label).toBeInstanceOf(Text);
-    expect(body).toBeInstanceOf(Text);
+    expect(body).toBeInstanceOf(Markdown);
+    const bodyText = getInternalText(body as unknown as { text?: string });
+    expect(bodyText).toBe("> bash: ls");
   });
 
-  it("renders a tool_result ✓ indicator as a Container", () => {
+  it("renders a tool_result ✓ indicator as a Container (blockquote-wrapped Markdown body)", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers();
     const renderer = toolRenderer(renderers);
@@ -121,11 +123,12 @@ describe("createConductMessageRenderers — tool renderer", () => {
     const component = renderer(message, OPTIONS, theme);
     expect(component).toBeInstanceOf(Container);
     const [, body] = (component as Container).children;
+    expect(body).toBeInstanceOf(Markdown);
     const bodyText = getInternalText(body as unknown as { text?: string });
-    expect(bodyText).toBe("✓");
+    expect(bodyText).toBe("> ✓");
   });
 
-  it("renders a tool_result ✗ <first line> indicator as a Container", () => {
+  it("renders a tool_result ✗ <first line> indicator as a Container (blockquote-wrapped Markdown body)", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers();
     const renderer = toolRenderer(renderers);
@@ -139,8 +142,9 @@ describe("createConductMessageRenderers — tool renderer", () => {
     const component = renderer(message, OPTIONS, theme);
     expect(component).toBeInstanceOf(Container);
     const [, body] = (component as Container).children;
+    expect(body).toBeInstanceOf(Markdown);
     const bodyText = getInternalText(body as unknown as { text?: string });
-    expect(bodyText).toBe("✗ permission denied");
+    expect(bodyText).toBe("> ✗ permission denied");
   });
 
   it("returns undefined on a forced throw (defense-in-depth)", () => {
@@ -160,7 +164,7 @@ describe("createConductMessageRenderers — tool renderer", () => {
     expect(result).toBeUndefined();
   });
 
-  it("renders safely when details is missing (defensive fallback)", () => {
+  it("renders safely when details is missing (defensive fallback; Markdown body)", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers();
     const renderer = toolRenderer(renderers);
@@ -174,14 +178,16 @@ describe("createConductMessageRenderers — tool renderer", () => {
     expect(component).toBeInstanceOf(Container);
     const [label, body] = (component as Container).children;
     expect(label).toBeInstanceOf(Text);
-    expect(body).toBeInstanceOf(Text);
+    expect(body).toBeInstanceOf(Markdown);
     const labelText = getInternalText(label as unknown as { text?: string });
     expect(labelText).toContain("(unknown)");
+    const bodyText = getInternalText(body as unknown as { text?: string });
+    expect(bodyText).toBe("> bash: ls");
   });
 
-  // ─── M1: Body is Text, not Markdown ─────────────────────────────
+  // ─── M1 (amended): Body is Markdown (blockquote-wrapped), not Text ──
 
-  it("M1: body child is a Text component, not Markdown (contrast with text renderer)", () => {
+  it("M1 (amended): body child is a Markdown component (blockquote-wrapped), not Text", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => "orchestrator");
     const tRenderer = toolRenderer(renderers);
@@ -198,13 +204,15 @@ describe("createConductMessageRenderers — tool renderer", () => {
       details: { role: "worker", kind: "text", is_orchestrator: false },
     });
 
-    // Tool renderer: body is Text
+    // Tool renderer (amended M1): body is Markdown (blockquote-wrapped)
     const toolComponent = tRenderer(toolMsg, OPTIONS, theme) as Container;
     const toolBody = toolComponent.children[1];
-    expect(toolBody).toBeInstanceOf(Text);
-    expect(toolBody instanceof Markdown).toBe(false);
+    expect(toolBody).toBeInstanceOf(Markdown);
+    expect(toolBody instanceof Text).toBe(false);
+    const toolBodyText = getInternalText(toolBody as unknown as { text?: string });
+    expect(toolBodyText).toBe("> bash: ls");
 
-    // Text renderer: body is Markdown
+    // Text renderer: body is still Markdown (unchanged)
     const textComponent = textR(textMsg, OPTIONS, theme) as Container;
     const textBody = textComponent.children[1];
     expect(textBody).toBeInstanceOf(Markdown);
