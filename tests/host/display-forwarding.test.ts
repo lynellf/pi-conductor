@@ -117,7 +117,7 @@ describe("attachSessionEventHandler — display sink", () => {
       // Reversal of the original Task 3 "thinking omitted"
       // decision — the human wants to see model reasoning at
       // all times (2026-06-20, after Phase 5.5).
-      text: "Hello \n\nplanning the response\n\nworld",
+      text: "Hello \n\n> planning the response\n\nworld",
     });
     expect(onDisplay).toHaveBeenNthCalledWith(2, {
       role: "orchestrator",
@@ -155,7 +155,47 @@ describe("attachSessionEventHandler — display sink", () => {
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "worker",
       kind: "text",
-      text: "Hello \n\nplanning the response\n\nworld",
+      text: "Hello \n\n> planning the response\n\nworld",
+    });
+  });
+
+  it("blockquotes multi-line thinking content", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      onDisplay,
+    });
+
+    const msg: AssistantMessage = {
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-20250514",
+      content: [{ type: "thinking", thinking: "line one\nline two" }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 123,
+    } as AssistantMessage;
+
+    session.emit({ type: "message_end", message: msg });
+
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    expect(onDisplay).toHaveBeenNthCalledWith(1, {
+      role: "worker",
+      kind: "text",
+      text: "> line one\n> line two",
     });
   });
 

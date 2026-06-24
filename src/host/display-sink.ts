@@ -43,6 +43,11 @@ export type DisplaySink = (event: DisplayEvent) => void;
  * single-paragraph rendering). `thinking` parts are emitted as their
  * own blocks separated from text (and from each other) by `"\n\n"`,
  * so reasoning reads as its own paragraph above/below the answer.
+ *
+ * Non-redacted thinking blocks are blockquoted (`> `-prefixed) so
+ * reasoning is visually de-emphasized relative to direct user
+ * communication in the TUI markdown renderer.
+ *
  * A message with only text parts is therefore byte-identical to the
  * pre-reversal behavior; only messages that carry thinking change.
  */
@@ -61,11 +66,19 @@ export function extractAssistantText(message: AssistantMessage): string {
         blocks.push(textBuf);
         textBuf = "";
       }
-      blocks.push(thinking);
+      blocks.push(blockquote(thinking));
     }
   }
   if (textBuf.length > 0) blocks.push(textBuf);
   return blocks.join("\n\n");
+}
+
+/** Prefix each line with `> ` so the renderer treats it as a markdown blockquote. */
+function blockquote(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
 }
 
 /**
