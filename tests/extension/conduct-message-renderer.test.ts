@@ -102,15 +102,13 @@ function getInternalText(component: { readonly text?: unknown }): string {
 }
 
 describe("createConductMessageRenderers", () => {
-  it("returns a renderer for conduct.role.text only (tool customType removed in Phase 5.5)", () => {
+  it("returns renderers for both conduct.role.text and conduct.role.tool (restored in Phase 7B.UX)", () => {
     const renderers = createConductMessageRenderers();
-    // Phase 5.5: the sink suppresses tool events, so the
-    // `conduct.role.tool` customType is dead and removed from the
-    // factory's record (YAGNI — re-add if a non-JSON tool-rendering
-    // path is later requested).
-    expect(Object.keys(renderers)).toEqual(["conduct.role.text"]);
+    // Phase 7B.UX restored the `conduct.role.tool` customType for
+    // tool-call and tool-result display events.
+    expect(Object.keys(renderers)).toEqual(["conduct.role.text", "conduct.role.tool"]);
     expect(typeof renderers["conduct.role.text"]).toBe("function");
-    expect(renderers["conduct.role.tool"]).toBeUndefined();
+    expect(typeof renderers["conduct.role.tool"]).toBe("function");
   });
 
   it("renders a conduct.role.text message as a Container with a bold role-label Text + a Markdown body carrying the LLM text verbatim", () => {

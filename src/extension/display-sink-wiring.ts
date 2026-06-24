@@ -7,27 +7,25 @@
  *
  * The `details` payload shape — `{ role, kind, is_orchestrator }` —
  * is the seam contract shared with the conductor-owned message
- * renderer in `conduct-message-renderer.ts`. `kind` is always
- * `"text"` (the sink suppresses every tool event — see below);
- * `is_orchestrator` is a derived boolean the sink computes at
- * emission time against the active run's orchestrator role (tracked
- * in `current-orchestrator.ts`), and the renderer reads it for label
- * color.
+ * renderer in `conduct-message-renderer.ts`. `kind` is `"text"` for
+ * LLM text events and `"tool"` for tool_call/tool_result display
+ * events (the formatter converts both into compact one-line summaries
+ * or `✓`/`✗` indicators). `is_orchestrator` is a derived boolean the
+ * sink computes at emission time against the active run's orchestrator
+ * role (tracked in `current-orchestrator.ts`), and the renderer reads
+ * it for label color.
  *
- * ## Phase 5.5 remediation — what the sink emits
+ * ## Phase 7B.UX — tool observability
  *
- * Only `text` events become `CustomMessage`s. The body is the LLM's
- * text verbatim — no `### ${role}` prefix (the renderer's structural
- * role label already names the role, so a second heading was
- * visual duplication). `tool_call` and `tool_result` events are
- * suppressed entirely: tool args are JSON-shaped and the
- * `handoff`/`end` tool results are model-facing protocol noise
- * ("emission recorded: …"). Real tool activity remains in the
- * per-role session JSONL
- * (`<cwd>/.pi-conductor/runs/<run_id>/sessions/`); the TUI stream
- * is an observability surface, not the durable record. A future
- * phase that wants non-JSON tool rendering in the TUI re-introduces
- * a `conduct.role.tool` `customType` + a structured renderer.
+ * Tool events (`tool_call`, `tool_result`) are now emitted as
+ * `conduct.role.tool` `CustomMessage`s with `details.kind: "tool"`.
+ * The formatters in `src/host/tool-summary.ts` produce compact
+ * summaries (e.g. `bash: pnpm test`) or `✓`/`✗` indicators — not
+ * the full JSON flood. Conductor machine tools (`handoff`/`end`/
+ * `ask_user`) are suppressed at the formatter level and never
+ * reach the sink. Full tool bodies remain in the per-role session
+ * JSONL (`<cwd>/.pi-conductor/runs/<run_id>/sessions/`); the TUI
+ * stream is an observability surface, not the durable record.
  *
  * The body uses markdown so the conductor-owned renderer can present
  * it via the SDK's `getMarkdownTheme()` with no
@@ -57,25 +55,47 @@ import { getCurrentOrchestratorRole } from "./current-orchestrator.js";
  */
 export function createConductDisplaySink(sendMessage: ExtensionAPI["sendMessage"]): DisplaySink {
   return (event: DisplayEvent) => {
-    // Phase 5.5: suppress all tool activity from the TUI stream.
-    // Tool calls and tool results (the conductor's `handoff`/`end`
-    // machine tools AND built-in tools like `bash`/`read`) are
-    // protocol noise here; the user-meaningful signal is the LLM's
-    // text reasoning. Real tool activity stays in the per-role
-    // session JSONL. See the file-level doc for the rationale.
-    if (event.kind !== "text") return;
+    // Phase 7B.UX: tool events (`tool_call`, `tool_result`) are now
+    // emitted as `conduct.role.tool` with compact summaries. The
+    // formatters in src/host/tool-summary.ts already suppress machine
+    // tools by returning `null` — the sink only sees non-null events
+    // for built-in tools.
+    //
+    // `text` events use the existing `conduct.role.text` customType.
+    if (event.kind === "text") {
+      const orchestratorRole = getCurrentOrchestratorRole();
+      const details: ConductMessageDetails = {
+        role: event.role,
+        kind: "text",
+        is_orchestrator: orchestratorRole !== null && event.role === orchestratorRole,
+      };
+      sendMessage({
+        customType: "conduct.role.text",
+        content: event.text,
+        display: true,
+        details,
+      });
+      return;
+    }
 
-    const orchestratorRole = getCurrentOrchestratorRole();
-    const details: ConductMessageDetails = {
-      role: event.role,
-      kind: "text",
-      is_orchestrator: orchestratorRole !== null && event.role === orchestratorRole,
-    };
-    sendMessage({
-      customType: "conduct.role.text",
-      content: event.text,
-      display: true,
-      details,
-    });
+    // Tool events: emit as `conduct.role.tool`. The content is the
+    // formatter-produced summary (e.g. "bash: ls" for tool_call,
+    // "✓" or "✗ <first line>" for tool_result). `kind` is "tool"
+    // for both so the renderer does not need a third discriminator.
+    if (event.kind === "tool_call" || event.kind === "tool_result") {
+      const orchestratorRole = getCurrentOrchestratorRole();
+      const details: ConductMessageDetails = {
+        role: event.role,
+        kind: "tool",
+        is_orchestrator: orchestratorRole !== null && event.role === orchestratorRole,
+      };
+      sendMessage({
+        customType: "conduct.role.tool",
+        content: event.text,
+        display: true,
+        details,
+      });
+      return;
+    }
   };
 }

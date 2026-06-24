@@ -79,7 +79,7 @@ function makeSession() {
 }
 
 describe("attachSessionEventHandler — display sink", () => {
-  it("forwards assistant text, tool calls, and tool results to the display sink", () => {
+  it("forwards assistant text, compact tool summaries, and success/error indicators to the display sink", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
@@ -119,15 +119,19 @@ describe("attachSessionEventHandler — display sink", () => {
       // all times (2026-06-20, after Phase 5.5).
       text: "Hello \n\n> planning the response\n\nworld",
     });
+    // Compact tool summary (formatToolCallSummary):
+    // "bash: ls" instead of the old JSON flood
     expect(onDisplay).toHaveBeenNthCalledWith(2, {
       role: "orchestrator",
       kind: "tool_call",
-      text: 'bash: {"command":"ls"}',
+      text: "bash: ls",
     });
+    // Success indicator (formatToolResultSummary):
+    // "✓" instead of the old JSON flood
     expect(onDisplay).toHaveBeenNthCalledWith(3, {
       role: "orchestrator",
       kind: "tool_result",
-      text: 'bash: {"ok":true}',
+      text: "✓",
     });
   });
 
@@ -223,6 +227,127 @@ describe("attachSessionEventHandler — display sink", () => {
       kind: "text",
       text: "final answer",
     });
+  });
+
+  it("forwards tool_error with a ✗ <first line> indicator for error results", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      onDisplay,
+    });
+
+    // Multi-line string error result
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-err",
+      toolName: "bash",
+      result: "permission denied\n  at script.sh:3",
+      isError: true,
+    });
+
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    expect(onDisplay).toHaveBeenNthCalledWith(1, {
+      role: "worker",
+      kind: "tool_result",
+      text: "✗ permission denied",
+    });
+  });
+
+  it("forwards tool_error with an object result coerced to ✗ <first line>", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      onDisplay,
+    });
+
+    // Object result (Open concern A): the error path stringifies
+    // the object and takes the first line.
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-err-obj",
+      toolName: "bash",
+      result: { message: "command not found", code: 127 },
+      isError: true,
+    });
+
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    expect(onDisplay).toHaveBeenNthCalledWith(1, {
+      role: "worker",
+      kind: "tool_result",
+      text: expect.stringMatching(/^✗ /),
+    });
+  });
+
+  it("suppresses handoff tool_call and tool_result events (protocol noise)", () => {
+    // Machine tools (handoff, end, ask_user) are suppressed by
+    // the formatters returning null. The display sink never
+    // receives them.
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "orchestrator",
+      onDisplay,
+    });
+
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-handoff",
+      toolName: "handoff",
+      args: { target_role: "worker" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-handoff",
+      toolName: "handoff",
+      result: { ok: true },
+      isError: false,
+    });
+
+    // No tool_call or tool_result events for machine tools.
+    expect(onDisplay).not.toHaveBeenCalled();
+  });
+
+  it("suppresses end tool_call and tool_result events", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "orchestrator",
+      onDisplay,
+    });
+
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-end",
+      toolName: "end",
+      args: { reason: "done" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-end",
+      toolName: "end",
+      result: { ok: true },
+      isError: false,
+    });
+
+    expect(onDisplay).not.toHaveBeenCalled();
   });
 
   it("does not require a display sink", () => {

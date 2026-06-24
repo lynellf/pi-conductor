@@ -116,6 +116,9 @@ export interface StartStatusPollerOptions {
   readonly onNewTransitions?: (records: readonly TransitionRecord[]) => void;
 }
 
+/** Braille spinner frames. Cycles on the 250ms poll interval. */
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /**
  * Start a status poller for the given `RunHandle`. The
  * poller calls `setStatus(text)` on every tick until
@@ -127,6 +130,11 @@ export interface StartStatusPollerOptions {
  * the command handler does not call `setStatus` directly
  * during the run. This keeps the rendering and the
  * teardown in one place.
+ *
+ * When the run is active (`exitReason === "running"`), a
+ * braille spinner character is prepended to the status
+ * line. The spinner cycles on each tick. Terminal ticks
+ * clear the line with no spinner.
  *
  * @param handle - The active `RunHandle`. The poller
  *                 reads `runStats()` on every tick; the
@@ -159,6 +167,9 @@ export function startStatusPoller(
   // makes the "uninitialized" intent explicit and
   // makes a regression obvious in tests.
   let lastSeenLength = -1;
+  // Spinner frame index: advances on each non-terminal
+  // tick. Starts at 0 so the first tick shows "⠋".
+  let spinnerIndex = 0;
   const onNewTransitions = options.onNewTransitions;
 
   const tick = (): void => {
@@ -192,7 +203,15 @@ export function startStatusPoller(
       stop();
       return;
     }
-    setStatus(formatConductStatus(stats));
+
+    // Prepend the spinner frame to the status line (C1:
+    // poller-level, NOT inside `formatConductStatus`).
+    // `formatConductStatus` stays pure — the existing 11
+    // string-equality assertions in status.test.ts target
+    // it directly and are unchanged.
+    const frame = SPINNER_FRAMES[spinnerIndex];
+    spinnerIndex = (spinnerIndex + 1) % SPINNER_FRAMES.length;
+    setStatus(`${frame} ${formatConductStatus(stats)}`);
   };
 
   // Render the initial line immediately so the user

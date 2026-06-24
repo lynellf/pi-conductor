@@ -91,14 +91,3 @@ function readableThinking(part: ThinkingContent): string {
   if (part.redacted) return "";
   return typeof part.thinking === "string" ? part.thinking : "";
 }
-
-/**
- * Stable stringification for display text. Plain strings pass
- * through; objects and arrays are JSON-rendered when possible.
- */
-export function stringifyDisplayValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  const json = JSON.stringify(value);
-  if (json !== undefined) return json;
-  return String(value);
-}

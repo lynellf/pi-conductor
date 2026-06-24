@@ -30,12 +30,10 @@
  * The `ConductMessageDetails` type is the seam contract the sink
  * (`src/extension/display-sink-wiring.ts`) writes and the renderer
  * reads. `is_orchestrator` is the only field the renderer branches
- * on for color; `role` drives the label text. `kind` is always
- * `"text"` after the Phase 5.5 sink change (tool events are
- * suppressed at the sink and never reach the renderer); it is
- * retained on the contract for grep-ability of the seam shape.
- * The sink computes `is_orchestrator` from the active run's
- * manifest (see `current-orchestrator.ts`).
+ * on for color; `role` drives the label text. `kind` is `"text"` or
+ * `"tool"` (Phase 7B.UX restored the `"tool"` kind for tool-call and
+ * tool-result display events). The sink computes `is_orchestrator`
+ * from the active run's manifest (see `current-orchestrator.ts`).
  *
  * ## Why a local `CustomMessage` shape
  *
@@ -74,12 +72,16 @@ import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tu
 
 /**
  * Kind discriminator the display sink stamps on every `CustomMessage`.
- * Phase 5.5 narrowed this to `"text"` only — the sink suppresses all
- * `tool_call`/`tool_result` events and never emits a `"tool"` kind.
- * The `conduct.role.tool` customType was removed for YAGNI; re-add
- * both if a non-JSON tool-rendering path is later requested.
+ * - `"text"` — LLM text (conduct.role.text)
+ * - `"tool"` — tool call/result summary (conduct.role.tool)
+ *
+ * Phase 7B.UX restored the `"tool"` kind and the `conduct.role.tool`
+ * customType. The sink folds both `tool_call` and `tool_result`
+ * DisplayEvents into `kind: "tool"` — the formatter's content already
+ * carries the `✓`/`✗` marker for end events, so the renderer does not
+ * need a third discriminator.
  */
-export type ConductMessageKind = "text";
+export type ConductMessageKind = "text" | "tool";
 
 /**
  * Shared `details` payload shape for the two `conduct.role.*`
@@ -95,6 +97,13 @@ export type ConductMessageKind = "text";
  * this boolean for color. This keeps the renderer run-agnostic —
  * registering it at extension factory time and reusing it across
  * runs is safe.
+ *
+ * `kind` is `"text"` or `"tool"` (Phase 7B.UX restored the `"tool"`
+ * kind for tool-call and tool-result display events). The renderer
+ * does not currently branch on `kind` — the `conduct.role.tool`
+ * renderer ignores it; the `conduct.role.text` renderer treats it
+ * as text. Retained on the contract for grep-ability of the seam
+ * shape.
  */
 export interface ConductMessageDetails {
   readonly role: string;
@@ -127,6 +136,12 @@ const ORCHESTRATOR_LABEL_COLOR: ThemeColor = "mdHeading";
 const WORKER_LABEL_COLOR: ThemeColor = "accent";
 /** Fallback color when the orchestrator role is unknown (`null` — no active run). */
 const UNKNOWN_LABEL_COLOR: ThemeColor = "muted";
+/**
+ * Role-label color for tool-call / tool-result messages (conduct.role.tool).
+ * A muted secondary surface distinct from the orchestrator/worker/unknown
+ * colors. Used by the tool renderer exclusively — NOT by `pickLabelColor`.
+ */
+const TOOL_LABEL_COLOR: ThemeColor = "dim";
 
 /**
  * Pick the role-label color. The renderer is run-agnostic: the
@@ -220,9 +235,58 @@ function buildContainer(
 }
 
 /**
- * Build a single renderer. Closure-free over mutable state — the
- * orchestrator getter is the only "live" reference, and it points
- * at the module-level `currentOrchestratorRole` slot.
+ * Build the `Container` for a `conduct.role.tool` message (Phase 7B.UX).
+ * Compact one-line layout: a role label colored with `TOOL_LABEL_COLOR`
+ * (NOT `pickLabelColor`) and the body as a `Text` child (NOT `Markdown`),
+ * because the formatter's output is a single-line summary or indicator,
+ * not markdown text.
+ *
+ * The container's children:
+ *
+ *   1. `Text` — the role label, colored with `TOOL_LABEL_COLOR` ("dim").
+ *      The label text is `details.role` (e.g., "orchestrator", "worker").
+ *      The label is NOT bolded (contrast with the text renderer).
+ *   2. `Text` — the body, carrying the formatter-produced summary
+ *      (e.g., "bash: ls", "✓", "✗ error: permission denied"). Plain text,
+ *      not markdown.
+ *
+ * The tool renderer does NOT use `pickLabelColor`, `ORCHESTRATOR_LABEL_COLOR`,
+ * `WORKER_LABEL_COLOR`, or `UNKNOWN_LABEL_COLOR` — the tool label is always
+ * colored with `TOOL_LABEL_COLOR` regardless of orchestrator status (M2).
+ */
+function buildToolContainer(
+  message: ConductCustomMessage,
+  options: MessageRenderOptions,
+  theme: Theme,
+): Container {
+  void options;
+
+  const details = message.details;
+  const labelText = theme.fg(TOOL_LABEL_COLOR, details?.role ?? "(unknown)");
+
+  // Body: the formatter-produced text. Always a string in practice.
+  const body = message.content;
+  const bodyText =
+    typeof body === "string"
+      ? body
+      : body
+          .filter(
+            (part): part is { readonly type: string; readonly text: string } =>
+              part.type === "text" && "text" in part,
+          )
+          .map((part) => part.text)
+          .join("\n");
+
+  const container = new Container();
+  container.addChild(new Text(labelText, 0, 0));
+  container.addChild(new Text(bodyText, 0, 0));
+  return container;
+}
+
+/**
+ * Build the `conduct.role.text` renderer. Closure-free over mutable
+ * state — the orchestrator getter is the only "live" reference, and
+ * it points at the module-level `currentOrchestratorRole` slot.
  *
  * The wrapper is the defense-in-depth try/catch the spec calls for
  * (Pinned SDK surface #4): the SDK already wraps the renderer call
@@ -244,14 +308,31 @@ function createRenderer(
 }
 
 /**
+ * Build the `conduct.role.tool` renderer. Pure: no orchestrator
+ * getter needed — the tool label color is always `TOOL_LABEL_COLOR`
+ * regardless of orchestrator status (M2).
+ *
+ * The wrapper is the defense-in-depth try/catch (same pattern as
+ * `createRenderer`).
+ */
+function createToolRenderer(): MessageRenderer<ConductMessageDetails> {
+  return (message, options, theme) => {
+    try {
+      return buildToolContainer(message, options, theme);
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+/**
  * Build the conductor-owned renderer, keyed by its `customType`.
  * The factory's caller (`extensions/conduct.ts`) iterates the
  * record and registers each with `pi.registerMessageRenderer`.
  *
- * Phase 5.5 narrowed the record to `conduct.role.text` only — the
- * sink suppresses tool events, so `conduct.role.tool` is dead and
- * removed (YAGNI). Re-add the key if a non-JSON tool-rendering
- * path is later requested.
+ * Phase 7B.UX restored the `conduct.role.tool` key — the sink now
+ * emits tool_call / tool_result events as `conduct.role.tool` with
+ * compact formatter summaries. Both keys are returned.
  *
  * Exposing the record (vs. a single named export) keeps the
  * registration step a single `for ... of` and matches the SDK's
@@ -268,9 +349,11 @@ function createRenderer(
 export function createConductMessageRenderers(
   getOrchestratorRole: () => string | null = () => null,
 ): Record<string, MessageRenderer<ConductMessageDetails>> {
-  const renderer = createRenderer(getOrchestratorRole);
+  const textRenderer = createRenderer(getOrchestratorRole);
+  const toolRenderer = createToolRenderer();
   return {
-    "conduct.role.text": renderer,
+    "conduct.role.text": textRenderer,
+    "conduct.role.tool": toolRenderer,
   };
 }
 

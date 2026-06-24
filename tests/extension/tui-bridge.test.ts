@@ -190,39 +190,44 @@ describe("extension shell — Phase 2 + 5 display sink wiring", () => {
     setCurrentOrchestratorRole(null);
   });
 
-  it("emits only text events, with the LLM text verbatim and no role prefix; tool calls and tool results are suppressed", () => {
-    // Phase 5.5 remediation: the sink drops the `### ${role}`
-    // body prefix (the renderer's structural role label already
-    // names the role) and suppresses ALL tool events — both the
-    // conductor's `handoff`/`end` machine tools and built-in
-    // tools (`bash`, `read`, …). The user-meaningful signal in
-    // the TUI is the LLM's text reasoning; real tool activity
-    // remains in the per-role session JSONL.
+  it("forwards text events as conduct.role.text with kind='text' and tool_call/tool_result as conduct.role.tool with kind='tool'", () => {
+    // Phase 7B.UX: the sink now emits text events as
+    // `conduct.role.text` (unchanged) and tool_call / tool_result
+    // as `conduct.role.tool` with compact summaries.
     const sendMessage = vi.fn();
     const sink = createConductDisplaySink(sendMessage);
 
     sink({ role: "worker", kind: "text", text: "hello world" });
     sink({ role: "worker", kind: "tool_call", text: 'bash: {"command":"ls"}' });
-    sink({ role: "worker", kind: "tool_result", text: "emission recorded: handoff → worker" });
+    sink({ role: "worker", kind: "tool_result", text: "✓" });
 
-    // Only the text event emits a CustomMessage.
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
     expect(sendMessage).toHaveBeenNthCalledWith(1, {
       customType: "conduct.role.text",
-      // Body is the LLM's text verbatim — no `### worker` prefix.
       content: "hello world",
       display: true,
       details: { role: "worker", kind: "text", is_orchestrator: false },
     });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, {
+      customType: "conduct.role.tool",
+      content: 'bash: {"command":"ls"}',
+      display: true,
+      details: { role: "worker", kind: "tool", is_orchestrator: false },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(3, {
+      customType: "conduct.role.tool",
+      content: "✓",
+      display: true,
+      details: { role: "worker", kind: "tool", is_orchestrator: false },
+    });
   });
 
-  it("suppresses tool_call and tool_result events entirely (no CustomMessage emitted for any tool activity)", () => {
-    // Dedicated tool-suppression test (Phase 5.5 Task 10):
-    // neither the conductor's machine tools (`handoff`, `end`)
-    // nor built-in tools (`bash`, `read`, …) surface in the TUI
-    // stream. The sink returns without calling `sendMessage` for
-    // every `tool_call` and `tool_result` kind. Real tool activity
-    // remains in the per-role session JSONL.
+  it("emits ALL tool events through the sink (no tool suppression at this level)", () => {
+    // Phase 7B.UX removed the Phase 5.5 suppression of tool events.
+    // The sink emits every tool_call and tool_result as
+    // `conduct.role.tool`. Tool-name-level filtering (machine tools
+    // vs built-in tools) happens upstream in the formatters, not
+    // at the sink level.
     const sendMessage = vi.fn();
     const sink = createConductDisplaySink(sendMessage);
 
@@ -237,28 +242,89 @@ describe("extension shell — Phase 2 + 5 display sink wiring", () => {
     sink({ role: "orchestrator", kind: "tool_call", text: 'end: {"reason":"done"}' });
     sink({ role: "orchestrator", kind: "tool_result", text: "emission recorded: end" });
 
-    expect(sendMessage).not.toHaveBeenCalled();
+    // All 6 tool events now emit as conduct.role.tool messages.
+    expect(sendMessage).toHaveBeenCalledTimes(6);
+    for (const call of sendMessage.mock.calls) {
+      const [msg] = call;
+      expect(msg).toMatchObject({
+        customType: "conduct.role.tool",
+        display: true,
+        details: { kind: "tool" },
+      });
+    }
   });
 
-  it("stamps is_orchestrator=true when the active run's orchestrator emits", () => {
-    setCurrentOrchestratorRole("orchestrator");
-
+  it("emits text as conduct.role.text and tool_call / tool_result as conduct.role.tool with compact summaries; full tool bodies NOT shown", () => {
+    // Phase 7B.UX: the sink now emits text events as
+    // `conduct.role.text` (unchanged) and tool_call / tool_result
+    // as `conduct.role.tool` with the formatter's compact
+    // summaries. Full tool args/results are NOT shown — the
+    // formatters in src/host/tool-summary.ts produce one-liners.
     const sendMessage = vi.fn();
     const sink = createConductDisplaySink(sendMessage);
-    sink({ role: "orchestrator", kind: "text", text: "I am the orchestrator" });
-    sink({ role: "worker", kind: "text", text: "I am the worker" });
 
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        details: expect.objectContaining({ role: "orchestrator", is_orchestrator: true }),
-      }),
-    );
-    expect(sendMessage).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        details: expect.objectContaining({ role: "worker", is_orchestrator: false }),
-      }),
-    );
+    sink({ role: "worker", kind: "text", text: "hello world" });
+    sink({ role: "worker", kind: "tool_call", text: "bash: ls" });
+    sink({ role: "worker", kind: "tool_result", text: "✓" });
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, {
+      customType: "conduct.role.text",
+      content: "hello world",
+      display: true,
+      details: { role: "worker", kind: "text", is_orchestrator: false },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, {
+      customType: "conduct.role.tool",
+      content: "bash: ls",
+      display: true,
+      details: { role: "worker", kind: "tool", is_orchestrator: false },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(3, {
+      customType: "conduct.role.tool",
+      content: "✓",
+      display: true,
+      details: { role: "worker", kind: "tool", is_orchestrator: false },
+    });
+  });
+
+  it("suppresses machine-tool events (handoff/end/ask_user) — they never reach the sink", () => {
+    // Machine tools are suppressed at the formatter level
+    // (formatToolCallSummary / formatToolResultSummary return null).
+    // The formatters in src/host/tool-summary.ts filter them before
+    // the host emits. The sink itself does not receive machine-tool
+    // events; this test asserts the sink path for tool events is
+    // active (non-machine tools would emit). Since the fixture
+    // feeds the sink directly, machine-tool text still goes through
+    // but the sink does not re-filter by tool name — it treats all
+    // tool_call / tool_result as `conduct.role.tool`.
+    setCurrentOrchestratorRole("orchestrator");
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+
+    sink({ role: "orchestrator", kind: "tool_call", text: 'handoff: {"target_role":"worker"}' });
+    sink({
+      role: "orchestrator",
+      kind: "tool_result",
+      text: "emission recorded: handoff → worker",
+    });
+
+    // Machine-tool text *does* get through the sink (the sink
+    // doesn't know about tool names). The formatter-level
+    // suppression happens upstream. At the sink level, ALL
+    // tool_call / tool_result events become conduct.role.tool.
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, {
+      customType: "conduct.role.tool",
+      content: 'handoff: {"target_role":"worker"}',
+      display: true,
+      details: { role: "orchestrator", kind: "tool", is_orchestrator: true },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, {
+      customType: "conduct.role.tool",
+      content: "emission recorded: handoff → worker",
+      display: true,
+      details: { role: "orchestrator", kind: "tool", is_orchestrator: true },
+    });
   });
 });

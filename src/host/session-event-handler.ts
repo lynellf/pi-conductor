@@ -32,7 +32,8 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
 import type { SessionState } from "./cost.js";
-import { type DisplaySink, extractAssistantText, stringifyDisplayValue } from "./display-sink.js";
+import { type DisplaySink, extractAssistantText } from "./display-sink.js";
+import { formatToolCallSummary, formatToolResultSummary } from "./tool-summary.js";
 
 // ─── Public API ─────────────────────────────────────────────────────
 
@@ -113,20 +114,18 @@ function onSessionEvent(
   event: AgentSessionEvent,
 ): void {
   if (event.type === "tool_execution_start") {
-    onDisplay?.({
-      role,
-      kind: "tool_call",
-      text: `${event.toolName}: ${stringifyDisplayValue(event.args)}`,
-    });
+    const summary = formatToolCallSummary(event.toolName, event.args);
+    if (summary !== null) {
+      onDisplay?.({ role, kind: "tool_call", text: summary });
+    }
     return;
   }
 
   if (event.type === "tool_execution_end") {
-    onDisplay?.({
-      role,
-      kind: "tool_result",
-      text: `${event.toolName}: ${stringifyDisplayValue(event.result)}`,
-    });
+    const result = formatToolResultSummary(event.toolName, event.result, event.isError);
+    if (result !== null) {
+      onDisplay?.({ role, kind: "tool_result", text: result });
+    }
     return;
   }
 
