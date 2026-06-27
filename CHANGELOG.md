@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.1] - 2026-06-26
+
+### Bug fixes
+- **Streaming markdown: quote-block continuity across chunk boundaries.** Continuation chunks emitted from `message_update` and `message_end` in `src/host/session-event-handler.ts` now flow through a new pure normalizer `normalizeContinuationChunk` (`src/host/markdown-continuation.ts`, ~150 LOC) that walks back to the slice's logical line start and prepends the appropriate `> ` (or `> > `) prefix when the slice starts mid-line inside a blockquoted thinking line. The prefix insertion is display-only: `stream.len` continues to count characters in the original formatted string, so the source/accounting invariant is preserved and `findFlushBoundary()` behavior is unchanged. Continuation chunks that start at a line boundary or in non-quoted text are emitted unchanged. Closes the display regression where text starting inside a quote block would finish outside of it after a flush boundary (originally evidenced by `docs/image.png` and `docs/Screenshot 2026-06-24 at 10.03.08 PM.png`; both removed in bf054d8). Spec: `docs/archive/quote-block-rendering-fix/spec.md`.
+
+### Tests
+- `tests/host/markdown-continuation.test.ts` (new, ~290 lines): 19 table-driven cases for `normalizeContinuationChunk` and `detectQuotePrefix` — `sliceStart === 0`, empty slice, mid-line blockquoted, start-of-new-line, mid-line unquoted, nested quotes, multi-line chunk with quote prefix, unquoted current line, slice-to-end, text-only messages, and `>` without trailing space.
+- `tests/host/display-forwarding.test.ts` (~90 lines added): end-to-end coverage for the screenshot regression. The two new cases assert that quoted continuation chunks preserve the blockquote marker and that unquoted continuation chunks do not pick one up, both through the full `attachSessionEventHandler` pipeline.
+
+### Notes
+- No breaking changes to the public API surface. No new exports. The new module is pure (no I/O, no side effects) and lives in `src/host/`; the grep-guard test (`tests/grep-guard.test.ts`) and the `no-ctx.newSession` / `no-ctx.fork` extension grep guard continue to pass.
+- The deferred limitations called out in the spec (full code-fence state rebasing inside quoted thinking; lazy-continuation `>` markers on lines that don't start with `>`; indented blockquotes with leading whitespace) are not addressed by this release.
+- A manual TUI visual check on a live `/conduct` session remains the only open step before the next feature work; the integration tests in `tests/host/display-forwarding.test.ts` pin the behavioral contract but do not replace a human eye on a running session.
+- The completed `docs/quote-block-rendering-fix/` plan was moved to `docs/archive/quote-block-rendering-fix/` after the spec/plan/tasks were reviewed and shipped; the spec is the durable record of the bug and the fix surface.
+
 ## [0.5.0] - 2026-06-24
 
 ### Host driver
