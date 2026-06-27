@@ -73,6 +73,7 @@ import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tu
 /**
  * Kind discriminator the display sink stamps on every `CustomMessage`.
  * - `"text"` — LLM text (conduct.role.text)
+ * - `"text_stream"` — label-less continuation chunk (conduct.role.text_stream)
  * - `"tool"` — tool call/result summary (conduct.role.tool)
  *
  * Phase 7B.UX restored the `"tool"` kind and the `conduct.role.tool`
@@ -80,8 +81,13 @@ import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tu
  * DisplayEvents into `kind: "tool"` — the formatter's content already
  * carries the `✓`/`✗` marker for end events, so the renderer does not
  * need a third discriminator.
+ *
+ * The `"text_stream"` kind was added in tui-stream-readability Phase 1
+ * for label-less stream continuation chunks. The renderer for
+ * `conduct.role.text_stream` ignores `is_orchestrator` and produces no
+ * role label (N12).
  */
-export type ConductMessageKind = "text" | "tool";
+export type ConductMessageKind = "text" | "text_stream" | "tool";
 
 /**
  * Shared `details` payload shape for the two `conduct.role.*`
@@ -291,6 +297,39 @@ function buildToolContainer(
 }
 
 /**
+ * Build the `Container` for a `conduct.role.text_stream` message
+ * (tui-stream-readability Phase 1). Label-less by design: the
+ * Container carries only a `Markdown` body child — no role-label
+ * `Text` — so continuation chunks do not repeat the role name.
+ * `is_orchestrator` is ignored (N12).
+ *
+ * The body uses the SDK's `getMarkdownTheme()` just like the
+ * labeled `conduct.role.text` renderer, so the visual style is
+ * consistent across all stream chunks.
+ */
+function buildTextStreamContainer(
+  message: ConductCustomMessage,
+  _options: MessageRenderOptions,
+  _theme: Theme,
+): Container {
+  const body = message.content;
+  const bodyText =
+    typeof body === "string"
+      ? body
+      : body
+          .filter(
+            (part): part is { readonly type: string; readonly text: string } =>
+              part.type === "text" && "text" in part,
+          )
+          .map((part) => part.text)
+          .join("\n");
+
+  const container = new Container();
+  container.addChild(new Markdown(bodyText, 0, 0, getMarkdownTheme()));
+  return container;
+}
+
+/**
  * Build the `conduct.role.text` renderer. Closure-free over mutable
  * state — the orchestrator getter is the only "live" reference, and
  * it points at the module-level `currentOrchestratorRole` slot.
@@ -333,13 +372,33 @@ function createToolRenderer(): MessageRenderer<ConductMessageDetails> {
 }
 
 /**
+ * Build the `conduct.role.text_stream` renderer. Label-less: returns
+ * only a `Markdown` body in a `Container` with no role-label `Text`
+ * child. No orchestrator getter needed (N12: `is_orchestrator` is
+ * ignored).
+ */
+function createTextStreamRenderer(): MessageRenderer<ConductMessageDetails> {
+  return (message, options, theme) => {
+    try {
+      return buildTextStreamContainer(message, options, theme);
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+/**
  * Build the conductor-owned renderer, keyed by its `customType`.
  * The factory's caller (`extensions/conduct.ts`) iterates the
  * record and registers each with `pi.registerMessageRenderer`.
  *
  * Phase 7B.UX restored the `conduct.role.tool` key — the sink now
  * emits tool_call / tool_result events as `conduct.role.tool` with
- * compact formatter summaries. Both keys are returned.
+ * compact formatter summaries.
+ *
+ * The `conduct.role.text_stream` key was added in tui-stream-readability
+ * Phase 1 for label-less stream continuation chunks. All three keys
+ * are returned.
  *
  * Exposing the record (vs. a single named export) keeps the
  * registration step a single `for ... of` and matches the SDK's
@@ -358,8 +417,10 @@ export function createConductMessageRenderers(
 ): Record<string, MessageRenderer<ConductMessageDetails>> {
   const textRenderer = createRenderer(getOrchestratorRole);
   const toolRenderer = createToolRenderer();
+  const textStreamRenderer = createTextStreamRenderer();
   return {
     "conduct.role.text": textRenderer,
+    "conduct.role.text_stream": textStreamRenderer,
     "conduct.role.tool": toolRenderer,
   };
 }

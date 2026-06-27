@@ -102,12 +102,19 @@ function getInternalText(component: { readonly text?: unknown }): string {
 }
 
 describe("createConductMessageRenderers", () => {
-  it("returns renderers for both conduct.role.text and conduct.role.tool (restored in Phase 7B.UX)", () => {
+  it("returns renderers for conduct.role.text, conduct.role.text_stream, and conduct.role.tool", () => {
     const renderers = createConductMessageRenderers();
     // Phase 7B.UX restored the `conduct.role.tool` customType for
     // tool-call and tool-result display events.
-    expect(Object.keys(renderers)).toEqual(["conduct.role.text", "conduct.role.tool"]);
+    // tui-stream-readability Phase 1 added conduct.role.text_stream
+    // for label-less stream continuation chunks.
+    expect(Object.keys(renderers).sort()).toEqual([
+      "conduct.role.text",
+      "conduct.role.text_stream",
+      "conduct.role.tool",
+    ]);
     expect(typeof renderers["conduct.role.text"]).toBe("function");
+    expect(typeof renderers["conduct.role.text_stream"]).toBe("function");
     expect(typeof renderers["conduct.role.tool"]).toBe("function");
   });
 
@@ -246,4 +253,100 @@ describe("createConductMessageRenderers", () => {
     expect(labelText).toContain("[muted]");
     expect(labelText).toContain("[bold]"); // Phase 5.5: label is bolded even in the fallback
   });
+
+  // ─── text_stream renderer ───────────────────────────────────
+
+  it("renders a conduct.role.text_stream message as a Container with a single Markdown body (no role label)", () => {
+    // N12: the text_stream renderer is label-less by design.
+    // The Container carries only a Markdown child — no Text
+    // role-label component.
+    const theme = makeStubTheme();
+    const renderers = createConductMessageRenderers(() => "orchestrator");
+    const renderer = textStreamRenderer(renderers);
+
+    const message = makeMessage({
+      customType: "conduct.role.text",
+      content: "continuation text for the stream",
+      details: { role: "worker", kind: "text_stream", is_orchestrator: false },
+    });
+
+    const component = renderer(message, OPTIONS, theme);
+    expect(component).toBeInstanceOf(Container);
+
+    const container = component as Container;
+    // The container should have exactly one child: the Markdown body
+    expect(container.children).toHaveLength(1);
+    const [body] = container.children;
+    expect(body).toBeInstanceOf(Markdown);
+    // There should be NO Text child (no role label)
+    expect(body instanceof Text).toBe(false);
+
+    const bodyText = getInternalText(body as unknown as { text?: string });
+    expect(bodyText).toBe("continuation text for the stream");
+  });
+
+  it("text_stream renderer ignores is_orchestrator (N12)", () => {
+    // The label-less renderer does NOT use the is_orchestrator
+    // flag. The same Container structure is returned regardless
+    // of the orchestrator status.
+    const theme = makeStubTheme();
+    const renderers = createConductMessageRenderers(() => "orchestrator");
+    const renderer = textStreamRenderer(renderers);
+
+    // Message with is_orchestrator=true (orchestrator role)
+    const message = makeMessage({
+      customType: "conduct.role.text",
+      content: "orchestrator continuation",
+      details: { role: "orchestrator", kind: "text_stream", is_orchestrator: true },
+    });
+
+    const component = renderer(message, OPTIONS, theme) as Container;
+    // No Text child — the is_orchestrator flag is never read
+    expect(component.children).toHaveLength(1);
+    expect(component.children[0]).toBeInstanceOf(Markdown);
+  });
+
+  it("text_stream renderer returns undefined on a forced throw", () => {
+    const theme = makeStubTheme();
+    const renderers = createConductMessageRenderers();
+    const renderer = textStreamRenderer(renderers);
+
+    // The text_stream renderer reads message.content directly (not
+    // details), so we make content throw to trigger the catch.
+    const exploding = {
+      customType: "conduct.role.text",
+      get content() {
+        throw new Error("forced");
+      },
+    } as unknown as never;
+
+    const result = renderer(exploding, OPTIONS, theme);
+    expect(result).toBeUndefined();
+  });
+
+  it("text_stream renderer returns Container with Markdown even when details is missing", () => {
+    const theme = makeStubTheme();
+    const renderers = createConductMessageRenderers();
+    const renderer = textStreamRenderer(renderers);
+
+    const message = {
+      customType: "conduct.role.text",
+      content: "fallback body",
+    } as unknown as never;
+
+    const component = renderer(message, OPTIONS, theme);
+    expect(component).toBeInstanceOf(Container);
+    const container = component as Container;
+    expect(container.children).toHaveLength(1);
+    expect(container.children[0]).toBeInstanceOf(Markdown);
+    const bodyText = getInternalText(container.children[0] as unknown as { text?: string });
+    expect(bodyText).toBe("fallback body");
+  });
 });
+
+/** Get the `conduct.role.text_stream` renderer with a runtime guard. */
+function textStreamRenderer(renderers: ReturnType<typeof createConductMessageRenderers>) {
+  const r = renderers["conduct.role.text_stream"];
+  if (r === undefined) throw new Error("conduct.role.text_stream renderer not registered");
+  return r;
+}

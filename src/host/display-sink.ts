@@ -10,8 +10,16 @@ import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
 
 import type { Role } from "../core/types.js";
 
-/** Display event kind forwarded from a role session. */
-export type DisplayEventKind = "text" | "tool_call" | "tool_result";
+/**
+ * Display event kind forwarded from a role session.
+ *
+ * - `"text"` — A labeled role text event. Used for full non-streamed
+ *   messages and the first visible chunk of a streamed assistant message.
+ * - `"text_stream"` — A label-less continuation chunk of a streamed
+ *   assistant message (display-only; not a machine event).
+ * - `"tool_call"` / `"tool_result"` — Tool activity summaries.
+ */
+export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_result";
 
 /** Single display event from a role session. */
 export interface DisplayEvent {

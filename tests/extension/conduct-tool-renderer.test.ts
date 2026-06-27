@@ -78,10 +78,15 @@ function getInternalText(component: { readonly text?: unknown }): string {
 }
 
 describe("createConductMessageRenderers — tool renderer", () => {
-  it("returns both conduct.role.text and conduct.role.tool keys", () => {
+  it("returns conduct.role.text, conduct.role.text_stream, and conduct.role.tool keys", () => {
     const renderers = createConductMessageRenderers();
-    expect(Object.keys(renderers)).toEqual(["conduct.role.text", "conduct.role.tool"]);
+    expect(Object.keys(renderers).sort()).toEqual([
+      "conduct.role.text",
+      "conduct.role.text_stream",
+      "conduct.role.tool",
+    ]);
     expect(typeof renderers["conduct.role.text"]).toBe("function");
+    expect(typeof renderers["conduct.role.text_stream"]).toBe("function");
     expect(typeof renderers["conduct.role.tool"]).toBe("function");
   });
 

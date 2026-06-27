@@ -61,7 +61,6 @@ export function createConductDisplaySink(sendMessage: ExtensionAPI["sendMessage"
     // tools by returning `null` — the sink only sees non-null events
     // for built-in tools.
     //
-    // `text` events use the existing `conduct.role.text` customType.
     if (event.kind === "text") {
       const orchestratorRole = getCurrentOrchestratorRole();
       const details: ConductMessageDetails = {
@@ -71,6 +70,29 @@ export function createConductDisplaySink(sendMessage: ExtensionAPI["sendMessage"
       };
       sendMessage({
         customType: "conduct.role.text",
+        content: event.text,
+        display: true,
+        details,
+      });
+      return;
+    }
+
+    // Stream continuation chunks: emit as `conduct.role.text_stream`.
+    // Label-less by design — the renderer ignores `is_orchestrator`
+    // and produces no role label (N12). We still stamp `kind` as
+    // `"text_stream"` for the renderer to distinguish from labeled
+    // text, and `role` for grep-ability.
+    if (event.kind === "text_stream") {
+      // is_orchestrator is always false: the label-less renderer
+      // (conduct.role.text_stream) never uses it for coloring.
+      // Stamped for structural consistency with the details contract.
+      const details: ConductMessageDetails = {
+        role: event.role,
+        kind: "text_stream",
+        is_orchestrator: false,
+      };
+      sendMessage({
+        customType: "conduct.role.text_stream",
         content: event.text,
         display: true,
         details,

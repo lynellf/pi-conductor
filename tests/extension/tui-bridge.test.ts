@@ -327,4 +327,52 @@ describe("extension shell — Phase 2 + 5 display sink wiring", () => {
       details: { role: "orchestrator", kind: "tool", is_orchestrator: true },
     });
   });
+
+  it("forwards text_stream events as conduct.role.text_stream with kind='text_stream'", () => {
+    // tui-stream-readability Phase 1: stream continuation chunks
+    // use kind="text_stream" and map to conduct.role.text_stream.
+    // is_orchestrator is always false per N12 (label-less renderer
+    // ignores it).
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+
+    sink({ role: "worker", kind: "text_stream", text: " continuation text" });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, {
+      customType: "conduct.role.text_stream",
+      content: " continuation text",
+      display: true,
+      details: { role: "worker", kind: "text_stream", is_orchestrator: false },
+    });
+  });
+
+  it("forwards text_stream with orchestrator role and ignores is_orchestrator", () => {
+    // Even when the streaming role is the orchestrator, the sink
+    // stamps is_orchestrator: false on text_stream events (N12:
+    // the label-less renderer does not use it).
+    setCurrentOrchestratorRole("orchestrator");
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+
+    sink({
+      role: "orchestrator",
+      kind: "text_stream",
+      text: " more analysis...",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // is_orchestrator is false even though the current orchestrator
+    // role matches — the text_stream renderer ignores it.
+    expect(sendMessage).toHaveBeenNthCalledWith(1, {
+      customType: "conduct.role.text_stream",
+      content: " more analysis...",
+      display: true,
+      details: {
+        role: "orchestrator",
+        kind: "text_stream",
+        is_orchestrator: false,
+      },
+    });
+  });
 });

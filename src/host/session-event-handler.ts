@@ -43,8 +43,10 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
+import { findFlushBoundary, MAX_FLUSH_WINDOW_CHARS } from "./boundary-flush.js";
 import type { SessionState } from "./cost.js";
 import { type DisplaySink, extractAssistantText } from "./display-sink.js";
+import { normalizeContinuationChunk } from "./markdown-continuation.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
 
 // ─── Streaming constants ────────────────────────────────────────────
@@ -67,13 +69,22 @@ import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.j
 export const STREAM_FLUSH_THRESHOLD_CHARS = 200;
 
 /**
- * Per-session mutable holder for the count of formatted assistant-text
- * characters already flushed during the in-flight message (spec:
- * progressive-text-streaming). Passed by reference into `onSessionEvent`
- * and mutated in place, mirroring how `pending` is threaded.
+ * Per-session mutable holder for streamed message state (spec:
+ * progressive-text-streaming / tui-stream-readability). Passed by
+ * reference into `onSessionEvent` and mutated in place, mirroring
+ * how `pending` is threaded.
+ *
+ * - `len`: number of formatted characters already flushed during
+ *   the in-flight assistant message.
+ * - `hasEmittedText`: whether this assistant message has already
+ *   emitted at least one visible text chunk. The first chunk uses
+ *   `kind: "text"` (labeled); subsequent chunks use `kind: "text_stream"`
+ *   (label-less continuation). Reset on `message_start` and after
+ *   `message_end` so labels do not leak across messages (N1).
  */
 interface StreamState {
   len: number;
+  hasEmittedText: boolean;
 }
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -107,7 +118,7 @@ export function attachSessionEventHandler(args: {
   // Per-session streamed-len holder. Reset on message_start and after
   // message_end. Same scoping rationale as `pending`: each role
   // session gets its own onSessionEvent via attachSessionEventHandler.
-  const stream: StreamState = { len: 0 };
+  const stream: StreamState = { len: 0, hasEmittedText: false };
 
   args.session.subscribe((event) =>
     onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending, stream),
@@ -193,24 +204,38 @@ function onSessionEvent(
   }
 
   // ─── Streaming: message_start ────────────────────────────────
-  // Reset the per-session streamed-len. Defensive — harmless for
-  // user-prompt message_start (spec: progressive-text-streaming).
+  // Reset per-message stream state (len + hasEmittedText). Defensive
+  // — harmless for user-prompt message_start (spec:
+  // progressive-text-streaming / tui-stream-readability N1).
   if (event.type === "message_start") {
     stream.len = 0;
+    stream.hasEmittedText = false;
     return;
   }
 
   // ─── Streaming: message_update ───────────────────────────────
   // Recompute the formatted assistant text; emit only the suffix
   // since the last flush when the accumulated delta crosses the
-  // threshold (spec: progressive-text-streaming).
+  // threshold. Uses boundary-aware flushing to avoid mid-sentence
+  // splits (spec: tui-stream-readability).
   if (event.type === "message_update") {
     const msg = event.message as AssistantMessage;
     if (msg?.role === "assistant") {
       const formatted = extractAssistantText(msg);
       if (formatted.length - stream.len >= STREAM_FLUSH_THRESHOLD_CHARS) {
-        onDisplay?.({ role, kind: "text", text: formatted.slice(stream.len) });
-        stream.len = formatted.length;
+        const boundaryPos = findFlushBoundary(
+          formatted,
+          stream.len,
+          STREAM_FLUSH_THRESHOLD_CHARS,
+          MAX_FLUSH_WINDOW_CHARS,
+        );
+        const suffix = normalizeContinuationChunk(formatted, stream.len, boundaryPos);
+        if (suffix.length > 0) {
+          const kind = stream.hasEmittedText ? "text_stream" : "text";
+          onDisplay?.({ role, kind, text: suffix });
+          stream.hasEmittedText = true;
+        }
+        stream.len = boundaryPos;
       }
     }
     return;
@@ -233,11 +258,16 @@ function onSessionEvent(
     const text = extractAssistantText(message);
     // Tail-flush: emit only the unflushed portion (all of it when
     // no message_update fired, because stream.len stays 0).
-    // Reset stream.len for the next message.
+    // Use text_stream for continuation tails when hasEmittedText
+    // is true; use text for the first/only chunk (N3 preserves the
+    // `text.length > stream.len` guard).
+    // Reset stream state for the next message (N1).
     if (text.length > stream.len) {
-      onDisplay?.({ role, kind: "text", text: text.slice(stream.len) });
+      const kind = stream.hasEmittedText ? "text_stream" : "text";
+      onDisplay?.({ role, kind, text: normalizeContinuationChunk(text, stream.len, text.length) });
     }
     stream.len = 0;
+    stream.hasEmittedText = false;
   }
 
   if (message?.role === "assistant" && message.usage) {

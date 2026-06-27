@@ -14,7 +14,7 @@
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-
+import { MAX_FLUSH_WINDOW_CHARS } from "../../src/host/boundary-flush.js";
 import { SessionState } from "../../src/host/cost.js";
 import {
   attachSessionEventHandler,
@@ -471,10 +471,11 @@ describe("attachSessionEventHandler — display sink", () => {
         kind: "text",
         text: chunk,
       });
-      // Second emit: the unflushed tail
+      // Second emit: the unflushed tail (now text_stream because
+      // hasEmittedText was set by the first chunk)
       expect(onDisplay).toHaveBeenNthCalledWith(2, {
         role: "orchestrator",
-        kind: "text",
+        kind: "text_stream",
         text: finalText.slice(chunkLen),
       });
     });
@@ -553,14 +554,16 @@ describe("attachSessionEventHandler — display sink", () => {
         kind: "text",
         text: partial1, // first chunk: slice(0, chunk1)
       });
+      // Second and third chunks are text_stream because
+      // hasEmittedText was set by the first chunk.
       expect(onDisplay).toHaveBeenNthCalledWith(2, {
         role: "orchestrator",
-        kind: "text",
+        kind: "text_stream",
         text: partial2.slice(chunk1), // second chunk: slice(chunk1, chunk1+chunk2Gain)
       });
       expect(onDisplay).toHaveBeenNthCalledWith(3, {
         role: "orchestrator",
-        kind: "text",
+        kind: "text_stream",
         text: finalText.slice(chunk1 + chunk2Gain), // tail: slice(chunk1+chunk2Gain)
       });
     });
@@ -605,13 +608,14 @@ describe("attachSessionEventHandler — display sink", () => {
         kind: "text",
         text: msg1Text,
       });
-      // Message 1 tail
+      // Message 1 tail (text_stream because hasEmittedText was set)
       expect(onDisplay).toHaveBeenNthCalledWith(2, {
         role: "orchestrator",
-        kind: "text",
+        kind: "text_stream",
         text: msg1Tail.slice(msg1Text.length),
       });
-      // Message 2 full text (not sliced by msg1's len)
+      // Message 2 full text: the message_start reset hasEmittedText
+      // so the second message gets kind: text again (no labels leaked)
       expect(onDisplay).toHaveBeenNthCalledWith(3, {
         role: "orchestrator",
         kind: "text",
@@ -704,6 +708,228 @@ describe("attachSessionEventHandler — display sink", () => {
         kind: "text",
         text: chunk,
       });
+    });
+
+    // ── N10 ────────────────────────────────────────────────────
+    it("empty formatted text at message_end produces zero text/text_stream events", () => {
+      // N10: when extractAssistantText returns empty string at
+      // message_end, no display event should be emitted.
+      const session = makeSession();
+      const state = new SessionState({ cap: null, model: null });
+      const onDisplay = vi.fn();
+
+      attachSessionEventHandler({
+        session: session as never,
+        state,
+        role: "orchestrator",
+        onDisplay,
+      });
+
+      // message_update with only tool_use blocks → empty formatted text
+      session.emit({ type: "message_start", message: textMessage("") });
+      session.emit({
+        type: "message_update",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "bash", input: { command: "ls" } }],
+        } as unknown as AssistantMessage,
+      });
+      // message_end with only tool_use blocks → empty formatted text
+      session.emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "bash", input: { command: "ls" } }],
+        } as unknown as AssistantMessage,
+      });
+
+      // extractAssistantText returns "" for tool_use-only content.
+      // message_end: text.length (0) > stream.len (0) is false → no emit.
+      // No text or text_stream events should appear.
+      const textEvents = onDisplay.mock.calls.filter(
+        ([event]) => event.kind === "text" || event.kind === "text_stream",
+      );
+      expect(textEvents).toHaveLength(0);
+    });
+
+    // ── Regression: screenshot mid-sentence split ──────────────
+    it("avoids mid-sentence split when a sentence boundary is within the max window (screenshot regression)", () => {
+      // The approved plan (tui-stream-readability) identifies that
+      // the screenshot shows a mid-sentence split at the hard 200-char
+      // threshold. This test asserts that the boundary-aware flush
+      // prefers a sentence boundary over the hard threshold when one
+      // appears within the max window.
+      const session = makeSession();
+      const state = new SessionState({ cap: null, model: null });
+      const onDisplay = vi.fn();
+
+      attachSessionEventHandler({
+        session: session as never,
+        state,
+        role: "orchestrator",
+        onDisplay,
+      });
+
+      // Build text where the hard 200-char point lands mid-word
+      // in a sentence. A sentence boundary (". ") appears at ~240
+      // chars (within the max window), and the boundary-aware flush
+      // should use that instead of the hard 200-char cut.
+      const noBoundaryRegion = "x".repeat(180); // 0-179: no paragraph/line/sentence boundaries
+      const shortMid = "y".repeat(20); // 180-199: no boundaries, ends at minPos-1
+      // At position 200 the sentence starts with a boundary at ~240:
+      const sentence = "This design choice affects performance. "; // 200-239: 40 chars, ". " at 238
+      const afterBoundary = "z".repeat(50); // 240-289: rest
+      const fullText = noBoundaryRegion + shortMid + sentence + afterBoundary;
+
+      // Assert our test fixture is set up correctly:
+      // The sentence boundary ". " should be within the max window
+      const sentenceDotPos = fullText.indexOf(". ");
+      expect(sentenceDotPos).toBeGreaterThanOrEqual(THRESHOLD); // after minPos
+      expect(sentenceDotPos).toBeLessThan(THRESHOLD + MAX_FLUSH_WINDOW_CHARS); // within max window
+
+      session.emit({ type: "message_start", message: textMessage("") });
+      session.emit({ type: "message_update", message: textMessage(fullText) });
+      session.emit({ type: "message_end", message: textMessage(fullText) });
+
+      // The first flush should NOT be at the 200-char hard cut.
+      // Instead, it should be at the sentence boundary ". " + 2
+      // (including the space after the period).
+      const expectedBoundary = sentenceDotPos + 2; // after ". "
+
+      expect(onDisplay).toHaveBeenCalledTimes(2);
+      // First chunk: text up to and including the sentence boundary
+      expect(onDisplay).toHaveBeenNthCalledWith(1, {
+        role: "orchestrator",
+        kind: "text",
+        text: fullText.slice(0, expectedBoundary),
+      });
+      // The first chunk should NOT be the raw 200-char slice
+      expect(onDisplay).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          text: expect.not.stringMatching(/^x{200}/),
+        }),
+      );
+      // Second chunk: remaining tail (text_stream continuation)
+      expect(onDisplay).toHaveBeenNthCalledWith(2, {
+        role: "orchestrator",
+        kind: "text_stream",
+        text: fullText.slice(expectedBoundary),
+      });
+      // Verify concatenation: emitted text + text_stream = full text
+      const call1Text = onDisplay.mock.calls[0]?.[0]?.text ?? "";
+      const call2Text = onDisplay.mock.calls[1]?.[0]?.text ?? "";
+      expect(call1Text + call2Text).toBe(fullText);
+    });
+
+    // ── Markdown continuation context (Phase 1: quote-block continuity) ──
+
+    /** Build a minimal assistant message with thinking content. */
+    function thinkingMessage(text: string): AssistantMessage {
+      return {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: text }],
+      } as AssistantMessage;
+    }
+
+    it("preserves blockquote marker on continuation chunks when flush boundary splits a blockquoted line", () => {
+      // The screenshot regression: a long thinking line gets split at the
+      // max-window boundary, and the continuation tail must still be
+      // visually inside the blockquote.
+      //
+      // extractAssistantText for a single thinking part produces:
+      //   "> " + thinkingText  (each line prefixed)
+      //
+      // For a text of 810 chars (no newlines), formatted = "> " + 810 = 812 chars.
+      // The first flush uses the max-window fallback at position 600 (inside
+      // the blockquoted line). The tail at message_end (slice(600)) is plain
+      // prose — the normalizer must prepend "> ".
+
+      const thinkingLen = THRESHOLD + MAX_FLUSH_WINDOW_CHARS + 10; // 810
+      const thinkingText = "x".repeat(thinkingLen);
+      // formatted = "> xxxx..." (812 chars)
+
+      const session = makeSession();
+      const state = new SessionState({ cap: null, model: null });
+      const onDisplay = vi.fn();
+
+      attachSessionEventHandler({
+        session: session as never,
+        state,
+        role: "worker",
+        onDisplay,
+      });
+
+      // Use the same long thinking message for both update and end
+      const msg = thinkingMessage(thinkingText);
+
+      session.emit({ type: "message_start", message: textMessage("") });
+      session.emit({ type: "message_update", message: msg });
+      session.emit({ type: "message_end", message: msg });
+
+      // First chunk: kind "text" should start with "> " prefix
+      expect(onDisplay).toHaveBeenNthCalledWith(1, {
+        role: "worker",
+        kind: "text",
+        text: expect.stringMatching(/^> /),
+      });
+
+      // Second chunk (continuation): kind "text_stream"
+      // BEFORE the fix: starts without "> " — the BUG
+      // AFTER the fix: starts with "> " — CORRECT
+      expect(onDisplay).toHaveBeenCalledTimes(2);
+      const secondChunk = onDisplay.mock.calls[1]?.[0];
+      expect(secondChunk.kind).toBe("text_stream");
+      expect(secondChunk.text).toMatch(/^> /);
+
+      // Verify concatenation (with normalization, display text may be
+      // longer than source due to inserted prefix)
+      const firstChunk = onDisplay.mock.calls[0]?.[0];
+      expect(firstChunk.text.length).toBeGreaterThan(0);
+      // Both chunks should look like blockquoted content
+      expect(firstChunk.text).toMatch(/^> x+$/);
+      expect(secondChunk.text).toMatch(/^> x+$/);
+    });
+
+    it("does not prefix non-quoted continuation chunks", () => {
+      // Paired normal-text fixture: plain assistant text with no thinking
+      // content must NOT get a "> " prefix on continuation chunks.
+
+      const textLen = THRESHOLD + MAX_FLUSH_WINDOW_CHARS + 10; // 810
+      const longText = "y".repeat(textLen);
+      // No thinking content — formatted = longText (no blockquotes)
+
+      const session = makeSession();
+      const state = new SessionState({ cap: null, model: null });
+      const onDisplay = vi.fn();
+
+      attachSessionEventHandler({
+        session: session as never,
+        state,
+        role: "worker",
+        onDisplay,
+      });
+
+      const msg = textMessage(longText);
+
+      session.emit({ type: "message_start", message: textMessage("") });
+      session.emit({ type: "message_update", message: msg });
+      session.emit({ type: "message_end", message: msg });
+
+      // Two chunks: first from message_update, second from message_end
+      expect(onDisplay).toHaveBeenCalledTimes(2);
+
+      // First chunk: kind "text"
+      expect(onDisplay).toHaveBeenNthCalledWith(1, {
+        role: "worker",
+        kind: "text",
+        text: expect.any(String),
+      });
+
+      // Second chunk: kind "text_stream" — should NOT start with "> "
+      const secondChunk = onDisplay.mock.calls[1]?.[0];
+      expect(secondChunk.kind).toBe("text_stream");
+      expect(secondChunk.text).not.toMatch(/^> /);
     });
   });
 });
