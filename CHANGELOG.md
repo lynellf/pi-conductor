@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug fixes
+- Allow `provider:id` entries with colons in the id (e.g. Ollama tags `ollama:model:tag`); the resolver now uses the first colon as the separator.
+
 ## [0.5.1] - 2026-06-26
 
 ### Bug fixes
