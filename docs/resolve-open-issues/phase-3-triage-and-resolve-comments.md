@@ -60,14 +60,14 @@ open issues but worth tracking as separate work. File each as a
 new issue before closing #3, so the repo's queue reflects the
 follow-up:
 
-- [ ] **FU-1** "Add `docs/record-emitter-spec.md` covering the
+- [x] **FU-1** "Add `docs/record-emitter-spec.md` covering the
       `subscribeToRecords` contract" — surfaces from phase 1's
       decision to repoint README references at
       `src/host/record-emitter.ts`. Labels: `documentation`,
       `enhancement`. Body: a one-paragraph spec sketch
       referencing the implementation; defer the full spec to
       the assignee.
-- [ ] **FU-2** "Pre-flight check: warn when `role.models[]`
+- [x] **FU-2** "Pre-flight check: warn when `role.models[]`
       names an unregistered provider at manifest-load time" —
       surfaces from phase 2's "out of scope" note. Would change
       the §13 contract; a separate decision. Labels: `enhancement`.
@@ -130,7 +130,7 @@ they're filed.)
 
 ## Tasks
 
-- [ ] **T3.1** After phase 1's PR is merged: `gh issue close 4
+- [x] **T3.1** After phase 1's PR is merged: `gh issue close 4
       --comment "<body of #4 comment above, with PR URL
       filled in>"` (or, equivalently, post the comment first
       via `gh issue comment 4 --body "..."` and then `gh issue
@@ -138,27 +138,27 @@ they're filed.)
       comment is captured before the issue transitions to
       `closed` (GitHub's web UI hides the comment editor on
       closed issues, and CLI scripts occasionally race).
-- [ ] **T3.2** File FU-1: `gh issue create --label
+- [x] **T3.2** File FU-1: `gh issue create --label
       documentation,enhancement --title "Add docs/record-emitter-spec.md
       covering the subscribeToRecords contract" --body "..."`.
-- [ ] **T3.3** File FU-2: `gh issue create --label enhancement
+- [x] **T3.3** File FU-2: `gh issue create --label enhancement
       --title "Pre-flight check: warn on unregistered
       providers in role.models[]" --body "..."`.
-- [ ] **T3.4** After phase 2's PR is merged: `gh issue comment
+- [x] **T3.4** After phase 2's PR is merged: `gh issue comment
       3 --body "<body of #3 comment, with PR_URL and FU-2_URL
       filled in>"`, then `gh issue close 3`.
-- [ ] **T3.5** Verify both issues now show `closed` state with
+- [x] **T3.5** Verify both issues now show `closed` state with
       the resolution comment visible: `gh issue view 3 --json
       state,closedAt,body` and same for #4.
 
 ## Label-application timing
 
-- [ ] **T3.6** Apply labels to #3 and #4 at the start of the
+- [x] **T3.6** Apply labels to #3 and #4 at the start of the
       triage work, *before* the fix lands — so the labels
       appear in the repo's open-issue views during the fix
       cycle. `gh issue edit 3 --add-label bug,enhancement`;
       `gh issue edit 4 --add-label documentation`.
-- [ ] **T3.7** Confirm via `gh issue view 3 --json labels` and
+- [x] **T3.7** Confirm via `gh issue view 3 --json labels` and
       `gh issue view 4 --json labels` that the labels were
       applied (the `gh label list` command's `bug` and
       `documentation` entries already exist; no label

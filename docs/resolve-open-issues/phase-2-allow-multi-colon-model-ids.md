@@ -94,7 +94,7 @@ worked before keep working; manifests that hit the multi-colon case
 
 ## Tasks
 
-- [ ] **T2.1** Edit `src/host/production-host-resolve.ts`:
+- [x] **T2.1** Edit `src/host/production-host-resolve.ts`:
       - Remove the "more than one colon" branch in `splitProviderId` (lines
         87-90). Use the first colon as the separator; everything after is
         the id. Empty provider and empty id stay as `MalformedModelEntryError`
@@ -106,7 +106,7 @@ worked before keep working; manifests that hit the multi-colon case
         resolver is now first-colon, not single-colon.
       - Update the JSDoc on `resolveModel` (line 58-65) only if it claims
         "exactly one colon" — if it doesn't, no change needed.
-- [ ] **T2.2** Edit `src/manifest/validate.ts`:
+- [x] **T2.2** Edit `src/manifest/validate.ts`:
       - Tighten `PROVIDER_ID_FORM` to remove the now-redundant `:` from the
         id character class (change `[a-zA-Z0-9._:/-]+` to
         `[a-zA-Z0-9._/-]+`). Rationale: the runtime is the real gate; the
@@ -117,7 +117,7 @@ worked before keep working; manifests that hit the multi-colon case
         explain: provider must start with a letter, id is
         `letters/digits/._-` plus `/`, no colons (the colon is the
         boundary).
-- [ ] **T2.3** Edit `tests/host/production-host.test.ts`:
+- [x] **T2.3** Edit `tests/host/production-host.test.ts`:
       - Remove the `{ name: "multiple colons (only one allowed)", entry:
         "anthropic:claude:x" }` case from the malformed-entries table
         (lines 282-310) — it no longer applies.
@@ -129,13 +129,13 @@ worked before keep working; manifests that hit the multi-colon case
         "robit/ornith:9b")`.
       - Keep all the existing malformed cases (no colon, empty provider,
         empty id, empty string).
-- [ ] **T2.4** Edit `tests/manifest/validate.test.ts` (only if a test
+- [x] **T2.4** Edit `tests/manifest/validate.test.ts` (only if a test
       exercises the regex's id-side colon): the existing
       `bare-model-alias` test uses `claude-sonnet` (no colon in id), so
       it still passes. Add a positive test asserting that
       `ollama:robit/ornith:9b` is NOT flagged — confirms validator and
       resolver agree.
-- [ ] **T2.5** Edit `CHANGELOG.md`: add a new `## [Unreleased]` block
+- [x] **T2.5** Edit `CHANGELOG.md`: add a new `## [Unreleased]` block
       at the top of the file (above `## [0.5.1] - 2026-06-26`, which
       is the current latest header) containing a `### Bug fixes`
       section. Use `### Bug fixes` — NOT `### Fixed` — to match the

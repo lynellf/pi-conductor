@@ -59,13 +59,13 @@ follow-up work — a dedicated spec — is filed as a separate enhancement issue
 
 ## Tasks
 
-- [ ] **T1.1** Update `README.md` line 27: link text `[pi]` → URL
+- [x] **T1.1** Update `README.md` line 27: link text `[pi]` → URL
       `https://github.com/earendil-works/pi`.
-- [ ] **T1.2** Update `README.md` line 233: URL → monorepo path
+- [x] **T1.2** Update `README.md` line 233: URL → monorepo path
       `https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md`.
-- [ ] **T1.3** Update `README.md` line 236: URL → monorepo path
+- [x] **T1.3** Update `README.md` line 236: URL → monorepo path
       `https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md`.
-- [ ] **T1.4** Update `README.md` lines 243–245: prose copy —
+- [x] **T1.4** Update `README.md` lines 243–245: prose copy —
       - line 243: keep "If those links 404…" sentence; the monorepo path
         (`packages/coding-agent/docs/`) is now the canonical path, so the
         "may be a monorepo at `earendil-works/pi` under `packages/coding-agent/docs/`"
@@ -75,14 +75,14 @@ follow-up work — a dedicated spec — is filed as a separate enhancement issue
       - line 244: `@earendil-works/pi-coding-agent` → `@earendil-works/pi`;
         in-package path → `packages/coding-agent/docs/quickstart.md`.
       - line 245: same, for `sdk.md`.
-- [ ] **T1.5** Update `README.md` lines 81, 436, 485 (3x): relative path
+- [x] **T1.5** Update `README.md` lines 81, 436, 485 (3x): relative path
       `docs/orchestrator-fsm-spec.md` → `docs/archive/orchestrator-fsm-spec.md`
       (the file's current location; do not move it back).
-- [ ] **T1.6** Update `README.md` lines 342, 405, 438 (3x): relative path
+- [x] **T1.6** Update `README.md` lines 342, 405, 438 (3x): relative path
       `docs/record-emitter-spec.md` → `src/host/record-emitter.ts` (the
       implementation is the authority today; a dedicated spec is filed as
       follow-up — see "Triage" in phase 3).
-- [ ] **T1.7** Spot-check the rendered GitHub Markdown in a PR preview to
+- [x] **T1.7** Spot-check the rendered GitHub Markdown in a PR preview to
       confirm the link list visually resolves.
 
 ## Verification
