@@ -24,7 +24,7 @@ appended to a run-keyed log. Caps (per-session, per-run, per-worker visit count)
 are enforced as host guards that synthesize machine events through the reducer —
 never by mutating the checkpoint.
 
-It ships as a [pi](https://github.com/earendil-works/pi-coding-agent) package:
+It ships as a [pi](https://github.com/earendil-works/pi) package:
 
 ```bash
 pi install ./           # from this checkout (dev)
@@ -78,7 +78,7 @@ active in the TUI, press `Esc` and confirm to abort it; the standalone `conduct`
 CLI does not add that Escape interrupt.
 
 For the full architecture rationale, see
-[`docs/orchestrator-fsm-spec.md`](docs/orchestrator-fsm-spec.md) (the
+[`docs/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md) (the
 authority).
 
 ---
@@ -230,19 +230,17 @@ may also be named in `tools:`.
 **Reference — pi's tool documentation (the authority on the built-in set;
 pi-conductor is a pass-through consumer):**
 
-- [pi Quickstart — tools](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/quickstart.md)
+- [pi Quickstart — tools](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md)
   (the "By default, pi gives the model four tools" statement + the opt-in
   read-only tools).
-- [pi SDK reference — tools](https://github.com/earendil-works/pi-coding-agent/blob/main/docs/sdk.md)
+- [pi SDK reference — tools](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md)
   (the `createReadTool` / `createWriteTool` / `createEditTool` /
   `createBashTool` / `createGrepTool` / `createFindTool` / `createLsTool`
   factories, the `tools` / `excludeTools` / `noTools` options, and custom-tool
   registration via `customTools` / `pi.registerTool`).
 
-If those links 404 (pi's repo may be a monorepo at `earendil-works/pi` under
-`packages/coding-agent/docs/`), the same files ship inside the installed
-`@earendil-works/pi-coding-agent` package at `docs/quickstart.md` and
-`docs/sdk.md`.
+The same files ship inside the installed `@earendil-works/pi` package at
+`packages/coding-agent/docs/quickstart.md` and `packages/coding-agent/docs/sdk.md`.
 
 **Footgun — `tools:` is an explicit allowlist, not a default-extension.** A role
 receives **exactly** the names it declares plus `handoff`+`end` — not pi's
@@ -339,7 +337,7 @@ The contract — FIFO subscription order, fire-and-forget async delivery,
 sync-throw and async-rejection isolation, re-entrant subscribe /
 unsubscribe (effects take place on the next record), idempotent unsubscribe,
 and the durable backstop pattern — is in
-[`docs/record-emitter-spec.md`](docs/record-emitter-spec.md) (the authority).
+[`src/host/record-emitter.ts`](src/host/record-emitter.ts) (the authority).
 
 ### A consumer extension
 
@@ -402,7 +400,7 @@ pi.events.on("conductor:record", (record) => { /* ... */ });
 This is a thin wrapper over `subscribeToRecords` in `extensions/conduct.ts`
 for consumers that prefer the `pi.events` API. Consumers that import
 `subscribeToRecords` directly do not need the bridge. See the spec §8.5
-note in [`docs/record-emitter-spec.md`](docs/record-emitter-spec.md) for
+note in [`src/host/record-emitter.ts`](src/host/record-emitter.ts) for
 the rationale.
 
 ### What this is not
@@ -433,9 +431,9 @@ the rationale.
 
 Full status is tracked in the authoritative specs:
 
-- [`docs/orchestrator-fsm-spec.md`](docs/orchestrator-fsm-spec.md) — the
+- [`docs/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md) — the
   FSM engine.
-- [`docs/record-emitter-spec.md`](docs/record-emitter-spec.md) — the
+- [`src/host/record-emitter.ts`](src/host/record-emitter.ts) — the
   typed in-process emitter (`subscribeToRecords`) and its consumer
   contract.
 
@@ -482,7 +480,7 @@ checkpoint + event + def (pinned manifest snapshot)
   work-after-handoff cannot mutate the workspace.
 
 The full authority is
-[`docs/orchestrator-fsm-spec.md`](docs/orchestrator-fsm-spec.md).
+[`docs/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md).
 
 ---
 

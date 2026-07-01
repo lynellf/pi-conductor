@@ -53,8 +53,10 @@ export interface ManifestReport {
   readonly warnings: readonly ManifestWarning[];
 }
 
-// `provider:id` form (§8.1). Provider starts with a letter; ID allows
-// the common model-name characters including `/` and `:` for paths/namespaces.
+// `provider:id` form (§8.1). Provider starts with a letter; the colon
+// is the boundary. The runtime resolver (splitProviderId) uses the first
+// colon as the separator and allows colons in the id; the regex is a smoke
+// test for the `provider:id` shape only.
 const PROVIDER_ID_FORM = /^[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9._:/-]+$/;
 
 function isModelEffort(value: unknown): value is ModelEffort {

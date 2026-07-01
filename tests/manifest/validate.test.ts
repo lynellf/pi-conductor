@@ -102,6 +102,18 @@ describe("validateManifest: hard errors (§13)", () => {
     const r = validateManifest(manifest);
     expect(r.warnings).toEqual([]);
   });
+
+  it("does NOT flag multi-colon entries as bare-model-alias (first colon is separator)", () => {
+    const manifest = m([
+      {
+        name: "orch",
+        is_orchestrator: true,
+        models: [{ model: "ollama:robit/ornith:9b", effort: "medium" }],
+      },
+    ]);
+    const r = validateManifest(manifest);
+    expect(r.errors.map((e) => e.code)).not.toContain("bare-model-alias");
+  });
 });
 
 // ─── §13 soft warnings ─────────────────────────────────────────────────

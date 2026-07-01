@@ -284,7 +284,6 @@ describe("resolveModel — provider:id → Model + logical (§8.1)", () => {
       { name: "no colon separator", entry: "claude-x" },
       { name: "empty provider", entry: ":claude-x" },
       { name: "empty id", entry: "anthropic:" },
-      { name: "multiple colons (only one allowed)", entry: "anthropic:claude:x" },
       { name: "empty string", entry: "" },
     ];
 
@@ -296,6 +295,19 @@ describe("resolveModel — provider:id → Model + logical (§8.1)", () => {
         );
       });
     }
+  });
+
+  // ─── Positive cases: multi-colon entries (§8.1, first-colon separator) ───
+  it("resolves multi-colon entries using first colon as separator; find called with correct split", () => {
+    const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+    const findSpy = vi
+      .spyOn(registry, "find")
+      .mockReturnValue(makeFakeModel() as unknown as ReturnType<typeof registry.find>);
+    const result = resolveModel("implementer", "ollama:robit/ornith:9b", registry);
+    expect(result.model).toBeDefined();
+    expect(result.logical).toBe("ollama:robit/ornith:9b");
+    expect(findSpy).toHaveBeenCalledWith("ollama", "robit/ornith:9b");
+    expect(findSpy).toHaveBeenCalledTimes(1);
   });
 });
 
