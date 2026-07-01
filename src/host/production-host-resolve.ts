@@ -75,18 +75,15 @@ export function resolveModel(
   return { model: model as Model<never>, logical: entry };
 }
 
-/** Internal: split a `provider:id` entry. Strict form: exactly one
- *  `:`, both sides non-empty. Not exported — the validation is the
+/** Internal: split a `provider:id` entry. Strict form: at least one
+ *  `:`, provider side non-empty, id side non-empty. The first colon
+ *  is the separator; colons in the id are allowed (e.g. Ollama tags
+ *  like `ollama:model:tag`). Not exported — the validation is the
  *  resolution contract; exposing the raw split would invite callers
  *  to skip the check. */
 function splitProviderId(role: Role, entry: string): { provider: string; id: string } {
   const first = entry.indexOf(":");
   if (first === -1) {
-    throw new MalformedModelEntryError(role, entry);
-  }
-  // Reject more than one colon — `provider:id` has exactly one
-  // separator.
-  if (entry.indexOf(":", first + 1) !== -1) {
     throw new MalformedModelEntryError(role, entry);
   }
   const provider = entry.slice(0, first);

@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.5.2] - 2026-06-30
+
+### Bug fixes
+- Allow `provider:id` entries with colons in the id (e.g. Ollama tags `ollama:model:tag`); the resolver now uses the first colon as the separator (closes #3).
+
+### Documentation
+- Fix broken links in README: external pi links updated to monorepo paths, internal spec links repointed to `docs/archive/`, monorepo hedge text simplified (closes #1, #2, #4).
+- Remove stale `docs/record-emitter-spec.md` reference from `src/host/record-emitter.ts` JSDoc (closes #4).
+
+### Tests
+- Add positive test for multi-colon model ID resolution with provider-find spy assertion.
+- Add validator test ensuring multi-colon entries pass the bare-model-alias check.
+
 ## [0.5.1] - 2026-06-26
 
 ### Bug fixes

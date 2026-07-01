@@ -1,6 +1,6 @@
 /**
  * Record emitter — in-process fan-out of every `PersistedRecord` the
- * host persists to its run log.  spec: `docs/record-emitter-spec.md` §3, §4.
+ * host persists to its run log.
  *
  * **Scoping** (record-emitter-spec §4.1): this emitter covers the
  * loop-time `host.persistRecord` call-site only — both
