@@ -2,32 +2,18 @@
  * Record emitter — in-process fan-out of every `PersistedRecord` the
  * host persists to its run log.
  *
- * **Scoping** (record-emitter-spec §4.1): this emitter covers the
- * loop-time `host.persistRecord` call-site only — both
- * `ProductionHost.persistRecord` and `StubHost.persistRecord` call
- * `notifyListeners` after `log.append`.  Direct `log.append` calls
- * elsewhere in `src/host/` (e.g. the four call-sites in
- * `src/host/api.ts` for initial snapshot, crash reconciliation,
- * session_failed("crashed"), and the crash snapshot) are outside the
- * emitter's scope — they bypass `persistRecord` and therefore do not
- * fire listeners.  The durable JSONL log remains the system of
- * record; the emitter is best-effort delivery on top.
+ * The full contract is documented in `docs/record-emitter-spec.md`.
+ * This module is the implementation; the spec is the authority.
  *
- * ## Module-level design
+ * ## Quick summary
  *
- * - **Process-global registry.**  One `Set<Listener>` for the entire
- *   pi process.  A consumer extension subscribes once (at extension
- *   load) and receives records from all hosts in the process.  If
- *   per-host isolation is needed in the future, it's an additive
- *   change (host-scoped registry); v1 is process-global.
- * - **Thread-safety.**  Node.js is single-threaded; the `Set` is
- *   safe to read and mutate from the same event-loop turn.
- *   Listeners are fire-and-forget (§4.3) — the host does not `await`
- *   async listeners, so there is no concurrent mutation risk from
- *   interleaved promises.
- * - **Zero I/O, zero pi imports.**  This module is pure in-process
- *   fan-out; it lives in `src/host/` (which the grep-guard allows to
- *   import pi, but this module doesn't need to).
+ * - **Scoping** (`docs/record-emitter-spec.md §4.1`): covers loop-time
+ *   `host.persistRecord` only; direct `log.append` calls bypass.
+ * - **Process-global registry.** One `Set<Listener>` for the entire
+ *   pi process. A consumer extension subscribes once.
+ * - **Thread-safety.** Node.js is single-threaded; the `Set` is safe
+ *   to read and mutate from the same event-loop turn.
+ * - **Zero I/O, zero pi imports.** Pure in-process fan-out.
  */
 
 import type { PersistedRecord } from "../persistence/log.js";
@@ -36,7 +22,7 @@ import type { PersistedRecord } from "../persistence/log.js";
  * A listener callback for `subscribeToRecords`.
  *
  * May be sync or async.  The host fires listeners fire-and-forget —
- * async listeners are NOT awaited (§4.3).
+ * async listeners are NOT awaited (`docs/record-emitter-spec.md §4.3`).
  */
 export type Listener = (record: PersistedRecord) => void | Promise<void>;
 
@@ -44,9 +30,9 @@ export type Listener = (record: PersistedRecord) => void | Promise<void>;
  * Module-level listener registry.
  *
  * `Set` preserves insertion order per the ES2015 spec, giving FIFO
- * delivery (§4.2).  Re-entrant mutations (subscribe / unsubscribe
+ * delivery (`docs/record-emitter-spec.md §4.2`).  Re-entrant mutations (subscribe / unsubscribe
  * inside a listener) are handled by snapshotting the set before
- * iteration (§4.5).
+ * iteration (`docs/record-emitter-spec.md §4.5`).
  */
 const listeners = new Set<Listener>();
 
@@ -56,20 +42,20 @@ const listeners = new Set<Listener>();
  * Listeners fire in subscription order (FIFO).  Each listener is
  * invoked exactly once per record the host persists.  Listener
  * errors are isolated: a sync throw or async rejection in one
- * listener does not affect the engine or other listeners (§4).
+ * listener does not affect the engine or other listeners (`docs/record-emitter-spec.md §4.4`).
  *
  * Returns an unsubscribe handle.  Calling the handle a second time
  * is a no-op.  The listener is removed from the registry on the
  * first call; subsequent calls return without effect.
  *
  * Listeners may be sync or async.  The host fires listeners
- * fire-and-forget — async listeners are NOT awaited (§4.3).
+ * fire-and-forget — async listeners are NOT awaited (`docs/record-emitter-spec.md §4.3`).
  *
  * Re-entrant subscribe / unsubscribe from inside a listener is
  * permitted: subscriptions made inside a listener fire on the
  * NEXT record, not the current one; unsubscribes made inside a
  * listener take effect on the next record.  The current record's
- * dispatch is unaffected (§4.5).
+ * dispatch is unaffected (`docs/record-emitter-spec.md §4.5`).
  *
  * @param listener  Callback invoked for every persisted record.
  * @returns         An idempotent unsubscribe function.
@@ -89,15 +75,15 @@ export function subscribeToRecords(listener: Listener): () => void {
  *
  * Takes a snapshot of the listener set before iterating so
  * re-entrant mutations (subscribe / unsubscribe inside a listener)
- * don't affect the current dispatch (§4.5).  New subscriptions fire
+ * don't affect the current dispatch (`docs/record-emitter-spec.md §4.5`).  New subscriptions fire
  * on the next record; unsubscribes take effect on the next record.
  *
  * Sync throws are caught; async rejections are caught via `.catch()`.
- * Neither affects the engine or other listeners (§4.4).
+ * Neither affects the engine or other listeners (`docs/record-emitter-spec.md §4.4`).
  *
  * Fast-path: no-op when the set is empty.
  *
- * Fire-and-forget: async listeners are NOT awaited (§4.3).
+ * Fire-and-forget: async listeners are NOT awaited (`docs/record-emitter-spec.md §4.3`).
  *
  * This is exported as an internal seam for the host implementations
  * (`ProductionHost.persistRecord`, `StubHost.persistRecord`).  It

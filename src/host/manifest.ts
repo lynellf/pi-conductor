@@ -16,6 +16,15 @@
  * Soft warnings are returned alongside the definition so callers can
  * log them; they never block derivation.
  *
+ * **Additional advisory checks (host-side):** `loadManifest` and
+ * `loadManifestFromString` accept an optional `modelRegistry` parameter.
+ * When provided, `checkModelProvidersRegistered` runs after `validateManifest`
+ * and `toMachineDefinition`, emitting `"unregistered-provider"` warnings for
+ * every `role.models[].entry` whose `(provider, id)` pair is not registered
+ * in the runtime `ModelRegistry`. This check is structurally separate from
+ * spec §13 — it operates on the runtime registry, not the static manifest YAML.
+ * The host-agnostic core invariant is preserved.
+ *
  * **Phase 7D additions:** `LoadedManifest` now carries two extra
  * fields so downstream code (the §8.1 system-prompt resolver in
  * `production-host-resolve.ts`) can locate the manifest's directory
@@ -35,6 +44,8 @@
 import { readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+
 import type { MachineDefinition } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
 import { parseManifest } from "../manifest/parse.js";
@@ -43,6 +54,7 @@ import {
   type ManifestError,
   type ManifestReport,
   type ManifestWarning,
+  type ManifestWarningCode,
   validateManifest,
 } from "../manifest/validate.js";
 
@@ -69,8 +81,10 @@ export class HostManifestError extends Error {
  * Result of a successful manifest load.
  *
  * `warnings` are non-blocking (§13 soft warnings: cheaper-fallback
- * missing, missing-required-tool in role.tools). Callers may surface
- * them but should not block run-start on them.
+ * missing, missing-required-tool in role.tools). When a `ModelRegistry`
+ * is provided at load time, `"unregistered-provider"` warnings may also
+ * appear (advisory host-side check — see `checkModelProvidersRegistered`).
+ * Callers may surface them but should not block run-start on them.
  *
  * `manifest` is the parsed on-disk shape (the role configs the host
  * needs for per-role cost caps and model-fallback resolution — Task
@@ -98,8 +112,63 @@ export interface LoadedManifest {
 }
 
 /**
+ * Host-side advisory check: every `role.models[].entry` whose
+ * `(provider, id)` pair is not registered in the `ModelRegistry`.
+ *
+ * This check is structurally separate from spec §13 — it operates
+ * on the runtime registry, not the static manifest YAML. It is
+ * strictly post-validation: by the time this check runs,
+ * `validateManifest` has already confirmed every entry is in
+ * `provider:id` form. Missing registrations are advisory warnings
+ * only, because providers can be registered dynamically by pi
+ * extensions that load after conductor.
+ *
+ * One warning is emitted per (role, entry). If a role has
+ * `models: [a, b, c]` and all three miss, that is three warnings.
+ *
+ * @param manifest  The parsed manifest (post-§13 validation).
+ * @param modelRegistry  The runtime `ModelRegistry` to check against.
+ * @returns  A frozen list of warnings. Empty when every entry resolves.
+ */
+export function checkModelProvidersRegistered(
+  manifest: Manifest,
+  modelRegistry: ModelRegistry,
+): readonly ManifestWarning[] {
+  const warnings: ManifestWarning[] = [];
+
+  for (const role of manifest.roles) {
+    if (!role.models || role.models.length === 0) continue;
+
+    for (const modelConfig of role.models) {
+      const entry = modelConfig.model;
+      const firstColon = entry.indexOf(":");
+      if (firstColon === -1) continue; // malformed — §13 already caught this
+
+      const provider = entry.slice(0, firstColon);
+      const id = entry.slice(firstColon + 1);
+      if (provider === "" || id === "") continue; // malformed — §13 already caught this
+
+      const model = modelRegistry.find(provider, id);
+      if (model === undefined) {
+        warnings.push({
+          code: "unregistered-provider" as ManifestWarningCode,
+          message: `role '${role.name}' has models[].entry '${entry}' whose provider '${provider}' is not registered in the ModelRegistry; the runtime will throw ModelNotFoundError when this model is selected`,
+          role: role.name,
+        });
+      }
+    }
+  }
+
+  return Object.freeze(warnings);
+}
+
+/**
  * Load `.pi/conductor.yaml` from `path`, validate it against §13, and
  * derive the pinned `MachineDefinition`.
+ *
+ * When `opts.modelRegistry` is provided, also runs `checkModelProvidersRegistered`
+ * — a host-side advisory check that emits `"unregistered-provider"` warnings
+ * for entries whose provider is not registered in the runtime `ModelRegistry`.
  *
  * Phase 7D: also sets `manifestDir = dirname(path)` on the returned
  * `LoadedManifest` so the §8.1 system-prompt resolver can locate
@@ -109,15 +178,22 @@ export interface LoadedManifest {
  * @throws {ManifestParseError} on malformed YAML or shape violations
  *         (re-thrown from `parseManifest` unchanged).
  */
-export async function loadManifest(path: string): Promise<LoadedManifest> {
+export async function loadManifest(
+  path: string,
+  opts?: { modelRegistry?: ModelRegistry },
+): Promise<LoadedManifest> {
   const raw = await readFile(path, "utf8");
-  return loadManifestFromString(raw, dirname(path));
+  return loadManifestFromString(raw, dirname(path), opts?.modelRegistry);
 }
 
 /**
  * Parse + validate + derive from a manifest string. Exposed for tests
  * and for callers (a future TUI viewer, a test harness) that already
  * have the YAML in hand.
+ *
+ * When `modelRegistry` is provided, also runs `checkModelProvidersRegistered`
+ * — a host-side advisory check that emits `"unregistered-provider"` warnings
+ * for entries whose provider is not registered in the runtime `ModelRegistry`.
  *
  * Phase 7D: accepts an optional `manifestDir` (the directory
  * containing the manifest file, when known). When omitted, defaults
@@ -132,6 +208,7 @@ export async function loadManifest(path: string): Promise<LoadedManifest> {
 export function loadManifestFromString(
   rawYaml: string,
   manifestDir: string | null = null,
+  modelRegistry?: ModelRegistry,
 ): LoadedManifest {
   // Phase 1 Task 3 — throws ManifestParseError on shape violations.
   // Pass through unchanged: parse errors are a different failure mode
@@ -161,10 +238,18 @@ export function loadManifestFromString(
   // internal re-validation will agree).
   const def: MachineDefinition = toMachineDefinition(manifest);
 
+  // Run the host-side provider-registration check when a registry is
+  // provided. This is strictly post-validation and advisory.
+  const warnings = [...report.warnings];
+  if (modelRegistry !== undefined) {
+    const providerWarnings = checkModelProvidersRegistered(manifest, modelRegistry);
+    warnings.push(...providerWarnings);
+  }
+
   return Object.freeze({
     def,
     manifest,
-    warnings: Object.freeze([...report.warnings]),
+    warnings: Object.freeze(warnings),
     manifestDir,
     manifestVersion: manifest.version,
   }) as LoadedManifest;

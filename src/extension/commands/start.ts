@@ -199,11 +199,25 @@ export async function handleStart(
   const baseDir = ensureRunBaseDir(ctx.cwd);
   let handle: RunHandle;
   try {
-    handle = await startRun(manifestPath, { goal, hostFactory, baseDir });
+    handle = await startRun(manifestPath, { goal, hostFactory, baseDir, modelRegistry });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     ctx.ui.notify(`Cannot start run: ${message}`, "error");
     return;
+  }
+
+  // Surface any load-time provider-registration warnings (advisory only).
+  // The check runs in `loadManifest` when a `ModelRegistry` is provided;
+  // warnings are aggregated across all roles/entries.
+  const unregisteredWarnings = handle.loadedManifest.warnings.filter(
+    (w) => w.code === "unregistered-provider",
+  );
+  if (unregisteredWarnings.length > 0) {
+    const entries = unregisteredWarnings.map((w) => w.message).join("; ");
+    ctx.ui.notify(
+      `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
+      "warning",
+    );
   }
 
   setActiveRun(handle);

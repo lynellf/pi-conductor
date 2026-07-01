@@ -27,6 +27,7 @@
 import { describe, expect, it } from "vitest";
 import type { Checkpoint, MachineDefinition, UsageRecord } from "../../src/core/types.js";
 import { applyRunConfigOverride, RunConfigError } from "../../src/host/config.js";
+import type { LoadedManifest } from "../../src/host/manifest.js";
 import {
   type ConfigOverrideContainer,
   type RunConfigOverride,
@@ -678,6 +679,13 @@ describe("RunHandle.runConfig (§11.8) — updates the shared configOverride con
       runId: "r1",
       def: makeDef(),
       log: new InMemoryRecordLog(),
+      loadedManifest: {
+        def: makeDef(),
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
       configOverrideContainer: container,
       requestAbort: async () => {},
       completionPromise: new Promise(() => {
