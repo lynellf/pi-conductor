@@ -12,6 +12,9 @@
  *    the host appends after every accepted/rejected transition so
  *    `latestCheckpoint(runId)` is a read of the last snapshot, not an
  *    event-sourced replay — §11.1 explicitly forbids replay).
+ *  - `run_seeded` (host-owned, non-machine-event record carrying the
+ *    run's original goal at `startRun` time; used by `resumeRun` to
+ *    restore the goal context).
  *
  * **`RecordLog`** is the host-side persistence contract. The pure core
  * ships the interface and an in-memory implementation for unit tests.
@@ -40,13 +43,29 @@ export interface CheckpointSnapshot {
   readonly checkpoint: Checkpoint;
 }
 
+/**
+ * Host-owned, non-machine-event record carrying the run's original goal
+ * at `startRun` time. Analogous to `checkpoint_snapshot` — a host-owned
+ * wrapper around run-level data the reducer never branches on.
+ *
+ * Written once at run start, read by `resumeRun` to restore the goal
+ * context for the resumed orchestrator session.
+ */
+export interface RunSeededRecord {
+  readonly type: "run_seeded";
+  readonly run_id: string;
+  readonly goal: string;
+  readonly ts: number;
+}
+
 /** Union of every record the host appends to its run_id-keyed log. */
 export type PersistedRecord =
   | TransitionAccepted
   | TransitionRejected
   | SessionLifecycleEvent
   | ModelFallback
-  | CheckpointSnapshot;
+  | CheckpointSnapshot
+  | RunSeededRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
@@ -74,6 +93,14 @@ export interface RecordLog {
    * if no snapshot has been appended yet (run not started).
    */
   latestCheckpoint(runId: string): Checkpoint | null;
+
+  /**
+   * The goal from the latest `RunSeededRecord` for the run, or `null`
+   * if no seed record has been appended yet (run started before this
+   * feature shipped, or the log is empty). Used by `resumeRun` to
+   * restore the original goal context.
+   */
+  latestRunSeed(runId: string): string | null;
 
   /**
    * All records for the run in append order. The Phase 4 host may use
@@ -118,6 +145,7 @@ export class InMemoryRecordLog implements RecordLog {
   private byRun: Map<string, PersistedRecord[]> = new Map();
 
   append(record: PersistedRecord): void {
+    // RunSeededRecord carries its own `run_id` directly.
     // CheckpointSnapshot does not carry its own `run_id` field — the
     // wrapped Checkpoint is the source of truth for which run the
     // snapshot belongs to. Every other record shape carries `run_id`
@@ -138,6 +166,19 @@ export class InMemoryRecordLog implements RecordLog {
       const record = list[i];
       if (record && record.type === "checkpoint_snapshot") {
         return record.checkpoint;
+      }
+    }
+    return null;
+  }
+
+  latestRunSeed(runId: string): string | null {
+    const list = this.byRun.get(runId);
+    if (list === undefined) return null;
+    // Walk in reverse: most recent seed first.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const record = list[i];
+      if (record && record.type === "run_seeded") {
+        return record.goal;
       }
     }
     return null;

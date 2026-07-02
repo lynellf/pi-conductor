@@ -82,11 +82,10 @@ export async function handleResume(
   }
 
   // Production host factory — same shape as /conduct.
-  // Resume does not carry a goal (the run's existing
-  // checkpoint + run memory are the seed); the goal
-  // arg to `resumeRun` is used only if the resume
-  // path needs a fresh prompt (it does not, in v1 —
-  // the run continues from `current_role`).
+  // The goal arg to `resumeRun` is always "" (the extension does not
+  // accept a goal override at resume time); the original goal is
+  // recovered from the persisted `run_seeded` record automatically
+  // inside `resumeRun`.
   const modelRegistry = ctx.modelRegistry;
   const cwd = ctx.cwd;
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
