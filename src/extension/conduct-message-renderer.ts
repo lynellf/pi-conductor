@@ -35,6 +35,10 @@
  * tool-result display events). The sink computes `is_orchestrator`
  * from the active run's manifest (see `current-orchestrator.ts`).
  *
+ * Phase 1 (open-issues-round-2): `"text_stream"` removed — text now
+ * emits as a single `"text"` per assistant turn, so the label-less
+ * continuation renderer is no longer needed.
+ *
  * ## Why a local `CustomMessage` shape
  *
  * The SDK's `MessageRenderer<T = unknown>` expects `CustomMessage<T>`
@@ -73,7 +77,6 @@ import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tu
 /**
  * Kind discriminator the display sink stamps on every `CustomMessage`.
  * - `"text"` — LLM text (conduct.role.text)
- * - `"text_stream"` — label-less continuation chunk (conduct.role.text_stream)
  * - `"tool"` — tool call/result summary (conduct.role.tool)
  *
  * Phase 7B.UX restored the `"tool"` kind and the `conduct.role.tool`
@@ -82,12 +85,10 @@ import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tu
  * carries the `✓`/`✗` marker for end events, so the renderer does not
  * need a third discriminator.
  *
- * The `"text_stream"` kind was added in tui-stream-readability Phase 1
- * for label-less stream continuation chunks. The renderer for
- * `conduct.role.text_stream` ignores `is_orchestrator` and produces no
- * role label (N12).
+ * Phase 1 (open-issues-round-2): `"text_stream"` removed — text now
+ * emits as a single `"text"` per assistant turn.
  */
-export type ConductMessageKind = "text" | "text_stream" | "tool";
+export type ConductMessageKind = "text" | "tool";
 
 /**
  * Shared `details` payload shape for the two `conduct.role.*`
@@ -188,13 +189,6 @@ function buildContainer(
   theme: Theme,
   getOrchestratorRole: () => string | null,
 ): Container {
-  // The `expanded` flag is honored by passing it through to the
-  // Markdown body. The SDK's container surfaces a collapse/expand
-  // toggle; we don't need to act on the flag here — the SDK
-  // already drives re-render on toggle. We keep `options.expanded`
-  // in scope for future collapse-threshold logic (Phase 5 open
-  // question #2: always-full in v1; revisit if long runs prove
-  // to scroll too much).
   void options;
 
   const details = message.details;
@@ -202,26 +196,8 @@ function buildContainer(
     details === undefined
       ? UNKNOWN_LABEL_COLOR
       : pickLabelColor(details.is_orchestrator, getOrchestratorRole());
-  // Phase 5.5: bold the role label so it reads as a structural
-  // anchor above the body. `theme.bold` produces ANSI bold codes
-  // that compose cleanly inside `theme.fg` (the stub theme in
-  // tests wraps as `[bold]` inside `[<color>]`). Markdown bold
-  // (`**role**`) is not used — the label is a separate `Text`
-  // component, not part of the body's `Markdown`, so the
-  // structural separation the renderer establishes is preserved.
   const labelText = theme.fg(labelColor, theme.bold(details?.role ?? "(unknown)"));
 
-  // `message.content` is the markdown body the sink already
-  // emitted. The `getMarkdownTheme()` from the package root
-  // (`@earendil-works/pi-coding-agent` re-exports it from
-  // `./modes/interactive/theme/theme.ts`) is the same theme the
-  // default renderer uses; we just skip the
-  // `defaultTextStyle.color` override that was flattening
-  // everything to `customMessageText`. The sink always emits a
-  // string content, so the array branch is a defensive parallel
-  // of the SDK's `CustomMessageComponent.rebuild()` — filter to
-  // text parts and join. (We don't cast `part.text`; we
-  // narrow via the discriminator.)
   const body = message.content;
   const bodyText =
     typeof body === "string"
@@ -254,15 +230,6 @@ function blockquote(text: string): string {
  * (NOT `pickLabelColor`) and the body as a `Markdown` child
  * (blockquote-wrapped for visual de-emphasis; M1 amended).
  *
- * The container's children:
- *
- *   1. `Text` — the role label, colored with `TOOL_LABEL_COLOR` ("dim").
- *      The label text is `details.role` (e.g., "orchestrator", "worker").
- *      The label is NOT bolded (contrast with the text renderer).
- *   2. `Markdown` — the body, carrying the formatter-produced summary
- *      (e.g., "bash: ls", "✓", "✗ error: permission denied"), wrapped
- *      in `> `-prefixed markdown blockquote lines for visual de-emphasis.
- *
  * The tool renderer does NOT use `pickLabelColor`, `ORCHESTRATOR_LABEL_COLOR`,
  * `WORKER_LABEL_COLOR`, or `UNKNOWN_LABEL_COLOR` — the tool label is always
  * colored with `TOOL_LABEL_COLOR` regardless of orchestrator status (M2).
@@ -277,7 +244,6 @@ function buildToolContainer(
   const details = message.details;
   const labelText = theme.fg(TOOL_LABEL_COLOR, details?.role ?? "(unknown)");
 
-  // Body: the formatter-produced text. Always a string in practice.
   const body = message.content;
   const bodyText =
     typeof body === "string"
@@ -297,49 +263,7 @@ function buildToolContainer(
 }
 
 /**
- * Build the `Container` for a `conduct.role.text_stream` message
- * (tui-stream-readability Phase 1). Label-less by design: the
- * Container carries only a `Markdown` body child — no role-label
- * `Text` — so continuation chunks do not repeat the role name.
- * `is_orchestrator` is ignored (N12).
- *
- * The body uses the SDK's `getMarkdownTheme()` just like the
- * labeled `conduct.role.text` renderer, so the visual style is
- * consistent across all stream chunks.
- */
-function buildTextStreamContainer(
-  message: ConductCustomMessage,
-  _options: MessageRenderOptions,
-  _theme: Theme,
-): Container {
-  const body = message.content;
-  const bodyText =
-    typeof body === "string"
-      ? body
-      : body
-          .filter(
-            (part): part is { readonly type: string; readonly text: string } =>
-              part.type === "text" && "text" in part,
-          )
-          .map((part) => part.text)
-          .join("\n");
-
-  const container = new Container();
-  container.addChild(new Markdown(bodyText, 0, 0, getMarkdownTheme()));
-  return container;
-}
-
-/**
- * Build the `conduct.role.text` renderer. Closure-free over mutable
- * state — the orchestrator getter is the only "live" reference, and
- * it points at the module-level `currentOrchestratorRole` slot.
- *
- * The wrapper is the defense-in-depth try/catch the spec calls for
- * (Pinned SDK surface #4): the SDK already wraps the renderer call
- * in try/catch and falls through to the default `CustomMessageComponent`
- * on throw, but a renderer-level catch keeps the error out of the
- * SDK's silent swallow and makes the fail-safe behavior explicit
- * in this codebase.
+ * Build the `conduct.role.text` renderer.
  */
 function createRenderer(
   getOrchestratorRole: () => string | null,
@@ -354,33 +278,12 @@ function createRenderer(
 }
 
 /**
- * Build the `conduct.role.tool` renderer. Pure: no orchestrator
- * getter needed — the tool label color is always `TOOL_LABEL_COLOR`
- * regardless of orchestrator status (M2).
- *
- * The wrapper is the defense-in-depth try/catch (same pattern as
- * `createRenderer`).
+ * Build the `conduct.role.tool` renderer.
  */
 function createToolRenderer(): MessageRenderer<ConductMessageDetails> {
   return (message, options, theme) => {
     try {
       return buildToolContainer(message, options, theme);
-    } catch {
-      return undefined;
-    }
-  };
-}
-
-/**
- * Build the `conduct.role.text_stream` renderer. Label-less: returns
- * only a `Markdown` body in a `Container` with no role-label `Text`
- * child. No orchestrator getter needed (N12: `is_orchestrator` is
- * ignored).
- */
-function createTextStreamRenderer(): MessageRenderer<ConductMessageDetails> {
-  return (message, options, theme) => {
-    try {
-      return buildTextStreamContainer(message, options, theme);
     } catch {
       return undefined;
     }
@@ -396,14 +299,9 @@ function createTextStreamRenderer(): MessageRenderer<ConductMessageDetails> {
  * emits tool_call / tool_result events as `conduct.role.tool` with
  * compact formatter summaries.
  *
- * The `conduct.role.text_stream` key was added in tui-stream-readability
- * Phase 1 for label-less stream continuation chunks. All three keys
- * are returned.
- *
- * Exposing the record (vs. a single named export) keeps the
- * registration step a single `for ... of` and matches the SDK's
- * `messageRenderers: Map<string, MessageRenderer>` shape
- * (`dist/core/extensions/types.d.ts` L1180).
+ * Phase 1 (open-issues-round-2): `conduct.role.text_stream` key
+ * removed — text now emits as a single `conduct.role.text` per
+ * assistant turn.
  *
  * @param getOrchestratorRole - Live reference to the active run's
  *                              orchestrator role (or `null` when no
@@ -417,10 +315,8 @@ export function createConductMessageRenderers(
 ): Record<string, MessageRenderer<ConductMessageDetails>> {
   const textRenderer = createRenderer(getOrchestratorRole);
   const toolRenderer = createToolRenderer();
-  const textStreamRenderer = createTextStreamRenderer();
   return {
     "conduct.role.text": textRenderer,
-    "conduct.role.text_stream": textStreamRenderer,
     "conduct.role.tool": toolRenderer,
   };
 }

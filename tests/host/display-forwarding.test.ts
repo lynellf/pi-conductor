@@ -1,25 +1,21 @@
 /**
  * Phase 2 Task 3 — host display forwarding.
  *
+ * Updated for Phase 1 (open-issues-round-2): text no longer streams
+ * progressively. One `"text"` display event is emitted per assistant
+ * turn at `message_end` with the full extracted text. Tool events
+ * (`tool_call` / `tool_result`) remain per-event (unchanged).
+ *
  * Pins the additive display tap on `attachSessionEventHandler`:
  * assistant text and combined tool-completed lines flow to the
  * optional display sink without changing the cost / terminal-reason
  * logic.
- *
- * Updated for tool-display-combine-status (Phase 1): the host
- * buffers the start summary and emits a single combined line at
- * `tool_execution_end`. Start events emit nothing; orphaned ends
- * emit nothing; machine tools remain suppressed.
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import { MAX_FLUSH_WINDOW_CHARS } from "../../src/host/boundary-flush.js";
 import { SessionState } from "../../src/host/cost.js";
-import {
-  attachSessionEventHandler,
-  STREAM_FLUSH_THRESHOLD_CHARS,
-} from "../../src/host/session-event-handler.js";
+import { attachSessionEventHandler } from "../../src/host/session-event-handler.js";
 
 function makeAssistantMessage(): AssistantMessage {
   return {
@@ -45,9 +41,6 @@ function makeAssistantMessage(): AssistantMessage {
   } as AssistantMessage;
 }
 
-/** Assistant message with a redacted thinking block (safety-filtered;
- * only an opaque `thinkingSignature` survives, `.thinking` is empty).
- * The display extractor must skip it — no gibberish in the TUI. */
 function makeAssistantMessageWithRedactedThinking(): AssistantMessage {
   return {
     role: "assistant",
@@ -92,7 +85,6 @@ describe("attachSessionEventHandler — display sink", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
     attachSessionEventHandler({
       session: session as never,
       state,
@@ -115,24 +107,12 @@ describe("attachSessionEventHandler — display sink", () => {
       isError: false,
     });
 
-    // The handler emits TWO display events:
-    // 1. The assistant text (from message_end).
-    // 2. The combined tool-completed line (from tool_execution_end).
-    // No separate tool_call event is emitted (buffered).
     expect(onDisplay).toHaveBeenCalledTimes(2);
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "orchestrator",
       kind: "text",
-      // Thinking is included as a separate block (joined with
-      // "\n\n") so reasoning reads as its own paragraph; the
-      // two adjacent text parts still merge ("Hello " + "world"
-      // → "Hello world") because they are one logical utterance.
-      // Reversal of the original Task 3 "thinking omitted"
-      // decision — the human wants to see model reasoning at
-      // all times (2026-06-20, after Phase 5.5).
       text: "Hello \n\n> planning the response\n\nworld",
     });
-    // Combined line: "✓ bash: ls" — no separate "✓" indicator.
     expect(onDisplay).toHaveBeenNthCalledWith(2, {
       role: "orchestrator",
       kind: "tool_result",
@@ -140,24 +120,11 @@ describe("attachSessionEventHandler — display sink", () => {
     });
   });
 
-  it("includes non-redacted thinking content in the text display event (reversal of Task 3 'thinking omitted')", () => {
-    // The human reversed the original "thinking omitted by default"
-    // decision on 2026-06-20: they want to see what the models are
-    // thinking at all times. The display extractor now surfaces
-    // non-redacted `ThinkingContent.thinking` as part of the text
-    // event, joined as a separate block so it reads as its own
-    // paragraph above/below the answer text.
+  it("includes non-redacted thinking content in the text display event", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
-
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
     session.emit({ type: "message_end", message: makeAssistantMessage() });
 
     expect(onDisplay).toHaveBeenCalledTimes(1);
@@ -172,13 +139,7 @@ describe("attachSessionEventHandler — display sink", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
 
     const msg: AssistantMessage = {
       role: "assistant",
@@ -197,7 +158,6 @@ describe("attachSessionEventHandler — display sink", () => {
       stopReason: "stop",
       timestamp: 123,
     } as AssistantMessage;
-
     session.emit({ type: "message_end", message: msg });
 
     expect(onDisplay).toHaveBeenCalledTimes(1);
@@ -208,24 +168,12 @@ describe("attachSessionEventHandler — display sink", () => {
     });
   });
 
-  it("skips redacted thinking blocks (no opaque payload in the TUI)", () => {
-    // Safety-filtered thinking blocks carry only an opaque
-    // `thinkingSignature` (`.thinking` is empty, `.redacted` is
-    // true). The extractor skips them so the TUI never shows
-    // gibberish; the readable text parts still surface.
+  it("skips redacted thinking blocks", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
-
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
     session.emit({ type: "message_end", message: makeAssistantMessageWithRedactedThinking() });
-
     expect(onDisplay).toHaveBeenCalledTimes(1);
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "worker",
@@ -238,15 +186,7 @@ describe("attachSessionEventHandler — display sink", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
-
-    // Matching start (buffer the summary) + end with multi-line string error
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
     session.emit({
       type: "tool_execution_start",
       toolCallId: "call-err",
@@ -260,7 +200,6 @@ describe("attachSessionEventHandler — display sink", () => {
       result: "permission denied\n  at script.sh:3",
       isError: true,
     });
-
     expect(onDisplay).toHaveBeenCalledTimes(1);
     expect(onDisplay).toHaveBeenNthCalledWith(1, {
       role: "worker",
@@ -269,61 +208,17 @@ describe("attachSessionEventHandler — display sink", () => {
     });
   });
 
-  it("emits combined ✗ bash: ls: <message> for error with object result", () => {
-    const session = makeSession();
-    const state = new SessionState({ cap: null, model: null });
-    const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
-
-    // Matching start (buffer the summary) + end with object error
-    session.emit({
-      type: "tool_execution_start",
-      toolCallId: "call-err-obj",
-      toolName: "bash",
-      args: { command: "ls" },
-    });
-    session.emit({
-      type: "tool_execution_end",
-      toolCallId: "call-err-obj",
-      toolName: "bash",
-      result: { message: "command not found", code: 127 },
-      isError: true,
-    });
-
-    expect(onDisplay).toHaveBeenCalledTimes(1);
-    expect(onDisplay).toHaveBeenNthCalledWith(1, {
-      role: "worker",
-      kind: "tool_result",
-      text: "✗ bash: ls: command not found",
-    });
-  });
-
   it("buffers start and emits nothing until end", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
-
-    // Emit only the start event; nothing should be displayed yet
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
     session.emit({
       type: "tool_execution_start",
       toolCallId: "call-1",
       toolName: "bash",
       args: { command: "ls" },
     });
-
     expect(onDisplay).not.toHaveBeenCalled();
   });
 
@@ -331,17 +226,7 @@ describe("attachSessionEventHandler — display sink", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
-    attachSessionEventHandler({
-      session: session as never,
-      state,
-      role: "worker",
-      onDisplay,
-    });
-
-    // Emit only the end event with no prior start; orphaned end
-    // has undefined summary -> formatToolCompletedLine returns
-    // null -> no emit.
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
     session.emit({
       type: "tool_execution_end",
       toolCallId: "call-orphan",
@@ -349,25 +234,19 @@ describe("attachSessionEventHandler — display sink", () => {
       result: "permission denied",
       isError: true,
     });
-
     expect(onDisplay).not.toHaveBeenCalled();
   });
 
-  it("suppresses handoff tool_call and tool_result events (protocol noise)", () => {
-    // Machine tools (handoff, end, ask_user) are suppressed by
-    // the formatters returning null. The display sink never
-    // receives them.
+  it("suppresses handoff tool events", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
     attachSessionEventHandler({
       session: session as never,
       state,
       role: "orchestrator",
       onDisplay,
     });
-
     session.emit({
       type: "tool_execution_start",
       toolCallId: "call-handoff",
@@ -381,23 +260,19 @@ describe("attachSessionEventHandler — display sink", () => {
       result: { ok: true },
       isError: false,
     });
-
-    // No tool_call or tool_result events for machine tools.
     expect(onDisplay).not.toHaveBeenCalled();
   });
 
-  it("suppresses end tool_call and tool_result events", () => {
+  it("suppresses end tool events", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
     const onDisplay = vi.fn();
-
     attachSessionEventHandler({
       session: session as never,
       state,
       role: "orchestrator",
       onDisplay,
     });
-
     session.emit({
       type: "tool_execution_start",
       toolCallId: "call-end",
@@ -411,42 +286,28 @@ describe("attachSessionEventHandler — display sink", () => {
       result: { ok: true },
       isError: false,
     });
-
     expect(onDisplay).not.toHaveBeenCalled();
   });
 
   it("does not require a display sink", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });
-
     expect(() =>
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "worker",
-      }),
+      attachSessionEventHandler({ session: session as never, state, role: "worker" }),
     ).not.toThrow();
   });
 
-  // ─── Streaming (Phase 1: suffix-chunk flush) ─────────────────
+  // ─── Post-streaming (Phase 1) ──────────────────────────────────
 
-  describe("Streaming", () => {
-    /** Build a minimal assistant message with pure text content. */
+  describe("Single-emit per turn", () => {
     function textMessage(text: string): AssistantMessage {
       return { role: "assistant", content: [{ type: "text", text }] } as AssistantMessage;
     }
 
-    const THRESHOLD = STREAM_FLUSH_THRESHOLD_CHARS;
-
-    // ── Case 1 ─────────────────────────────────────────────────
-    it("streams accumulated text in a threshold suffix chunk then a tail at message_end", () => {
-      // What only this case pins: the chunk-then-tail boundary —
-      // that message_end emits the slice *after* the last-flushed
-      // length, not the whole text (the new message_end invariant).
+    it("emits one text event per assistant turn with the full text, regardless of length", () => {
       const session = makeSession();
       const state = new SessionState({ cap: null, model: null });
       const onDisplay = vi.fn();
-
       attachSessionEventHandler({
         session: session as never,
         state,
@@ -454,235 +315,41 @@ describe("attachSessionEventHandler — display sink", () => {
         onDisplay,
       });
 
-      const chunkLen = THRESHOLD + 10; // 210 — crosses threshold
-      const tailLen = 40;
-      const finalLen = chunkLen + tailLen; // 250
-      const chunk = "a".repeat(chunkLen);
-      const finalText = "a".repeat(finalLen);
-
+      const longText = "a".repeat(500);
       session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: textMessage(chunk) });
-      session.emit({ type: "message_end", message: textMessage(finalText) });
+      session.emit({ type: "message_update", message: textMessage(longText) });
+      session.emit({ type: "message_end", message: textMessage(longText) });
 
-      expect(onDisplay).toHaveBeenCalledTimes(2);
-      // First emit: the full chunk (stream.len was 0)
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "orchestrator",
-        kind: "text",
-        text: chunk,
-      });
-      // Second emit: the unflushed tail (now text_stream because
-      // hasEmittedText was set by the first chunk)
-      expect(onDisplay).toHaveBeenNthCalledWith(2, {
-        role: "orchestrator",
-        kind: "text_stream",
-        text: finalText.slice(chunkLen),
-      });
-    });
-
-    // ── Case 2 ─────────────────────────────────────────────────
-    it("message_update below the threshold emits nothing mid-stream; full text emits once at message_end", () => {
-      // What only this case pins: the sub-threshold no-flush
-      // fallback — that a sub-threshold partial produces zero
-      // intermediate emits, and the new message_end tail
-      // (slice(0)) is byte-identical to the legacy whole-text
-      // emit. This is the no-regression proof for the
-      // pre-streaming path inside the new streaming suite.
-      const session = makeSession();
-      const state = new SessionState({ cap: null, model: null });
-      const onDisplay = vi.fn();
-
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "orchestrator",
-        onDisplay,
-      });
-
-      const short = THRESHOLD - 1; // 199 — below threshold
-      const finalText = "a".repeat(short);
-
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: textMessage(finalText) });
-      session.emit({ type: "message_end", message: textMessage(finalText) });
-
-      // Only one emit: the message_end tail (= full text, since
-      // stream.len never moved)
       expect(onDisplay).toHaveBeenCalledTimes(1);
       expect(onDisplay).toHaveBeenNthCalledWith(1, {
         role: "orchestrator",
         kind: "text",
-        text: finalText,
+        text: longText,
       });
     });
 
-    // ── Case 3 ─────────────────────────────────────────────────
-    it("flushes exactly the new suffix on each threshold crossing", () => {
-      // What only this case pins: multi-chunk continuity — that
-      // consecutive chunks each emit *exactly* the new suffix
-      // and never re-flush the prefix (case 1 only crosses once,
-      // so it cannot prove the stream.len advances across two
-      // message_updates).
+    it("emits one text event per assistant turn even without message_update", () => {
       const session = makeSession();
       const state = new SessionState({ cap: null, model: null });
       const onDisplay = vi.fn();
+      attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
 
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "orchestrator",
-        onDisplay,
-      });
-
-      const chunk1 = THRESHOLD + 10; // 210 — crosses threshold
-      const chunk2Gain = THRESHOLD; // 200 — crosses threshold again
-      const tailGain = 40;
-      const finalLen = chunk1 + chunk2Gain + tailGain;
-
-      const partial1 = "a".repeat(chunk1);
-      const partial2 = "a".repeat(chunk1 + chunk2Gain);
-      const finalText = "a".repeat(finalLen);
-
+      const shortText = "Hello world";
       session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: textMessage(partial1) });
-      session.emit({ type: "message_update", message: textMessage(partial2) });
-      session.emit({ type: "message_end", message: textMessage(finalText) });
+      session.emit({ type: "message_end", message: textMessage(shortText) });
 
-      expect(onDisplay).toHaveBeenCalledTimes(3);
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "orchestrator",
-        kind: "text",
-        text: partial1, // first chunk: slice(0, chunk1)
-      });
-      // Second and third chunks are text_stream because
-      // hasEmittedText was set by the first chunk.
-      expect(onDisplay).toHaveBeenNthCalledWith(2, {
-        role: "orchestrator",
-        kind: "text_stream",
-        text: partial2.slice(chunk1), // second chunk: slice(chunk1, chunk1+chunk2Gain)
-      });
-      expect(onDisplay).toHaveBeenNthCalledWith(3, {
-        role: "orchestrator",
-        kind: "text_stream",
-        text: finalText.slice(chunk1 + chunk2Gain), // tail: slice(chunk1+chunk2Gain)
-      });
-    });
-
-    // ── Case 4 ─────────────────────────────────────────────────
-    it("resets the accumulator across consecutive messages", () => {
-      // What only this case pins: the per-message reset — neither
-      // case 1 nor 3 spans two messages, so neither can detect a
-      // stale stream.len leaking from one turn into the next.
-      const session = makeSession();
-      const state = new SessionState({ cap: null, model: null });
-      const onDisplay = vi.fn();
-
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "orchestrator",
-        onDisplay,
-      });
-
-      const msg1Text = "a".repeat(THRESHOLD + 10); // 210 — crosses threshold
-      const msg1Tail = "a".repeat(THRESHOLD + 20); // 220 — final for msg1
-      const msg2Text = "short"; // 5 chars, no update
-
-      // Message 1: streamed with a threshold-crossing update
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: textMessage(msg1Text) });
-      session.emit({ type: "message_end", message: textMessage(msg1Tail) });
-
-      // Message 2: standalone (no message_update)
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_end", message: textMessage(msg2Text) });
-
-      // Message 1: chunk + tail = 2 emits
-      // Message 2: full text (slice(0), not slice(lenFromMsg1)) = 1 emit
-      // Total: 3 emits
-      expect(onDisplay).toHaveBeenCalledTimes(3);
-
-      // Message 1 chunk
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "orchestrator",
-        kind: "text",
-        text: msg1Text,
-      });
-      // Message 1 tail (text_stream because hasEmittedText was set)
-      expect(onDisplay).toHaveBeenNthCalledWith(2, {
-        role: "orchestrator",
-        kind: "text_stream",
-        text: msg1Tail.slice(msg1Text.length),
-      });
-      // Message 2 full text: the message_start reset hasEmittedText
-      // so the second message gets kind: text again (no labels leaked)
-      expect(onDisplay).toHaveBeenNthCalledWith(3, {
-        role: "orchestrator",
-        kind: "text",
-        text: msg2Text,
-      });
-    });
-
-    // ── Case 5 ─────────────────────────────────────────────────
-    it("toolcall message_updates with no text growth emit nothing", () => {
-      // What only this case pins: that a tool-call-only
-      // message_update (no new text) does NOT trip a spurious
-      // flush — the suffix-length guard is computed on
-      // extractAssistantText output, not on event presence.
-      const session = makeSession();
-      const state = new SessionState({ cap: null, model: null });
-      const onDisplay = vi.fn();
-
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "orchestrator",
-        onDisplay,
-      });
-
-      const text = "This is a short assistant response";
-
-      // message_start
-      session.emit({ type: "message_start", message: textMessage("") });
-      // message_update with a tool_use block AND the same text
-      // as the start partial (no new text) — formatted text
-      // doesn't grow, so no flush
-      session.emit({
-        type: "message_update",
-        message: {
-          role: "assistant",
-          content: [
-            { type: "text", text },
-            { type: "tool_use", name: "bash", input: { command: "ls" } },
-          ],
-        } as AssistantMessage,
-      });
-      // message_end with the same text
-      session.emit({ type: "message_end", message: textMessage(text) });
-
-      // Only one emit: the message_end tail (= full text, since
-      // no threshold flush ever fired). The message_update
-      // contributed 0 new chars (extractAssistantText still
-      // returns the same text length), so its guard computed
-      // delta < threshold.
       expect(onDisplay).toHaveBeenCalledTimes(1);
       expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "orchestrator",
+        role: "worker",
         kind: "text",
-        text,
+        text: shortText,
       });
     });
 
-    // ── Case 6 ─────────────────────────────────────────────────
-    it("error message_end does not flush the remainder (early-return preserved)", () => {
-      // What only this case pins: the error-path early-return
-      // runs before the new tail-flush — the reframed
-      // message_end text block stays positioned after the
-      // stopReason === "error" early-return.
+    it("emits no text event for empty assistant message (tool_use only)", () => {
       const session = makeSession();
       const state = new SessionState({ cap: null, model: null });
       const onDisplay = vi.fn();
-
       attachSessionEventHandler({
         session: session as never,
         state,
@@ -690,51 +357,7 @@ describe("attachSessionEventHandler — display sink", () => {
         onDisplay,
       });
 
-      const chunk = "a".repeat(THRESHOLD + 10); // 210 — crosses threshold
-      const finalWithError = "a".repeat(THRESHOLD + 50); // longer, but never flushed because of error
-
       session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: textMessage(chunk) });
-      session.emit({
-        type: "message_end",
-        message: { ...textMessage(finalWithError), stopReason: "error" } as AssistantMessage,
-      });
-
-      // Only the streamed chunk was displayed; the error message_end
-      // skipped the tail flush due to early-return.
-      expect(onDisplay).toHaveBeenCalledTimes(1);
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "orchestrator",
-        kind: "text",
-        text: chunk,
-      });
-    });
-
-    // ── N10 ────────────────────────────────────────────────────
-    it("empty formatted text at message_end produces zero text/text_stream events", () => {
-      // N10: when extractAssistantText returns empty string at
-      // message_end, no display event should be emitted.
-      const session = makeSession();
-      const state = new SessionState({ cap: null, model: null });
-      const onDisplay = vi.fn();
-
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "orchestrator",
-        onDisplay,
-      });
-
-      // message_update with only tool_use blocks → empty formatted text
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({
-        type: "message_update",
-        message: {
-          role: "assistant",
-          content: [{ type: "tool_use", name: "bash", input: { command: "ls" } }],
-        } as unknown as AssistantMessage,
-      });
-      // message_end with only tool_use blocks → empty formatted text
       session.emit({
         type: "message_end",
         message: {
@@ -743,193 +366,54 @@ describe("attachSessionEventHandler — display sink", () => {
         } as unknown as AssistantMessage,
       });
 
-      // extractAssistantText returns "" for tool_use-only content.
-      // message_end: text.length (0) > stream.len (0) is false → no emit.
-      // No text or text_stream events should appear.
-      const textEvents = onDisplay.mock.calls.filter(
-        ([event]) => event.kind === "text" || event.kind === "text_stream",
-      );
+      const textEvents = onDisplay.mock.calls.filter(([event]) => event.kind === "text");
       expect(textEvents).toHaveLength(0);
     });
 
-    // ── Regression: screenshot mid-sentence split ──────────────
-    it("avoids mid-sentence split when a sentence boundary is within the max window (screenshot regression)", () => {
-      // The approved plan (tui-stream-readability) identifies that
-      // the screenshot shows a mid-sentence split at the hard 200-char
-      // threshold. This test asserts that the boundary-aware flush
-      // prefers a sentence boundary over the hard threshold when one
-      // appears within the max window.
+    it("tool events still emit per-event (unchanged)", () => {
       const session = makeSession();
       const state = new SessionState({ cap: null, model: null });
       const onDisplay = vi.fn();
+      attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
 
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "orchestrator",
-        onDisplay,
+      session.emit({
+        type: "tool_execution_start",
+        toolCallId: "call-1",
+        toolName: "bash",
+        args: { command: "ls" },
       });
-
-      // Build text where the hard 200-char point lands mid-word
-      // in a sentence. A sentence boundary (". ") appears at ~240
-      // chars (within the max window), and the boundary-aware flush
-      // should use that instead of the hard 200-char cut.
-      const noBoundaryRegion = "x".repeat(180); // 0-179: no paragraph/line/sentence boundaries
-      const shortMid = "y".repeat(20); // 180-199: no boundaries, ends at minPos-1
-      // At position 200 the sentence starts with a boundary at ~240:
-      const sentence = "This design choice affects performance. "; // 200-239: 40 chars, ". " at 238
-      const afterBoundary = "z".repeat(50); // 240-289: rest
-      const fullText = noBoundaryRegion + shortMid + sentence + afterBoundary;
-
-      // Assert our test fixture is set up correctly:
-      // The sentence boundary ". " should be within the max window
-      const sentenceDotPos = fullText.indexOf(". ");
-      expect(sentenceDotPos).toBeGreaterThanOrEqual(THRESHOLD); // after minPos
-      expect(sentenceDotPos).toBeLessThan(THRESHOLD + MAX_FLUSH_WINDOW_CHARS); // within max window
-
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: textMessage(fullText) });
-      session.emit({ type: "message_end", message: textMessage(fullText) });
-
-      // The first flush should NOT be at the 200-char hard cut.
-      // Instead, it should be at the sentence boundary ". " + 2
-      // (including the space after the period).
-      const expectedBoundary = sentenceDotPos + 2; // after ". "
+      session.emit({
+        type: "tool_execution_end",
+        toolCallId: "call-1",
+        toolName: "bash",
+        result: { ok: true },
+        isError: false,
+      });
+      session.emit({
+        type: "tool_execution_start",
+        toolCallId: "call-2",
+        toolName: "read",
+        args: { path: "foo.ts" },
+      });
+      session.emit({
+        type: "tool_execution_end",
+        toolCallId: "call-2",
+        toolName: "read",
+        result: "file content",
+        isError: false,
+      });
 
       expect(onDisplay).toHaveBeenCalledTimes(2);
-      // First chunk: text up to and including the sentence boundary
       expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "orchestrator",
-        kind: "text",
-        text: fullText.slice(0, expectedBoundary),
+        role: "worker",
+        kind: "tool_result",
+        text: "✓ bash: ls",
       });
-      // The first chunk should NOT be the raw 200-char slice
-      expect(onDisplay).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({
-          text: expect.not.stringMatching(/^x{200}/),
-        }),
-      );
-      // Second chunk: remaining tail (text_stream continuation)
       expect(onDisplay).toHaveBeenNthCalledWith(2, {
-        role: "orchestrator",
-        kind: "text_stream",
-        text: fullText.slice(expectedBoundary),
-      });
-      // Verify concatenation: emitted text + text_stream = full text
-      const call1Text = onDisplay.mock.calls[0]?.[0]?.text ?? "";
-      const call2Text = onDisplay.mock.calls[1]?.[0]?.text ?? "";
-      expect(call1Text + call2Text).toBe(fullText);
-    });
-
-    // ── Markdown continuation context (Phase 1: quote-block continuity) ──
-
-    /** Build a minimal assistant message with thinking content. */
-    function thinkingMessage(text: string): AssistantMessage {
-      return {
-        role: "assistant",
-        content: [{ type: "thinking", thinking: text }],
-      } as AssistantMessage;
-    }
-
-    it("preserves blockquote marker on continuation chunks when flush boundary splits a blockquoted line", () => {
-      // The screenshot regression: a long thinking line gets split at the
-      // max-window boundary, and the continuation tail must still be
-      // visually inside the blockquote.
-      //
-      // extractAssistantText for a single thinking part produces:
-      //   "> " + thinkingText  (each line prefixed)
-      //
-      // For a text of 810 chars (no newlines), formatted = "> " + 810 = 812 chars.
-      // The first flush uses the max-window fallback at position 600 (inside
-      // the blockquoted line). The tail at message_end (slice(600)) is plain
-      // prose — the normalizer must prepend "> ".
-
-      const thinkingLen = THRESHOLD + MAX_FLUSH_WINDOW_CHARS + 10; // 810
-      const thinkingText = "x".repeat(thinkingLen);
-      // formatted = "> xxxx..." (812 chars)
-
-      const session = makeSession();
-      const state = new SessionState({ cap: null, model: null });
-      const onDisplay = vi.fn();
-
-      attachSessionEventHandler({
-        session: session as never,
-        state,
         role: "worker",
-        onDisplay,
+        kind: "tool_result",
+        text: "✓ read: foo.ts",
       });
-
-      // Use the same long thinking message for both update and end
-      const msg = thinkingMessage(thinkingText);
-
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: msg });
-      session.emit({ type: "message_end", message: msg });
-
-      // First chunk: kind "text" should start with "> " prefix
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "worker",
-        kind: "text",
-        text: expect.stringMatching(/^> /),
-      });
-
-      // Second chunk (continuation): kind "text_stream"
-      // BEFORE the fix: starts without "> " — the BUG
-      // AFTER the fix: starts with "> " — CORRECT
-      expect(onDisplay).toHaveBeenCalledTimes(2);
-      const secondChunk = onDisplay.mock.calls[1]?.[0];
-      expect(secondChunk.kind).toBe("text_stream");
-      expect(secondChunk.text).toMatch(/^> /);
-
-      // Verify concatenation (with normalization, display text may be
-      // longer than source due to inserted prefix)
-      const firstChunk = onDisplay.mock.calls[0]?.[0];
-      expect(firstChunk.text.length).toBeGreaterThan(0);
-      // Both chunks should look like blockquoted content
-      expect(firstChunk.text).toMatch(/^> x+$/);
-      expect(secondChunk.text).toMatch(/^> x+$/);
-    });
-
-    it("does not prefix non-quoted continuation chunks", () => {
-      // Paired normal-text fixture: plain assistant text with no thinking
-      // content must NOT get a "> " prefix on continuation chunks.
-
-      const textLen = THRESHOLD + MAX_FLUSH_WINDOW_CHARS + 10; // 810
-      const longText = "y".repeat(textLen);
-      // No thinking content — formatted = longText (no blockquotes)
-
-      const session = makeSession();
-      const state = new SessionState({ cap: null, model: null });
-      const onDisplay = vi.fn();
-
-      attachSessionEventHandler({
-        session: session as never,
-        state,
-        role: "worker",
-        onDisplay,
-      });
-
-      const msg = textMessage(longText);
-
-      session.emit({ type: "message_start", message: textMessage("") });
-      session.emit({ type: "message_update", message: msg });
-      session.emit({ type: "message_end", message: msg });
-
-      // Two chunks: first from message_update, second from message_end
-      expect(onDisplay).toHaveBeenCalledTimes(2);
-
-      // First chunk: kind "text"
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
-        role: "worker",
-        kind: "text",
-        text: expect.any(String),
-      });
-
-      // Second chunk: kind "text_stream" — should NOT start with "> "
-      const secondChunk = onDisplay.mock.calls[1]?.[0];
-      expect(secondChunk.kind).toBe("text_stream");
-      expect(secondChunk.text).not.toMatch(/^> /);
     });
   });
 });
