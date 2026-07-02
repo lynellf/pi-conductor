@@ -34,7 +34,9 @@ export type ManifestWarningCode =
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
   | "no-cheaper-fallback"
   /** A role's `tools:` omits `handoff` or `end`; host force-injects (§8.1). */
-  | "missing-required-tool";
+  | "missing-required-tool"
+  /** A role's `models[].entry` provider is not registered in the runtime `ModelRegistry` (host-side advisory check). */
+  | "unregistered-provider";
 
 export interface ManifestError {
   readonly code: ManifestErrorCode;

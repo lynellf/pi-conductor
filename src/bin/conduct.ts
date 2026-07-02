@@ -176,6 +176,9 @@ function createCliUiContext(input: Readable, output: Writable): ExtensionUIConte
  * the entrypoint at the bottom of this file does that. Tests
  * pass a recording `exit` and assert on the returned code +
  * recorded codes.
+ *
+ * Warnings from the load-time `unregistered-provider` check are
+ * written to stderr before the run begins.
  */
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<number> {
   const {
@@ -225,7 +228,23 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     const handle = await startRunImpl(manifestAbs, {
       goal: parsed.goal,
       hostFactory,
+      modelRegistry,
     });
+
+    // Surface any load-time provider-registration warnings (advisory only).
+    // Warnings are printed to stderr before `runLoop` so the user sees
+    // the preflight result before any runtime errors. The aggregated
+    // message names every affected role + entry.
+    const unregisteredWarnings = handle.loadedManifest.warnings.filter(
+      (w) => w.code === "unregistered-provider",
+    );
+    if (unregisteredWarnings.length > 0) {
+      const entries = unregisteredWarnings.map((w) => w.message).join("; ");
+      out.error(
+        `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
+      );
+    }
+
     const { finalCheckpoint, exitReason } = await handle.completion();
     out.log(
       `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}`,

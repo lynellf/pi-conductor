@@ -73,6 +73,15 @@ function makeCompletionHandle(runId: string) {
     // to set the current-orchestrator slot for the display
     // sink's `is_orchestrator` derivation.
     def: { orchestrator: "orchestrator" },
+    // Phase 7D: the handler reads `handle.loadedManifest.warnings`
+    // to surface `"unregistered-provider"` advisories.
+    loadedManifest: {
+      def: {} as Record<string, unknown>,
+      manifest: { version: 1 } as Record<string, unknown>,
+      warnings: [],
+      manifestDir: null,
+      manifestVersion: 1,
+    } as never,
   };
 }
 

@@ -21,6 +21,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -148,5 +149,114 @@ describe("loadManifest — manifestDir is dirname(path) (Task 7D.2)", () => {
     expect(loaded.def.manifest_version).toBe("1");
     expect(loaded.manifest.roles).toHaveLength(1);
     expect(loaded.warnings).toEqual([]);
+  });
+});
+
+// ─── Provider-registration preflight check (Issue #6) ───────────────
+
+describe("checkModelProvidersRegistered — preflight advisory check (T2.9)", () => {
+  const MANIFEST_WITH_MODELS = `
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: ollama:robit/ornith:9b
+        effort: medium
+      - model: anthropic:claude-4
+        effort: high
+  - name: worker
+    max_visits: 3
+    models:
+      - model: ollama:robit/ornith:9b
+        effort: low
+`;
+
+  const MANIFEST_WITH_THREE_MISSING = `
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: provider-a:model-1
+        effort: medium
+      - model: provider-b:model-2
+        effort: medium
+      - model: provider-c:model-3
+        effort: medium
+`;
+
+  const MANIFEST_NO_MODELS = `
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    system_prompt: roles/orchestrator.md
+`;
+
+  function emptyRegistry(): ModelRegistry {
+    return ModelRegistry.inMemory(AuthStorage.inMemory());
+  }
+
+  function registryWithAnthropic(): ModelRegistry {
+    const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+    // Override find to return a model only for "anthropic" without
+    // calling registerProvider (which requires SDK-internal config).
+    registry.find = (provider: string) => {
+      if (provider === "anthropic") return {} as never;
+      return undefined;
+    };
+    return registry;
+  }
+
+  it("emits unregistered-provider warning when registry find returns undefined", () => {
+    const loaded = loadManifestFromString(MANIFEST_WITH_MODELS, null, emptyRegistry());
+    // Both roles use ollama which is not registered; anthropic also not registered.
+    const unregistered = loaded.warnings.filter((w) => w.code === "unregistered-provider");
+    // 3 entries total: orchestrator has ollama + anthropic (both miss), worker has ollama (miss)
+    expect(unregistered).toHaveLength(3);
+    expect(unregistered[0]?.message).toContain("orchestrator");
+    expect(unregistered[0]?.message).toContain("ollama:robit/ornith:9b");
+  });
+
+  it("no warning when registry find returns a model", () => {
+    const loaded = loadManifestFromString(MANIFEST_WITH_MODELS, null, registryWithAnthropic());
+    const unregistered = loaded.warnings.filter((w) => w.code === "unregistered-provider");
+    // Only anthropic resolves; ollama entries still miss.
+    expect(unregistered).toHaveLength(2);
+    expect(unregistered.every((w) => w.message.includes("ollama"))).toBe(true);
+  });
+
+  it("no unregistered-provider warning when no ModelRegistry is passed (back-compat)", () => {
+    const loaded = loadManifestFromString(MANIFEST_WITH_MODELS);
+    const unregistered = loaded.warnings.filter((w) => w.code === "unregistered-provider");
+    expect(unregistered).toHaveLength(0);
+  });
+
+  it("roles without models are skipped (system-model path)", () => {
+    const loaded = loadManifestFromString(MANIFEST_NO_MODELS, null, emptyRegistry());
+    const unregistered = loaded.warnings.filter((w) => w.code === "unregistered-provider");
+    expect(unregistered).toHaveLength(0);
+  });
+
+  it("per-entry granularity: three missing entries → three warnings", () => {
+    const loaded = loadManifestFromString(MANIFEST_WITH_THREE_MISSING, null, emptyRegistry());
+    const unregistered = loaded.warnings.filter((w) => w.code === "unregistered-provider");
+    expect(unregistered).toHaveLength(3);
+  });
+
+  it("hard errors still block: bare-model-alias throws before preflight check runs", () => {
+    const bareAliasManifest = `
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: bare-alias
+        effort: medium
+`;
+    expect(() => loadManifestFromString(bareAliasManifest, null, emptyRegistry())).toThrow(
+      HostManifestError,
+    );
   });
 });

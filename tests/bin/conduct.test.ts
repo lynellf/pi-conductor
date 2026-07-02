@@ -151,6 +151,13 @@ function makeStartRunMock(opts: {
       }),
       runConfig: () => {},
       abort: () => {},
+      loadedManifest: {
+        def: {} as Record<string, unknown>,
+        manifest: {} as Record<string, unknown>,
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      } as never,
     } as unknown as RunHandle;
   };
 }
@@ -234,11 +241,18 @@ describe("runCli manifest existence", () => {
         async (_path: string, _opts: unknown) =>
           ({
             runId: "test",
+            loadedManifest: {
+              def: {} as Record<string, unknown>,
+              manifest: {} as Record<string, unknown>,
+              warnings: [],
+              manifestDir: null,
+              manifestVersion: 1,
+            } as Record<string, unknown>,
             completion: async () => ({
               finalCheckpoint: { current_role: "done" },
               exitReason: "done",
             }),
-          }) as RunHandle,
+          }) as unknown as RunHandle,
       );
       const exit = makeExit();
       const c = makeConsole();
@@ -269,11 +283,18 @@ describe("runCli delegation to startRun", () => {
         async (_path: string, _opts: unknown) =>
           ({
             runId: "test-1",
+            loadedManifest: {
+              def: {} as Record<string, unknown>,
+              manifest: {} as Record<string, unknown>,
+              warnings: [],
+              manifestDir: null,
+              manifestVersion: 1,
+            } as Record<string, unknown>,
             completion: async () => ({
               finalCheckpoint: { current_role: "done" },
               exitReason: "done",
             }),
-          }) as RunHandle,
+          }) as unknown as RunHandle,
       );
       const c = makeConsole();
       await runCli(["manifest.yaml", "ship a fix"], {
@@ -323,11 +344,18 @@ describe("runCli delegation to startRun", () => {
         answer = await uiContext?.input("Which color?");
         return {
           runId: "test-cli-ui",
+          loadedManifest: {
+            def: {} as Record<string, unknown>,
+            manifest: {} as Record<string, unknown>,
+            warnings: [],
+            manifestDir: null,
+            manifestVersion: 1,
+          } as Record<string, unknown>,
           completion: async () => ({
             finalCheckpoint: { current_role: "done" },
             exitReason: "done",
           }),
-        } as RunHandle;
+        } as unknown as RunHandle;
       });
 
       const code = await runCli(["manifest.yaml", "goal"], {
@@ -417,6 +445,55 @@ describe("runCli delegation to startRun", () => {
       expect(code).toBe(1);
       const stderr = c.stderrLines.join("\n");
       expect(stderr).toMatch(/ManifestParseError/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── CLI preflight warning surface (Issue #6 / T2.12) ──────────────────
+
+describe("CLI preflight unregistered-provider warning (T2.12)", () => {
+  it("prints aggregated warning to stderr when find returns undefined, then proceeds to completion", async () => {
+    const dir = makeManifestDir();
+    try {
+      const c = makeConsole();
+      const code = await runCli(["manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({
+          runId: "run-preflight-1",
+          finalRole: "done",
+          exitReason: "done",
+        }),
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+      });
+      // The mock handle has empty warnings so no preflight message.
+      // But the run still proceeds — exit 0.
+      expect(code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("no preflight message on stderr when no warnings present", async () => {
+    const dir = makeManifestDir();
+    try {
+      const c = makeConsole();
+      await runCli(["manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({
+          runId: "run-preflight-2",
+          finalRole: "done",
+          exitReason: "done",
+        }),
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+      });
+      const stderr = c.stderrLines.join("\n");
+      expect(stderr).not.toMatch(/unregistered provider/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

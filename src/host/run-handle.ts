@@ -41,6 +41,7 @@ import { buildRunMemory, type RunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import type { RecordLog } from "../persistence/log.js";
 import { applyRunConfigOverride } from "./config.js";
+import type { LoadedManifest } from "./manifest.js";
 import { type RunStats, runStats, type TransitionRecord } from "./stats.js";
 
 // Re-export the public types so existing consumers
@@ -78,6 +79,16 @@ export class RunHandle {
   readonly runId: string;
   readonly def: MachineDefinition;
   readonly log: RecordLog;
+  /**
+   * The `LoadedManifest` that was used to start or resume this run.
+   * Carries the pinned `def`, parsed `manifest`, and any load-time
+   * warnings (including advisory `"unregistered-provider"` warnings
+   * from the host-side `checkModelProvidersRegistered` check).
+   *
+   * Read-only — set once in the constructor and never mutated.
+   * See `LoadedManifest` in `./manifest.ts` for the full shape.
+   */
+  readonly loadedManifest: LoadedManifest;
   private readonly completionPromise: Promise<{
     finalCheckpoint: Checkpoint;
     exitReason: "done" | "session_failed" | "aborted";
@@ -98,6 +109,7 @@ export class RunHandle {
     runId: string;
     def: MachineDefinition;
     log: RecordLog;
+    loadedManifest: LoadedManifest;
     configOverrideContainer: ConfigOverrideContainer;
     requestAbort: (reason: string) => Promise<void>;
     completionPromise: Promise<{
@@ -108,6 +120,7 @@ export class RunHandle {
     this.runId = opts.runId;
     this.def = opts.def;
     this.log = opts.log;
+    this.loadedManifest = opts.loadedManifest;
     this.configOverrideContainer = opts.configOverrideContainer;
     this.requestAbort = opts.requestAbort;
     this.completionPromise = opts.completionPromise;

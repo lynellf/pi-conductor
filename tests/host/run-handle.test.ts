@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type { MachineDefinition } from "../../src/core/types.js";
+import type { LoadedManifest } from "../../src/host/manifest.js";
 import { RunHandle } from "../../src/host/run-handle.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
 
@@ -30,6 +31,13 @@ describe("RunHandle.abort()", () => {
       runId: checkpoint.run_id,
       def,
       log,
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
       configOverrideContainer: { current: {} },
       requestAbort,
       completionPromise: Promise.resolve({
@@ -45,5 +53,65 @@ describe("RunHandle.abort()", () => {
     expect(requestAbort).not.toHaveBeenCalled();
     expect(handle.isAborted()).toEqual({ aborted: false, reason: null });
     expect(handle.runStats().exitReason).toBe("done");
+  });
+});
+
+describe("RunHandle.loadedManifest (T2.11)", () => {
+  it("constructor stores and exposes loadedManifest as the same reference", () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const manifestStub: LoadedManifest = {
+      def,
+      manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+      warnings: [],
+      manifestDir: null,
+      manifestVersion: 1,
+    };
+
+    const handle = new RunHandle({
+      runId: "test-loaded-manifest",
+      def,
+      log,
+      loadedManifest: manifestStub,
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: new Promise(() => {
+        // never resolves — the test doesn't await completion().
+      }),
+    });
+
+    // Reference equality: the handle exposes the exact same object.
+    expect(handle.loadedManifest).toBe(manifestStub);
+    // Read-only surface (no setters — access is just a property read).
+    expect(handle.loadedManifest.def).toBe(def);
+    expect(handle.loadedManifest.warnings).toEqual([]);
+  });
+
+  it("loadedManifest is read-only (no setter exposed)", () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const manifestStub: LoadedManifest = {
+      def,
+      manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+      warnings: [],
+      manifestDir: null,
+      manifestVersion: 1,
+    };
+
+    const handle = new RunHandle({
+      runId: "test-loaded-manifest-ro",
+      def,
+      log,
+      loadedManifest: manifestStub,
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: new Promise(() => {
+        // never resolves.
+      }),
+    });
+
+    // The field is `readonly` — TS catches writes. At runtime,
+    // reading the field returns the original reference.
+    expect(handle.loadedManifest.manifestVersion).toBe(1);
   });
 });

@@ -57,6 +57,8 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+
 import { createInitialCheckpoint } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type { Checkpoint, MachineDefinition, Role, SessionLifecycleEvent } from "../core/types.js";
@@ -82,6 +84,16 @@ export interface StartRunOptions {
    * `resumeRun`; the host is NOT reused across resumes.
    */
   readonly hostFactory: (ctx: HostFactoryContext) => Host;
+  /**
+   * Optional runtime `ModelRegistry` for the load-time provider-registration
+   * advisory check (`checkModelProvidersRegistered`). When provided,
+   * every `role.models[].entry` is checked against the registry;
+   * unregistered providers emit `"unregistered-provider"` warnings on
+   * the returned `RunHandle.loadedManifest.warnings`.
+   * When omitted (the default), the check is skipped — behavior is
+   * unchanged from prior releases.
+   */
+  readonly modelRegistry?: ModelRegistry;
 }
 
 /** Top-level options for `resumeRun`. */
@@ -91,6 +103,13 @@ export interface ResumeRunOptions {
   /** Goal text for any resumed orchestrator session. */
   readonly goal: string;
   readonly hostFactory: (ctx: HostFactoryContext) => Host;
+  /**
+   * Optional runtime `ModelRegistry` for the load-time provider-registration
+   * advisory check. Mirrors `StartRunOptions.modelRegistry` — same
+   * semantics, surfaced on `RunHandle.loadedManifest.warnings` after
+   * `resumeRun` returns. When omitted, the check is skipped.
+   */
+  readonly modelRegistry?: ModelRegistry;
 }
 
 /** Context passed to the host factory on each run start / resume. */
@@ -116,7 +135,10 @@ export interface HostFactoryContext {
  * enters the orchestration loop.
  */
 export async function startRun(manifestPath: string, opts: StartRunOptions): Promise<RunHandle> {
-  const loaded = await loadManifest(manifestPath);
+  const loaded = await loadManifest(
+    manifestPath,
+    opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
+  );
   const baseDir = await resolveBaseDir(opts.baseDir);
   const log = new FileRecordLog({ baseDir });
   const def = loaded.def;
@@ -172,7 +194,12 @@ export async function resumeRun(
   // The snapshot's manifest_version is the canonical link to the
   // manifest that was active when the run started; a mismatch
   // means the manifest was edited mid-run, which §10 forbids.
-  const loaded = await loadManifest(manifestPath);
+  // The optional modelRegistry also runs the advisory provider-registration
+  // check on resume — same registry → same warnings, no double-fire concern.
+  const loaded = await loadManifest(
+    manifestPath,
+    opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
+  );
   if (loaded.def.manifest_version !== checkpoint.manifest_version) {
     throw new Error(
       `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${loaded.def.manifest_version}' (§10)`,
@@ -281,6 +308,7 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     runId,
     def,
     log,
+    loadedManifest,
     configOverrideContainer,
     requestAbort: abortControl.requestAbort,
     completionPromise: completionPromise.then((r) => ({

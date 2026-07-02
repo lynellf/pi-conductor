@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Host driver
+- Warn at load time when a `role.models[].entry` is not registered in the `ModelRegistry` (advisory `unregistered-provider` warning; issue #6). Surfaced on the extension `/conduct` and `/conduct:resume` paths (via `ctx.ui.notify`) and on the `conduct` CLI (via stderr). The runtime `ModelNotFoundError` is unchanged.
+
+### Documentation
+- Document the `subscribeToRecords` contract surface in `docs/record-emitter-spec.md` (issue #5). No behavior change.
+
 ## [0.5.2] - 2026-06-30
 
 ### Bug fixes
