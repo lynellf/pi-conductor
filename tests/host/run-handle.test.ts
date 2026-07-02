@@ -115,3 +115,103 @@ describe("RunHandle.loadedManifest (T2.11)", () => {
     expect(handle.loadedManifest.manifestVersion).toBe(1);
   });
 });
+
+describe("RunHandle.originalGoal()", () => {
+  it("returns empty string when no run_seeded record exists", () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    log.append({ type: "checkpoint_snapshot", checkpoint: createInitialCheckpoint(def) });
+
+    const handle = new RunHandle({
+      runId: createInitialCheckpoint(def).run_id,
+      def,
+      log,
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: new Promise(() => {
+        // never resolves.
+      }),
+    });
+
+    expect(handle.originalGoal()).toBe("");
+  });
+
+  it("returns the goal from the latest run_seeded record", () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const cp = createInitialCheckpoint(def);
+    log.append({ type: "checkpoint_snapshot", checkpoint: cp });
+    log.append({
+      type: "run_seeded",
+      run_id: cp.run_id,
+      goal: "fix the bug in foo.ts",
+      ts: Date.now(),
+    });
+
+    const handle = new RunHandle({
+      runId: cp.run_id,
+      def,
+      log,
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: new Promise(() => {
+        // never resolves.
+      }),
+    });
+
+    expect(handle.originalGoal()).toBe("fix the bug in foo.ts");
+  });
+
+  it("returns the latest goal when multiple run_seeded records exist", () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const cp = createInitialCheckpoint(def);
+    log.append({ type: "checkpoint_snapshot", checkpoint: cp });
+    log.append({
+      type: "run_seeded",
+      run_id: cp.run_id,
+      goal: "first goal",
+      ts: 100,
+    });
+    log.append({
+      type: "run_seeded",
+      run_id: cp.run_id,
+      goal: "latest goal",
+      ts: 200,
+    });
+
+    const handle = new RunHandle({
+      runId: cp.run_id,
+      def,
+      log,
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: new Promise(() => {
+        // never resolves.
+      }),
+    });
+
+    expect(handle.originalGoal()).toBe("latest goal");
+  });
+});

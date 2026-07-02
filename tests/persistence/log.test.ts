@@ -142,4 +142,64 @@ describe("InMemoryRecordLog", () => {
     expect(log.records("run-1")).toEqual([]);
     expect(log.listRunIds()).toEqual([]);
   });
+
+  // ─── latestRunSeed ────────────────────────────────────────────
+
+  it("latestRunSeed returns null for a run with no run_seeded record", () => {
+    const log = new InMemoryRecordLog();
+    log.append(ended("orchestrator", 0.5));
+    expect(log.latestRunSeed("run-1")).toBeNull();
+  });
+
+  it("latestRunSeed returns the goal from the latest run_seeded record", () => {
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "run_seeded",
+      run_id: "run-1",
+      goal: "fix the bug",
+      ts: 100,
+    });
+    expect(log.latestRunSeed("run-1")).toBe("fix the bug");
+  });
+
+  it("latestRunSeed returns the most recent run_seeded when multiple exist", () => {
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "run_seeded",
+      run_id: "run-1",
+      goal: "original goal",
+      ts: 100,
+    });
+    log.append({
+      type: "run_seeded",
+      run_id: "run-1",
+      goal: "updated goal",
+      ts: 200,
+    });
+    expect(log.latestRunSeed("run-1")).toBe("updated goal");
+  });
+
+  it("latestRunSeed returns null for a run_id that does not exist", () => {
+    const log = new InMemoryRecordLog();
+    expect(log.latestRunSeed("nonexistent-run")).toBeNull();
+  });
+
+  it("latestRunSeed walks only the requested run (per-run isolation)", () => {
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "run_seeded",
+      run_id: "run-a",
+      goal: "fix run-a",
+      ts: 100,
+    });
+    log.append({
+      type: "run_seeded",
+      run_id: "run-b",
+      goal: "fix run-b",
+      ts: 200,
+    });
+    expect(log.latestRunSeed("run-a")).toBe("fix run-a");
+    expect(log.latestRunSeed("run-b")).toBe("fix run-b");
+    expect(log.latestRunSeed("run-c")).toBeNull();
+  });
 });

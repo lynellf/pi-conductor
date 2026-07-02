@@ -222,6 +222,16 @@ export class RunHandle {
     return buildRunMemory(effectiveCheckpoint, records, this.def, { goal, runCostCap });
   }
 
+  /**
+   * The original run seed goal from the persisted `run_seeded` record,
+   * or `""` if no seed record exists (run started before this feature
+   * shipped).
+   */
+  originalGoal(): string {
+    const goal = this.log.latestRunSeed(this.runId);
+    return goal !== null ? goal : "";
+  }
+
   // ─── Internals ──────────────────────────────────────────────
 
   /**

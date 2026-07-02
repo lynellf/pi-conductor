@@ -63,7 +63,7 @@ import { createInitialCheckpoint } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type { Checkpoint, MachineDefinition, Role, SessionLifecycleEvent } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
-import type { CheckpointSnapshot, RecordLog } from "../persistence/log.js";
+import type { CheckpointSnapshot, RecordLog, RunSeededRecord } from "../persistence/log.js";
 import type { Host, RoleSession } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -153,6 +153,18 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   };
   log.append(initialSnapshot);
 
+  // Persist the run_seeded record with the original goal (§8.4).
+  // Written right after the initial snapshot so resumeRun can
+  // reconstruct the goal from the log. The record is host-owned
+  // and non-machine-event — the reducer never inspects it.
+  const seedRecord: RunSeededRecord = {
+    type: "run_seeded",
+    run_id: runId,
+    goal: opts.goal,
+    ts: Date.now(),
+  };
+  log.append(seedRecord);
+
   const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
   void opts.goal; // goal is unused by runLoop directly; Task 16.5 wires it into the orchestrator seed
 
@@ -211,7 +223,12 @@ export async function resumeRun(
   const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
 
   const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
-  void opts.goal;
+
+  // Restore the original goal from the run log (if available).
+  // Falls back to opts.goal (which may be "") for runs that
+  // pre-date this feature.
+  const seedGoal = log.latestRunSeed(runId);
+  const goal = seedGoal !== null ? seedGoal : opts.goal;
 
   return await runWithCompletion({
     runId,
@@ -219,7 +236,7 @@ export async function resumeRun(
     log,
     host,
     initialCheckpoint: reconciledCheckpoint,
-    goal: opts.goal,
+    goal,
     loadedManifest: loaded,
   });
 }

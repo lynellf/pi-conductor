@@ -67,6 +67,17 @@ export class FileRecordLog implements RecordLog {
     return null;
   }
 
+  latestRunSeed(runId: string): string | null {
+    const records = this.records(runId);
+    for (let i = records.length - 1; i >= 0; i--) {
+      const r = records[i];
+      if (r && r.type === "run_seeded") {
+        return r.goal;
+      }
+    }
+    return null;
+  }
+
   records(runId: string): readonly PersistedRecord[] {
     const filePath = this.filePath(runId);
     if (!existsSync(filePath)) return Object.freeze([]);
