@@ -10,7 +10,7 @@ tags:
   - model
   - resolution
   - validation
-updated_at: 2026-06-30
+updated_at: 2026-07-01
 ---
 # Summary
 
@@ -59,5 +59,8 @@ validator regex is a shape-only smoke test.
 
 # Related
 
+- `.okf/concepts/manifest-validation-boundary.md` — the strict boundary
+  between static structural validation (§13) and runtime availability
+  checks (host-side, preflight).
 - `.okf/concepts/manifest-validation.md` (none yet — future doc about the
   §13 manifest check pipeline would reference this).

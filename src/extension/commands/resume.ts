@@ -111,11 +111,27 @@ export async function handleResume(
       goal: "",
       hostFactory,
       baseDir,
+      modelRegistry,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     ctx.ui.notify(`Cannot resume run ${runId}: ${message}`, "error");
     return;
+  }
+
+  // Surface any load-time provider-registration warnings (advisory only).
+  // The check runs on resume too — a freshly-loaded manifest with the
+  // same registry produces the same warnings, which is correct (the
+  // registry contents may have changed since start).
+  const unregisteredWarnings = handle.loadedManifest.warnings.filter(
+    (w) => w.code === "unregistered-provider",
+  );
+  if (unregisteredWarnings.length > 0) {
+    const entries = unregisteredWarnings.map((w) => w.message).join("; ");
+    ctx.ui.notify(
+      `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
+      "warning",
+    );
   }
 
   setActiveRun(handle);

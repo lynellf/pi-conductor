@@ -1,16 +1,21 @@
 /**
- * Record emitter tests — spec §9, `docs/record-emitter-spec.md`.
+ * Record emitter tests — `docs/record-emitter-spec.md` §7.
+ *
+ * This file is the authoritative test surface for the record-emitter
+ * contract. Every clause in `docs/record-emitter-spec.md` §4 is
+ * exercised here. The test-to-spec mapping is documented in §7 of
+ * the spec doc.
  *
  * Covers:
- *   1. Listener fires on every persistRecord call
- *   2. Multiple listeners fire in subscription order (FIFO)
- *   3. Sync throw in one listener is isolated
- *   4. Async rejection in one listener is isolated
- *   5. Re-entrant subscribe fires on the NEXT record
- *   6. Re-entrant unsubscribe takes effect on the NEXT record
- *   7. Unsubscribe is idempotent
- *   8. No listeners registered is a no-op
- *   9. run_id filter on the consumer side is correct
+ *   1. Listener fires on every persistRecord call (§4.1)
+ *   2. Multiple listeners fire in subscription order (FIFO) (§4.2)
+ *   3. Sync throw in one listener is isolated (§4.4)
+ *   4. Async rejection in one listener is isolated (§4.4)
+ *   5. Re-entrant subscribe fires on the NEXT record (§4.5)
+ *   6. Re-entrant unsubscribe takes effect on the NEXT record (§4.5)
+ *   7. Unsubscribe is idempotent (§4.6)
+ *   8. No listeners registered is a no-op (§4.7)
+ *   9. run_id filter on the consumer side is correct (§4.1)
  *
  * Tests use `subscribeToRecords` (from the public barrel), the
  * `StubHost` with `InMemoryRecordLog`, and both direct `persistRecord`
