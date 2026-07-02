@@ -34,6 +34,13 @@
  * `the TUI bridge polish spec Diagnosis).
  * Any code fences the LLM emits (```…```) are rendered as code
  * blocks by the markdown theme's native handling.
+ *
+ * ## Phase 1 (open-issues-round-2) — no more text_stream
+ *
+ * Text now emits as a single `conduct.role.text` per assistant turn
+ * (on `message_end`). The `text_stream` DisplayEventKind is no longer
+ * emitted by the host, so the sink no longer handles it. Tool events
+ * remain per-event.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -70,29 +77,6 @@ export function createConductDisplaySink(sendMessage: ExtensionAPI["sendMessage"
       };
       sendMessage({
         customType: "conduct.role.text",
-        content: event.text,
-        display: true,
-        details,
-      });
-      return;
-    }
-
-    // Stream continuation chunks: emit as `conduct.role.text_stream`.
-    // Label-less by design — the renderer ignores `is_orchestrator`
-    // and produces no role label (N12). We still stamp `kind` as
-    // `"text_stream"` for the renderer to distinguish from labeled
-    // text, and `role` for grep-ability.
-    if (event.kind === "text_stream") {
-      // is_orchestrator is always false: the label-less renderer
-      // (conduct.role.text_stream) never uses it for coloring.
-      // Stamped for structural consistency with the details contract.
-      const details: ConductMessageDetails = {
-        role: event.role,
-        kind: "text_stream",
-        is_orchestrator: false,
-      };
-      sendMessage({
-        customType: "conduct.role.text_stream",
         content: event.text,
         display: true,
         details,

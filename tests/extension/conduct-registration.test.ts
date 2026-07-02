@@ -94,17 +94,17 @@ describe("extension shell — Task 7B.1: registration", () => {
     }
   });
 
-  it("registers conduct.role.text, conduct.role.text_stream, and conduct.role.tool renderers", async () => {
+  it("registers conduct.role.text and conduct.role.tool renderers", async () => {
     // Phase 7B.UX restored the `conduct.role.tool` customType for
     // tool-call and tool-result display events.
-    // tui-stream-readability Phase 1 added conduct.role.text_stream
-    // for label-less stream continuation chunks.
+    // Phase 1 (open-issues-round-2): `conduct.role.text_stream` removed -
+    // text now emits as a single `conduct.role.text` per assistant turn.
     const ext = await loadExtension("<test>", cwd);
     expect(ext.messageRenderers.has("conduct.role.text")).toBe(true);
-    expect(ext.messageRenderers.has("conduct.role.text_stream")).toBe(true);
     expect(ext.messageRenderers.has("conduct.role.tool")).toBe(true);
     expect(ext.messageRenderers.get("conduct.role.text")).toBeTypeOf("function");
-    expect(ext.messageRenderers.get("conduct.role.text_stream")).toBeTypeOf("function");
     expect(ext.messageRenderers.get("conduct.role.tool")).toBeTypeOf("function");
+    // Verify text_stream is NOT registered
+    expect(ext.messageRenderers.has("conduct.role.text_stream")).toBe(false);
   });
 });

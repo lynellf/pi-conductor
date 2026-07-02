@@ -4,6 +4,12 @@
  * A role session can expose assistant text and tool activity to the
  * host TUI without mutating the session tree. The host emits these
  * events, and the extension maps them to custom messages.
+ *
+ * Phase 1 (open-issues-round-2): `text_stream` no longer emitted -
+ * text now appears as a single `"text"` event per assistant turn
+ * at `message_end`. The `text_stream` variant is retained in the
+ * type for external code that may pattern-match on the full union,
+ * but the host never emits it.
  */
 
 import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
@@ -13,11 +19,13 @@ import type { Role } from "../core/types.js";
 /**
  * Display event kind forwarded from a role session.
  *
- * - `"text"` — A labeled role text event. Used for full non-streamed
- *   messages and the first visible chunk of a streamed assistant message.
- * - `"text_stream"` — A label-less continuation chunk of a streamed
- *   assistant message (display-only; not a machine event).
- * - `"tool_call"` / `"tool_result"` — Tool activity summaries.
+ * - `"text"` — A labeled role text event. Used for full assistant
+ *   messages (emitted once per `message_end`).
+ * - `"tool_call"` / `"tool_result"` — Tool activity summaries
+ *   (emitted per event, unchanged).
+ *
+ * `text_stream` is retained in the type for backward compatibility
+ * but is no longer emitted by the host (Phase 1).
  */
 export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_result";
 
