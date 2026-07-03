@@ -1,12 +1,78 @@
 # Changelog
 
-## [Unreleased]
+## [0.5.3] - 2026-07-03
 
 ### Host driver
-- Warn at load time when a `role.models[].entry` is not registered in the `ModelRegistry` (advisory `unregistered-provider` warning; issue #6). Surfaced on the extension `/conduct` and `/conduct:resume` paths (via `ctx.ui.notify`) and on the `conduct` CLI (via stderr). The runtime `ModelNotFoundError` is unchanged.
+- **Pre-flight check: warn on unregistered providers** (issue #6,
+  commit `44a4397`). At manifest-load time, when a `ModelRegistry`
+  is supplied to `loadManifest` / `loadManifestFromString`, an
+  advisory `"unregistered-provider"` warning is emitted for each
+  `role.models[].entry` pair not registered in pi's runtime
+  registry. Surfaced on the extension `/conduct` and `/conduct:resume`
+  paths via `ctx.ui.notify` and on the `conduct` CLI via stderr.
+  The runtime `ModelNotFoundError` from `spawnRole` is unchanged —
+  providers registered by extensions that load after conductor
+  (or dynamically) still resolve at use time. Spec:
+  `docs/archive/issues-5-and-6/phase-2-provider-preflight.md`.
+- **Resume context restores the original goal** (issue #9, commits
+  `2145f53` and `566e9ee`). `startRun` now appends a new
+  `run_seeded` record to the log immediately after the initial
+  `checkpoint_snapshot`; `resumeRun` reads the latest `run_seeded`
+  for the run and uses its `goal` as `initialGoal`. New
+  `RunHandle.originalGoal(): string` seam surfaces the persisted
+  goal for diagnostics. Pre-existing in-flight runs (no
+  `run_seeded` record on disk) fall back to the previous
+  empty-goal behavior — no regression. Spec:
+  `docs/archive/open-issues-round-2/phase-2-issue-9-resume-context.md`.
+
+### Bug fixes
+- **Disjointed TUI output** (issue #8, commit `6f962f2`). Text and
+  thinking content from a role's assistant turn now render as one
+  continuous block in pi's TUI instead of as multiple visually-
+  separated chunks. Root cause: pi's `CustomMessageComponent`
+  hardcodes a leading `Spacer(1)` per `CustomMessage`, and the
+  per-chunk `conduct.role.text_stream` emissions each inserted a
+  fresh `CustomMessage` (with its Spacer). Fix: buffer chunks and
+  emit exactly one `conduct.role.text` `CustomMessage` per turn
+  at `message_end`. The `text_stream` `DisplayEventKind` variant
+  is retained internally; the `text_stream` key is removed from
+  `ConductMessageKind` and `createConductMessageRenderers`. Tool
+  events (`conduct.role.tool`) remain per-event — they are
+  atomic. **Behavior change:** live progressive text rendering is
+  gone; the role's text and thinking appear all at once at
+  `message_end`. Spec:
+  `docs/archive/open-issues-round-2/phase-1-issue-8-tui-disjointed.md`.
 
 ### Documentation
-- Document the `subscribeToRecords` contract surface in `docs/record-emitter-spec.md` (issue #5). No behavior change.
+- **`subscribeToRecords` contract surface** (issue #5). The full
+  contract (FIFO ordering, fire-and-forget async, sync-throw and
+  async-rejection isolation, re-entrant subscribe/unsubscribe,
+  idempotent unsubscribe, empty-set fast path, durable backstop,
+  out-of-scope) is documented at `docs/record-emitter-spec.md`
+  (~166 lines added). No behavior change.
+
+### Notes
+- No breaking changes to the public API surface — `src/index.ts`
+  is unchanged. The `subscribeToRecords` / `startRun` / `resumeRun`
+  / `listRuns` / `createProductionHost` / `getDefaultBundle`
+  exports from 0.5.0 hold. The only renderer-map delta
+  (`conduct.role.text_stream` removed) is renderer-registry
+  internals; no library consumer is expected to register against
+  that customType.
+- Two host-internal modules were deleted:
+  `src/host/boundary-flush.ts` and `src/host/markdown-continuation.ts`.
+  Neither was re-exported from `src/index.ts`. The
+  `STREAM_FLUSH_THRESHOLD_CHARS` and `MAX_FLUSH_WINDOW_CHARS`
+  constants are gone with them.
+- New `PersistedRecord` variant `run_seeded` (host-owned,
+  non-machine-event; the reducer never branches on it). Existing
+  readers that exhaustively switch on `PersistedRecord.type` need
+  a new arm; the project's OOS log (`src/persistence/log.ts:44`)
+  is type-driven and in-repo readers are updated.
+- The grep-guard test (`tests/grep-guard.test.ts`) and the
+  `no-ctx.newSession` / `no-ctx.fork` extension grep guard
+  continue to pass — no code outside `src/host/` and
+  `src/extension/` (and the corresponding tests) was touched.
 
 ## [0.5.2] - 2026-06-30
 
