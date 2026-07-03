@@ -14,7 +14,7 @@
  */
 
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   type AskUserUnavailableError,
@@ -57,6 +57,14 @@ function makeUi() {
 }
 
 describe("createAskUserTool", () => {
+  beforeEach(() => {
+    // Ensure real timers are active even if fake timers leaked from
+    // a previous test file (isolate:false). Some tests yield control
+    // via `await new Promise(res => setTimeout(res, 0))` which would
+    // hang forever under fake timers.
+    vi.useRealTimers();
+  });
+
   it("returns the typed text answer for `input` and keeps the capture buffer untouched", async () => {
     const seam = new SessionSeam();
     const ui = makeUi();

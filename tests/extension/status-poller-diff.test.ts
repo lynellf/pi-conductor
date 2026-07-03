@@ -119,11 +119,17 @@ function makeRecord(overrides: Partial<TransitionRecord> = {}): TransitionRecord
 }
 
 describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
+  let stopPoller: (() => void) | undefined;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    stopPoller = undefined;
   });
 
   afterEach(() => {
+    // Clean up the interval BEFORE restoring real timers so the
+    // fake timer queue is empty and no callbacks are orphaned.
+    stopPoller?.();
     vi.useRealTimers();
   });
 
@@ -137,7 +143,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
     ]);
     const newTransitions: Array<readonly TransitionRecord[]> = [];
 
-    startStatusPoller(handle, () => {}, {
+    stopPoller = startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
 
@@ -170,7 +176,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ transitionHistory: [r1] }), // tick 3: no new
     ]);
     const newTransitions: Array<readonly TransitionRecord[]> = [];
-    startStatusPoller(handle, () => {}, {
+    stopPoller = startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
 
@@ -210,7 +216,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       }), // tick 2: terminal + new end
     ]);
     const newTransitions: Array<readonly TransitionRecord[]> = [];
-    startStatusPoller(handle, (text) => setStatusCalls.push(text), {
+    stopPoller = startStatusPoller(handle, (text) => setStatusCalls.push(text), {
       onNewTransitions: (records) => newTransitions.push(records),
     });
 
@@ -237,7 +243,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
     // is not invoked.
     const { handle } = makeFakeHandle([makeStats({ transitionHistory: [] })]);
     const newTransitions: Array<readonly TransitionRecord[]> = [];
-    startStatusPoller(handle, () => {}, {
+    stopPoller = startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
     expect(newTransitions).toEqual([]);
@@ -273,7 +279,11 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ state: "done", exitReason: "done" }),
     ]);
     const setStatusCalls: Array<string | undefined> = [];
-    expect(() => startStatusPoller(handle, (text) => setStatusCalls.push(text))).not.toThrow();
+    // Capture the stop function for cleanup, using expect().not.toThrow()
+    // to verify the v1 call does not throw.
+    expect(() => {
+      stopPoller = startStatusPoller(handle, (text) => setStatusCalls.push(text));
+    }).not.toThrow();
     vi.advanceTimersByTime(250);
     const last = setStatusCalls[setStatusCalls.length - 1];
     expect(last).toBeUndefined();
@@ -295,7 +305,7 @@ describe("startStatusPoller — transition diff (Phase 8 B2)", () => {
       makeStats({ transitionHistory: [hist1, hist2, newRecord] }), // tick 1: new
     ]);
     const newTransitions: Array<readonly TransitionRecord[]> = [];
-    startStatusPoller(handle, () => {}, {
+    stopPoller = startStatusPoller(handle, () => {}, {
       onNewTransitions: (records) => newTransitions.push(records),
     });
 

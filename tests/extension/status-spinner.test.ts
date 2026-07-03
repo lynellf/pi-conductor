@@ -87,11 +87,17 @@ function makeFakeHandle(script: readonly RunStats[]): {
 }
 
 describe("startStatusPoller — spinner", () => {
+  let stopPoller: (() => void) | undefined;
+
   beforeEach(() => {
     vi.useFakeTimers();
+    stopPoller = undefined;
   });
 
   afterEach(() => {
+    // Clean up the interval BEFORE restoring real timers so the
+    // fake timer queue is empty and no callbacks are orphaned.
+    stopPoller?.();
     vi.useRealTimers();
   });
 
@@ -105,7 +111,7 @@ describe("startStatusPoller — spinner", () => {
     ]);
     const setStatusCalls: Array<string | undefined> = [];
 
-    startStatusPoller(handle, (text) => setStatusCalls.push(text));
+    stopPoller = startStatusPoller(handle, (text) => setStatusCalls.push(text));
 
     // Initial tick fires synchronously.
     expect(setStatusCalls).toHaveLength(1);
@@ -134,7 +140,7 @@ describe("startStatusPoller — spinner", () => {
     const { handle } = makeFakeHandle(stats);
     const setStatusCalls: Array<string | undefined> = [];
 
-    startStatusPoller(handle, (text) => setStatusCalls.push(text));
+    stopPoller = startStatusPoller(handle, (text) => setStatusCalls.push(text));
 
     // Advance through all 10 frames + 1 wrap
     for (let i = 0; i < frames + 1; i++) {
@@ -165,7 +171,7 @@ describe("startStatusPoller — spinner", () => {
     ]);
     const setStatusCalls: Array<string | undefined> = [];
 
-    startStatusPoller(handle, (text) => setStatusCalls.push(text));
+    stopPoller = startStatusPoller(handle, (text) => setStatusCalls.push(text));
 
     // Initial tick: spinner present
     expect(setStatusCalls).toHaveLength(1);
