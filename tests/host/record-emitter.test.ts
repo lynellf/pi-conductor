@@ -25,7 +25,7 @@
  * behavior per AGENTS.md testing convention.
  */
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runLoop } from "../../src/host/loop.js";
 import {
   type Checkpoint,
@@ -71,6 +71,14 @@ function sessionStarted(
 // (subscribeToRecords in vitest's isolated environment means each
 // test file gets its own module instance, so this is mainly a
 // defense-in-depth measure.)
+
+beforeEach(() => {
+  // Ensure real timers are active even if fake timers leaked from
+  // a previous test file (isolate:false). Case 4 uses
+  // `await new Promise((resolve) => setTimeout(resolve, 10))` which
+  // would hang forever under fake timers.
+  vi.useRealTimers();
+});
 
 afterEach(() => {
   // Tests clean up their own listeners via the returned unsubscribe
