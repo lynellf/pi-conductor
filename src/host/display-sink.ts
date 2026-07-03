@@ -10,6 +10,12 @@
  * at `message_end`. The `text_stream` variant is retained in the
  * type for external code that may pattern-match on the full union,
  * but the host never emits it.
+ *
+ * Phase 1 (open-issues-round-3, issue #12): `DisplayEvent` gains an
+ * optional `files` field carrying `TouchedFile` entries for
+ * file-mutating tool invocations (`write`, `edit`). Read-only tools
+ * (`read`, `grep`, `find`, `ls`) and machine tools (`handoff`, `end`,
+ * `ask_user`) never populate `files`. `bash` is out of scope for v1.
  */
 
 import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
@@ -29,11 +35,42 @@ import type { Role } from "../core/types.js";
  */
 export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_result";
 
+/**
+ * A single file mutation observed from a tool invocation.
+ *
+ * `additions` and `deletions` are **char-count** metrics derived from
+ * the tool's args — we don't have pre-write file content for `write`,
+ * so `write` always reports `deletions: 0`; `edit` sums `oldText` /
+ * `newText` length across its `edits[]` array. Char-count is the only
+ * metric derivable from args alone; a future iteration could swap in
+ * line-counts if RunDeck or other consumers require precision.
+ *
+ * @see extractFileMutations — the only caller that populates this type.
+ */
+export interface TouchedFile {
+  readonly path: string;
+  /** Char-count of new content introduced by the tool call. */
+  readonly additions?: number;
+  /** Char-count of content removed by the tool call. */
+  readonly deletions?: number;
+}
+
 /** Single display event from a role session. */
 export interface DisplayEvent {
   readonly role: Role;
   readonly kind: DisplayEventKind;
   readonly text: string;
+  /**
+   * Files touched by a mutating tool invocation. Populated only on
+   * successful `tool_result` events for `write` and `edit`
+   * (read-only and machine tools are excluded; `bash` is out of
+   * scope for v1 — see plan Open Question 1).
+   *
+   * Optional: consumers that don't need file annotations can ignore
+   * the field entirely. `text` and `tool_call` events never carry
+   * `files`.
+   */
+  readonly files?: ReadonlyArray<TouchedFile>;
 }
 
 /** Sink for display-only role events. */
@@ -106,4 +143,85 @@ function blockquote(text: string): string {
 function readableThinking(part: ThinkingContent): string {
   if (part.redacted) return "";
   return typeof part.thinking === "string" ? part.thinking : "";
+}
+
+// ─── Issue #12: file mutation extraction ───────────────────────────────
+
+/** Guard: is `val` a plain object? (not null, not array) */
+function isObject(val: unknown): val is Record<string, unknown> {
+  return typeof val === "object" && val !== null && !Array.isArray(val);
+}
+
+/**
+ * Extract the list of files a tool invocation touched, with optional
+ * additions/deletions char-counts.
+ *
+ * Returns:
+ * - `undefined` for non-mutating tools (`read`, `grep`, `find`, `ls`,
+ *   the conductor machine tools `handoff`/`end`/`ask_user`, and any
+ *   tool name not in `write`/`edit`). Callers use `undefined` to
+ *   distinguish "not applicable" from "no files matched."
+ * - A (possibly empty) `TouchedFile[]` for `write`/`edit` invocations.
+ *   Empty when `args` is missing the expected fields (e.g., an `edit`
+ *   call with no `edits` array, or a `write` call without a `content`
+ *   field) — caller may choose to emit `files: []` for diagnostics or
+ *   omit the field.
+ *
+ * **Metric unit:** char-count. `write` always reports `deletions: 0`
+ * because the previous file content is not in the tool args; only
+ * the new content is observable. `edit` sums `oldText.length` /
+ * `newText.length` across the `edits[]` array.
+ *
+ * **Pure function** — no I/O, no SDK coupling beyond the typed
+ * `args: unknown` shape. Unit-testable in isolation; does not import
+ * from `@earendil-works/pi-coding-agent` (lives in `src/host/`).
+ *
+ * @param toolName - The tool name from the SDK event.
+ * @param args - The `args` field (typed `unknown` to match the
+ *               SDK's `any` at the call site; widening is safe).
+ */
+export function extractFileMutations(
+  toolName: string,
+  args: unknown,
+): ReadonlyArray<TouchedFile> | undefined {
+  switch (toolName) {
+    case "write": {
+      if (!isObject(args)) return [];
+      const path = typeof args.path === "string" ? args.path : undefined;
+      if (path === undefined) return [];
+      // Require content to be a string; non-string content means the
+      // tool args don't match the expected shape → return [].
+      if (typeof args.content !== "string") return [];
+      return [{ path, additions: args.content.length, deletions: 0 }];
+    }
+
+    case "edit": {
+      if (!isObject(args)) return [];
+      const path = typeof args.path === "string" ? args.path : undefined;
+      if (path === undefined) return [];
+      const rawEdits = args.edits;
+      if (!Array.isArray(rawEdits) || rawEdits.length === 0) return [];
+      let additions = 0;
+      let deletions = 0;
+      for (const edit of rawEdits) {
+        if (isObject(edit)) {
+          if (typeof edit.newText === "string") additions += edit.newText.length;
+          if (typeof edit.oldText === "string") deletions += edit.oldText.length;
+        }
+      }
+      return [{ path, additions, deletions }];
+    }
+
+    case "read":
+    case "grep":
+    case "find":
+    case "ls":
+    case "handoff":
+    case "end":
+    case "ask_user":
+      return undefined;
+
+    default:
+      return undefined;
+  }
 }

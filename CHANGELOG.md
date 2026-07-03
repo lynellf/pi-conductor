@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.6.0] - 2026-07-03
+
+### Enhancement
+- **DisplayEvent carries `files` for file-mutating tools** (issue #12).
+  `DisplayEvent` gains an optional `files?: ReadonlyArray<TouchedFile>`
+  field, populated by the host on successful `tool_result` events for
+  the `write` and `edit` built-in tools. Each `TouchedFile` entry
+  carries `path`, `additions` (char-count of new content), and
+  `deletions` (char-count of removed content). For `write`, `deletions`
+  is always `0` because pre-write content is not observable from tool
+  args; `edit` reports summed char-counts across its `edits[]` array.
+  Read-only tools (`read`, `grep`, `find`, `ls`) and machine tools
+  (`handoff`, `end`, `ask_user`) never populate `files`; `bash` is
+  out of scope for this release. Consumers that don't need file
+  annotations can ignore the field entirely; the TUI bridge is
+  unchanged. New `extractFileMutations(toolName, args)` pure helper
+  in `src/host/display-sink.ts`. Spec:
+  `docs/open-issues-round-3/phase-1-issue-12-touched-files.md`.
+
+### Bug fixes
+- **Issue #11 closed as already implemented.** The per-chunk
+  `text_stream` emission described in issue #11 was removed in commit
+  `6f962f2` (Phase 1, open-issues-round-2) — the same commit that
+  fixed the related #8 TUI disjointed output bug. One
+  `DisplayEvent` per assistant turn at `message_end` has been the
+  behavior since 0.5.3 (pinned by `tests/host/display-forwarding.test.ts`
+  "Single-emit per turn" describe block). No code change.
+
+### Notes
+- No breaking changes to the public API surface. The `files` field
+  is optional and additive; consumers that don't read it are unaffected.
+  The grep-guard test (`tests/grep-guard.test.ts`) and the
+  `no-ctx.newSession`/`no-ctx.fork` extension grep guard continue to
+  pass — the new code stays in `src/host/`.
+- Two new test files: `tests/host/display-sink.test.ts` (pure unit
+  tests for `extractFileMutations`, 25 cases) and extended
+  `tests/host/display-forwarding.test.ts` (7 new integration cases
+  for the wired `files` behavior).
+
 ## [0.5.3] - 2026-07-03
 
 ### Host driver

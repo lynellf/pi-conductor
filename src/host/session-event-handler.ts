@@ -41,7 +41,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
 import type { SessionState } from "./cost.js";
-import { type DisplaySink, extractAssistantText } from "./display-sink.js";
+import { type DisplaySink, extractAssistantText, extractFileMutations } from "./display-sink.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -57,6 +57,10 @@ import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.j
  * so by the time `createAgentSession` returns the state already
  * reflects the session's first events (typically none — the
  * `prompt()` call drives emissions).
+ *
+ * **Display sink (`onDisplay`):** `tool_result` events may carry a
+ * `files` field when the tool is `write` or `edit` and the
+ * execution succeeded (issue #12, open-issues-round-3).
  */
 export function attachSessionEventHandler(args: {
   session: AgentSession;
@@ -64,13 +68,14 @@ export function attachSessionEventHandler(args: {
   role: Role;
   onDisplay?: DisplaySink;
 }): void {
-  // Per-session buffer: toolCallId → invocation summary. The
-  // shared displaySink is wired into every role session;
+  // Per-session buffer: toolCallId → { summary, args }.
+  // The args are needed at `tool_execution_end` to populate
+  // `DisplayEvent.files` for write/edit tools (issue #12).
   // toolCallId is unique within a session, so a closure-scoped
   // Map avoids cross-session collisions without needing the
   // sessionId — fine because each session gets its own
   // onSessionEvent via attachSessionEventHandler.
-  const pending = new Map<string, string>();
+  const pending = new Map<string, { summary: string; args: unknown }>();
 
   args.session.subscribe((event) =>
     onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending),
@@ -129,27 +134,42 @@ function onSessionEvent(
   role: Role,
   onDisplay: DisplaySink | undefined,
   event: AgentSessionEvent,
-  pending: Map<string, string>,
+  pending: Map<string, { summary: string; args: unknown }>,
 ): void {
   if (event.type === "tool_execution_start") {
-    // Buffer the invocation summary; do NOT emit a tool_call
+    // Buffer the invocation summary and args; do NOT emit a tool_call
     // event (spec: tool-display-combine-status — combine at end).
     const summary = formatToolCallSummary(event.toolName, event.args);
     if (summary !== null) {
-      pending.set(event.toolCallId, summary);
+      pending.set(event.toolCallId, { summary, args: event.args });
     }
     return;
   }
 
   if (event.type === "tool_execution_end") {
-    // Look up the buffered summary from the matching start event
-    // (if any). Orphaned ends (no matching start) get undefined
+    // Look up the buffered { summary, args } from the matching start
+    // event (if any). Orphaned ends (no matching start) get undefined
     // and formatToolCompletedLine returns null → no emit.
-    const summary = pending.get(event.toolCallId);
+    const buffered = pending.get(event.toolCallId);
     pending.delete(event.toolCallId);
-    const line = formatToolCompletedLine(summary, event.result, event.isError);
+    const line = formatToolCompletedLine(buffered?.summary, event.result, event.isError);
     if (line !== null) {
-      onDisplay?.({ role, kind: "tool_result", text: line });
+      // Issue #12 (open-issues-round-3): attach `files` for
+      // mutating tool invocations on success only. `extractFileMutations`
+      // returns `undefined` for non-mutating tools (read-only, machine);
+      // returns `[]` for mutating tools with malformed args (no field).
+      // On error we omit the field entirely since the workspace may
+      // not have been mutated. Use the spread-with-condition pattern
+      // so the field is absent (not `undefined`) when not applicable.
+      const files = event.isError
+        ? undefined
+        : extractFileMutations(event.toolName, buffered?.args);
+      onDisplay?.({
+        role,
+        kind: "tool_result",
+        text: line,
+        ...(files !== undefined && files.length > 0 && { files }),
+      });
     }
     return;
   }
