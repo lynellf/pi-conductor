@@ -41,7 +41,14 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
 import type { SessionState } from "./cost.js";
-import { type DisplaySink, extractAssistantText, extractFileMutations } from "./display-sink.js";
+import {
+  type DisplaySink,
+  extractAssistantText,
+  extractFileHunks,
+  extractFileMutations,
+  type HunkLine,
+} from "./display-sink.js";
+import { loadWriteHunksForArgs } from "./hunk-diff.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
 
 // ─── Public API ─────────────────────────────────────────────────────
@@ -61,6 +68,10 @@ import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.j
  * **Display sink (`onDisplay`):** `tool_result` events may carry a
  * `files` field when the tool is `write` or `edit` and the
  * execution succeeded (issue #12, open-issues-round-3).
+ *
+ * Issue #13 (open-issues-round-3): `files[].hunks` is populated for
+ * `edit` (synchronous) and `write` (synchronous via pre-read at
+ * `tool_execution_start`) when structured diff hunks can be computed.
  */
 export function attachSessionEventHandler(args: {
   session: AgentSession;
@@ -68,14 +79,28 @@ export function attachSessionEventHandler(args: {
   role: Role;
   onDisplay?: DisplaySink;
 }): void {
-  // Per-session buffer: toolCallId → { summary, args }.
+  // Per-session buffer: toolCallId → { summary, args, writeHunks }.
   // The args are needed at `tool_execution_end` to populate
   // `DisplayEvent.files` for write/edit tools (issue #12).
+  // Issue #13: for `write` tools, `writeHunks` holds structured diff
+  // hunks computed synchronously at `tool_execution_start` (pre-mutation
+  // file read via loadWriteHunksForArgs).
   // toolCallId is unique within a session, so a closure-scoped
   // Map avoids cross-session collisions without needing the
   // sessionId — fine because each session gets its own
   // onSessionEvent via attachSessionEventHandler.
-  const pending = new Map<string, { summary: string; args: unknown }>();
+  const pending = new Map<
+    string,
+    {
+      summary: string;
+      args: unknown;
+      /** Structured diff hunks for `write` tool invocations.
+       *  Computed at `tool_execution_start` (pre-mutation, synchronous);
+       *  consumed at `tool_execution_end` for emission. `undefined` on
+       *  read failure (graceful degradation: char-counts still flow). */
+      writeHunks?: ReadonlyArray<HunkLine> | undefined;
+    }
+  >();
 
   args.session.subscribe((event) =>
     onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending),
@@ -127,6 +152,9 @@ export function createCaptureRejector(): CaptureRejector {
  * `SessionState` and (for cap detection) calls
  * `session.abort()`. The loop owns the rest (record shape,
  * `reduceLifecycle`, persistence).
+ *
+ * **Issue #13 (`hunks`):** `tool_execution_end` emits `files[].hunks`
+ * for `edit` (synchronous) and `write` (synchronous via pre-read).
  */
 function onSessionEvent(
   session: AgentSession,
@@ -134,44 +162,90 @@ function onSessionEvent(
   role: Role,
   onDisplay: DisplaySink | undefined,
   event: AgentSessionEvent,
-  pending: Map<string, { summary: string; args: unknown }>,
+  pending: Map<
+    string,
+    {
+      summary: string;
+      args: unknown;
+      writeHunks?: ReadonlyArray<HunkLine> | undefined;
+    }
+  >,
 ): void {
   if (event.type === "tool_execution_start") {
     // Buffer the invocation summary and args; do NOT emit a tool_call
     // event (spec: tool-display-combine-status — combine at end).
     const summary = formatToolCallSummary(event.toolName, event.args);
     if (summary !== null) {
-      pending.set(event.toolCallId, { summary, args: event.args });
+      const entry: {
+        summary: string;
+        args: unknown;
+        writeHunks?: ReadonlyArray<HunkLine> | undefined;
+      } = { summary, args: event.args };
+
+      // Issue #13: capture the previous file content for `write` so we
+      // can produce structured diff hunks at `tool_execution_end`. The
+      // file is still pre-mutation here; reading post-tool would yield
+      // `args.content` (useless for diffing). Fire-and-forget — failures
+      // are swallowed in `loadWriteHunksForArgs` (returns `undefined`).
+      if (event.toolName === "write") {
+        entry.writeHunks = loadWriteHunksForArgs(event.args);
+      }
+
+      pending.set(event.toolCallId, entry);
     }
     return;
   }
 
   if (event.type === "tool_execution_end") {
-    // Look up the buffered { summary, args } from the matching start
-    // event (if any). Orphaned ends (no matching start) get undefined
-    // and formatToolCompletedLine returns null → no emit.
+    // Look up the buffered { summary, args, writeOldContentPromise }
+    // from the matching start event (if any). Orphaned ends (no matching
+    // start) get undefined and formatToolCompletedLine returns null →
+    // no emit.
     const buffered = pending.get(event.toolCallId);
     pending.delete(event.toolCallId);
     const line = formatToolCompletedLine(buffered?.summary, event.result, event.isError);
-    if (line !== null) {
-      // Issue #12 (open-issues-round-3): attach `files` for
-      // mutating tool invocations on success only. `extractFileMutations`
-      // returns `undefined` for non-mutating tools (read-only, machine);
-      // returns `[]` for mutating tools with malformed args (no field).
-      // On error we omit the field entirely since the workspace may
-      // not have been mutated. Use the spread-with-condition pattern
-      // so the field is absent (not `undefined`) when not applicable.
-      const files = event.isError
-        ? undefined
-        : extractFileMutations(event.toolName, buffered?.args);
+    if (line === null) return;
+
+    if (event.isError) {
+      // Errors omit `files` entirely (Phase 1 contract).
+      onDisplay?.({ role, kind: "tool_result", text: line });
+      return;
+    }
+
+    const mutations = extractFileMutations(event.toolName, buffered?.args);
+
+    // Helper: emit a `tool_result` display event with the given hunks
+    // attached to the existing mutations (or omit hunks if none).
+    const emit = (hunks?: ReadonlyArray<HunkLine>): void => {
+      const files =
+        mutations !== undefined && mutations.length > 0
+          ? mutations.map((f) => (hunks && hunks.length > 0 ? { ...f, hunks } : f))
+          : undefined;
       onDisplay?.({
         role,
         kind: "tool_result",
         text: line,
-        ...(files !== undefined && files.length > 0 && { files }),
+        ...(files !== undefined && { files }),
       });
+    };
+
+    // `edit` — pure, hunks from args.
+    if (event.toolName === "edit") {
+      emit(extractFileHunks(event.toolName, buffered?.args));
+      return;
     }
-    return;
+
+    // `write` — synchronous hunks already computed at tool_execution_start
+    // via loadWriteHunksForArgs (pre-mutation file read). Emit with the
+    // computed hunks (or undefined on read failure → emit without hunks).
+    const writeHunks = buffered?.writeHunks;
+    if (event.toolName === "write" && writeHunks !== undefined) {
+      emit(writeHunks);
+      return;
+    }
+
+    // Other tools: emit without hunks.
+    emit();
   }
 
   // Phase 1 (open-issues-round-2): `message_update` no longer emits

@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.7.1] - 2026-07-05
+
+### Enhancement
+- **Structured diff hunks in `TouchedFile`** (issue #13).
+  `TouchedFile` gains an optional `hunks?: ReadonlyArray<HunkLine>`
+  field populated by the host on successful `tool_result` events for
+  `write` and `edit` built-in tools. `HunkLine` carries `lineNumber`,
+  `content` (with `+`/`-` prefix for add/del lines), and `kind`
+  (`add | del | context`). New types `HunkLine` and `TouchedFile.hunks`
+  in `src/host/display-sink.ts`. New module `src/host/hunk-diff.ts` with
+  `parseDiffHunks` (pure diff parsing via `diff` package),
+  `buildWriteHunks` (write-tool hunk builder), and
+  `loadWriteHunksForArgs` (async disk read at `tool_execution_start`
+  for pre-mutation content capture). `edit` tool produces pure hunks
+  from `args.edits[]`; `write` tool produces hunks by diffing captured
+  pre-write content against `args.content`. New files (no prior content)
+  get all-`add` hunks; disk read failures degrade gracefully (char-counts
+  still flow, `hunks` absent). `extractFileHunks(toolName, args)` pure
+  helper added to `src/host/display-sink.ts` for `edit` tool.
+
+### Bug fixes
+- **Test assertions fixed for `diff` library behavior.** The hunk-diff
+  tests and display-forwarding integration tests now correctly reflect
+  the `diff` package's line-by-line output format. Line number
+  tracking correctly handles deletions and additions with cumulative
+  offset calculation. Tests updated in `tests/host/hunk-diff.test.ts` and
+  `tests/host/display-forwarding.test.ts`.
+
+### Notes
+- No breaking changes to the public API surface. `hunks` is optional
+  and additive; consumers that don't read it are unaffected. The
+  grep-guard test (`tests/grep-guard.test.ts`) and the
+  `no-ctx.newSession`/`no-ctx.fork` extension grep guard continue to
+  pass.
+- TypeScript strict mode enforced; all `noNonNullAssertion` lint
+  warnings fixed in test files.
+
 ## [0.6.0] - 2026-07-03
 
 ### Enhancement
