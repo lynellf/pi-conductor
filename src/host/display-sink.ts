@@ -16,6 +16,14 @@
  * file-mutating tool invocations (`write`, `edit`). Read-only tools
  * (`read`, `grep`, `find`, `ls`) and machine tools (`handoff`, `end`,
  * `ask_user`) never populate `files`. `bash` is out of scope for v1.
+ *
+ * Phase 2 (open-issues-round-3, issue #13): `TouchedFile` gains an
+ * optional `hunks` field carrying `HunkLine` entries for `write`
+ * and `edit` invocations where a structured line-level diff is
+ * available. `edit` produces pure hunks from `args.edits[]`; `write`
+ * requires an async disk read at `tool_execution_start` (pre-mutation)
+ * and diffs against `args.content` at `tool_execution_end` (~1–5 ms
+ * deferred emission).
  */
 
 import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
@@ -36,6 +44,36 @@ import type { Role } from "../core/types.js";
 export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_result";
 
 /**
+ * A single line in a structured diff hunk (issue #13).
+ *
+ * `lineNumber` is the position of the line in the appropriate file:
+ *   - `add` lines → line number in the **new** file.
+ *   - `del` lines → line number in the **old** file.
+ *   - `context` lines → line number in the **new** file.
+ *
+ * `content` carries the rendered line text with a marker prefix
+ * (`+` for `add`, `-` for `del`, none for `context`) so consumers
+ * can render unified-diff-style output without re-classifying.
+ *
+ * **Edit-only line numbers:** for `edit` tool hunks (no surrounding
+ * context), `add` line numbers count from 1 (synthetic new-file
+ * position) and `del` line numbers count from 1 (synthetic old-file
+ * position). The issue body explicitly accepts "hunks may be
+ * edit-only without full-file context" — the alternative is to read
+ * the file at `tool_execution_start`, which is deferred.
+ *
+ * For `write` tool hunks (full file read), `lineNumber` reflects
+ * the real file positions because we diff against the captured
+ * pre-write content.
+ */
+export interface HunkLine {
+  readonly lineNumber: number;
+  /** Line content with `+`/`-` prefix for `add`/`del` lines. */
+  readonly content: string;
+  readonly kind: "add" | "del" | "context";
+}
+
+/**
  * A single file mutation observed from a tool invocation.
  *
  * `additions` and `deletions` are **char-count** metrics derived from
@@ -45,7 +83,22 @@ export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_resu
  * metric derivable from args alone; a future iteration could swap in
  * line-counts if RunDeck or other consumers require precision.
  *
- * @see extractFileMutations — the only caller that populates this type.
+ * `hunks` is a structured line-level diff, populated only when the
+ * host can compute one (issue #13):
+ *   - `edit` — pure derivation from `args.edits[]` (changed lines
+ *     only; sequential line numbers).
+ *   - `write` — async I/O against the previous file content,
+ *     captured at `tool_execution_start`. New files (no prior content)
+ *     get all-`add` hunks starting from line 1.
+ *   - Absent for read-only, machine, and `bash` tools; absent when
+ *     args are malformed or the disk read fails (graceful degradation:
+ *     char-counts still flow, `hunks` is absent).
+ *
+ * Optional and additive — consumers that don't read `hunks` are
+ * unaffected.
+ *
+ * @see extractFileMutations — populates `additions` / `deletions`.
+ * @see extractFileHunks — populates `hunks` for `edit`.
  */
 export interface TouchedFile {
   readonly path: string;
@@ -53,6 +106,27 @@ export interface TouchedFile {
   readonly additions?: number;
   /** Char-count of content removed by the tool call. */
   readonly deletions?: number;
+  /**
+   * Structured diff hunks for this file (issue #13).
+   *
+   * Populated only on successful tool invocations when hunks can be
+   * computed:
+   *   - `edit` — pure derivation from `args.edits[]` (changed lines
+   *     only; sequential line numbers).
+   *   - `write` — async I/O against the previous file content,
+   *     captured at `tool_execution_start`. New files (no prior
+   *     content) get all-`add` hunks starting from line 1.
+   *
+   * Absent for read-only tools (`read`, `grep`, `find`, `ls`),
+   * machine tools (`handoff`, `end`, `ask_user`), `bash` (out of
+   * scope for v1), and any case where the args are malformed or
+   * the disk read fails (graceful degradation: char-counts still
+   * flow, `hunks` is absent).
+   *
+   * Optional and additive — consumers that don't read `hunks` are
+   * unaffected.
+   */
+  readonly hunks?: ReadonlyArray<HunkLine>;
 }
 
 /** Single display event from a role session. */
@@ -148,7 +222,7 @@ function readableThinking(part: ThinkingContent): string {
 // ─── Issue #12: file mutation extraction ───────────────────────────────
 
 /** Guard: is `val` a plain object? (not null, not array) */
-function isObject(val: unknown): val is Record<string, unknown> {
+export function isObject(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null && !Array.isArray(val);
 }
 
@@ -224,4 +298,69 @@ export function extractFileMutations(
     default:
       return undefined;
   }
+}
+
+// ─── Issue #13: hunk extraction ──────────────────────────────────────
+
+/**
+ * Pure helper: produce structured diff hunks for a tool invocation
+ * from its args. No filesystem I/O — `write` requires the previous
+ * content to be supplied by the caller (use `loadWriteHunksForArgs`
+ * from `hunk-diff.ts`).
+ *
+ * Returns:
+ *   - `undefined` for non-mutating tools (`read`, `grep`, `find`,
+ *     `ls`, machine tools, unknown tools). Callers omit the field.
+ *   - `[]` for mutating tools whose args don't match the expected
+ *     shape (graceful degradation).
+ *   - `HunkLine[]` for `edit` (pure: derived from `args.edits[]`'s
+ *     `oldText`/`newText` pairs — changed lines only, sequential
+ *     line numbers).
+ *   - `undefined` for `write` (caller must supply the previous
+ *     content via `loadWriteHunksForArgs`; `extractFileHunks` cannot
+ *     do I/O by contract).
+ *
+ * @param toolName - The tool name from the SDK event.
+ * @param args - The `args` field from the tool event.
+ */
+export function extractFileHunks(
+  toolName: string,
+  args: unknown,
+): ReadonlyArray<HunkLine> | undefined {
+  if (toolName !== "edit") return undefined;
+  if (!isObject(args)) return [];
+  const rawEdits = args.edits;
+  if (!Array.isArray(rawEdits) || rawEdits.length === 0) return [];
+  const hunks: HunkLine[] = [];
+
+  for (const edit of rawEdits) {
+    if (!isObject(edit)) continue;
+    const oldText = typeof edit.oldText === "string" ? edit.oldText : "";
+    const newText = typeof edit.newText === "string" ? edit.newText : "";
+    // Per-edit sequential line numbers: del and add counters each start at 1
+    // for each edit (sequential; the issue accepts edit-only without
+    // full-file context line numbers).
+    let delLine = 1;
+    let addLine = 1;
+
+    // Emit del lines for this edit first (standard unified-diff order)
+    const oldLines = oldText.split("\n");
+    for (let i = 0; i < oldLines.length; i++) {
+      const line = oldLines[i];
+      // Drop trailing empty element from trailing newline
+      if (i === oldLines.length - 1 && line === "") break;
+      hunks.push({ lineNumber: delLine++, content: `-${line}`, kind: "del" });
+    }
+
+    // Emit add lines for this edit
+    const newLines = newText.split("\n");
+    for (let i = 0; i < newLines.length; i++) {
+      const line = newLines[i];
+      // Drop trailing empty element from trailing newline
+      if (i === newLines.length - 1 && line === "") break;
+      hunks.push({ lineNumber: addLine++, content: `+${line}`, kind: "add" });
+    }
+  }
+
+  return hunks;
 }

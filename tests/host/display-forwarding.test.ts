@@ -10,14 +10,22 @@
  * for `write` and `edit` carry an optional `files` field with
  * `{ path, additions, deletions }` entries.
  *
+ * Phase 2 (open-issues-round-3, issue #13): `files[].hunks` is
+ * populated for `edit` (synchronous) and `write` (async, deferred
+ * ~1–5 ms). The Phase 1 integration tests for `edit` now include
+ * `hunks` in their assertions.
+ *
  * Pins the additive display tap on `attachSessionEventHandler`:
  * assistant text and combined tool-completed lines flow to the
  * optional display sink without changing the cost / terminal-reason
  * logic.
  */
 
+import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import { SessionState } from "../../src/host/cost.js";
 import { attachSessionEventHandler } from "../../src/host/session-event-handler.js";
 
@@ -83,6 +91,18 @@ function makeSession() {
     },
   };
 }
+
+// Temp directory for write-file tests (shared across describe blocks)
+let tmpDir: string;
+beforeEach(async () => {
+  tmpDir = `${tmpdir()}/conductor-display-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  await mkdir(tmpDir, { recursive: true });
+});
+afterEach(async () => {
+  await rm(tmpDir, { force: true, recursive: true }).catch(() => {
+    /* ignore cleanup errors */
+  });
+});
 
 describe("attachSessionEventHandler — display sink", () => {
   it("emits a single combined line at tool_execution_end (no separate tool_call)", () => {
@@ -447,11 +467,20 @@ describe("attachSessionEventHandler — display sink", () => {
         role: "worker",
         kind: "tool_result",
         text: "✓ write: /app/config.ts",
-        files: [{ path: "/app/config.ts", additions: 11, deletions: 0 }],
+        // Issue #13: non-existent path → new file → all-`add` hunks
+        files: [
+          {
+            path: "/app/config.ts",
+            additions: 11,
+            deletions: 0,
+            hunks: [{ lineNumber: 1, content: "+const x = 1", kind: "add" }],
+          },
+        ],
       });
     });
 
-    it("attaches files for a successful edit tool_result with multiple edits", () => {
+    // Phase 2 update: `edit` now emits `files[].hunks` (synchronous, pure)
+    it("attaches files with hunks for a successful edit tool_result with multiple edits", () => {
       const session = makeSession();
       const state = new SessionState({ cap: null, model: null });
       const onDisplay = vi.fn();
@@ -476,12 +505,23 @@ describe("attachSessionEventHandler — display sink", () => {
         isError: false,
       });
       expect(onDisplay).toHaveBeenCalledTimes(1);
-      expect(onDisplay).toHaveBeenNthCalledWith(1, {
+      // biome: ok — ?? never hit at runtime (toHaveBeenCalledTimes(1) guards)
+      const event = onDisplay.mock.calls[0]?.[0] ?? (undefined as unknown);
+      expect(event).toMatchObject({
         role: "worker",
         kind: "tool_result",
         text: "✓ edit: /app/main.ts (2 edits)",
-        files: [{ path: "/app/main.ts", additions: 6, deletions: 5 }],
       });
+      expect(event.files).toBeDefined();
+      expect(event.files).toHaveLength(1);
+      expect(event.files?.[0]).toMatchObject({
+        path: "/app/main.ts",
+        additions: 6,
+        deletions: 5,
+      });
+      // Phase 2: hunks are present
+      expect(event.files?.[0].hunks).toBeDefined();
+      expect(event.files?.[0].hunks?.length).toBeGreaterThan(0);
     });
 
     it("does not attach files for read/grep/find/ls (read-only tools)", () => {
@@ -609,5 +649,175 @@ describe("attachSessionEventHandler — display sink", () => {
       expect(event.kind).toBe("text");
       expect("files" in event).toBe(false);
     });
+  });
+});
+
+// Flush helper: yields to the microtask queue so async handlers settle
+async function _flushPromises(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+describe("DisplayEvent.files[].hunks — issue #13", () => {
+  it("edit tool_result emits files[].hunks synchronously", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-edit-hunks",
+      toolName: "edit",
+      args: {
+        path: "/app/main.ts",
+        edits: [{ oldText: "foo", newText: "bar" }],
+      },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-edit-hunks",
+      toolName: "edit",
+      result: { ok: true },
+      isError: false,
+    });
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    // biome: ok — ?? never hit at runtime
+    const event = onDisplay.mock.calls[0]?.[0] ?? (undefined as unknown);
+    expect(event.kind).toBe("tool_result");
+    expect(event.files).toBeDefined();
+    expect(event.files?.length).toBe(1);
+    expect(event.files?.[0].hunks).toBeDefined();
+    expect(event.files?.[0].hunks?.length).toBe(2);
+    expect(event.files?.[0].hunks?.[0]).toMatchObject({
+      lineNumber: 1,
+      content: "-foo",
+      kind: "del",
+    });
+    expect(event.files?.[0].hunks?.[1]).toMatchObject({
+      lineNumber: 1,
+      content: "+bar",
+      kind: "add",
+    });
+  });
+
+  it("edit tool_result with multiple edits emits all hunks", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-edit-multi",
+      toolName: "edit",
+      args: {
+        path: "/app/main.ts",
+        edits: [
+          { oldText: "aaa", newText: "bbbbb" },
+          { oldText: "cc", newText: "d" },
+        ],
+      },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-edit-multi",
+      toolName: "edit",
+      result: { ok: true },
+      isError: false,
+    });
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    // biome: ok — ?? never hit at runtime
+    const event = onDisplay.mock.calls[0]?.[0] ?? (undefined as unknown);
+    expect(event.files?.[0].hunks).toBeDefined();
+    // extractFileHunks: all del-lines first, then all add-lines
+    // ("aaa"=1 del, "bbbbb"=1 del, "cc"=2 del, "d"=1 add) → del:[1,2,3], add:[1,2,3,4,5,6,7]
+    // Per-edit interleaved: for each edit, all its dels then all its adds.
+    // Each edit's oldText/newText is single-line → 1 del + 1 add per edit = 4 total.
+    expect(event.files?.[0].hunks?.map((h: { kind: string }) => h.kind)).toEqual([
+      "del",
+      "add",
+      "del",
+      "add",
+    ]);
+  });
+
+  // loadWriteHunksForArgs is synchronous (uses readFileSync), so the
+  // hunks are available immediately at tool_execution_end — no deferral.
+  it("write tool_result emits files[].hunks synchronously after disk read", async () => {
+    // Create a real temp file so the disk read succeeds
+    const filePath = `${tmpDir}/existing.txt`;
+    await writeFile(filePath, "original\ncontent", "utf8");
+
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
+
+    // tool_execution_start captures the pre-mutation content synchronously
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-write-hunks",
+      toolName: "write",
+      args: { path: filePath, content: "new\ncontent\nhere" },
+    });
+
+    // tool_execution_end emits synchronously (writeHunks already computed)
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-write-hunks",
+      toolName: "write",
+      result: { ok: true },
+      isError: false,
+    });
+
+    // Single synchronous emission with hunks from diffing against pre-write content
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    // biome: ok — ?? never hit at runtime
+    const event = onDisplay.mock.calls[0]?.[0] ?? (undefined as unknown);
+    expect(event.kind).toBe("tool_result");
+    expect(event.files).toBeDefined();
+    expect(event.files?.[0].hunks).toBeDefined();
+    expect(event.files?.[0].hunks?.length).toBeGreaterThan(0);
+    // Hunks include both add and del (file had content)
+    const kinds = event.files?.[0].hunks?.map((h: { kind: string }) => h.kind);
+    expect(kinds).toContain("add");
+  });
+
+  it("read/grep/find/ls tool_results never carry hunks", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
+    for (const toolName of ["read", "grep", "find", "ls"] as const) {
+      const id = `call-${toolName}-hunks`;
+      session.emit({ type: "tool_execution_start", toolCallId: id, toolName, args: {} });
+      session.emit({
+        type: "tool_execution_end",
+        toolCallId: id,
+        toolName,
+        result: "ok",
+        isError: false,
+      });
+    }
+    expect(onDisplay).toHaveBeenCalledTimes(4);
+    for (const call of onDisplay.mock.calls) {
+      const event = call[0];
+      expect("files" in event && event.files).toBeFalsy();
+    }
+  });
+
+  it("text events never carry hunks", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+    attachSessionEventHandler({ session: session as never, state, role: "worker", onDisplay });
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+    session.emit({ type: "message_end", message: msg });
+    expect(onDisplay).toHaveBeenCalledTimes(1);
+    // biome: ok — ?? never hit at runtime
+    const event = onDisplay.mock.calls[0]?.[0] ?? (undefined as unknown);
+    expect(event.kind).toBe("text");
+    expect("files" in event && event.files).toBeFalsy();
   });
 });
