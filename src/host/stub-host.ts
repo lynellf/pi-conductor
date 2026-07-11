@@ -58,7 +58,8 @@ import type {
 } from "../index.js";
 import { SessionState } from "./cost.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
-import type { SessionTerminalReason } from "./host.js";
+import { createHandoffContextTool } from "./handoff-context-tool.js";
+import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
@@ -124,7 +125,7 @@ export class StubHost implements Host {
     this.sessionManager = SessionManager.inMemory();
   }
 
-  async spawnRole(role: Role, opts: { modelIndex?: number } = {}): Promise<RoleSession> {
+  async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
     // ── Task 18: model-fallback policy ─────────────────────────
     // §9.4 v1 default: hand to orchestrator once, then escalate.
     // The "unavailable" marker is set when the role's models were
@@ -165,6 +166,8 @@ export class StubHost implements Host {
     const modelIndex = opts.modelIndex ?? 0;
     let logicalModel: string | null = null;
     let effort: ModelEffort = DEFAULT_MODEL_EFFORT;
+    let retries = 0;
+    let retryDelayMs = 0;
     if (roleConfig?.models !== undefined) {
       if (roleConfig.models.length > 0) {
         if (modelIndex >= roleConfig.models.length) {
@@ -180,6 +183,8 @@ export class StubHost implements Host {
         if (entry !== undefined) {
           logicalModel = entry.model;
           effort = entry.effort;
+          retries = entry.retries ?? 0;
+          retryDelayMs = entry.retry_delay_ms ?? 0;
         }
       }
     }
@@ -197,12 +202,16 @@ export class StubHost implements Host {
     const rejector = createCaptureRejector();
     const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
     const end = createEndTool(seam, rejector.shouldRejectCapture);
+    const handoffContext =
+      opts.handoffContextRef === undefined
+        ? null
+        : createHandoffContextTool(opts.handoffContextRef);
 
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       model: this.model,
       modelRegistry: this.modelRegistry,
-      tools: ["handoff", "end"],
-      customTools: [handoff, end],
+      tools: ["handoff", "end", ...(handoffContext === null ? [] : ["handoff_context"])],
+      customTools: [handoff, end, ...(handoffContext === null ? [] : [handoffContext])],
       sessionManager: this.sessionManager,
     };
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
@@ -229,6 +238,8 @@ export class StubHost implements Host {
       sessionFile: session.sessionFile ?? `/tmp/${stubId}.jsonl`,
       model: logicalModel,
       effort,
+      retries,
+      retryDelayMs,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
       subscribe: (listener) => session.subscribe(listener),

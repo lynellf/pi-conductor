@@ -83,4 +83,49 @@ describe("parseManifest", () => {
       ),
     ).toThrow(ManifestParseError);
   });
+
+  it("parses bounded retry settings on model entries", () => {
+    const manifest = parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: stub:primary
+        retries: 2
+        retry_delay_ms: 5000
+`);
+
+    expect(manifest.roles[0]?.models).toEqual([
+      { model: "stub:primary", effort: "medium", retries: 2, retry_delay_ms: 5000 },
+    ]);
+  });
+
+  it("rejects a retry delay above the bounded host limit", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: stub:primary
+        retry_delay_ms: 60001
+`),
+    ).toThrow("retry_delay_ms must be between 0 and 60000 milliseconds");
+  });
+
+  it("rejects an unbounded retry allowance", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: stub:primary
+        retries: 11
+`),
+    ).toThrow("retries must be between 0 and 10 additional attempts");
+  });
 });

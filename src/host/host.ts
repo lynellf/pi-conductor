@@ -49,6 +49,7 @@ import type {
 import type { RunMemory } from "../core/run-memory.js";
 import type {
   Checkpoint,
+  HandoffContextRef,
   MachineDefinition,
   ModelEffort,
   Role,
@@ -99,6 +100,10 @@ export interface RoleSession {
   readonly model: string | null;
   /** The effort / thinking level this session ran with (§8.1, §11.4). */
   readonly effort: ModelEffort;
+  /** Additional fresh-session attempts allowed for this model entry (§8.2). */
+  readonly retries?: number;
+  /** Delay before each same-model retry, in milliseconds (§8.2). */
+  readonly retryDelayMs?: number;
 
   /**
    * Read the per-session machine-event capture buffer (Task 14).
@@ -174,6 +179,11 @@ export interface SpawnRoleOptions {
    * until the list is exhausted (Task 18). Defaults to `0`.
    */
   readonly modelIndex?: number;
+  /**
+   * Host-generated predecessor pointer for the optional bounded context tool
+   * (issue #14). Callers must not derive this from model payload.
+   */
+  readonly handoffContextRef?: HandoffContextRef;
 }
 
 // ─── seedRunMemory args ────────────────────────────────────────────────

@@ -166,7 +166,20 @@ export async function loadSystemPrompt(
  *  disables them even when they're in `customTools`; sdk-surface.md §1).
  *  Dedups so they appear exactly once even if the role already names them.
  *  Order: declared tools first, then `handoff`, `end`, and `ask_user`. */
-export function buildToolsAllowlist(roleTools: readonly string[] | undefined): readonly string[] {
-  const declared = roleTools ?? [];
-  return Array.from(new Set([...declared, "handoff", "end", "ask_user"]));
+export function buildToolsAllowlist(
+  roleTools: readonly string[] | undefined,
+  includeHandoffContext = false,
+): readonly string[] {
+  const declared = (roleTools ?? []).filter(
+    (toolName) => toolName !== "handoff_context" || includeHandoffContext,
+  );
+  return Array.from(
+    new Set([
+      ...declared,
+      "handoff",
+      "end",
+      "ask_user",
+      ...(includeHandoffContext ? ["handoff_context"] : []),
+    ]),
+  );
 }

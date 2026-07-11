@@ -38,11 +38,32 @@ import { AskUserUnavailableError } from "./errors.js";
  */
 export const askUserArgsSchema = Type.Object(
   {
-    kind: Type.Unsafe({ type: "string", enum: ["input", "confirm", "select"] }),
-    prompt: Type.String({ minLength: 1 }),
-    options: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })),
+    kind: Type.Unsafe({
+      type: "string",
+      enum: ["input", "confirm", "select"],
+      description:
+        "Dialog control: input for free-form text, confirm for yes/no, select for one option.",
+    }),
+    prompt: Type.String({
+      minLength: 1,
+      description: "The question shown to the user.",
+    }),
+    options: Type.Optional(
+      Type.Array(Type.String({ minLength: 1 }), {
+        minItems: 1,
+        description: "Choices for select only; omit this field for input and confirm.",
+      }),
+    ),
   },
-  { additionalProperties: false },
+  {
+    additionalProperties: false,
+    description: "Ask a user for free-form text, a yes/no answer, or one supplied choice.",
+    examples: [
+      { kind: "input", prompt: "What should I clarify?" },
+      { kind: "confirm", prompt: "Proceed with the migration?" },
+      { kind: "select", prompt: "Which plan?", options: ["A", "B"] },
+    ],
+  },
 );
 
 type AskUserKind = "input" | "confirm" | "select";
@@ -88,6 +109,21 @@ function formatAnswer(kind: AskUserKind, answer: string | boolean | undefined): 
   return (answer as string | undefined) ?? "(no selection)";
 }
 
+function validateAskUserArgs(params: AskUserArgs): void {
+  if (params.kind === "select") {
+    if (params.options === undefined || params.options.length < 1) {
+      throw new Error("ask_user: 'select' kind requires a non-empty 'options' array");
+    }
+    return;
+  }
+
+  if (params.options !== undefined) {
+    throw new Error(
+      `ask_user: '${params.kind}' kind does not accept 'options'; use 'select' for multiple-choice questions`,
+    );
+  }
+}
+
 /**
  * Build the `ask_user` tool (spec §B). The host wires one instance
  * per role session, and the tool reads the UI from the execution
@@ -111,6 +147,10 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
     parameters: askUserArgsSchema,
     executionMode: "sequential",
     execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
+      // `Type.Unsafe` intentionally emits a portable enum schema but its
+      // inferred kind is unknown; the SDK has already validated this shape.
+      const args = params as AskUserArgs;
+      validateAskUserArgs(args);
       if (!ctx.hasUI) {
         throw new AskUserUnavailableError(ctx.mode);
       }
@@ -125,14 +165,14 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
       try {
         const dialogOptions = signal === undefined ? undefined : { signal };
 
-        switch (params.kind) {
+        switch (args.kind) {
           case "input": {
-            const answer = await ctx.ui.input(params.prompt, undefined, dialogOptions);
+            const answer = await ctx.ui.input(args.prompt, undefined, dialogOptions);
             return {
               content: [
                 {
                   type: "text" as const,
-                  text: formatAnswer(params.kind, answer),
+                  text: formatAnswer(args.kind, answer),
                 },
               ],
               details: {
@@ -143,12 +183,12 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
             };
           }
           case "confirm": {
-            const answer = await ctx.ui.confirm("Ask user", params.prompt, dialogOptions);
+            const answer = await ctx.ui.confirm("Ask user", args.prompt, dialogOptions);
             return {
               content: [
                 {
                   type: "text" as const,
-                  text: formatAnswer(params.kind, answer),
+                  text: formatAnswer(args.kind, answer),
                 },
               ],
               details: {
@@ -159,15 +199,15 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
             };
           }
           case "select": {
-            if (params.options === undefined || params.options.length < 1) {
+            if (args.options === undefined || args.options.length < 1) {
               throw new Error("ask_user: 'select' kind requires a non-empty 'options' array");
             }
-            const answer = await ctx.ui.select(params.prompt, params.options, dialogOptions);
+            const answer = await ctx.ui.select(args.prompt, args.options, dialogOptions);
             return {
               content: [
                 {
                   type: "text" as const,
-                  text: formatAnswer(params.kind, answer),
+                  text: formatAnswer(args.kind, answer),
                 },
               ],
               details: {
@@ -178,7 +218,7 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
             };
           }
           default:
-            throw new Error(`ask_user: unknown kind '${(params as AskUserArgs).kind}'`);
+            throw new Error(`ask_user: unknown kind '${args.kind}'`);
         }
       } finally {
         release(); // always unblock the next waiter

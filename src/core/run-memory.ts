@@ -44,6 +44,7 @@ import { rollup } from "../cost/rollup.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type {
   Checkpoint,
+  HandoffContextRef,
   MachineDefinition,
   SessionLifecycleEvent,
   TransitionAccepted,
@@ -82,6 +83,7 @@ export interface LastMessage {
   readonly from: string;
   readonly text: string | null;
   readonly suggests_next: string | null;
+  readonly context_ref: HandoffContextRef | null;
 }
 
 /** §8.4 run memory artifact. */
@@ -192,6 +194,22 @@ function buildLastMessage(records: readonly PersistedRecord[], runId: string): L
     from: latest.role,
     text: typeof reason === "string" ? reason : null,
     suggests_next: latest.suggests_next,
+    context_ref: resolveContextRef(latest, runId),
+  };
+}
+
+/**
+ * Read the host envelope when present. For older records, derive the same
+ * pointer from the persisted role/session fields; synthesized sentinels have
+ * no readable source and remain explicitly null.
+ */
+function resolveContextRef(record: TransitionAccepted, runId: string): HandoffContextRef | null {
+  if (record.context_ref !== undefined) return record.context_ref;
+  if (record.session_file.startsWith("<synthesized:")) return null;
+  return {
+    run_id: runId,
+    source_role: record.role,
+    source_session_file: record.session_file,
   };
 }
 

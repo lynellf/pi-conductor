@@ -247,11 +247,12 @@ describe("Task 13.5 — file-backed log + resume", () => {
     // Step 2: resumeRun. The reconciler should record
     // session_failed("crashed") for the worker, then drive the rest
     // of the run to completion (worker -> orchestrator -> end).
+    let resumedWorkerOptions: unknown;
     const resumedHandle = await resumeRun(manifestPath, initialCheckpoint.run_id, {
       goal: "do the thing",
       baseDir,
-      hostFactory: ({ runId, log }) =>
-        new StubHost({
+      hostFactory: ({ runId, log }) => {
+        const host = new StubHost({
           runId,
           log,
           // Script provides emissions for the NEW worker session
@@ -262,7 +263,14 @@ describe("Task 13.5 — file-backed log + resume", () => {
             { kind: "emit_handoff", target_role: "orchestrator", reason: "worker resumed" },
             { kind: "emit_end", reason: "all done" },
           ],
-        }),
+        });
+        const originalSpawn = host.spawnRole.bind(host);
+        host.spawnRole = async (role, options) => {
+          if (role === "worker") resumedWorkerOptions = options;
+          return originalSpawn(role, options);
+        };
+        return host;
+      },
     });
 
     const result = await resumedHandle.completion();
@@ -289,6 +297,15 @@ describe("Task 13.5 — file-backed log + resume", () => {
     expect(workerStarts.length).toBeGreaterThanOrEqual(2);
     const newWorker = workerStarts.find((s) => s.session_file !== workerSessionFile);
     expect(newWorker).toBeDefined();
+    // The handoff predates the context_ref field, so resume derives the
+    // trusted predecessor pointer from the older role/session fields.
+    expect(resumedWorkerOptions).toMatchObject({
+      handoffContextRef: {
+        run_id: initialCheckpoint.run_id,
+        source_role: "orchestrator",
+        source_session_file: orchSessionFile,
+      },
+    });
   });
 
   it("resumeRun with no orphaned session is a no-op (no extra session_failed)", async () => {

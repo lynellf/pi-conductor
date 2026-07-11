@@ -362,7 +362,16 @@ describe("buildRunMemory: current_role and state", () => {
 
 function accepted(
   role: string,
-  opts: { reason?: string; suggestsNext?: string | null; to?: string } = {},
+  opts: {
+    reason?: string;
+    suggestsNext?: string | null;
+    to?: string;
+    contextRef?: {
+      run_id: string;
+      source_role: string;
+      source_session_file: string;
+    } | null;
+  } = {},
 ): TransitionAccepted {
   return {
     type: "transition_accepted",
@@ -381,6 +390,7 @@ function accepted(
     effect: [],
     session_file: `/${role}.jsonl`,
     ts: TS,
+    ...(opts.contextRef !== undefined && { context_ref: opts.contextRef }),
   };
 }
 
@@ -404,6 +414,11 @@ describe("buildRunMemory: last_message (§8.4)", () => {
       from: "reviewer",
       text: "REQUEST-CHANGES: fix B1 in production-host-parity.test.ts",
       suggests_next: "implementer",
+      context_ref: {
+        run_id: "run-1",
+        source_role: "reviewer",
+        source_session_file: "/reviewer.jsonl",
+      },
     });
   });
 
@@ -414,6 +429,11 @@ describe("buildRunMemory: last_message (§8.4)", () => {
     expect(mem.last_message?.from).toBe("planner");
     expect(mem.last_message?.text).toBeNull();
     expect(mem.last_message?.suggests_next).toBe("implementer");
+    expect(mem.last_message?.context_ref).toEqual({
+      run_id: "run-1",
+      source_role: "planner",
+      source_session_file: "/planner.jsonl",
+    });
   });
 
   it("suggests_next is null when the worker omitted it", () => {
@@ -422,6 +442,20 @@ describe("buildRunMemory: last_message (§8.4)", () => {
     const mem = buildRunMemory(cp, records, DEF, { goal: "x", runCostCap: null });
     expect(mem.last_message?.text).toBe("done");
     expect(mem.last_message?.suggests_next).toBeNull();
+    expect(mem.last_message?.context_ref).toEqual({
+      run_id: "run-1",
+      source_role: "implementer",
+      source_session_file: "/implementer.jsonl",
+    });
+  });
+
+  it("preserves an explicit null context for synthesized transitions", () => {
+    const cp = ck("orchestrator", { reviewer: 1 });
+    const records: PersistedRecord[] = [
+      accepted("reviewer", { reason: "unavailable", contextRef: null }),
+    ];
+    const mem = buildRunMemory(cp, records, DEF, { goal: "x", runCostCap: null });
+    expect(mem.last_message?.context_ref).toBeNull();
   });
 
   it("uses the LATEST transition when multiple exist (append-ordered records)", () => {
