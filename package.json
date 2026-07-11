@@ -1,6 +1,6 @@
 {
   "name": "pi-conductor",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Multi-role LLM orchestration via a guarded, observable handoff state machine — installs as a pi extension exposing `/conduct`.",
   "license": "MIT",
   "author": "Ezell <lynellf@gmail.com>",
