@@ -215,10 +215,11 @@ function toModelEffort(value: unknown, path: string): ModelEffort {
     value !== "low" &&
     value !== "medium" &&
     value !== "high" &&
-    value !== "xhigh"
+    value !== "xhigh" &&
+    value !== "max"
   ) {
     throw new ManifestParseError(
-      `${path} must be one of off, minimal, low, medium, high, or xhigh`,
+      `${path} must be one of off, minimal, low, medium, high, xhigh, or max`,
     );
   }
   return value as ModelEffort;

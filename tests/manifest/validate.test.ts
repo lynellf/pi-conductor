@@ -178,6 +178,21 @@ describe("validateManifest: soft warnings (§13)", () => {
     const r = validateManifest(manifest);
     expect(r.errors.map((e) => e.code)).toContain("invalid-model-effort");
   });
+
+  it("accepts max as a valid model effort", () => {
+    const manifest = parseManifest(`
+version: 1
+roles:
+  - name: orch
+    is_orchestrator: true
+    models:
+      - model: openai:gpt-5.6
+        effort: max
+`);
+
+    const r = validateManifest(manifest);
+    expect(r.errors).toEqual([]);
+  });
 });
 
 // ─── toMachineDefinition (§12) ─────────────────────────────────────────

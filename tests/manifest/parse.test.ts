@@ -84,6 +84,20 @@ describe("parseManifest", () => {
     ).toThrow(ManifestParseError);
   });
 
+  it("parses GPT-5.6 max effort", () => {
+    const manifest = parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: openai:gpt-5.6
+        effort: max
+`);
+
+    expect(manifest.roles[0]?.models).toEqual([{ model: "openai:gpt-5.6", effort: "max" }]);
+  });
+
   it("parses bounded retry settings on model entries", () => {
     const manifest = parseManifest(`
 version: 1
