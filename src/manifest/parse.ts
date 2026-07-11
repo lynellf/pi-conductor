@@ -23,6 +23,7 @@ import type { Manifest, ModelConfig, RoleConfig } from "./types.js";
 import { ManifestParseError } from "./types.js";
 
 const MAX_MODEL_RETRY_DELAY_MS = 60_000;
+const MAX_MODEL_RETRIES = 10;
 
 /**
  * Parse a raw `.pi/conductor.yaml` string into a `Manifest`.
@@ -130,9 +131,9 @@ function toFiniteInt(value: unknown, path: string): number {
   return value;
 }
 
-function toBoundedInt(value: unknown, path: string, max: number): number {
+function toBoundedInt(value: unknown, path: string, max: number, unit: string): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
-    throw new ManifestParseError(`${path} must be between 0 and ${max} milliseconds`);
+    throw new ManifestParseError(`${path} must be between 0 and ${max} ${unit}`);
   }
   return value;
 }
@@ -187,11 +188,18 @@ function parseModelConfig(value: unknown, path: string): ModelConfig {
       ? DEFAULT_MODEL_EFFORT
       : toModelEffort(entry.effort, `${path}.effort`);
   const retries =
-    entry.retries === undefined ? undefined : toFiniteInt(entry.retries, `${path}.retries`);
+    entry.retries === undefined
+      ? undefined
+      : toBoundedInt(entry.retries, `${path}.retries`, MAX_MODEL_RETRIES, "additional attempts");
   const retry_delay_ms =
     entry.retry_delay_ms === undefined
       ? undefined
-      : toBoundedInt(entry.retry_delay_ms, `${path}.retry_delay_ms`, MAX_MODEL_RETRY_DELAY_MS);
+      : toBoundedInt(
+          entry.retry_delay_ms,
+          `${path}.retry_delay_ms`,
+          MAX_MODEL_RETRY_DELAY_MS,
+          "milliseconds",
+        );
   return Object.freeze({
     model,
     effort,

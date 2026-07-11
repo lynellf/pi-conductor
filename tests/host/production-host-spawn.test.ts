@@ -178,6 +178,22 @@ describe("buildToolsAllowlist — Task 7A.3", () => {
     expect(result.filter((n) => n === "end")).toHaveLength(1);
     expect(result.filter((n) => n === "ask_user")).toHaveLength(1);
   });
+
+  it("adds the predecessor-only context tool only when a host reference is present", () => {
+    expect(buildToolsAllowlist(["handoff_context"], false)).toEqual(["handoff", "end", "ask_user"]);
+    expect(buildToolsAllowlist([], true)).toEqual([
+      "handoff",
+      "end",
+      "ask_user",
+      "handoff_context",
+    ]);
+    expect(buildToolsAllowlist(["handoff_context"], true)).toEqual([
+      "handoff_context",
+      "handoff",
+      "end",
+      "ask_user",
+    ]);
+  });
 });
 
 // ─── ProductionHost.spawnRole — Task 7A.3 wiring ─────────────────────
@@ -256,6 +272,24 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
     expect(toolNames.filter((n) => n === "handoff")).toHaveLength(1);
     expect(toolNames.filter((n) => n === "end")).toHaveLength(1);
     expect(toolNames.filter((n) => n === "ask_user")).toHaveLength(1);
+
+    await session.dispose();
+  });
+
+  it("registers the bounded predecessor context tool for a referenced handoff", async () => {
+    const host = makeHost(workdir);
+    const session = await host.spawnRole("implementer", {
+      modelIndex: 0,
+      handoffContextRef: {
+        run_id: "test-run-1",
+        source_role: "orchestrator",
+        source_session_file: "/tmp/previous-orchestrator.jsonl",
+      },
+    });
+    const toolNames = asFull(session).getActiveToolNames();
+
+    expect(toolNames).toContain("handoff_context");
+    expect(toolNames.filter((n) => n === "handoff_context")).toHaveLength(1);
 
     await session.dispose();
   });

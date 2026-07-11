@@ -58,7 +58,8 @@ import type {
 } from "../index.js";
 import { SessionState } from "./cost.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
-import type { SessionTerminalReason } from "./host.js";
+import { createHandoffContextTool } from "./handoff-context-tool.js";
+import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
@@ -124,7 +125,7 @@ export class StubHost implements Host {
     this.sessionManager = SessionManager.inMemory();
   }
 
-  async spawnRole(role: Role, opts: { modelIndex?: number } = {}): Promise<RoleSession> {
+  async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
     // ── Task 18: model-fallback policy ─────────────────────────
     // §9.4 v1 default: hand to orchestrator once, then escalate.
     // The "unavailable" marker is set when the role's models were
@@ -201,12 +202,16 @@ export class StubHost implements Host {
     const rejector = createCaptureRejector();
     const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
     const end = createEndTool(seam, rejector.shouldRejectCapture);
+    const handoffContext =
+      opts.handoffContextRef === undefined
+        ? null
+        : createHandoffContextTool(opts.handoffContextRef);
 
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       model: this.model,
       modelRegistry: this.modelRegistry,
-      tools: ["handoff", "end"],
-      customTools: [handoff, end],
+      tools: ["handoff", "end", ...(handoffContext === null ? [] : ["handoff_context"])],
+      customTools: [handoff, end, ...(handoffContext === null ? [] : [handoffContext])],
       sessionManager: this.sessionManager,
     };
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;

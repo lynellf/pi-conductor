@@ -77,6 +77,14 @@ export function formatRunMemorySeed(memory: RunMemory): string {
               ? "(none)"
               : memory.last_message.suggests_next
           }`,
+          memory.last_message.context_ref === null
+            ? "  context_ref: (no readable source session exists)"
+            : [
+                "  context_ref:",
+                `    run_id: ${memory.last_message.context_ref.run_id}`,
+                `    source_role: ${memory.last_message.context_ref.source_role}`,
+                `    source_session_file: ${memory.last_message.context_ref.source_session_file}`,
+              ].join("\n"),
         ].join("\n");
 
   return [
