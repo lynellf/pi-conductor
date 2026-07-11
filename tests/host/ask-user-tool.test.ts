@@ -220,6 +220,34 @@ describe("createAskUserTool", () => {
     ).rejects.toThrow("ask_user: 'select' kind requires a non-empty 'options' array");
   });
 
+  it("rejects options for input before opening the input dialog", async () => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind: "input", prompt: "What now?", options: ["A", "B"] }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: 'input' kind does not accept 'options'; use 'select'");
+    expect(ui.input).not.toHaveBeenCalled();
+  });
+
+  it("rejects options for confirm before opening the confirmation dialog", async () => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind: "confirm", prompt: "Which one?", options: ["A", "B"] }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: 'confirm' kind does not accept 'options'; use 'select'");
+    expect(ui.confirm).not.toHaveBeenCalled();
+  });
+
   // ─── run fceb3964 fix: executionMode + mutex serialization ───────────
 
   it("declares executionMode: 'sequential' (spec §B, run fceb3964)", () => {
@@ -379,6 +407,8 @@ describe("askUserArgsSchema (flat, portable)", () => {
     expect(serialized.properties.kind).toEqual({
       type: "string",
       enum: ["input", "confirm", "select"],
+      description:
+        "Dialog control: input for free-form text, confirm for yes/no, select for one option.",
     });
   });
 });
