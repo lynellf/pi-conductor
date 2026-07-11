@@ -17,6 +17,9 @@ importers:
       diff:
         specifier: ^8.0.2
         version: 8.0.4
+      yaml:
+        specifier: ^2.6.0
+        version: 2.9.0
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.16
@@ -39,9 +42,6 @@ importers:
       vitest:
         specifier: ^3.2.0
         version: 3.2.6(@types/node@22.19.21)(jiti@2.7.0)(yaml@2.9.0)
-      yaml:
-        specifier: ^2.6.0
-        version: 2.9.0
 
 packages:
 
