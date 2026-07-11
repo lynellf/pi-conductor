@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.8.0] - 2026-07-11
+
+### Enhancements
+- **Bounded, trusted handoff context** (issue #14). Accepted handoffs now carry
+  a host-generated predecessor reference, and recipient sessions can opt into
+  reading that session through the no-argument `handoff_context` tool. Reads
+  are restricted to the host-selected predecessor, bounded to 10,000
+  characters, preserved across resume, and explicitly unavailable for
+  synthesized handoffs. New public exports include `HandoffContextRef`,
+  `HandoffContextToolDetails`, `createHandoffContextTool`, and
+  `handoffContextArgsSchema`. See
+  `docs/decisions/ADR-001-handoff-context.md`.
+- **Same-model retries before fallback** (issue #16). Manifest model entries
+  accept optional `retries` (0–10 additional attempts) and `retry_delay_ms`
+  (0–60,000 milliseconds). Transient model errors retry in a fresh session
+  before advancing to the next configured model, while preserving the visit
+  index and enforcing both run and session cost caps. Each retry emits a new
+  persisted `model_retry` record; `ModelRetry` is publicly exported.
+
+### Bug fixes
+- **Reject incoherent `ask_user` arguments before opening a dialog.** `input`
+  and `confirm` calls now reject an `options` field, while `select` continues
+  to require a non-empty options array. The tool schema also provides clearer
+  descriptions and examples to guide model-generated arguments.
+- **Prevent retry and fallback attempts from bypassing session budgets.** A
+  model error that consumes the configured session cost cap now terminates as
+  `session_cost_cap_exceeded` instead of starting another attempt.
+
+### Notes
+- No breaking changes to the public API surface. New fields, record variants,
+  manifest settings, and exports are additive; manifests without retry
+  settings retain the previous no-retry behavior.
+- The handoff context reference is host-owned metadata. The reducer remains
+  payload-blind and does not read session files or branch on the reference.
+
 ## [0.7.1] - 2026-07-05
 
 ### Enhancement
