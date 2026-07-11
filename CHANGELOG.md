@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2] - 2026-07-11
+
+### Enhancements
+- **Support the GPT-5.6 `max` effort level.** `ModelEffort` and manifest
+  validation now accept `max` alongside the existing pi effort levels, and the
+  selected value is carried through to the host session boundary. The README
+  now lists the complete effort mapping in the `RoleConfig` table.
+
 ## [0.8.1] - 2026-07-11
 
 ### Bug fixes

@@ -67,7 +67,7 @@ roles:
     max_visits: 3
     models:
       - model: stub:stub-model
-        effort: high
+        effort: max
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, handoff, end]
 `;
@@ -298,11 +298,11 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
     const host = makeHost(workdir);
     const session = await host.spawnRole("implementer", { modelIndex: 0 });
 
-    // The role's manifest declares `models: [{ model: 'stub:stub-model', effort: 'high' }]`.
+    // The role's manifest declares `models: [{ model: 'stub:stub-model', effort: 'max' }]`.
     // The `logical` field is the original `provider:id` string the loop records
     // on `session_started` (§11.4); `effort` is the manifest's thinking level.
     expect(session.model).toBe("stub:stub-model");
-    expect(session.effort).toBe("high");
+    expect(session.effort).toBe("max");
 
     await session.dispose();
   });

@@ -22,7 +22,7 @@ export type State = Role | "done";
 // ─── Host-agnostic model effort ────────────────────────────────────────
 
 /** pi thinking level / model effort token (§8.1, manifest layer). */
-export type ModelEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ModelEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 /** conductor-owned default effort when a manifest omits it (§8.1). */
 export const DEFAULT_MODEL_EFFORT: ModelEffort = "medium";
