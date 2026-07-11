@@ -165,6 +165,8 @@ export class StubHost implements Host {
     const modelIndex = opts.modelIndex ?? 0;
     let logicalModel: string | null = null;
     let effort: ModelEffort = DEFAULT_MODEL_EFFORT;
+    let retries = 0;
+    let retryDelayMs = 0;
     if (roleConfig?.models !== undefined) {
       if (roleConfig.models.length > 0) {
         if (modelIndex >= roleConfig.models.length) {
@@ -180,6 +182,8 @@ export class StubHost implements Host {
         if (entry !== undefined) {
           logicalModel = entry.model;
           effort = entry.effort;
+          retries = entry.retries ?? 0;
+          retryDelayMs = entry.retry_delay_ms ?? 0;
         }
       }
     }
@@ -229,6 +233,8 @@ export class StubHost implements Host {
       sessionFile: session.sessionFile ?? `/tmp/${stubId}.jsonl`,
       model: logicalModel,
       effort,
+      retries,
+      retryDelayMs,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
       subscribe: (listener) => session.subscribe(listener),
