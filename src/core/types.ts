@@ -111,6 +111,17 @@ export interface PayloadSummary {
 }
 
 /**
+ * Host-generated pointer to the session that produced a handoff.
+ * The reducer treats it as opaque record metadata; the host is the only
+ * writer and the recipient's context tool is the only reader (issue #14).
+ */
+export interface HandoffContextRef {
+  readonly run_id: string;
+  readonly source_role: Role;
+  readonly source_session_file: string;
+}
+
+/**
  * §11.2: accepted transition record. Shape-validated at the seam; the
  * full validated payload is held by the host for seeding the next
  * session and is NOT part of this persisted record.
@@ -128,6 +139,8 @@ export interface TransitionAccepted {
   readonly guard: string | null;
   readonly effect: readonly Effect[];
   readonly session_file: string;
+  /** Host-generated predecessor pointer; absent in older persisted records. */
+  readonly context_ref?: HandoffContextRef | null;
   readonly ts: number;
 }
 

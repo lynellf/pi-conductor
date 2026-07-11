@@ -49,6 +49,7 @@ import type {
 import type { RunMemory } from "../core/run-memory.js";
 import type {
   Checkpoint,
+  HandoffContextRef,
   MachineDefinition,
   ModelEffort,
   Role,
@@ -178,6 +179,11 @@ export interface SpawnRoleOptions {
    * until the list is exhausted (Task 18). Defaults to `0`.
    */
   readonly modelIndex?: number;
+  /**
+   * Host-generated predecessor pointer for the optional bounded context tool
+   * (issue #14). Callers must not derive this from model payload.
+   */
+  readonly handoffContextRef?: HandoffContextRef;
 }
 
 // ─── seedRunMemory args ────────────────────────────────────────────────

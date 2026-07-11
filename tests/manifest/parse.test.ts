@@ -114,4 +114,18 @@ roles:
 `),
     ).toThrow("retry_delay_ms must be between 0 and 60000 milliseconds");
   });
+
+  it("rejects an unbounded retry allowance", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models:
+      - model: stub:primary
+        retries: 11
+`),
+    ).toThrow("retries must be between 0 and 10 additional attempts");
+  });
 });

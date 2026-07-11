@@ -78,6 +78,7 @@ import { createInitialCheckpoint, reduce } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type {
   Checkpoint,
+  HandoffContextRef,
   MachineDefinition,
   MachineEvent,
   Role,
@@ -117,6 +118,11 @@ export interface RunLoopOptions {
   readonly host: Host;
   /** Initial goal text seeded into the first orchestrator session. */
   readonly initialGoal: string;
+  /**
+   * Latest persisted handoff reference when entering a run at a non-initial
+   * role (resume). Fresh runs leave this unset.
+   */
+  readonly initialHandoffContextRef?: HandoffContextRef | null;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
    *  that lets the host derive model + system prompt + tools from the
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
@@ -175,6 +181,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // the snapshot's active_role_session id (resume case) or null (fresh).
   let parentSessionId: string | null = checkpoint.active_role_session?.id ?? null;
   let seed = initialGoal;
+  // Host-generated predecessor pointer for the next role's optional
+  // handoff_context tool. It is replaced only by an accepted handoff or by
+  // the persisted run-memory envelope on an orchestrator/resume turn.
+  let handoffContextRef: HandoffContextRef | null = opts.initialHandoffContextRef ?? null;
   // Task 17 §11.7 worker-deferral guard: a run-cap breach detected on
   // a worker terminal defers the synthesized `end` to the next
   // orchestrator-current moment (spec: "the host does NOT synthesize
@@ -273,6 +283,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         runCostCap: opts.getRunCostCap?.() ?? opts.runCostCap ?? null,
       });
       seed = formatRunMemorySeed(runMemory);
+      handoffContextRef = runMemory.last_message?.context_ref ?? null;
     }
 
     // ── Task 18: model-fallback loop ─────────────────────────
@@ -301,7 +312,16 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // the latter propagates to abort the run per §9.4.
       let session: RoleSession;
       try {
-        session = await host.spawnRole(role, { ...opts.spawnDefaults, modelIndex });
+        // `spawnDefaults` is a test/host override surface, not a provenance
+        // surface. Remove any caller-supplied reference before adding the
+        // loop's trusted value so it cannot override or seed the envelope.
+        const spawnDefaults = { ...(opts.spawnDefaults ?? {}) };
+        delete spawnDefaults.handoffContextRef;
+        session = await host.spawnRole(role, {
+          ...spawnDefaults,
+          modelIndex,
+          ...(handoffContextRef !== null && { handoffContextRef }),
+        });
       } catch (err) {
         if (err instanceof NoMoreModelsError) {
           roleOutcome = { kind: "exhausted" };
@@ -552,11 +572,20 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           // surfaced `reason` before persistence — so the run-memory
           // `last_message` (§8.4) can deliver the worker's verdict/status
           // to the next orchestrator session.
+          const acceptedContextRef: HandoffContextRef | null =
+            reduceResult.kind === "accepted" && validated.event.type === "handoff"
+              ? {
+                  run_id: checkpoint.run_id,
+                  source_role: role,
+                  source_session_file: sessionFile,
+                }
+              : null;
           const enrichedRecord: typeof reduceResult.record =
             reduceResult.kind === "accepted"
               ? {
                   ...reduceResult.record,
                   payload_summary: summarizePayload(validated.event.payload),
+                  context_ref: acceptedContextRef,
                 }
               : reduceResult.record;
           host.persistRecord(enrichedRecord);
@@ -625,6 +654,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           // spawnRole + session_started (next outer iteration) wires
           // parent_session = sessionId automatically. ─────────────────
           const nextRole: Role = reduceResult.state;
+          if (acceptedContextRef === null) {
+            throw new Error(
+              "runLoop: accepted non-terminal handoff is missing its host-generated context_ref",
+            );
+          }
           const payload = validated.event.payload as Record<string, unknown> | undefined;
           const suggestsNext =
             validated.event.type === "handoff" &&
@@ -633,7 +667,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             typeof payload.suggests_next === "string"
               ? (payload.suggests_next as Role)
               : null;
-          nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext);
+          handoffContextRef = acceptedContextRef;
+          nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext, acceptedContextRef);
           inner = { kind: "advance", nextSeed };
           break;
         }
@@ -757,12 +792,20 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         sessionFile: SYNTHESIZED_UNAVAILABLE_SESSION_FILE,
         ts: Date.now(),
       });
-      host.persistRecord(result.record);
+      if (result.kind !== "accepted") {
+        throw new Error("runLoop: synthesized role-unavailable handoff was rejected");
+      }
+      host.persistRecord({
+        ...result.record,
+        payload_summary: summarizePayload(synthesized.payload),
+        context_ref: null,
+      });
       checkpoint = result.checkpoint;
       host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
       // Continue outer loop with a "role unavailable" seed for the
       // orchestrator. The orchestrator's system prompt would handle
       // this payload; the loop just formats the surface text.
+      handoffContextRef = null;
       seed = formatRoleUnavailableSeed(role);
     } else {
       // advance: continue outer loop with the new seed.
@@ -875,6 +918,7 @@ function formatRoleUnavailableSeed(role: Role): string {
     `  - end the run, OR`,
     `  - hand off to a different role (NOT '${role}'), OR`,
     `  - hand off to '${role}' (this will escalate per §9.4).`,
+    "No readable source session exists for this synthesized handoff.",
     "When done, emit exactly one handoff (target_role=<next role>) or end.",
   ].join("\n");
 }
@@ -889,14 +933,30 @@ function formatHandoffSeed(
   payload: Record<string, unknown> | undefined,
   targetRole: Role,
   suggestsNext: Role | null,
+  contextRef: HandoffContextRef,
 ): string {
-  const payloadStr = payload === undefined ? "(no payload)" : JSON.stringify(payload, null, 2);
+  // `context_ref` is a host-owned reserved field. Keep arbitrary role fields
+  // compatible, but do not echo a model-supplied value beside the trusted
+  // envelope where a recipient could mistake it for the source pointer.
+  const payloadForSeed =
+    payload === undefined
+      ? undefined
+      : Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "context_ref"));
+  const payloadStr =
+    payloadForSeed === undefined ? "(no payload)" : JSON.stringify(payloadForSeed, null, 2);
   const suggestsLine =
     suggestsNext !== null
       ? `\nThe previous role suggests you may next hand off to: ${suggestsNext} (advisory; §8.3).`
       : "";
   return [
     `[handoff → ${targetRole}]`,
+    "Host-generated predecessor context (trusted; payload fields cannot override it):",
+    "context_ref:",
+    `  run_id: ${contextRef.run_id}`,
+    `  source_role: ${contextRef.source_role}`,
+    `  source_session_file: ${contextRef.source_session_file}`,
+    "",
+    "handoff payload:",
     payloadStr,
     suggestsLine,
     "",

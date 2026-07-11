@@ -194,6 +194,16 @@ function onSessionEvent(
     state.addMessageUsage(key, message.usage);
   }
 
+  // A failed provider response can still consume enough usage to hit the
+  // session cap. Classify that terminal before `model_error` so the retry
+  // loop cannot start another session after the per-session budget is spent.
+  if (message.usage && state.isSessionCapExceeded() && !state.aborted) {
+    state.markAborted();
+    state.setTerminalReason("session_cost_cap_exceeded");
+    void session.abort();
+    return;
+  }
+
   // Model-error detection (Task 18, §8.2). The stub's `fail`
   // step emits an AssistantMessage with `stopReason: "error"`.
   // The SDK's `AgentSessionEvent` protocol folds the

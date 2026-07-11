@@ -363,6 +363,50 @@ describe("Same-model retry (§8.2 / issue #16)", () => {
       records.find((record) => record.type === "session_failed" && record.role === "worker"),
     ).toMatchObject({ failure_reason: "session_cost_cap_exceeded" });
   });
+
+  it("does not retry when a model error itself reaches the session cap", async () => {
+    const loaded = makeRetryLoadedManifest({
+      retries: 2,
+      includeFallback: true,
+      workerMaxSessionCostUsd: 0.01,
+    });
+    const { createInitialCheckpoint, InMemoryRecordLog } = await import("../../src/index.js");
+    const initialCheckpoint = createInitialCheckpoint(loaded.def);
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      loadedManifest: loaded,
+      steps: [
+        { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
+        {
+          kind: "fail",
+          errorMessage: "failed after consuming the session budget",
+          usage: {
+            input: 50,
+            output: 25,
+            totalTokens: 75,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.05 },
+          },
+        },
+      ],
+    });
+
+    const result = await runLoop({
+      def: loaded.def as MachineDefinition,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    expect(result.exitReason).toBe("session_failed");
+    const records = log.records(initialCheckpoint.run_id);
+    expect(records.filter((record) => record.type === "model_retry")).toHaveLength(0);
+    expect(records.filter((record) => record.type === "model_fallback")).toHaveLength(0);
+    expect(
+      records.find((record) => record.type === "session_failed" && record.role === "worker"),
+    ).toMatchObject({ failure_reason: "session_cost_cap_exceeded" });
+  });
 });
 
 // ─── Test 2: all models fail (exhaustion) ─────────────────────────────
@@ -391,6 +435,19 @@ describe("Model fallback (§9.4) — all models fail, hand to orchestrator once"
         { kind: "emit_end", reason: "role unavailable, ending run" },
       ],
     });
+    const orchestratorPrompts: string[] = [];
+    const originalSpawn = host.spawnRole.bind(host);
+    host.spawnRole = async (role, options) => {
+      const session = await originalSpawn(role, options);
+      if (role === "orchestrator") {
+        const originalPrompt = session.prompt.bind(session);
+        session.prompt = async (text) => {
+          orchestratorPrompts.push(text);
+          await originalPrompt(text);
+        };
+      }
+      return session;
+    };
 
     const result = await runLoop({
       def: loaded.def as MachineDefinition,
@@ -439,9 +496,11 @@ describe("Model fallback (§9.4) — all models fail, hand to orchestrator once"
     expect(accepted[1]?.from).toBe("worker");
     expect(accepted[1]?.to).toBe("orchestrator");
     expect(accepted[1]?.session_file).toBe("<synthesized:handoff:role-unavailable>");
+    expect(accepted[1]?.context_ref).toBeNull();
     expect(accepted[2]?.event).toBe("end");
     expect(accepted[2]?.from).toBe("orchestrator");
     expect(accepted[2]?.to).toBe("done");
+    expect(orchestratorPrompts[1]).toContain("no readable source session exists");
 
     // 2 session_started for the worker (primary + fallback), both
     // with visit_index 1 (same visit, different model).

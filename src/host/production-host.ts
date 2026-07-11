@@ -65,6 +65,7 @@ import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
+import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { Host, RoleSession, SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
 import {
@@ -291,7 +292,11 @@ export class ProductionHost implements Host {
     //    `buildToolsAllowlist` dedups so a role that already names
     //    them in `role.tools` still gets them exactly once.
     const roleTools = roleConfig?.tools;
-    const tools = buildToolsAllowlist(roleTools);
+    const handoffContext =
+      opts.handoffContextRef === undefined
+        ? null
+        : createHandoffContextTool(opts.handoffContextRef);
+    const tools = buildToolsAllowlist(roleTools, handoffContext !== null);
 
     // 5. Build the file-backed `SessionManager` rooted under the
     //    conductor's per-run directory (NOT pi's own session tree).
@@ -320,7 +325,7 @@ export class ProductionHost implements Host {
       modelRegistry: this.modelRegistry,
       resourceLoader: loader,
       sessionManager,
-      customTools: [handoff, end, askUser],
+      customTools: [handoff, end, askUser, ...(handoffContext === null ? [] : [handoffContext])],
       tools: [...tools],
     };
     if (model !== undefined) {
