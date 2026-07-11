@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1] - 2026-07-11
+
+### Bug fixes
+- **Declare `yaml` as a runtime dependency** (issue #18). The manifest
+  parser is loaded by the published extension, so `yaml` now ships under
+  `dependencies`; clean Pi installations no longer fail with
+  `Cannot find module 'yaml'`.
+
 ## [0.8.0] - 2026-07-11
 
 ### Enhancements
