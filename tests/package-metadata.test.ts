@@ -142,14 +142,18 @@ describe("extension entrypoints (pi extension surface)", () => {
 });
 
 describe("runtime imports are not devDependencies-only", () => {
-  // The extensions and the host may import bare packages at runtime.
+  // The extension, host, and manifest parser may import bare packages at runtime.
   // `pi install` runs `npm install --omit=dev`, so anything imported
   // by these files must resolve from `dependencies` or `peerDependencies`.
   //
   // (We exclude test files + node_modules + the public barrel's
   // bundled-default re-exports from `src/index.ts` — the barrel is
   // the public surface, not a runtime load path.)
-  const runtimeFiles = ["extensions/conduct.ts", "src/host/index.ts"] as const;
+  const runtimeFiles = [
+    "extensions/conduct.ts",
+    "src/host/index.ts",
+    "src/manifest/parse.ts",
+  ] as const;
 
   it.each(
     runtimeFiles,
