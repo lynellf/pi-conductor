@@ -117,7 +117,11 @@ export type StubStep =
       readonly usage?: Partial<Usage>;
     }
   | { readonly kind: "no_emission" }
-  | { readonly kind: "fail"; readonly errorMessage: string };
+  | {
+      readonly kind: "fail";
+      readonly errorMessage: string;
+      readonly usage?: Partial<Usage>;
+    };
 
 /** A single tool call in a multi-tool stub step. */
 export interface StubToolCall {

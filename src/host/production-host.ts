@@ -242,6 +242,8 @@ export class ProductionHost implements Host {
     let model: Model<never> | undefined;
     let logical: string | null = null;
     const effort: ModelEffort = entry?.effort ?? DEFAULT_MODEL_EFFORT;
+    const retries = entry?.retries ?? 0;
+    const retryDelayMs = entry?.retry_delay_ms ?? 0;
     if (entry !== null) {
       const resolved = resolveModel(role, entry.model, this.modelRegistry);
       model = resolved.model;
@@ -369,6 +371,8 @@ export class ProductionHost implements Host {
       sessionFile: session.sessionFile ?? `${this.sessionDir}/${sessionId}.jsonl`,
       model: logical,
       effort,
+      retries,
+      retryDelayMs,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
       subscribe: (listener: (event: AgentSessionEvent) => void) => session.subscribe(listener),

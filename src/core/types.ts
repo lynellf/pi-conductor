@@ -282,3 +282,17 @@ export interface ModelFallback {
   readonly session_file: string;
   readonly ts: number;
 }
+
+/** Issue #16: driver-issued same-model retry record. */
+export interface ModelRetry {
+  readonly type: "model_retry";
+  readonly run_id: string;
+  readonly role: Role;
+  readonly model: string | null;
+  readonly attempt: number;
+  readonly max_retries: number;
+  readonly reason: "model_error";
+  readonly delay_ms: number;
+  readonly session_file: string;
+  readonly ts: number;
+}

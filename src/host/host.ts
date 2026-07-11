@@ -99,6 +99,10 @@ export interface RoleSession {
   readonly model: string | null;
   /** The effort / thinking level this session ran with (§8.1, §11.4). */
   readonly effort: ModelEffort;
+  /** Additional fresh-session attempts allowed for this model entry (§8.2). */
+  readonly retries?: number;
+  /** Delay before each same-model retry, in milliseconds (§8.2). */
+  readonly retryDelayMs?: number;
 
   /**
    * Read the per-session machine-event capture buffer (Task 14).

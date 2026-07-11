@@ -28,6 +28,7 @@ export type {
   MachineEvent,
   ModelEffort,
   ModelFallback,
+  ModelRetry,
   PayloadSummary,
   ReduceLifecycleMeta,
   RejectReason,

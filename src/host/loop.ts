@@ -290,6 +290,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // the same role gets the next index.
     const visitIndex = visitIndexByRole.get(role) ?? 1;
     let modelIndex = 0;
+    let retryAttempt = 0;
     let roleOutcome: RoleOutcome = { kind: "advance", nextSeed: seed };
 
     while (true) {
@@ -671,6 +672,37 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // `exhausted` and breaks. State is unchanged across model
       // retries (same role, same `visitIndex` captured above).
       if (inner.kind === "failed" && sessionHostReason === "model_error") {
+        // The failed terminal is already persisted before this branch. Do
+        // not start another session once the run budget is exhausted;
+        // retries and model fallback must not bypass the run cap (§11.7).
+        const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
+        if (runCap !== null && host.runCostSoFar() >= runCap) {
+          roleOutcome = { kind: "failed" };
+          break;
+        }
+
+        const maxRetries = session.retries ?? 0;
+        if (retryAttempt < maxRetries) {
+          const attempt = retryAttempt + 1;
+          const delayMs = session.retryDelayMs ?? 0;
+          host.persistRecord({
+            type: "model_retry",
+            run_id: checkpoint.run_id,
+            role,
+            model: session.model,
+            attempt,
+            max_retries: maxRetries,
+            reason: "model_error",
+            delay_ms: delayMs,
+            session_file: session.sessionFile,
+            ts: Date.now(),
+          });
+          retryAttempt = attempt;
+          await waitForRetry(delayMs);
+          continue;
+        }
+
+        retryAttempt = 0;
         const nextModel = host.getNextModel(role, modelIndex);
         if (nextModel !== null) {
           host.persistRecord({
@@ -769,6 +801,13 @@ const ZERO_USAGE: UsageRecord = Object.freeze({
   tokens: 0,
   cost: 0,
 }) as UsageRecord;
+
+function waitForRetry(delayMs: number): Promise<void> {
+  if (delayMs === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
 
 /**
  * Format a recovery prompt for a role turn that returned without a
