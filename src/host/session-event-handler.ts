@@ -258,35 +258,45 @@ function onSessionEvent(
   if (event.type !== "message_end") return;
   const message = event.message as AssistantMessage;
 
+  if (message?.role !== "assistant") return;
+
+  if (message.usage) {
+    // The SDK emits one message_end per message; this de-dup key also guards
+    // abort paths that re-fire the same event. Failed model attempts still
+    // consumed provider usage, so capture it before classifying the terminal.
+    const key = `${message.timestamp ?? 0}-${message.usage.totalTokens}-${message.usage.cost.total}`;
+    state.addMessageUsage(key, message.usage);
+  }
+
+  // A failed provider response can still consume enough usage to hit the
+  // session cap. Classify that terminal before `model_error` so the retry
+  // loop cannot start another session after the per-session budget is spent.
+  if (message.usage && state.isSessionCapExceeded() && !state.aborted) {
+    state.markAborted();
+    state.setTerminalReason("session_cost_cap_exceeded");
+    void session.abort();
+    return;
+  }
+
   // Model-error detection (Task 18, §8.2). The stub's `fail`
   // step emits an AssistantMessage with `stopReason: "error"`.
   // The SDK's `AgentSessionEvent` protocol folds the
   // underlying `pi-ai` stream's `error` into `message_end`
   // carrying the error message; we catch both here.
-  if (message?.role === "assistant" && message.stopReason === "error") {
+  if (message.stopReason === "error") {
     state.setTerminalReason("model_error");
     return;
   }
 
-  if (message?.role === "assistant") {
-    const text = extractAssistantText(message);
-    // Phase 1 (open-issues-round-2): emit exactly one `"text"` event
-    // per assistant turn with the full extracted text. No progressive
-    // streaming, no `text_stream` chunks.
-    if (text.length > 0) {
-      onDisplay?.({ role, kind: "text", text });
-    }
+  const text = extractAssistantText(message);
+  // Phase 1 (open-issues-round-2): emit exactly one `"text"` event
+  // per assistant turn with the full extracted text. No progressive
+  // streaming, no `text_stream` chunks.
+  if (text.length > 0) {
+    onDisplay?.({ role, kind: "text", text });
   }
 
-  if (message?.role === "assistant" && message.usage) {
-    // De-dup key: timestamp + totalTokens + cost.total. The SDK
-    // contract is one `message_end` per message; this guard is
-    // defensive against an `abort()` re-emitting the final
-    // message's events (§11.7 "abort accounting"). The
-    // composite key is unique per message by construction.
-    const key = `${message.timestamp ?? 0}-${message.usage.totalTokens}-${message.usage.cost.total}`;
-    state.addMessageUsage(key, message.usage);
-
+  if (message.usage) {
     // Per-session cap (§11.7). Evaluate against the cumulative
     // usage; if exceeded, abort and flip the terminal reason.
     // The check is on `message_end` (not `turn_end` as the spec

@@ -59,6 +59,9 @@ export type { DisplayEvent, DisplayEventKind, DisplaySink } from "./display-sink
 // a SessionSeam and closes over it; the loop does not see these
 // tools directly — only their effect on the seam.
 
+// ─── bounded predecessor context (issue #14) ────────────────────────
+export type { HandoffContextToolDetails } from "./handoff-context-tool.js";
+export { createHandoffContextTool, handoffContextArgsSchema } from "./handoff-context-tool.js";
 export type { EmissionToolDetails } from "./tools.js";
 export { createEndTool, createHandoffTool } from "./tools.js";
 

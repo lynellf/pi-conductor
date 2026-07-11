@@ -19,6 +19,10 @@ import type { ModelEffort, Role } from "../core/types.js";
 export interface ModelConfig {
   readonly model: string;
   readonly effort: ModelEffort;
+  /** Additional fresh-session attempts after the initial model attempt (0–10). */
+  readonly retries?: number;
+  /** Delay before each same-model retry, in milliseconds (0–60,000). */
+  readonly retry_delay_ms?: number;
 }
 
 /** §8 / §10: raw manifest shape parsed from `.pi/conductor.yaml`. */

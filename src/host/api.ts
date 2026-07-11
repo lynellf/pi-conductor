@@ -61,9 +61,20 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { createInitialCheckpoint } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
-import type { Checkpoint, MachineDefinition, Role, SessionLifecycleEvent } from "../core/types.js";
+import type {
+  Checkpoint,
+  HandoffContextRef,
+  MachineDefinition,
+  Role,
+  SessionLifecycleEvent,
+} from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
-import type { CheckpointSnapshot, RecordLog, RunSeededRecord } from "../persistence/log.js";
+import type {
+  CheckpointSnapshot,
+  PersistedRecord,
+  RecordLog,
+  RunSeededRecord,
+} from "../persistence/log.js";
 import type { Host, RoleSession } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -318,6 +329,7 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     initialCheckpoint,
     host,
     initialGoal: goal,
+    initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
     getRunCostCap,
     abortControl,
   });
@@ -333,6 +345,34 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
       exitReason: r.exitReason,
     })),
   });
+}
+
+/**
+ * Recover the latest host envelope before a resume. Older logs have no
+ * `context_ref`, so derive it from the durable role/session fields; the
+ * synthesized sentinel remains explicitly unreadable.
+ */
+function latestHandoffContextRef(
+  records: readonly PersistedRecord[],
+  runId: string,
+): HandoffContextRef | null {
+  let latest: HandoffContextRef | null = null;
+  for (const record of records) {
+    if (record.type !== "transition_accepted") continue;
+    if (record.run_id !== runId || record.event !== "handoff") continue;
+    if (record.context_ref !== undefined) {
+      latest = record.context_ref;
+      continue;
+    }
+    latest = record.session_file.startsWith("<synthesized:")
+      ? null
+      : {
+          run_id: runId,
+          source_role: record.role,
+          source_session_file: record.session_file,
+        };
+  }
+  return latest;
 }
 
 /**

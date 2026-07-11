@@ -27,6 +27,7 @@
 import type {
   Checkpoint,
   ModelFallback,
+  ModelRetry,
   SessionLifecycleEvent,
   TransitionAccepted,
   TransitionRejected,
@@ -64,6 +65,7 @@ export type PersistedRecord =
   | TransitionRejected
   | SessionLifecycleEvent
   | ModelFallback
+  | ModelRetry
   | CheckpointSnapshot
   | RunSeededRecord;
 

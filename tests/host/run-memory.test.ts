@@ -36,6 +36,90 @@ function makeDef(): MachineDefinition {
 }
 
 describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
+  it("passes a trusted predecessor context reference in both handoff directions", async () => {
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      steps: [
+        {
+          kind: "emit_tool_calls",
+          calls: [
+            {
+              name: "handoff",
+              arguments: {
+                target_role: "worker",
+                reason: "plan ready",
+                context_ref: {
+                  run_id: "attacker-run",
+                  source_role: "attacker",
+                  source_session_file: "/attacker/session.jsonl",
+                },
+              },
+            },
+          ],
+        },
+        { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
+        { kind: "emit_end", reason: "all done" },
+      ],
+    });
+    const spawned: Array<{ role: string; sessionFile: string; options: unknown }> = [];
+    const prompts: Array<{ role: string; text: string }> = [];
+    const originalSpawn = host.spawnRole.bind(host);
+    host.spawnRole = async (role, options) => {
+      const session = await originalSpawn(role, options);
+      spawned.push({ role, sessionFile: session.sessionFile, options });
+      const originalPrompt = session.prompt.bind(session);
+      session.prompt = async (text) => {
+        prompts.push({ role, text });
+        await originalPrompt(text);
+      };
+      return session;
+    };
+
+    const result = await runLoop({
+      def: makeDef(),
+      initialCheckpoint,
+      host,
+      initialGoal: "context test",
+      spawnDefaults: {
+        handoffContextRef: {
+          run_id: "attacker-run",
+          source_role: "attacker",
+          source_session_file: "/attacker/session.jsonl",
+        },
+      },
+    });
+
+    expect(result.exitReason).toBe("done");
+    expect(spawned).toHaveLength(3);
+    expect(spawned[0]?.options).not.toHaveProperty("handoffContextRef");
+    expect(spawned[1]?.options).toMatchObject({
+      handoffContextRef: {
+        run_id: initialCheckpoint.run_id,
+        source_role: "orchestrator",
+        source_session_file: spawned[0]?.sessionFile,
+      },
+    });
+    expect(spawned[2]?.options).toMatchObject({
+      handoffContextRef: {
+        run_id: initialCheckpoint.run_id,
+        source_role: "worker",
+        source_session_file: spawned[1]?.sessionFile,
+      },
+    });
+
+    const workerPrompt = prompts.find((entry) => entry.role === "worker")?.text;
+    expect(workerPrompt).toContain("source_role: orchestrator");
+    expect(workerPrompt).toContain(spawned[0]?.sessionFile ?? "missing source session");
+    expect(workerPrompt).not.toContain("/attacker/session.jsonl");
+    const secondOrchestratorPrompt = prompts.filter((entry) => entry.role === "orchestrator")[1]
+      ?.text;
+    expect(secondOrchestratorPrompt).toContain("context_ref:");
+    expect(secondOrchestratorPrompt).toContain("source_role: worker");
+  });
+
   it("first orchestrator turn references current run cost and uncapped candidates", async () => {
     const initialCheckpoint = createInitialCheckpoint(makeDef());
     const log = new InMemoryRecordLog();
