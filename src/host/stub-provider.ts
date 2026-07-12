@@ -97,6 +97,37 @@ export type StubStep =
       readonly suggests_next?: string;
       readonly usage?: Partial<Usage>;
     }
+  // Issue #17: delegation
+  | {
+      /** Drive the `delegate` tool with a scripted batch result.
+       *  The stub emits a `toolcall` event with name `"delegate"` and
+       *  `arguments` matching `delegateInputSchema`. The tool's `execute`
+       *  calls the `DelegationManager` and returns the JSON result.
+       *  Children are driven by the same stub but at independent cursors
+       *  (one cursor per child, stored in `childStepCursors`). */
+      readonly kind: "emit_delegate";
+      readonly delegateArgs: {
+        readonly tasks: readonly {
+          readonly id: string;
+          readonly objective: string;
+          readonly expected_output: string;
+          readonly workspace: "read_only" | "worktree";
+        }[];
+      };
+      readonly usage?: Partial<Usage>;
+    }
+  | {
+      /** Drive the `report_result` tool for a child session.
+       *  Emits a `toolcall` event with name `"report_result"`.
+       *  Used in child StubStep scripts. */
+      readonly kind: "emit_report_result";
+      readonly reportArgs: {
+        readonly status: "completed" | "failed" | "no_changes";
+        readonly summary: string;
+        readonly verification?: readonly string[];
+      };
+      readonly usage?: Partial<Usage>;
+    }
   | {
       readonly kind: "emit_end";
       readonly reason?: string;
@@ -137,6 +168,18 @@ export interface StubStreamOptions {
    *  zeros. Field shape matches `Usage` (camelCase + nested `cost`),
    *  which is the §11.4 SDK mapping source. */
   readonly usage?: Partial<Usage>;
+  /**
+   * When true, after emitting tool call events the stream emits a final
+   * assistant message with `stopReason: "stop"` (instead of
+   * `reason: "toolUse"`). Use for child sessions that run a single
+   * tool and should end immediately after the tool result, without
+   * waiting for a model continuation response.
+   *
+   * Default: false (parent sessions use `reason: "toolUse"` so the
+   * SDK sends the tool result back to the model and waits for a
+   * follow-up response).
+   */
+  readonly emitStopAfterToolCalls?: boolean;
 }
 
 /** A single-tool-call record the stub pushes through the event protocol. */
@@ -186,7 +229,7 @@ export function makeStubModel(): Model<any> {
  * `AssistantMessage` (Task 17 reads `usage` from there).
  */
 export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction {
-  const { steps, usage: cannedUsage } = opts;
+  const { steps, usage: cannedUsage, emitStopAfterToolCalls = false } = opts;
   let stepIndex = 0;
 
   return (_model, _context, _options) => {
@@ -282,6 +325,26 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
           arguments: step.reason !== undefined ? { reason: step.reason } : {},
         },
       ];
+    } else if (step.kind === "emit_delegate") {
+      tcs = [
+        {
+          name: "delegate",
+          arguments: { tasks: step.delegateArgs.tasks },
+        },
+      ];
+    } else if (step.kind === "emit_report_result") {
+      tcs = [
+        {
+          name: "report_result",
+          arguments: {
+            status: step.reportArgs.status,
+            summary: step.reportArgs.summary,
+            ...(step.reportArgs.verification !== undefined && {
+              verification: step.reportArgs.verification,
+            }),
+          },
+        },
+      ];
     } else {
       // emit_tool_calls: multiple generic tool calls in one turn.
       tcs = step.calls.map((c) => ({ name: c.name, arguments: c.arguments }));
@@ -308,8 +371,19 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
       });
       stream.push({ type: "toolcall_end", contentIndex: ci, toolCall, partial: finalMessage });
     }
-    finalMessage.stopReason = "toolUse";
-    stream.push({ type: "done", reason: "toolUse", message: finalMessage });
+    if (emitStopAfterToolCalls) {
+      // Child session: after the tool call, emit a final stop response.
+      // The SDK executes the tool and receives the result; this stop signal
+      // tells it the turn is done and prompt() should resolve without waiting
+      // for a model continuation (which the stub cannot produce).
+      finalMessage.stopReason = "stop";
+      stream.push({ type: "done", reason: "stop", message: finalMessage });
+    } else {
+      // Parent session: the tool result is sent back to the model, which
+      // produces a follow-up response. The turn is not yet complete.
+      finalMessage.stopReason = "toolUse";
+      stream.push({ type: "done", reason: "toolUse", message: finalMessage });
+    }
     stream.end();
     return stream;
   };

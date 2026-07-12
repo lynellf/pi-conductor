@@ -63,11 +63,14 @@ import type { ModelConfig, RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
+import { createDelegateTool } from "./delegation/delegate-tool.js";
+import type { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { Host, RoleSession, SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
+import { ProductionHostDelegation } from "./production-host-delegation.js";
 import {
   buildToolsAllowlist,
   loadSystemPrompt,
@@ -80,18 +83,17 @@ import { attachSessionEventHandler, createCaptureRejector } from "./session-even
 import { createEndTool, createHandoffTool } from "./tools.js";
 
 /**
- * Constructor options for `ProductionHost`. Mirrors the production
- * context the orchestration loop needs to pass through: the
- * `ModelRegistry` (typically the extension's
- * `ExtensionCommandContext.modelRegistry`, shared with pi's
- * configured providers), the working directory (typically
- * `ctx.cwd`), and the run-scoped state (`log`, `loadedManifest`,
- * `runId`) the loop already gives `StubHost`.
+ * Constructor options for `ProductionHost`.
+ *
+ * Mirrors the production context the orchestration loop needs to pass
+ * through: the `ModelRegistry` (typically the extension's
+ * `ExtensionCommandContext.modelRegistry`, shared with pi's configured
+ * providers), the working directory (typically `ctx.cwd`), and the
+ * run-scoped state (`log`, `loadedManifest`, `runId`) the loop
+ * already gives `StubHost`.
  */
 export interface ProductionHostOptions {
-  /** Real `ModelRegistry` from the host's environment (extension
-   *  `ExtensionCommandContext.modelRegistry` or
-   *  `ModelRegistry.create(authStorage, modelsPath)` in standalone). */
+  /** Real `ModelRegistry` from the host environment. */
   readonly modelRegistry: ModelRegistry;
   /** Working directory for prompt-path resolution and session cwd. */
   readonly cwd: string;
@@ -99,62 +101,40 @@ export interface ProductionHostOptions {
   readonly uiContext?: ExtensionUIContext;
   /** Optional display sink for streamed role output. */
   readonly displaySink?: DisplaySink;
-  /** Host-owned `run_id`-keyed append-only log (Task 13.5). */
+  /** Host-owned `run_id`-keyed append-only log. */
   readonly log: RecordLog;
   /** Pinned manifest snapshot (def + role configs + warnings). */
   readonly loadedManifest: LoadedManifest;
   /** The run this host is bound to. */
   readonly runId: string;
   /**
-   * Optional: directory for SDK `SessionManager` files. The plan
-   * calls for the file-backed `SessionManager` to be "rooted under
-   * the conductor run log directory" — i.e., NOT in pi's own
-   * session tree (~/.pi/agent/sessions/<encoded-cwd>/). Default:
-   * `<cwd>/.pi-conductor/runs/<runId>/sessions`. Created on
-   * construction (`mkdirSync({ recursive: true })`).
+   * Optional: directory for SDK `SessionManager` files.
+   * Default: `<cwd>/.pi-conductor/runs/<runId>/sessions`.
    */
   readonly sessionDir?: string;
   /**
    * Optional: directory for the SDK's `DefaultResourceLoader` agent
-   * config (auth.json, models.json, extensions, etc.). Default:
-   * `<cwd>/.pi-conductor/agent`. The extension is expected to
-   * share its own `~/.pi/agent` by passing the path here, so
-   * spawned role sessions see the user's pi configuration. The
-   * default keeps the conductor's role sessions isolated from pi.
+   * config (auth.json, models.json, extensions, etc.).
+   * Default: `<cwd>/.pi-conductor/agent`.
    */
   readonly agentDir?: string;
 }
 
 /**
- * Production `Host` — `Phase 7A` scaffold + role-session spawn
- * (Tasks 7A.1, 7A.2, 7A.3).
- *
- * `implements Host` enforces compile-time conformance to the
- * seam the loop programs against. Adding/removing/renaming a
- * `Host` method in `host.ts` will fail typecheck here, which
- * is the right shape for a scaffold: any drift between the
- * seam and the implementation is caught at the boundary, not
- * at runtime.
+ * Production `Host` — implements the `Host` seam with real SDK
+ * (`createAgentSession`, `DefaultResourceLoader`, file-backed
+ * `SessionManager`). Compile-time parity with `StubHost` via the
+ * `Host` interface; drift is caught at the boundary.
  */
 export class ProductionHost implements Host {
-  // ─── Stored production context ────────────────────────────────────
-  /** See {@link ProductionHostOptions.modelRegistry}. */
   readonly modelRegistry: ModelRegistry;
-  /** See {@link ProductionHostOptions.cwd}. */
   readonly cwd: string;
-  /** See {@link ProductionHostOptions.log}. */
   readonly log: RecordLog;
-  /** See {@link ProductionHostOptions.loadedManifest}. */
   readonly loadedManifest: LoadedManifest;
-  /** See {@link ProductionHostOptions.runId}. */
   readonly runId: string;
-  /** See {@link ProductionHostOptions.uiContext}. */
   readonly uiContext: ExtensionUIContext | undefined;
-  /** See {@link ProductionHostOptions.displaySink}. */
   readonly displaySink: DisplaySink | undefined;
-  /** See {@link ProductionHostOptions.sessionDir}. */
   readonly sessionDir: string;
-  /** See {@link ProductionHostOptions.agentDir}. */
   readonly agentDir: string;
 
   constructor(opts: ProductionHostOptions) {
@@ -168,76 +148,54 @@ export class ProductionHost implements Host {
     this.sessionDir =
       opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
     this.agentDir = opts.agentDir ?? join(opts.cwd, ".pi-conductor", "agent");
-    // The SessionManager writes JSONL files directly into `sessionDir`
-    // without creating parent directories. Ensure the dir exists so
-    // the first `SessionManager.create(cwd, this.sessionDir)` call
-    // in `spawnRole` doesn't ENOENT.
     mkdirSync(this.sessionDir, { recursive: true });
+    this.delegation = new ProductionHostDelegation({
+      sessionDir: this.sessionDir,
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      modelRegistry: this.modelRegistry,
+    });
   }
 
-  // ─── Per-session state (Task 17 / 7A.4) ────────────────────────
-  // The host tracks the `SessionState` + the live `AgentSession`
-  // for each spawned role so the `Host` methods (`captureUsage`,
-  // `sessionTerminalReason`, `dispose`) can read the per-session
-  // cap/usage/terminal-reason state and clean up on dispose.
-  // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
   private readonly sessionStates: Map<string, SessionState> = new Map();
   private readonly agentsBySessionId: Map<string, AgentSession> = new Map();
-
-  /**
-   * Tracks the most-recent role that exhausted its model fallback
-   * (Task 18, §9.4 v1 default). The next `spawnRole` for this
-   * role throws `RoleEscalationError`; a `spawnRole` for any
-   * other role clears the marker (so a different re-dispatch
-   * doesn't trip the guard, only the same-role re-dispatch
-   * does). Identical semantics to `StubHost.unavailableRole` —
-   * kept as per-class state rather than extracted (the 15-line
-   * policy doesn't cross a "real duplication" threshold).
-   */
+  /** Tracks the most-recent role that exhausted its model fallback. */
   private unavailableRole: Role | null = null;
 
-  // ─── Host methods ──────────────────────────────────────────────────
-  // `spawnRole` is wired (7A.3). The remaining methods throw a
-  // phase-tagged "not yet implemented" error so 7A.4 fills them
-  // in (one task at a time, per the plan's slice structure).
+  /** Issue #17 Phase 2: delegation helpers. */
+  private readonly delegation: ProductionHostDelegation;
 
-  async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
-    // ── Task 18: model-fallback policy (parity with StubHost) ──
-    // §9.4 v1 default: hand to orchestrator once, then escalate.
-    // The "unavailable" marker is set when the role's models were
-    // just exhausted; the next spawnRole for the same role
-    // surfaces as a typed error. Different-role spawns clear the
-    // marker (unless the different role is the orchestrator and
-    // the unavailable role was a non-orchestrator, in which case
-    // the marker persists so a same-role re-dispatch escalates).
-    if (this.unavailableRole === role) {
-      this.unavailableRole = null; // consume the escalation
-      throw new RoleEscalationError(role);
-    }
-    if (this.unavailableRole !== null && this.unavailableRole !== role) {
-      const orchestrator = this.loadedManifest.def.orchestrator;
-      if (role !== orchestrator) {
-        this.unavailableRole = null;
-      }
-    }
+  /**
+   * Resolve all pre-session context for a role: model, system prompt,
+   * resource loader, tools allowlist, session manager, and delegation.
+   * Extracted to keep `spawnRole` under the AGENTS.md ~500-LOC ceiling.
+   */
+  private async resolveSessionContext(opts: {
+    readonly role: Role;
+    readonly roleConfig: RoleConfig | undefined;
+    readonly modelIndex: number;
+    readonly handoffContextRef: SpawnRoleOptions["handoffContextRef"];
+  }): Promise<{
+    readonly model: Model<never> | undefined;
+    readonly logical: string | null;
+    readonly effort: ModelEffort;
+    readonly retries: number;
+    readonly retryDelayMs: number;
+    readonly loader: DefaultResourceLoader;
+    readonly sessionManager: SessionManager;
+    readonly seam: SessionSeam;
+    readonly roleTools: readonly string[] | undefined;
+    readonly handoffContext: ReturnType<typeof createHandoffContextTool> | null;
+    readonly delegMgr: DelegationManager | undefined;
+    readonly delegationPolicy: import("../manifest/types.js").DelegationPolicy | undefined;
+  }> {
+    const { role, roleConfig, modelIndex, handoffContextRef } = opts;
 
-    const roleConfig = this.lookupRoleConfig(role);
-    const modelIndex = opts.modelIndex ?? 0;
-
-    // ── Task 18: resolve the model from the role's models[] list.
-    // The "logical" model is the `provider:id` string the
-    // lifecycle record will carry; the SDK model is resolved via
-    // `resolveModel` against `this.modelRegistry`. On a registry
-    // miss (`NoMoreModelsError` for out-of-range index), the role
-    // is marked unavailable so the next re-dispatch escalates
-    // (§9.4 v1 default).
     let entry: ModelConfig | null = null;
     try {
       entry = selectModelEntry(role, roleConfig, modelIndex);
     } catch (e) {
-      if (e instanceof NoMoreModelsError) {
-        this.unavailableRole = role;
-      }
+      if (e instanceof NoMoreModelsError) this.unavailableRole = role;
       throw e;
     }
     let model: Model<never> | undefined;
@@ -251,19 +209,6 @@ export class ProductionHost implements Host {
       logical = resolved.logical;
     }
 
-    // 2. Load the role's system prompt. `loadSystemPrompt` returns
-    //    null when the role has no `system_prompt` field; the
-    //    `systemPromptOverride` then leaves the SDK default in
-    //    place.
-    //
-    //    Phase 7D: thread the manifest's directory + version
-    //    through so the §8.1 prompt resolver can pick the right
-    //    resolution root. v1 (existing manifests) keeps
-    //    cwd-relative resolution; v2 (HOME-sourced and
-    //    self-contained manifests) resolves against
-    //    `manifestDir`. Both fields ride on `LoadedManifest` —
-    //    added in Task 7D.2, populated by `loadManifest` /
-    //    `loadManifestFromString`.
     const rolePrompt = await loadSystemPrompt(
       role,
       roleConfig?.system_prompt,
@@ -271,13 +216,6 @@ export class ProductionHost implements Host {
       this.loadedManifest.manifestDir,
       this.loadedManifest.manifestVersion,
     );
-
-    // 3. Build the `DefaultResourceLoader` with the role's prompt
-    //    wired via `systemPromptOverride`. The override is a closure
-    //    over `rolePrompt` so a single loader instance re-evaluates
-    //    the same string each time the SDK calls
-    //    `loader.getSystemPrompt()`. `await loader.reload()` is
-    //    required by the SDK before the session uses the loader.
     const loader = new DefaultResourceLoader({
       cwd: this.cwd,
       agentDir: this.agentDir,
@@ -285,74 +223,129 @@ export class ProductionHost implements Host {
     });
     await loader.reload();
 
-    // 4. Build the tools allowlist. The `tools` option on
-    //    `createAgentSession` is the SDK's allowlist — forgetting
-    //    to name `handoff` / `end` here silently disables them
-    //    even when they're in `customTools` (sdk-surface.md §1).
-    //    `buildToolsAllowlist` dedups so a role that already names
-    //    them in `role.tools` still gets them exactly once.
     const roleTools = roleConfig?.tools;
     const handoffContext =
-      opts.handoffContextRef === undefined
-        ? null
-        : createHandoffContextTool(opts.handoffContextRef);
-    const tools = buildToolsAllowlist(roleTools, handoffContext !== null);
-
-    // 5. Build the file-backed `SessionManager` rooted under the
-    //    conductor's per-run directory (NOT pi's own session tree).
-    //    `SessionManager.create(cwd, sessionDir)` puts each session's
-    //    JSONL file directly in `sessionDir`. The constructor
-    //    `mkdirSync`'d `sessionDir` already, so this never ENOENTs.
+      handoffContextRef === undefined ? null : createHandoffContextTool(handoffContextRef);
+    const _tools = buildToolsAllowlist(roleTools, handoffContext !== null);
     const sessionManager = SessionManager.create(this.cwd, this.sessionDir);
 
-    // 6. Build the per-session seam + the handoff/end tools. The
-    //    seam's capture buffer is the loop's read surface (§12.1);
-    //    the tools write to it on call. `ask_user` is the
-    //    non-terminating UI tool and does not touch the seam. The
-    //    `rejector` predicate is bound to the `SessionState` after
-    //    construction (the state needs the `sessionId`).
     const seam = new SessionSeam();
+    const delegationPolicy = roleConfig?.delegation;
+    const hasDelegateTool = roleConfig?.tools?.includes("delegate") ?? false;
+    let delegMgr: DelegationManager | undefined;
+    if (delegationPolicy !== undefined && hasDelegateTool) {
+      const admitted = this.delegation.nextAdmittedChild(role);
+      delegMgr = this.delegation.createDelegationManager({
+        parentRole: role,
+        policy: delegationPolicy,
+        runId: this.runId,
+        onRecord: (record) => this.persistRecord(record),
+        admittedChildren: admitted,
+        parentModel: logical,
+        parentModelEffort: effort,
+      });
+    }
+
+    return {
+      model,
+      logical,
+      effort,
+      retries,
+      retryDelayMs,
+      loader,
+      sessionManager,
+      seam,
+      roleTools,
+      handoffContext,
+      delegMgr,
+      delegationPolicy,
+    };
+  }
+
+  async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
+    // ── Task 18: model-fallback policy (parity with StubHost) ──
+    if (this.unavailableRole === role) {
+      this.unavailableRole = null; // consume the escalation
+      throw new RoleEscalationError(role);
+    }
+    if (this.unavailableRole !== null && this.unavailableRole !== role) {
+      const orchestrator = this.loadedManifest.def.orchestrator;
+      if (role !== orchestrator) this.unavailableRole = null;
+    }
+
+    const roleConfig = this.lookupRoleConfig(role);
+    const modelIndex = opts.modelIndex ?? 0;
+    const ctx = await this.resolveSessionContext({
+      role,
+      roleConfig,
+      modelIndex,
+      handoffContextRef: opts.handoffContextRef,
+    });
+
+    const {
+      model,
+      logical,
+      effort,
+      retries,
+      retryDelayMs,
+      loader,
+      sessionManager,
+      seam,
+      delegMgr,
+      delegationPolicy,
+    } = ctx;
+
+    // Build handoff/end/ask_user tools and customTools list.
     const rejector = createCaptureRejector();
     const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
     const end = createEndTool(seam, rejector.shouldRejectCapture);
     const askUser = createAskUserTool() as ToolDefinition;
+    const customTools: ToolDefinition[] = [handoff, end, askUser];
+    if (ctx.handoffContext !== null) customTools.push(ctx.handoffContext as ToolDefinition);
+    if (delegMgr !== undefined && delegationPolicy !== undefined) {
+      const delegateTool = createDelegateTool({
+        parentRole: role,
+        parentSession: "",
+        policy: delegationPolicy,
+        manager: delegMgr,
+        admittedChildren: this.delegation.admittedChildCount(role),
+      });
+      customTools.push(delegateTool as unknown as ToolDefinition);
+    }
 
-    // 7. Spawn the real `AgentSession` via the SDK. `model` is
-    //    `undefined` for the system-model path; the SDK uses its
-    //    default in that case (no `model` override).
+    // Spawn the real AgentSession.
+    const toolsList =
+      ctx.roleTools !== undefined
+        ? buildToolsAllowlist(ctx.roleTools, ctx.handoffContext !== null)
+        : buildToolsAllowlist(undefined, ctx.handoffContext !== null);
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       cwd: this.cwd,
       modelRegistry: this.modelRegistry,
       resourceLoader: loader,
       sessionManager,
-      customTools: [handoff, end, askUser, ...(handoffContext === null ? [] : [handoffContext])],
-      tools: [...tools],
+      customTools,
+      tools: [...toolsList],
     };
-    if (model !== undefined) {
-      // The SDK's `model` is `Model<any>`; `resolveModel` returns
-      // `Model<never>` (any-Api escape, see the function's
-      // comment). Cast at the boundary; the SDK handles any-Api
-      // models via its discriminated `api` field.
-      (createOpts as { model?: Model<never> }).model = model;
-    }
+    if (model !== undefined) (createOpts as { model?: Model<never> }).model = model;
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
     if (this.uiContext !== undefined) {
       await session.bindExtensions({ uiContext: this.uiContext });
     }
+    if (delegMgr !== undefined) {
+      const parentSessionFile =
+        session.sessionFile ?? `${this.sessionDir}/${session.sessionId}.jsonl`;
+      delegMgr.updateParentSession(parentSessionFile);
+      this.delegation.setParentSessionFile(parentSessionFile);
+    }
 
-    // 8. Track per-session state (Task 17 / 7A.4). The host's
-    //    `captureUsage` and `sessionTerminalReason` read from
-    //    this; `dispose` cleans up the maps.
+    // 8. Track per-session state and subscribe to events.
     const cap = roleConfig?.max_session_cost_usd ?? null;
     const state = new SessionState({ cap, model: logical });
     this.sessionStates.set(session.sessionId, state);
     this.agentsBySessionId.set(session.sessionId, session);
     rejector.bindState(state);
 
-    // 9. Subscribe the session to the shared event handler
-    //    (Task 17 + 18). The handler accumulates usage, detects
-    //    model errors, and enforces the per-session cost cap.
     attachSessionEventHandler({
       session,
       state,
@@ -360,15 +353,7 @@ export class ProductionHost implements Host {
       ...(this.displaySink !== undefined && { onDisplay: this.displaySink }),
     });
 
-    // 10. Wrap the SDK session in the loop's `RoleSession` seam.
-    //     The wrapper explicitly forwards the SDK methods the loop
-    //     uses (`subscribe`, `prompt`, `dispose`) — the SDK's
-    //     `AgentSession` has these on the prototype, so a spread
-    //     would miss them. Two SDK fields are also exposed as
-    //     extra properties: `systemPrompt` (a getter) and
-    //     `getActiveToolNames` (a method). These are NOT part of
-    //     the `RoleSession` interface — the loop doesn't read them
-    //     — but the wiring tests do (via a typed cast).
+    // 9. Wrap the SDK session in the loop's RoleSession seam.
     const sessionId = session.sessionId;
     const wrapper = {
       role,
@@ -387,9 +372,7 @@ export class ProductionHost implements Host {
         this.sessionStates.delete(sessionId);
         this.agentsBySessionId.delete(sessionId);
       },
-      // Test-introspection escape hatches. The loop never reads
-      // these; the wiring tests cast through `unknown` to verify
-      // the resource loader + tools allowlist are wired correctly.
+      // Test-introspection escape hatches.
       get systemPrompt(): string {
         return session.systemPrompt;
       },

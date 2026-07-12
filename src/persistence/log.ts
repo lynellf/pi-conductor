@@ -15,6 +15,9 @@
  *  - `run_seeded` (host-owned, non-machine-event record carrying the
  *    run's original goal at `startRun` time; used by `resumeRun` to
  *    restore the goal context).
+ *  - Issue #17 `subagent_started` / `subagent_completed` / `subagent_failed`
+ *    (host-owned auxiliary session lifecycle; reducer never branches on them,
+ *    spec §12.1 invariant 1).
  *
  * **`RecordLog`** is the host-side persistence contract. The pure core
  * ships the interface and an in-memory implementation for unit tests.
@@ -26,12 +29,16 @@
 
 import type {
   Checkpoint,
+  ModelEffort,
   ModelFallback,
   ModelRetry,
   SessionLifecycleEvent,
   TransitionAccepted,
   TransitionRejected,
+  UsageRecord,
 } from "../core/types.js";
+
+// ─── §11.1: Checkpoint snapshot ─────────────────────────────────────────
 
 /**
  * §11.1: a checkpoint snapshot is a full Checkpoint, snapshotted after
@@ -43,6 +50,8 @@ export interface CheckpointSnapshot {
   readonly type: "checkpoint_snapshot";
   readonly checkpoint: Checkpoint;
 }
+
+// ─── Run seed ────────────────────────────────────────────────────────────
 
 /**
  * Host-owned, non-machine-event record carrying the run's original goal
@@ -59,6 +68,102 @@ export interface RunSeededRecord {
   readonly ts: number;
 }
 
+// ─── Issue #17: subagent records ────────────────────────────────────────
+
+/**
+ * Issue #17 §9: record written when the host starts a child auxiliary
+ * session. The reducer never branches on this record (spec §12.1 invariant 1).
+ *
+ * The host writes this record before spawning the child. It is paired with
+ * exactly one terminal record (`subagent_completed` or `subagent_failed`)
+ * by `session_file` and `attempt`.
+ */
+export interface SubagentStartedRecord {
+  readonly type: "subagent_started";
+  readonly run_id: string;
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly parent_role: string;
+  readonly parent_session: string;
+  readonly session_file: string;
+  readonly attempt: number;
+  readonly model: string | null;
+  readonly model_effort: ModelEffort;
+  readonly workspace: "read_only" | "worktree";
+  /** Non-null for `worktree` mode; null for `read_only` mode. */
+  readonly worktree_path: string | null;
+  /** Non-null for `worktree` mode; null for `read_only` mode. */
+  readonly branch: string | null;
+  readonly base_commit: string | null;
+  readonly ts: number;
+}
+
+/**
+ * Issue #17 §9: terminal record for a successful subagent attempt.
+ * Consumed by the cost rollup for `perRun` / `perModel` / `perSubagent`.
+ *
+ * A `completed` status means the child produced a committed head commit.
+ * A `no_changes` status means the child ran without modifying the worktree.
+ */
+export interface SubagentCompletedRecord {
+  readonly type: "subagent_completed";
+  readonly run_id: string;
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly parent_role: string;
+  readonly parent_session: string;
+  readonly session_file: string;
+  readonly attempt: number;
+  readonly model: string | null;
+  readonly model_effort: ModelEffort;
+  readonly workspace: "read_only" | "worktree";
+  /** Non-null for `worktree` mode; null for `read_only` mode. */
+  readonly worktree_path: string | null;
+  /** Non-null for `worktree` mode; null for `read_only` mode. */
+  readonly branch: string | null;
+  readonly base_commit: string | null;
+  readonly status: "completed" | "no_changes";
+  readonly summary: string;
+  readonly verification?: readonly string[];
+  readonly head_commit?: string;
+  readonly usage: UsageRecord;
+  readonly ts: number;
+}
+
+/**
+ * Issue #17 §9: terminal record for a failed or cancelled subagent attempt.
+ * Consumed by the cost rollup for `perRun` / `perModel` / `perSubagent`.
+ *
+ * A `failed` status means the child exhausted its model retry/fallback
+ * budget or emitted an invalid/extra report.
+ * A `cancelled` status means the parent or run was aborted.
+ */
+export interface SubagentFailedRecord {
+  readonly type: "subagent_failed";
+  readonly run_id: string;
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly parent_role: string;
+  readonly parent_session: string;
+  readonly session_file: string;
+  readonly attempt: number;
+  readonly model: string | null;
+  readonly model_effort: ModelEffort;
+  readonly workspace: "read_only" | "worktree";
+  /** Non-null for `worktree` mode; null for `read_only` mode. */
+  readonly worktree_path: string | null;
+  /** Non-null for `worktree` mode; null for `read_only` mode. */
+  readonly branch: string | null;
+  readonly base_commit: string | null;
+  readonly status: "failed" | "cancelled";
+  readonly summary: string;
+  readonly verification?: readonly string[];
+  readonly head_commit?: string;
+  readonly failure_reason: string;
+  readonly usage: UsageRecord;
+  readonly ts: number;
+}
+
 /** Union of every record the host appends to its run_id-keyed log. */
 export type PersistedRecord =
   | TransitionAccepted
@@ -67,7 +172,10 @@ export type PersistedRecord =
   | ModelFallback
   | ModelRetry
   | CheckpointSnapshot
-  | RunSeededRecord;
+  | RunSeededRecord
+  | SubagentStartedRecord
+  | SubagentCompletedRecord
+  | SubagentFailedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

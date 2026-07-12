@@ -143,3 +143,260 @@ roles:
     ).toThrow("retries must be between 0 and 10 additional attempts");
   });
 });
+
+// ─── Issue #17 delegation block parsing ──────────────────────────────
+
+describe("parseManifest with delegation block (issue #17)", () => {
+  it("parses a role with a valid delegation block", () => {
+    const m = parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: implementer
+    max_visits: 3
+    tools: [read, edit, bash, handoff, end, delegate]
+    delegation:
+      max_parallel: 3
+      max_children: 6
+      max_depth: 1
+      workspace_modes: [read_only, worktree]
+      max_child_cost_usd: 2.00
+`);
+    const impl = m.roles[1];
+    expect(impl?.delegation).toEqual({
+      max_parallel: 3,
+      max_children: 6,
+      max_depth: 1 as const,
+      workspace_modes: ["read_only", "worktree"],
+      max_child_cost_usd: 2.0,
+    });
+  });
+
+  it("parses a role without delegation (delegation field is undefined)", () => {
+    const m = parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: reviewer
+    max_visits: 3
+    tools: [read, handoff, end]
+`);
+    expect(m.roles[1]?.delegation).toBeUndefined();
+  });
+
+  it("parses a role with only read_only workspace mode", () => {
+    const m = parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [read, handoff, end, delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 1
+      workspace_modes: [read_only]
+      max_child_cost_usd: 0.50
+`);
+    expect(m.roles[1]?.delegation?.workspace_modes).toEqual(["read_only"]);
+  });
+
+  it("throws when max_depth is not the literal 1", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 2
+      workspace_modes: [read_only]
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow("must be the literal 1");
+  });
+
+  it("throws when max_depth is 0", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 0
+      workspace_modes: [read_only]
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow("must be the literal 1");
+  });
+
+  it("throws when max_parallel is zero", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 0
+      max_children: 2
+      max_depth: 1
+      workspace_modes: [read_only]
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow("must be a positive integer (>= 1)");
+  });
+
+  it("throws when max_parallel is negative", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: -1
+      max_children: 2
+      max_depth: 1
+      workspace_modes: [read_only]
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow("must be a positive integer (>= 1)");
+  });
+
+  it("throws when max_children is zero", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 0
+      max_depth: 1
+      workspace_modes: [read_only]
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow("must be a positive integer (>= 1)");
+  });
+
+  it("throws when max_child_cost_usd is zero", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 1
+      workspace_modes: [read_only]
+      max_child_cost_usd: 0
+`),
+    ).toThrow("must be a positive finite number");
+  });
+
+  it("throws when max_child_cost_usd is negative", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 1
+      workspace_modes: [read_only]
+      max_child_cost_usd: -0.01
+`),
+    ).toThrow("must be a positive finite number");
+  });
+
+  it("throws when workspace_modes contains an invalid string", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 1
+      workspace_modes: [invalid_mode]
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow('must be "read_only" or "worktree"');
+  });
+
+  it("throws when workspace_modes is a non-array", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation:
+      max_parallel: 1
+      max_children: 2
+      max_depth: 1
+      workspace_modes: read_only
+      max_child_cost_usd: 1.00
+`),
+    ).toThrow("must be an array");
+  });
+
+  it("throws when delegation block is a string instead of an object", () => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    tools: [delegate]
+    delegation: not_an_object
+`),
+    ).toThrow("must be a YAML mapping (object)");
+  });
+});

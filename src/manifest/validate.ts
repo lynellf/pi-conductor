@@ -28,7 +28,15 @@ export type ManifestErrorCode =
   /** A `models:` entry is not in `provider:id` form (§8.1). */
   | "bare-model-alias"
   /** A `models:` entry has an invalid effort token (§8.1). */
-  | "invalid-model-effort";
+  | "invalid-model-effort"
+  /** A role has `delegation:` but no `tools: [delegate]` (spec §6 / issue #17). */
+  | "delegation-without-delegate-tool"
+  /** A role has `tools: [delegate]` but no `delegation:` block (spec §6 / issue #17). */
+  | "delegation-without-block"
+  /** A delegation policy field violates the §6 constraints (spec §6 / issue #17). */
+  | "delegation-invalid-policy"
+  /** `workspace_modes` in a delegation policy contains a duplicate (spec §6 / issue #17). */
+  | "delegation-duplicate-workspace-mode";
 
 export type ManifestWarningCode =
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
@@ -157,6 +165,83 @@ export function validateManifest(m: Manifest): ManifestReport {
         warnings.push({
           code: "missing-required-tool",
           message: `role '${role.name}' is missing 'handoff' or 'end' in \`tools:\`; the host force-injects both (§8.1), so the run is not broken — but this signals author-intent drift`,
+          role: role.name,
+        });
+      }
+    }
+
+    // Issue #17 §6: cross-check delegation block + delegate tool.
+    const hasDelegation = role.delegation !== undefined;
+    const hasDelegateTool = role.tools?.includes("delegate") ?? false;
+
+    if (hasDelegation && !hasDelegateTool) {
+      errors.push({
+        code: "delegation-without-delegate-tool",
+        message: `role '${role.name}' has a \`delegation:\` block but is missing 'delegate' in \`tools:\`; both are required for delegation to be enabled (spec §6 / issue #17 §5 decision 1)`,
+        role: role.name,
+      });
+    }
+
+    if (hasDelegateTool && !hasDelegation) {
+      errors.push({
+        code: "delegation-without-block",
+        message: `role '${role.name}' has 'delegate' in \`tools:\` but no \`delegation:\` block; both are required for delegation to be enabled (spec §6 / issue #17 §5 decision 1)`,
+        role: role.name,
+      });
+    }
+
+    // Issue #17 §6: validate delegation policy shape (after parse-level
+    // coercion — these are the remaining semantic checks not caught by
+    // structural coercion).
+    if (hasDelegation) {
+      const dp = role.delegation;
+      const violations: string[] = [];
+
+      if (
+        !Number.isFinite(dp.max_parallel) ||
+        dp.max_parallel < 1 ||
+        !Number.isInteger(dp.max_parallel)
+      ) {
+        violations.push(`max_parallel must be a finite positive integer; got ${dp.max_parallel}`);
+      }
+      if (
+        !Number.isFinite(dp.max_children) ||
+        dp.max_children < 1 ||
+        !Number.isInteger(dp.max_children)
+      ) {
+        violations.push(`max_children must be a finite positive integer; got ${dp.max_children}`);
+      }
+      if (dp.max_depth !== 1) {
+        violations.push(`max_depth must be the literal 1 in v1; got ${dp.max_depth}`);
+      }
+      if (!Array.isArray(dp.workspace_modes) || dp.workspace_modes.length === 0) {
+        violations.push(
+          `workspace_modes must be a non-empty array; got ${JSON.stringify(dp.workspace_modes)}`,
+        );
+      }
+      if (!Number.isFinite(dp.max_child_cost_usd) || dp.max_child_cost_usd <= 0) {
+        violations.push(
+          `max_child_cost_usd must be a positive finite number; got ${dp.max_child_cost_usd}`,
+        );
+      }
+      // §6: duplicates in workspace_modes — emitted as a separate typed error
+      // so the consumer can route on the `delegation-duplicate-workspace-mode`
+      // code; bundling it into `delegation-invalid-policy` would make the
+      // single-violation test (Task 1.6) ambiguous.
+      if (dp.workspace_modes.length !== new Set(dp.workspace_modes).size) {
+        const seen = new Set<string>();
+        const dup = dp.workspace_modes.find((m) => seen.has(m) || !seen.add(m));
+        errors.push({
+          code: "delegation-duplicate-workspace-mode",
+          message: `role '${role.name}' has duplicate workspace mode "${dup}" in its delegation policy (spec §6 / issue #17)`,
+          role: role.name,
+        });
+      }
+
+      if (violations.length > 0) {
+        errors.push({
+          code: "delegation-invalid-policy",
+          message: `role '${role.name}' has an invalid delegation policy: ${violations.join("; ")} (spec §6 / issue #17)`,
           role: role.name,
         });
       }
