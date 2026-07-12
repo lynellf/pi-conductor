@@ -318,6 +318,7 @@ describe("runCli delegation to startRun", () => {
         def: {} as HostFactoryContext["def"],
         log: {} as HostFactoryContext["log"],
         loadedManifest: {} as LoadedManifest,
+        reconciliation: null,
       };
       expect(() => opts.hostFactory(fakeCtx)).not.toThrow();
     } finally {
@@ -337,6 +338,7 @@ describe("runCli delegation to startRun", () => {
           def: {} as HostFactoryContext["def"],
           log: {} as HostFactoryContext["log"],
           loadedManifest: {} as LoadedManifest,
+          reconciliation: null,
         });
         const uiContext = (
           host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
