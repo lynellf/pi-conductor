@@ -203,3 +203,178 @@ describe("InMemoryRecordLog", () => {
     expect(log.latestRunSeed("run-c")).toBeNull();
   });
 });
+
+// ─── Issue #17 subagent records ────────────────────────────────────────
+
+import type {
+  SubagentCompletedRecord,
+  SubagentFailedRecord,
+  SubagentStartedRecord,
+} from "../../src/persistence/log.js";
+
+const SUB_TS = 1_800_000_000_000;
+
+function mkUsage(
+  input: number,
+  output: number,
+  cache_read: number,
+  cache_write: number,
+  cost: number,
+) {
+  return {
+    input,
+    output,
+    cache_read,
+    cache_write,
+    tokens: input + output + cache_read + cache_write,
+    cost,
+  };
+}
+
+function subStarted(overrides: Partial<SubagentStartedRecord> = {}): SubagentStartedRecord {
+  return {
+    type: "subagent_started",
+    run_id: "run-1",
+    child_id: "child-a",
+    task_id: "task-1",
+    parent_role: "implementer",
+    parent_session: "/parent.jsonl",
+    session_file: "/subagent-a.jsonl",
+    attempt: 1,
+    model: "anthropic:claude-opus-4-5",
+    model_effort: "high",
+    workspace: "read_only",
+    worktree_path: null,
+    branch: null,
+    base_commit: null,
+    ts: SUB_TS,
+    ...overrides,
+  };
+}
+
+function subCompleted(overrides: Partial<SubagentCompletedRecord> = {}): SubagentCompletedRecord {
+  return {
+    type: "subagent_completed",
+    run_id: "run-1",
+    child_id: "child-a",
+    task_id: "task-1",
+    parent_role: "implementer",
+    parent_session: "/parent.jsonl",
+    session_file: "/subagent-a.jsonl",
+    attempt: 1,
+    model: "anthropic:claude-opus-4-5",
+    model_effort: "high",
+    workspace: "read_only",
+    worktree_path: null,
+    branch: null,
+    base_commit: null,
+    status: "completed",
+    summary: "All done",
+    verification: ["tests passed"],
+    head_commit: "abc123",
+    usage: mkUsage(100, 50, 0, 0, 0.5),
+    ts: SUB_TS + 1,
+    ...overrides,
+  };
+}
+
+function subFailed(overrides: Partial<SubagentFailedRecord> = {}): SubagentFailedRecord {
+  return {
+    type: "subagent_failed",
+    run_id: "run-1",
+    child_id: "child-b",
+    task_id: "task-2",
+    parent_role: "implementer",
+    parent_session: "/parent.jsonl",
+    session_file: "/subagent-b.jsonl",
+    attempt: 1,
+    model: "anthropic:claude-opus-4-5",
+    model_effort: "high",
+    workspace: "worktree",
+    worktree_path: null,
+    branch: null,
+    base_commit: null,
+    status: "failed",
+    summary: "Crashed",
+    failure_reason: "extra_emission",
+    usage: mkUsage(50, 25, 0, 0, 0.25),
+    ts: SUB_TS + 2,
+    ...overrides,
+  };
+}
+
+describe("InMemoryRecordLog with subagent records (issue #17)", () => {
+  it("append accepts a subagent_started record", () => {
+    const log = new InMemoryRecordLog();
+    const rec = subStarted();
+    log.append(rec);
+    const records = log.records("run-1");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toBe(rec);
+  });
+
+  it("append accepts a subagent_completed record", () => {
+    const log = new InMemoryRecordLog();
+    const rec = subCompleted();
+    log.append(rec);
+    expect(log.records("run-1")).toHaveLength(1);
+  });
+
+  it("append accepts a subagent_failed record", () => {
+    const log = new InMemoryRecordLog();
+    const rec = subFailed();
+    log.append(rec);
+    expect(log.records("run-1")).toHaveLength(1);
+  });
+
+  it("subagent records do not affect latestCheckpoint (no checkpoint written)", () => {
+    const log = new InMemoryRecordLog();
+    log.append(subStarted());
+    log.append(subCompleted());
+    log.append(subFailed());
+    expect(log.latestCheckpoint("run-1")).toBeNull();
+  });
+
+  it("subagent records are keyed under their own run_id", () => {
+    const log = new InMemoryRecordLog();
+    log.append(subStarted({ run_id: "run-a" }));
+    log.append(subStarted({ run_id: "run-b" }));
+    expect(log.records("run-a")).toHaveLength(1);
+    expect(log.records("run-b")).toHaveLength(1);
+    expect(log.records("run-c")).toHaveLength(0);
+  });
+
+  it("subagent_started and subagent_completed for the same child are distinct records", () => {
+    const log = new InMemoryRecordLog();
+    log.append(subStarted({ child_id: "child-a" }));
+    log.append(subCompleted({ child_id: "child-a" }));
+    log.append(subStarted({ child_id: "child-b" }));
+    const records = log.records("run-1");
+    expect(records).toHaveLength(3);
+    const types = records.map((r) => (r as { type: string }).type);
+    expect(types).toEqual(["subagent_started", "subagent_completed", "subagent_started"]);
+  });
+
+  it("worktree fields are preserved on subagent_started", () => {
+    const log = new InMemoryRecordLog();
+    log.append(
+      subStarted({
+        workspace: "worktree",
+        worktree_path: "/run-state/worktrees/child-1",
+        branch: "conductor/child-1",
+        base_commit: "abc123",
+      }),
+    );
+    const rec = log.records("run-1")[0] as SubagentStartedRecord;
+    expect(rec.workspace).toBe("worktree");
+    expect(rec.worktree_path).toBe("/run-state/worktrees/child-1");
+    expect(rec.branch).toBe("conductor/child-1");
+    expect(rec.base_commit).toBe("abc123");
+  });
+
+  it("listRunIds includes runs that have only subagent records", () => {
+    const log = new InMemoryRecordLog();
+    log.append(subStarted({ run_id: "sub-run" }));
+    expect(log.listRunIds()).toEqual(["sub-run"]);
+  });
+});

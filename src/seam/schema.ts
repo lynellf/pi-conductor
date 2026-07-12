@@ -65,3 +65,94 @@ export const endArgsSchema = Type.Object(
 
 /** Typed view of a validated end args object. Host-side use. */
 export type EndArgs = Static<typeof endArgsSchema>;
+
+// ─── Issue #17 delegation schemas ──────────────────────────────────────
+
+/**
+ * Task descriptor within a delegation batch (spec §7.1 / issue #17).
+ *
+ * Bounds are enforced at the schema level; additional host-side checks
+ * (batch size, workspace-mode allowlist, worktree cleanliness gate)
+ * live in the delegation manager (Phase 2, not here).
+ *
+ * @see delegateInputSchema
+ * @see reportResultInputSchema
+ */
+const delegateTaskSchema = Type.Object({
+  /**
+   * Stable task identifier. Alphanumeric plus dot/underscore/hyphen; must
+   * start with a letter or digit. Max 64 chars.
+   * Pattern: `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`
+   */
+  id: Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }),
+  /** What the child should accomplish. Non-empty; host-enforced max length. */
+  objective: Type.String({ minLength: 1, maxLength: 8192 }),
+  /** What constitutes a successful outcome. Non-empty; host-enforced max length. */
+  expected_output: Type.String({ minLength: 1, maxLength: 8192 }),
+  /** Workspace mode for this task. */
+  workspace: Type.Union([Type.Literal("read_only"), Type.Literal("worktree")]),
+});
+
+/**
+ * The `delegate` tool input schema — parent side (spec §7.1 / issue #17).
+ *
+ * The parent role submits a batch of independent tasks. The host validates
+ * the complete batch before spawning any children (batch-level admission).
+ * Each task is keyed by `id` so results can be assembled in input order
+ * regardless of completion order.
+ *
+ * Bounds enforced here (schema level):
+ *   - `tasks` max 64 items
+ *   - `objective` / `expected_output` max 8192 chars each
+ *
+ * Additional host-side checks (Phase 2):
+ *   - No duplicate task IDs in the batch
+ *   - Batch count does not exceed remaining `max_children`
+ *   - Each requested workspace mode is allowed by the manifest policy
+ *   - Worktree cleanliness gate when any worktree task is present
+ *   - Run/parent budget admission for each task
+ */
+export const delegateInputSchema = Type.Object(
+  {
+    tasks: Type.Array(delegateTaskSchema, { minItems: 1, maxItems: 64 }),
+  },
+  { additionalProperties: true },
+);
+
+/** Typed view of a validated delegate input object. Host-side use. */
+export type DelegateInput = Static<typeof delegateInputSchema>;
+
+/**
+ * The `report_result` tool input schema — child side (spec §7.2 / issue #17).
+ *
+ * Every child receives this tool bound to its host-generated task ID.
+ * Children cannot report for a different task (enforced by the host in
+ * Phase 2 by binding the tool with the session's task ID at construction).
+ *
+ * A child that terminates without a valid report is a failed task
+ * (host-generated reason). A second report is an `extra_emission` failure.
+ *
+ * Bounds enforced here (schema level):
+ *   - `summary` max 4096 chars
+ *   - `verification` max 32 items, each max 256 chars
+ */
+export const reportResultInputSchema = Type.Object(
+  {
+    status: Type.Union([
+      Type.Literal("completed"),
+      Type.Literal("failed"),
+      Type.Literal("no_changes"),
+    ]),
+    /** Human-readable summary of the result. Non-empty; host-enforced max length. */
+    summary: Type.String({ minLength: 1, maxLength: 4096 }),
+    /**
+     * Verification lines produced by the child (e.g. "grep found N matches",
+     * "test suite passed"). Max 32 lines; each max 256 chars.
+     */
+    verification: Type.Optional(Type.Array(Type.String({ maxLength: 256 }), { maxItems: 32 })),
+  },
+  { additionalProperties: true },
+);
+
+/** Typed view of a validated report_result input object. Child/host use. */
+export type ReportResultInput = Static<typeof reportResultInputSchema>;

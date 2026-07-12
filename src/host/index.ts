@@ -212,3 +212,32 @@ export { createProductionHost } from "./production-host-factory.js";
 // effort; the durable JSONL log is the system of record.
 
 export { subscribeToRecords } from "./record-emitter.js";
+
+// ─── Delegation (Phase 2, issue #17) ─────────────────────────────────
+// Host delegation APIs for bounded sub-agent delegation with isolated
+// worktrees. These are the public delegation exports promised by
+// phase-2-host-delegation.md R2.13 / R2.5.
+
+export { buildChildToolsAllowlist } from "./delegation/child-tool-policy.js";
+export type {
+  ChildReportCapture,
+  ChildResult,
+  ChildSpawnHandle,
+  ChildUsage,
+  CreateDelegationManagerArgs,
+  DelegateTask,
+  PoolItem,
+  SpawnChildArgs,
+} from "./delegation/manager.js";
+export { DelegationManager } from "./delegation/manager.js";
+export { runBounded } from "./delegation/pool.js";
+export {
+  createReportResultTool,
+  type ReportCapture,
+} from "./delegation/report-result-tool.js";
+export { createRunTool } from "./delegation/run-tool.js";
+export { validateDelegateBatch } from "./delegation/validate-batch.js";
+export {
+  createWorktreeManager,
+  type WorktreeManager,
+} from "./delegation/worktree.js";

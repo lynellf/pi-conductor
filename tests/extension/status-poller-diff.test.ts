@@ -58,6 +58,7 @@ function makeStats(overrides: Partial<RunStats> = {}): RunStats {
         },
       },
       perModel: {},
+      perSubagent: {},
       orchestratorOverhead: {
         input: 0,
         output: 0,

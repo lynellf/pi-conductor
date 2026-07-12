@@ -63,7 +63,7 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
 export { parseManifest } from "./manifest/parse.js";
-export type { Manifest, ModelConfig, RoleConfig } from "./manifest/types.js";
+export type { DelegationPolicy, Manifest, ModelConfig, RoleConfig } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
 
 // ─── Manifest validation + derivation (§13, §12) ──────────────────────
@@ -90,8 +90,13 @@ export { validateManifest } from "./manifest/validate.js";
 // sees them (§3/§12: payload is `unknown`).
 
 export { summarizePayload } from "./seam/payload-summary.js";
-export type { EndArgs, HandoffArgs } from "./seam/schema.js";
-export { endArgsSchema, handoffArgsSchema } from "./seam/schema.js";
+export type { DelegateInput, EndArgs, HandoffArgs, ReportResultInput } from "./seam/schema.js";
+export {
+  delegateInputSchema,
+  endArgsSchema,
+  handoffArgsSchema,
+  reportResultInputSchema,
+} from "./seam/schema.js";
 export type {
   BreachFailureReason,
   EmissionCapture,
@@ -125,7 +130,14 @@ export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";
 // reads the last snapshot — never replays records. The host's resume
 // path (§11.9) reconstructs from this single read.
 
-export type { CheckpointSnapshot, PersistedRecord, RecordLog } from "./persistence/log.js";
+export type {
+  CheckpointSnapshot,
+  PersistedRecord,
+  RecordLog,
+  SubagentCompletedRecord,
+  SubagentFailedRecord,
+  SubagentStartedRecord,
+} from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
 
 // ─── Run memory artifact (§8.4) ───────────────────────────────────────
@@ -190,6 +202,7 @@ export type {
   SpawnRoleOptions,
   StartRunOptions,
   StubHostOptions,
+  StubStep,
   TransitionRecord,
 } from "./host/index.js";
 export {

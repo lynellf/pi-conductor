@@ -35,6 +35,8 @@
  * re-dispatch escalation.
  */
 
+import type { Buffer } from "node:buffer";
+
 import type { Usage } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -57,13 +59,17 @@ import type {
   UsageRecord,
 } from "../index.js";
 import { SessionState } from "./cost.js";
+import { createDelegateTool } from "./delegation/delegate-tool.js";
+import type { DelegationManager } from "./delegation/manager.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
+import { buildToolsAllowlist } from "./production-host-resolve.js";
 import { notifyListeners } from "./record-emitter.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
+import { StubHostDelegation } from "./stub-host-delegation.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
 export interface StubHostOptions {
@@ -81,6 +87,22 @@ export interface StubHostOptions {
    * model and never throws `NoMoreModelsError`.
    */
   readonly loadedManifest?: LoadedManifest;
+  /**
+   * Per-child StubStep scripts for delegation (issue #17 Phase 2).
+   * Keyed by `taskId` (the `id` from the delegate tool's `tasks[]` array).
+   * When the parent emits `emit_delegate`, the `DelegationManager`
+   * calls `spawnChild` for each task, which looks up the child's
+   * steps here by `taskId` and drives them through a separate stub session.
+   */
+  readonly childSteps?: ReadonlyMap<string, readonly StubStep[]>;
+  /**
+   * Deterministic random-bytes source for the `DelegationManager`.
+   * Used by tests to produce predictable child IDs so `childSteps`
+   * can be keyed by the same IDs.
+   *
+   * When omitted, defaults to `node:crypto.randomBytes` (unpredictable).
+   */
+  readonly randomBytes?: (n: number) => Buffer;
 }
 
 /**
@@ -105,11 +127,17 @@ export class StubHost implements Host {
    * guard, only the same-role re-dispatch does).
    */
   private unavailableRole: Role | null = null;
+  /** Delegation helpers (issue #17 Phase 2). */
+  private readonly delegation: StubHostDelegation;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
     this.runId = opts.runId;
     this.loadedManifestValue = opts.loadedManifest;
+    this.delegation = new StubHostDelegation({
+      ...(opts.childSteps !== undefined ? { childSteps: opts.childSteps } : {}),
+      ...(opts.randomBytes !== undefined ? { randomBytes: opts.randomBytes } : {}),
+    });
 
     const authStorage = AuthStorage.inMemory();
     this.modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -207,15 +235,57 @@ export class StubHost implements Host {
         ? null
         : createHandoffContextTool(opts.handoffContextRef);
 
+    // biome-ignore lint/suspicious/noExplicitAny: SDK erases generics at customTools boundary
+    const customTools: any[] = [handoff, end];
+    if (handoffContext !== null) customTools.push(handoffContext);
+
+    // ── Issue #17 Phase 2: delegate tool for delegation-enabled roles.
+    const delegationPolicy = roleConfig?.delegation;
+    const hasDelegateTool = roleConfig?.tools?.includes("delegate") ?? false;
+    let delegMgr: DelegationManager | undefined;
+    if (delegationPolicy !== undefined && hasDelegateTool) {
+      const admitted = this.delegation.nextAdmittedChild(role);
+      delegMgr = this.delegation.createDelegationManager({
+        parentRole: role,
+        parentSession: "",
+        policy: delegationPolicy,
+        runId: this.runId,
+        onRecord: (record) => this.persistRecord(record),
+        admittedChildren: admitted,
+        parentModel: logicalModel,
+        parentModelEffort: effort,
+      });
+    }
+    if (delegMgr !== undefined && delegationPolicy !== undefined) {
+      const delegateTool = createDelegateTool({
+        parentRole: role,
+        parentSession: "",
+        policy: delegationPolicy,
+        manager: delegMgr,
+        admittedChildren: this.delegation.admittedChildCount(role),
+      });
+      customTools.push(delegateTool as unknown as (typeof customTools)[number]);
+    }
+
+    const roleTools = roleConfig?.tools;
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       model: this.model,
       modelRegistry: this.modelRegistry,
-      tools: ["handoff", "end", ...(handoffContext === null ? [] : ["handoff_context"])],
-      customTools: [handoff, end, ...(handoffContext === null ? [] : [handoffContext])],
+      // Use buildToolsAllowlist (mirrors ProductionHost behavior).
+      // Spread to mutable string[] as required by createAgentSession.
+      tools: [...buildToolsAllowlist(roleTools, handoffContext !== null)],
+      customTools,
       sessionManager: this.sessionManager,
     };
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
+
+    // Update the delegation manager with the real parent session file.
+    if (delegMgr !== undefined) {
+      const parentSessionFile =
+        session.sessionFile ?? `/tmp/stub-session-${this.stubSessionCounter + 1}.jsonl`;
+      delegMgr.updateParentSession(parentSessionFile);
+    }
 
     this.stubSessionCounter += 1;
     const stubId = `stub-session-${this.stubSessionCounter}`;

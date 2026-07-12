@@ -19,7 +19,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
-import type { Manifest, ModelConfig, RoleConfig } from "./types.js";
+import type { DelegationPolicy, Manifest, ModelConfig, RoleConfig } from "./types.js";
 import { ManifestParseError } from "./types.js";
 
 const MAX_MODEL_RETRY_DELAY_MS = 60_000;
@@ -109,6 +109,9 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     }),
     ...(entry.tools !== undefined && {
       tools: toStringArray(entry.tools, `${path}.tools`),
+    }),
+    ...(entry.delegation !== undefined && {
+      delegation: parseDelegationPolicy(entry.delegation, `${path}.delegation`),
     }),
   }) as RoleConfig;
 
@@ -223,4 +226,93 @@ function toModelEffort(value: unknown, path: string): ModelEffort {
     );
   }
   return value as ModelEffort;
+}
+
+// ─── Delegation policy helpers ──────────────────────────────────────────
+
+/**
+ * Parse the `delegation` block from a role config entry.
+ * Throws `ManifestParseError` for malformed types or unsafe values (spec §6).
+ */
+function parseDelegationPolicy(value: unknown, path: string): DelegationPolicy {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
+  }
+  const obj = value as Record<string, unknown>;
+
+  const max_parallel = toPositiveFiniteInt(obj.max_parallel, `${path}.max_parallel`);
+  const max_children = toPositiveFiniteInt(obj.max_children, `${path}.max_children`);
+  const max_depth = toLiteral(obj.max_depth, 1, `${path}.max_depth`);
+  const workspace_modes = toWorkspaceModeArray(obj.workspace_modes, `${path}.workspace_modes`);
+  const max_child_cost_usd = toPositiveFiniteNumber(
+    obj.max_child_cost_usd,
+    `${path}.max_child_cost_usd`,
+  );
+
+  return Object.freeze({
+    max_parallel,
+    max_children,
+    max_depth,
+    workspace_modes,
+    max_child_cost_usd,
+  }) as DelegationPolicy;
+}
+
+/**
+ * Require a positive finite integer (strictly > 0).
+ * Used for `max_parallel`, `max_children`, and `max_child_cost_usd` (spec §6).
+ */
+function toPositiveFiniteInt(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new ManifestParseError(`${path} must be a positive integer (>= 1)`);
+  }
+  return value;
+}
+
+/**
+ * Require a positive finite number (strictly > 0).
+ * Used for `max_child_cost_usd` (spec §6).
+ */
+function toPositiveFiniteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new ManifestParseError(`${path} must be a positive finite number`);
+  }
+  return value;
+}
+
+/**
+ * Require a literal value match (exact equality).
+ * Used for `max_depth: 1` — v1 only (spec §6).
+ */
+function toLiteral<T>(value: unknown, expected: T, path: string): T {
+  if (value !== expected) {
+    throw new ManifestParseError(`${path} must be the literal ${expected}`);
+  }
+  return value as T;
+}
+
+/**
+ * Parse `workspace_modes` as a non-empty array of workspace-mode literals.
+ * Unknown values throw `ManifestParseError` (spec §6). Duplicate values are
+ * NOT rejected here — `validateManifest` (spec §13) emits the
+ * `delegation-duplicate-workspace-mode` error code so the consumer gets a
+ * typed error rather than a generic parse error.
+ */
+function toWorkspaceModeArray(value: unknown, path: string): readonly ("read_only" | "worktree")[] {
+  if (!Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be an array`);
+  }
+  const VALID: readonly ("read_only" | "worktree")[] = ["read_only", "worktree"];
+  const out: ("read_only" | "worktree")[] = [];
+  for (const [i, item] of value.entries()) {
+    const str = toNonEmptyString(item, `${path}[${i}]`);
+    if (!VALID.includes(str as "read_only" | "worktree")) {
+      throw new ManifestParseError(`${path}[${i}] must be "read_only" or "worktree"; got "${str}"`);
+    }
+    out.push(str as "read_only" | "worktree");
+  }
+  if (out.length === 0) {
+    throw new ManifestParseError(`${path} must be a non-empty array`);
+  }
+  return Object.freeze(out);
 }
