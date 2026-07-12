@@ -47,13 +47,51 @@ Delegated usage is charged to the parent invocation's session budget for admissi
 
 A host-owned `ChildBudgetLedger` tracks reserved `max_child_cost_usd` for each admitted child and settles on terminal. The ledger is consulted before each child is spawned and at every parent terminal evaluation of the run cap. The ledger is not persisted in the FSM reducer; it is reconstructed from `subagent_started` records on resume.
 
-### 6. Cancellation propagation (Phase 3 addition)
+### 6. Cancellation propagation (Phase 3 addition, clarified)
 
-`RunHandle.abort()` first aborts all active children (each gets a `subagent_failed` with `status: "cancelled"`), then aborts the parent session. Cancellation is idempotent: a second `abort()` call is a no-op.
+Cancellation first closes child admission and **initiates** abort/dispose on every
+started child. It then immediately initiates the parent-session abort, without
+waiting for child abort, terminal persistence, disposal, or cleanup. Child signals
+are issued before the parent signal, but the operations run concurrently; a failed
+child terminal append can never prevent parent abort.
 
-### 7. Resume reconciliation (Phase 3 addition)
+Every started attempt has one immutable cancellation-terminal candidate. `cancelAll`
+attempts all handles with `allSettled`; an append failure retains its candidate and
+keyed settlement/reservation for retry. `RunHandle.abort()` is request-idempotent,
+not call-suppressing: repeated calls await/retry pending terminal appends. The common
+controller records cancellation before a manager/session is registered, and cancels
+it immediately on later registration. Explicit user abort, parent-cap, and run-cap
+cancellation share this bridge; the first terminal reason wins.
 
-On `resumeRun`, records are scanned for `subagent_started` attempts without a matching terminal record. The host records them as crashed/cancelled (`failure_reason: "recovered"` or `"recovered_dirty"`), safely cleans only clean conductor-owned worktrees, and preserves dirty ones. Missing session files are surfaced as explicit recovery metadata. Reconciliation is idempotent: a second `resumeRun` does not duplicate terminal records or remove non-conductor paths.
+### 7. Secure execution lease and resume reconciliation (Phase 3 addition, clarified)
+
+`startRun` and `resumeRun` validate the host-generated canonical UUID v4 `run_id`
+before any path use, and resolve non-symlinked realpath-contained base, run-state,
+and lock roots. Rejection performs no append, reconciliation, spawn, cleanup, or
+suspect-path deletion.
+
+One exclusive, token-owned execution lease is acquired before start writes or resume
+reconciliation and held through the entire `runWithCompletion` loop. A contender
+returns typed `run_execution_in_progress` without state change. It never breaks a
+lock by age; it may reclaim only a well-formed lock whose owner is conclusively gone,
+then rechecks the token/inode before unlinking. The owner removes only its matching
+lock in `finally`.
+
+Recovery matches exact `(child_id, attempt)` records. It appends an unmatched attempt
+terminal before guarded cleanup and preserves dirty/unsafe paths. Retryable attempts
+also have durable retry intent and one task-level finalization record. Recovery never
+spawns an unowned child retry after a process crash: it finalizes an interrupted
+retry chain as recovered cancellation, then releases the one task envelope only after
+that finalization is durable. Reconciliation is idempotent.
+
+### 8. Retry identity and finalization (Phase 3 addition)
+
+One `child_id` names one task and one shared cost envelope. Each retry increments
+`attempt` and receives a fresh session file; worktree retries receive a fresh
+generated worktree and branch. `subagent_retry_intent` records the pinned next
+attempt/model after a retryable terminal, and `subagent_task_finalized` records the
+single final task outcome and aggregate usage. These additive host records do not
+enter the reducer or checkpoint.
 
 ## Consequences
 

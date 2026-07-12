@@ -349,22 +349,37 @@ anything. It must never delete the primary checkout or an unrelated branch.
 
 ## 11. Cancellation, recovery, and failure containment
 
-- `RunHandle.abort()` first marks the parent run aborted, aborts the active parent
-  session, and aborts every child owned by that parent. Each child gets a terminal
-  `subagent_failed` record with `status: "cancelled"` and captured usage where
-  available.
+- **Cancellation ordering (superseded/clarified by
+  `docs/issue-17-delegation-lifecycle-adjudication/spec.md`):** cancellation first
+  closes child admission, initiates abort/dispose for every active child, then
+  immediately initiates the active parent-session abort **without awaiting** child
+  abort, terminal persistence, disposal, or cleanup. Child signals are issued first,
+  but child and parent abort run concurrently; parent abort is never append-gated.
+  Each child has one immutable cancelled-terminal candidate with captured usage where
+  available. A failed append retains that candidate for retry and does not prevent
+  any other child or parent abort.
+- A run has one secure per-run execution lease held from start/resume state access
+  through the whole loop. `run_id` is validated as the host-minted canonical UUID and
+  state/lock roots are realpath-contained, non-symlinked direct descendants of the
+  configured base root. Invalid IDs or unsafe roots make no writes or cleanup.
+- A child task, distinct from its attempts, is durably finalized once. Retryable
+  attempts persist retry intent; recovery finalizes interrupted retry chains as
+  recovered cancellation rather than spawning unowned retry work. Each retry uses a
+  fresh session, worktree, and branch while sharing the task's one cost envelope.
 - A child failure is isolated to that task. Siblings continue unless the parent
   or run is cancelled or the run budget is exhausted.
 - A provider/model error consumes the bounded child retry/fallback policy; after
   exhaustion it is a failed task, not a main `session_failed` lifecycle event.
-- On resume, records are scanned for `subagent_started` attempts without a
-  matching terminal record. The host records them as crashed/cancelled with zero
-  or recoverable usage, safely cleans only clean conductor-owned worktrees, and
-  preserves dirty ones. The parent main-session crash reconciliation remains the
-  existing `reduceLifecycle(session_failed, "crashed")` path.
-- Recovery and cleanup are idempotent: a second resume never duplicates a child
-  terminal record or removes a non-conductor path. Missing session/worktree files
-  are surfaced as explicit recovery metadata, not silently treated as success.
+- On resume, exact attempt records and task retry/finalization state are scanned.
+  The host records an unmatched attempt terminal before finalizing interrupted work
+  as recovered cancellation with zero or recoverable usage; it does **not** start a
+  retry whose parent invocation crashed. It safely cleans only clean conductor-owned
+  worktrees and preserves dirty or unsafe ones. The parent main-session crash
+  reconciliation remains the existing `reduceLifecycle(session_failed, "crashed")`
+  path, but executes while the per-run execution lease is held.
+- Recovery and cleanup are idempotent: a second resume never duplicates an attempt
+  terminal/task finalization or removes a non-conductor path. Missing session/worktree
+  files are surfaced as explicit recovery metadata, not silently treated as success.
 
 ## 12. Invariants and failure modes
 
