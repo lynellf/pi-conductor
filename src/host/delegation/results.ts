@@ -42,6 +42,7 @@ export async function assembleResults(
   poolItems: readonly PoolItem[],
   reports: ReadonlyMap<string, ChildReportCapture>,
   childUsages: ReadonlyMap<string, ChildUsage>,
+  sessionMetas: ReadonlyMap<string, { sessionFile: string; model: string | null }>,
   worktreeManager: WorktreeManager | undefined,
   ctx: AssembleResultsContext,
 ): Promise<readonly ChildResult[]> {
@@ -57,6 +58,10 @@ export async function assembleResults(
 
     const report = reports.get(item.childId);
     const usage = childUsages.get(item.childId) ?? zeroUsage();
+    const sessionMeta = sessionMetas.get(item.childId) ?? {
+      sessionFile: item.sessionFile,
+      model: item.model,
+    };
     const status = report?.status ?? "failed";
 
     // Worktree verification at report time.
@@ -80,20 +85,35 @@ export async function assembleResults(
           } else if (head !== item.baseCommit) {
             finalFailureReason = "head_commit_mismatch";
           }
-        } else if (status === "completed" && head) {
-          // For completed tasks, record the head commit.
-          finalHeadCommit = head;
+        } else if (status === "completed") {
+          // A completed worktree task must identify a committed head.
+          if (head === null) finalFailureReason = "head_commit_mismatch";
+          else finalHeadCommit = head;
         }
       }
     }
 
-    // Persist the terminal record - use finalFailureReason to determine status.
+    if (report?.reportCount !== undefined && report.reportCount > 1) {
+      finalFailureReason = "extra_emission";
+    }
+    if (status === "failed" && finalFailureReason === undefined) {
+      finalFailureReason = "child_session_error";
+    }
+
+    // Persist the terminal record exactly once, after child execution is over.
     if (finalFailureReason) {
-      persistFailedRecord(item, report, usage, finalFailureReason, ctx);
+      persistFailedRecord(item, report, usage, finalFailureReason, sessionMeta, ctx);
     } else if (status === "completed" || status === "no_changes") {
-      persistCompletedRecord(item, report, usage, finalHeadCommit, ctx);
+      persistCompletedRecord(item, report, usage, finalHeadCommit, sessionMeta, ctx);
     } else {
-      persistFailedRecord(item, report, usage, finalFailureReason ?? "child_session_error", ctx);
+      persistFailedRecord(
+        item,
+        report,
+        usage,
+        finalFailureReason ?? "child_session_error",
+        sessionMeta,
+        ctx,
+      );
     }
 
     // Clean worktree removal (after terminal record is appended).
@@ -107,12 +127,19 @@ export async function assembleResults(
     ) {
       const isClean = await worktreeManager.isWorktreeClean(item.worktreePath);
       if (isClean) {
-        await worktreeManager.remove(item.worktreePath);
+        await worktreeManager.remove(item.worktreePath).catch(() => undefined);
       }
     }
 
     // Build the result.
-    const result = buildChildResult(item, report, usage, finalHeadCommit, finalFailureReason);
+    const result = buildChildResult(
+      item,
+      report,
+      usage,
+      finalHeadCommit,
+      finalFailureReason,
+      sessionMeta,
+    );
     results.push(result);
   }
 
@@ -126,6 +153,7 @@ function persistCompletedRecord(
   report: ChildReportCapture | undefined,
   usage: ChildUsage,
   finalHeadCommit: string | undefined,
+  sessionMeta: { sessionFile: string; model: string | null },
   ctx: AssembleResultsContext,
 ): void {
   const verification: readonly string[] = report ? (report.verification ?? []) : [];
@@ -137,9 +165,9 @@ function persistCompletedRecord(
     task_id: item.task.id,
     parent_role: ctx.parentRole,
     parent_session: ctx.parentSession,
-    session_file: item.sessionFile,
+    session_file: sessionMeta.sessionFile,
     attempt: item.attempt,
-    model: item.model,
+    model: sessionMeta.model,
     model_effort: item.modelEffort,
     workspace: item.workspace,
     worktree_path: item.worktreePath,
@@ -160,6 +188,7 @@ function persistFailedRecord(
   report: ChildReportCapture | undefined,
   usage: ChildUsage,
   failureReason: string,
+  sessionMeta: { sessionFile: string; model: string | null },
   ctx: AssembleResultsContext,
 ): void {
   ctx.onRecord({
@@ -169,9 +198,9 @@ function persistFailedRecord(
     task_id: item.task.id,
     parent_role: ctx.parentRole,
     parent_session: ctx.parentSession,
-    session_file: item.sessionFile,
+    session_file: sessionMeta.sessionFile,
     attempt: item.attempt,
-    model: item.model,
+    model: sessionMeta.model,
     model_effort: item.modelEffort,
     workspace: item.workspace,
     worktree_path: item.worktreePath,
@@ -191,6 +220,7 @@ function buildChildResult(
   usage: ChildUsage,
   finalHeadCommit: string | undefined,
   finalFailureReason: string | undefined,
+  sessionMeta: { sessionFile: string; model: string | null },
 ): ChildResult {
   const verification: readonly string[] = report ? (report.verification ?? []) : [];
   const branchValue = item.branch !== null ? item.branch : undefined;
@@ -198,7 +228,7 @@ function buildChildResult(
   return {
     task_id: item.task.id,
     child_id: item.childId,
-    session_file: item.sessionFile,
+    session_file: sessionMeta.sessionFile,
     workspace: item.workspace,
     ...(branchValue !== undefined && { branch: branchValue }),
     ...(finalHeadCommit !== undefined && { head_commit: finalHeadCommit }),

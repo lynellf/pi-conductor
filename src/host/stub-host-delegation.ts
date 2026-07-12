@@ -20,9 +20,11 @@ import {
 import type { ModelEffort, PersistedRecord, Role } from "../index.js";
 import { SessionState } from "./cost.js";
 import { buildChildToolsAllowlist } from "./delegation/child-tool-policy.js";
+import { buildConfinedTools } from "./delegation/child-tools.js";
 import type { ChildSpawnHandle, DelegationManager, SpawnChildArgs } from "./delegation/manager.js";
 import { DelegationManager as DelegationManagerClass } from "./delegation/manager.js";
 import { createReportResultTool } from "./delegation/report-result-tool.js";
+import { createRunTool } from "./delegation/run-tool.js";
 import { attachSessionEventHandler } from "./session-event-handler.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
@@ -100,6 +102,9 @@ export class StubHostDelegation {
       spawnChild: (args) => this.spawnChild(args, opts.parentRole),
       runId: opts.runId,
       admittedChildren: opts.admittedChildren,
+      getRemainingChildren: () =>
+        opts.policy.max_children - this.admittedChildCount(opts.parentRole),
+      addAdmittedChildren: (delta) => this.addAdmittedChildren(opts.parentRole, delta),
       parentModel: opts.parentModel,
       parentModelEffort: opts.parentModelEffort,
       randomBytes: this.randomBytes,
@@ -139,8 +144,9 @@ export class StubHostDelegation {
     childModel.provider = stubChildId;
     childModel.api = childApi;
 
-    const childSessionManager = SessionManager.inMemory();
-    const tools = buildChildToolsAllowlist({ workspace, role: parentRole });
+    const effectiveCwd = args.primaryCwd ?? "/tmp";
+    const childSessionManager = SessionManager.inMemory(effectiveCwd);
+    const confinedTools = buildConfinedTools(workspace, effectiveCwd);
 
     const childState = new SessionState({ cap: null, model: args.model });
     this.sessionStates.set(stubChildId, childState);
@@ -150,12 +156,22 @@ export class StubHostDelegation {
       attempt: args.attempt,
       onReport: args.onReport,
     });
+    const customTools = [...confinedTools, reportTool];
+    if (workspace === "worktree") {
+      customTools.push(
+        createRunTool({
+          worktreePath: effectiveCwd,
+          branch: `conductor/${args.childId}`,
+        }),
+      );
+    }
 
     const childResult = await createAgentSession({
       model: childModel,
       modelRegistry: childRegistry,
-      tools: [...tools],
-      customTools: [reportTool],
+      tools: [...buildChildToolsAllowlist({ workspace, role: parentRole })],
+      customTools,
+      cwd: effectiveCwd,
       sessionManager: childSessionManager,
     });
 

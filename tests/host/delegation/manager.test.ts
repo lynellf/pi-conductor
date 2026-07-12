@@ -202,6 +202,50 @@ describe("DelegationManager", () => {
       expect(results[0]?.status).toBeDefined();
     });
 
+    test("classifies duplicate report_result emissions as one failed child", async () => {
+      const onRecord = createMockOnRecord();
+      const spawnChild = vi.fn().mockImplementation(async (args: SpawnChildArgs) => {
+        args.onReport({
+          childId: args.childId,
+          attempt: args.attempt,
+          status: "completed",
+          summary: "first",
+          verification: undefined,
+        });
+        args.onReport({
+          childId: args.childId,
+          attempt: args.attempt,
+          status: "completed",
+          summary: "second",
+          verification: undefined,
+        });
+        return {
+          sessionId: "duplicate-report-session",
+          sessionFile: "/tmp/duplicate-report.jsonl",
+          prompt: vi.fn().mockResolvedValue(undefined),
+          subscribe: vi.fn().mockReturnValue(() => {}),
+          abort: vi.fn().mockResolvedValue(undefined),
+          dispose: vi.fn().mockResolvedValue(undefined),
+        } satisfies ChildSpawnHandle;
+      });
+
+      const mgr = new DelegationManager({
+        parentRole: "worker",
+        parentSession: "session-1",
+        policy: validPolicy,
+        onRecord,
+        spawnChild,
+        runId: "run-duplicate-report",
+      });
+
+      const [result] = await mgr.run([minimalTask]);
+      expect(result?.status).toBe("failed");
+      expect(result?.failure_reason).toBe("extra_emission");
+      expect(
+        onRecord.mock.calls.filter(([record]) => record.type === "subagent_failed"),
+      ).toHaveLength(1);
+    });
+
     test("adheres to max_parallel policy", async () => {
       const spawnChild = createMockSpawnChild();
       const onRecord = createMockOnRecord();

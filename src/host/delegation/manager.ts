@@ -11,6 +11,7 @@
 
 import { randomBytes as nodeRandomBytes } from "node:crypto";
 
+import type { Model } from "@earendil-works/pi-ai";
 import type { ModelEffort, PersistedRecord, Role } from "../../index.js";
 import type { DelegationPolicy } from "../../manifest/types.js";
 import { generateBranchName, generateChildId, generateWorktreePath } from "./ids.js";
@@ -28,6 +29,8 @@ export interface ChildReportCapture {
   readonly summary: string;
   /** May be undefined when the report has no verification items. */
   readonly verification: readonly string[] | undefined;
+  /** Number of valid report_result emissions observed for this attempt. */
+  readonly reportCount?: number;
 }
 
 /** The structured result returned to the parent role per task (spec §7.2). */
@@ -55,6 +58,7 @@ export interface ChildResult {
 /** Failure reasons surfaced in ChildResult. */
 export type ChildFailureReason =
   | "report_result_schema_invalid"
+  | "extra_emission"
   | "worktree_dirty_exit"
   | "head_commit_mismatch"
   | "worktree_gate_failed"
@@ -70,9 +74,15 @@ export interface CreateDelegationManagerArgs {
   readonly worktreeManager?: WorktreeManager;
   readonly runGit?: RunGit;
   readonly primaryCwd?: string;
+  /** Root for generated worktrees, normally the run state directory. */
+  readonly worktreeStateDir?: string;
   readonly randomBytes?: (n: number) => Buffer;
   readonly runId: string;
   readonly admittedChildren?: number;
+  readonly getRemainingChildren?: () => number;
+  readonly addAdmittedChildren?: (delta: number) => void;
+  /** Resolved SDK model inherited by production child sessions. */
+  readonly parentModelDefinition?: Model<never>;
   readonly budgetLedger?: ChildBudgetLedger;
   readonly abortSignal?: { aborted: boolean };
   /** Logical model string for child sessions (from parent's resolved model). */
@@ -94,6 +104,10 @@ export interface SpawnChildArgs {
   readonly attempt: number;
   /** The child's model — inherited from the parent's resolved model (spec §5 decision 3). */
   readonly model: string | null;
+  readonly modelDefinition?: Model<never>;
+  readonly modelEffort: ModelEffort;
+  readonly primaryCwd: string | null;
+  readonly parentSession: string;
   readonly onReport: (capture: ChildReportCapture) => void;
   readonly onComplete: (usage: ChildUsage) => void;
   readonly onError: (reason: string) => void;
@@ -164,11 +178,13 @@ export interface SpawnChildContext {
   readonly parentSession: string;
   readonly runId: string;
   readonly spawnChild: (args: SpawnChildArgs) => Promise<ChildSpawnHandle>;
+  readonly parentModelDefinition: Model<never> | undefined;
   readonly worktreeManager: WorktreeManager | undefined;
   readonly primaryCwd: string | undefined;
   readonly onRecord: (record: PersistedRecord) => void;
   readonly reports: Map<string, ChildReportCapture>;
   readonly childUsages: Map<string, ChildUsage>;
+  readonly sessionMetas: Map<string, { sessionFile: string; model: string | null }>;
   readonly childHandles: Map<string, ChildSpawnHandle>;
 }
 
@@ -176,11 +192,15 @@ export interface SpawnChildContext {
 
 interface WorktreeGateArgs {
   readonly tasks: readonly DelegateTask[];
-  readonly parentRole: Role;
-  readonly parentSession: string;
-  readonly runId: string;
   readonly worktreeManager: WorktreeManager | undefined;
-  readonly onRecord: (record: PersistedRecord) => void;
+}
+
+/** Raised when a worktree batch fails admission before any child is spawned. */
+export class DelegationAdmissionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DelegationAdmissionError";
+  }
 }
 
 /**
@@ -188,39 +208,23 @@ interface WorktreeGateArgs {
  * Returns an ordered cancelled-result array if the gate fails.
  */
 async function worktreeGate(args: WorktreeGateArgs): Promise<readonly ChildResult[] | null> {
-  const { tasks, parentRole, parentSession, runId, worktreeManager, onRecord } = args;
+  const { tasks, worktreeManager } = args;
   const worktreeTasks = tasks.filter((t) => t.workspace === "worktree");
   if (worktreeTasks.length === 0) return null;
 
-  if (!worktreeManager) return tasks.map((t) => cancelResultFromResults(t, "worktree_gate_failed"));
+  if (!worktreeManager) {
+    throw new DelegationAdmissionError("worktree delegation requires a Git worktree manager");
+  }
 
-  const [isRepo, isClean] = await Promise.all([
+  const [isRepo, isClean, head] = await Promise.all([
     worktreeManager.isRepo(),
     worktreeManager.isClean(),
+    worktreeManager.currentHead(),
   ]);
-  if (!isRepo || !isClean) {
-    onRecord({
-      type: "subagent_failed",
-      run_id: runId,
-      child_id: "worktree-gate",
-      task_id: "batch",
-      parent_role: parentRole,
-      parent_session: parentSession,
-      session_file: "",
-      attempt: 0,
-      model: null,
-      model_effort: "medium" as ModelEffort,
-      workspace: "worktree",
-      worktree_path: null,
-      branch: null,
-      base_commit: null,
-      ts: Date.now(),
-      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
-      status: "failed",
-      summary: "",
-      failure_reason: "worktree_gate_failed",
-    });
-    return tasks.map((t) => cancelResultFromResults(t, "worktree_gate_failed"));
+  if (!isRepo || !isClean || head === null) {
+    throw new DelegationAdmissionError(
+      "worktree delegation requires a clean Git checkout with a commit at HEAD",
+    );
   }
 
   return null;
@@ -262,31 +266,35 @@ export class DelegationManager {
       onRecord,
       spawnChild,
       runId,
-      admittedChildren: _admittedChildren = 0, // Phase 2: not yet enforced. Phase 3 wires budget ledger.
+      admittedChildren = 0,
+      getRemainingChildren,
+      addAdmittedChildren,
       primaryCwd,
+      worktreeStateDir,
       worktreeManager,
       abortSignal,
       parentModel = null,
+      parentModelDefinition,
       parentModelEffort = "medium" as ModelEffort,
     } = this.args;
 
     // Worktree gate: verify clean primary checkout before any spawn.
-    const gateResult = await worktreeGate({
-      tasks: input,
-      parentRole,
-      parentSession,
-      runId,
-      worktreeManager,
-      onRecord,
-    });
-    if (gateResult !== null) return gateResult;
+    const remaining = getRemainingChildren?.() ?? policy.max_children - admittedChildren;
+    if (input.length > remaining) {
+      return input.map((task) => cancelResultFromResults(task, "run_cap_would_breach"));
+    }
+
+    await worktreeGate({ tasks: input, worktreeManager });
+    addAdmittedChildren?.(input.length);
 
     // Prepare pool items with session metadata placeholders.
     const poolItems: PoolItem[] = [];
     for (const task of input) {
       const childId = generateChildId(this.randomBytes);
       const worktreePath =
-        task.workspace === "worktree" ? generateWorktreePath(primaryCwd ?? "/tmp", childId) : null;
+        task.workspace === "worktree"
+          ? generateWorktreePath(worktreeStateDir ?? primaryCwd ?? "/tmp", childId)
+          : null;
       const branch = task.workspace === "worktree" ? generateBranchName(childId) : null;
 
       let baseCommit: string | null = null;
@@ -312,6 +320,7 @@ export class DelegationManager {
     // Per-child mutable state.
     const reports = new Map<string, ChildReportCapture>();
     const childUsages = new Map<string, ChildUsage>();
+    const sessionMetas = new Map<string, { sessionFile: string; model: string | null }>();
     const childHandles = new Map<string, ChildSpawnHandle>();
 
     // Bounded concurrency context for each child runner.
@@ -320,11 +329,13 @@ export class DelegationManager {
       parentSession,
       runId,
       spawnChild,
+      parentModelDefinition,
       worktreeManager,
       primaryCwd,
       onRecord,
       reports,
       childUsages,
+      sessionMetas,
       childHandles,
     };
 
@@ -347,7 +358,7 @@ export class DelegationManager {
     );
 
     // Assemble ordered results using the now-populated pool items.
-    return assembleResults(input, poolItems, reports, childUsages, worktreeManager, {
+    return assembleResults(input, poolItems, reports, childUsages, sessionMetas, worktreeManager, {
       parentRole,
       parentSession,
       runId,

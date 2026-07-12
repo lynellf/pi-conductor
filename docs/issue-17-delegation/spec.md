@@ -1,7 +1,6 @@
 # Spec: bounded sub-agent delegation with isolated worktrees (Issue #17)
 
-Status: Draft specification for review; implementation is not authorized until the
-spec is acknowledged.
+Status: Acknowledged by overseer (2026-07-12). Implementation is authorized.
 
 ## 1. Verified context
 
