@@ -44,7 +44,9 @@ export interface CreateDelegateToolArgs {
    * Number of children already admitted in this role's lifetime.
    * Used to enforce `max_children`.
    */
-  readonly admittedChildren: number;
+  readonly admittedChildren?: number;
+  /** Read the live remaining child capacity when multiple batches are possible. */
+  readonly getRemainingChildren?: () => number;
   /** Log a diagnostic message (host-side diagnostics). */
   readonly log?: (msg: string) => void;
 }
@@ -59,7 +61,7 @@ export interface CreateDelegateToolArgs {
  * The tool is a proper SDK `ToolDefinition` created via `defineTool`.
  */
 export function createDelegateTool(args: CreateDelegateToolArgs): DelegateTool {
-  const { parentRole, policy, manager, admittedChildren, log } = args;
+  const { parentRole, policy, manager, admittedChildren = 0, getRemainingChildren, log } = args;
 
   return defineTool<typeof delegateInputSchema, DelegateToolDetails>({
     name: "delegate",
@@ -71,7 +73,7 @@ export function createDelegateTool(args: CreateDelegateToolArgs): DelegateTool {
       const validation: DelegateValidationResult = validateDelegateBatch(
         params,
         policy,
-        Math.max(0, policy.max_children - admittedChildren),
+        Math.max(0, getRemainingChildren?.() ?? policy.max_children - admittedChildren),
       );
 
       if (!validation.ok) {

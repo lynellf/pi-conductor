@@ -244,14 +244,13 @@ export class StubHost implements Host {
     const hasDelegateTool = roleConfig?.tools?.includes("delegate") ?? false;
     let delegMgr: DelegationManager | undefined;
     if (delegationPolicy !== undefined && hasDelegateTool) {
-      const admitted = this.delegation.nextAdmittedChild(role);
       delegMgr = this.delegation.createDelegationManager({
         parentRole: role,
         parentSession: "",
         policy: delegationPolicy,
         runId: this.runId,
         onRecord: (record) => this.persistRecord(record),
-        admittedChildren: admitted,
+        admittedChildren: this.delegation.admittedChildCount(role),
         parentModel: logicalModel,
         parentModelEffort: effort,
       });
@@ -263,6 +262,8 @@ export class StubHost implements Host {
         policy: delegationPolicy,
         manager: delegMgr,
         admittedChildren: this.delegation.admittedChildCount(role),
+        getRemainingChildren: () =>
+          delegationPolicy.max_children - this.delegation.admittedChildCount(role),
       });
       customTools.push(delegateTool as unknown as (typeof customTools)[number]);
     }

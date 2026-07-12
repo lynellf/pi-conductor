@@ -1,10 +1,10 @@
 # Plan — Issue #17: Bounded Sub-Agent Delegation with Isolated Worktrees
 
 **Source:** GitHub issue #17 (`Add bounded sub-agent delegation with isolated
-worktrees`, enhancement). Senior spec: [`spec.md`](./spec.md) (status: draft;
-implementation gated on overseer acknowledgment). This plan condenses the
-senior spec into a tactical, phased package and surfaces the implementation
-surfaces the spec §16 listed.
+worktrees`, enhancement). Senior spec: [`spec.md`](./spec.md) (status: acknowledged;
+authorised 2026-07-12). This plan condenses the senior spec into a
+tactical, phased package and surfaces the implementation surfaces the
+spec §16 listed.
 
 **Investigated by:** this planner via the senior spec; the in-flight
 `docs/issue-17-delegation/spec.md` (read in full); OKF docs
@@ -25,12 +25,12 @@ were read for plan-shape convention.
 
 ## Status
 
-The senior spec is in **draft** status. The overseer must acknowledge it
-before implementation begins. This tactical plan assumes the senior
-spec's recommended decisions (spec §17: manifest policy, command policy,
-model policy, cleanup policy) are accepted as-is. If the overseer revises
-any of them at end-of-loop review, the affected phases will need to be
-updated; that is a follow-up, not a plan-level blocker.
+The senior spec was acknowledged by the overseer on 2026-07-12.
+Implementation is authorised. All senior spec §17 decisions (manifest
+policy, command policy, model policy, cleanup policy) are accepted as-is.
+If the overseer revises any of them at end-of-loop review, the affected
+phases will need to be updated; that is a follow-up, not a plan-level
+blocker.
 
 ## Goal
 

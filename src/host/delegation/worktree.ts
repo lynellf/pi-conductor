@@ -21,6 +21,8 @@
  * - The primary checkout is never removed (it is never in `<stateDir>/worktrees/`)
  */
 
+import { resolve as pathResolve, sep as pathSep, relative } from "node:path";
+
 import { isValidChildId } from "./ids.js";
 
 export interface RunGitOptions {
@@ -133,6 +135,17 @@ export interface WorktreeManager {
 
 export function createWorktreeManager(args: CreateWorktreeManagerArgs): WorktreeManager {
   const { cwd, stateDir, runGit } = args;
+  const normalizedStateDir = pathResolve(stateDir);
+  const worktreesRoot = pathResolve(normalizedStateDir, "worktrees");
+
+  function isOwnedPath(candidate: string): boolean {
+    const rel = relative(worktreesRoot, pathResolve(candidate));
+    return /^child-[0-9a-f]{16}$/u.test(rel) && !rel.includes(pathSep);
+  }
+
+  function isOwnedBranch(branch: string): boolean {
+    return /^conductor\/child-[0-9a-f]{16}$/u.test(branch);
+  }
 
   const mgr: WorktreeManager = {
     async isRepo(): Promise<boolean> {
@@ -177,7 +190,11 @@ export function createWorktreeManager(args: CreateWorktreeManagerArgs): Worktree
         );
       }
 
-      const worktreePath = `${stateDir}/worktrees/${childId}`;
+      if (!/^[0-9a-f]{7,64}$/u.test(baseCommit)) {
+        throw new WorktreeError("git_error", `Invalid base commit: "${baseCommit}"`);
+      }
+
+      const worktreePath = pathResolve(worktreesRoot, childId);
       const branch = `conductor/${childId}`;
 
       try {
@@ -202,12 +219,10 @@ export function createWorktreeManager(args: CreateWorktreeManagerArgs): Worktree
     },
 
     async head(branch: string): Promise<string | null> {
-      // Defensive: only accept conductor-owned branches.
-      if (!branch.startsWith("conductor/")) {
-        return null;
-      }
+      // Defensive: only accept an exact host-generated conductor branch.
+      if (!isOwnedBranch(branch)) return null;
       try {
-        const result = await runGit(["rev-parse", "--verify", branch]);
+        const result = await runGit(["rev-parse", "--verify", branch], { cwd });
         if (result.exitCode !== 0) return null;
         return result.stdout.trim() || null;
       } catch {
@@ -216,13 +231,11 @@ export function createWorktreeManager(args: CreateWorktreeManagerArgs): Worktree
     },
 
     async isWorktreeClean(path: string): Promise<boolean> {
-      // Defensive: only check worktrees beneath stateDir.
-      if (!path.startsWith(`${stateDir}/worktrees/`)) {
-        return true; // Not a conductor worktree — treat as clean (don't remove).
-      }
+      // An unowned path must never be treated as safe for cleanup.
+      if (!isOwnedPath(path)) return false;
       try {
         const result = await runGit(["status", "--porcelain=v1", "--untracked-files=all"], {
-          cwd: path,
+          cwd: pathResolve(path),
         });
         return result.exitCode === 0 && result.stdout.trim() === "";
       } catch {
@@ -231,16 +244,16 @@ export function createWorktreeManager(args: CreateWorktreeManagerArgs): Worktree
     },
 
     async remove(path: string): Promise<void> {
-      // Defensive: only remove conductor-owned worktrees beneath stateDir/worktrees/.
-      if (!path.startsWith(`${stateDir}/worktrees/`)) {
+      // Defensive: only remove a generated child worktree path.
+      if (!isOwnedPath(path)) {
         throw new WorktreeError(
           "removal_failed",
-          `Refusing to remove path "${path}" — not beneath "${stateDir}/worktrees/"`,
+          `Refusing to remove path "${path}" — not a conductor-owned worktree`,
         );
       }
 
       try {
-        const result = await runGit(["worktree", "remove", "--force", path]);
+        const result = await runGit(["worktree", "remove", "--force", pathResolve(path)], { cwd });
         if (result.exitCode !== 0) {
           throw new WorktreeError("removal_failed", `git worktree remove failed: ${result.stderr}`);
         }

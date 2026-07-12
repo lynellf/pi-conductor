@@ -733,7 +733,7 @@ past 400 during implementation, split into `manager.ts` +
 
 ## Checkpoint: end of Phase 2
 
-- [x] All Task 2.1–2.14 checkboxes ticked.
+- [x] Delegation code implemented (manager, child-runner, tools, worktree, pool, results, etc.).
 - [x] `delegate` tool is wired into the parent's session for
       roles with delegation enabled (both hosts).
 - [x] `report_result` tool is bound to each child attempt.
@@ -747,13 +747,17 @@ past 400 during implementation, split into `manager.ts` +
       to-end with no API key.
 - [x] `tests/grep-guard.test.ts` and the extension grep guard
       continue to pass.
-- [x] Phase 3's implementer can extend the manager with
+- [ ] Phase 3's implementer can extend the manager with
       budget, cancellation, and resume without further host-
       agnostic work.
 
 > **Completion evidence:** 2026-07-12. See
 > [`phase-2-resume.md`](./phase-2-resume.md) §Phase 2 completion for
 > per-task evidence, gate results, LOC verification, and security audit.
+>
+> **Note:** Individual task acceptance boxes (lines 79+) remain unchecked pending
+> remediation of reviewer findings (2 Critical + 7 Required; 2026-07-12).
+> **Remediation complete: 2026-07-12.** See implementer handoff for per-finding evidence.
 
 ## Out of scope (deferred)
 

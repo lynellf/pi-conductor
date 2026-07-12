@@ -154,6 +154,7 @@ export class ProductionHost implements Host {
       cwd: this.cwd,
       agentDir: this.agentDir,
       modelRegistry: this.modelRegistry,
+      worktreeStateDir: join(opts.cwd, ".pi-conductor", "runs", opts.runId),
     });
   }
 
@@ -234,14 +235,14 @@ export class ProductionHost implements Host {
     const hasDelegateTool = roleConfig?.tools?.includes("delegate") ?? false;
     let delegMgr: DelegationManager | undefined;
     if (delegationPolicy !== undefined && hasDelegateTool) {
-      const admitted = this.delegation.nextAdmittedChild(role);
       delegMgr = this.delegation.createDelegationManager({
         parentRole: role,
         policy: delegationPolicy,
         runId: this.runId,
         onRecord: (record) => this.persistRecord(record),
-        admittedChildren: admitted,
+        admittedChildren: this.delegation.admittedChildCount(role),
         parentModel: logical,
+        ...(model !== undefined && { parentModelDefinition: model }),
         parentModelEffort: effort,
       });
     }
@@ -309,6 +310,8 @@ export class ProductionHost implements Host {
         policy: delegationPolicy,
         manager: delegMgr,
         admittedChildren: this.delegation.admittedChildCount(role),
+        getRemainingChildren: () =>
+          delegationPolicy.max_children - this.delegation.admittedChildCount(role),
       });
       customTools.push(delegateTool as unknown as ToolDefinition);
     }
@@ -336,7 +339,6 @@ export class ProductionHost implements Host {
       const parentSessionFile =
         session.sessionFile ?? `${this.sessionDir}/${session.sessionId}.jsonl`;
       delegMgr.updateParentSession(parentSessionFile);
-      this.delegation.setParentSessionFile(parentSessionFile);
     }
 
     // 8. Track per-session state and subscribe to events.

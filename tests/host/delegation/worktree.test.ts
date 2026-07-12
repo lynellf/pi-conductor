@@ -2,6 +2,11 @@
  * Tests for delegation/worktree.ts — Git worktree lifecycle manager.
  */
 
+import { execFile as execFileNode } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 import { isValidChildId } from "../../../src/host/delegation/ids.js";
 import { createWorktreeManager, WorktreeError } from "../../../src/host/delegation/worktree.js";
@@ -76,10 +81,69 @@ function createFakeRunGit(behavior: {
 
 const STATE_DIR = "/run/42eae1e0";
 const CWD = "/project";
+const execFile = promisify(execFileNode);
+
+async function realGit(args: readonly string[], opts?: { cwd?: string }) {
+  try {
+    const result = await execFile("git", [...args], { cwd: opts?.cwd });
+    return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
+  } catch (cause: unknown) {
+    const error = cause as { stdout?: string; stderr?: string; code?: number };
+    return {
+      stdout: error.stdout ?? "",
+      stderr: error.stderr ?? String(cause),
+      exitCode: typeof error.code === "number" ? error.code : 1,
+    };
+  }
+}
 
 // ─── Tests ─────────────────────────────────────────────────────────────────
 
 describe("createWorktreeManager", () => {
+  test("creates and removes a real pinned worktree without touching the primary checkout", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-conductor-worktree-"));
+    const primary = join(root, "primary");
+    const state = join(root, "state");
+    await rm(primary, { recursive: true, force: true });
+    await realGit(["init", primary]);
+    await realGit(
+      [
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "user.name=Test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "initial",
+      ],
+      { cwd: primary },
+    );
+    const manager = createWorktreeManager({ cwd: primary, stateDir: state, runGit: realGit });
+
+    try {
+      const base = await manager.currentHead();
+      expect(await manager.isRepo()).toBe(true);
+      expect(base).toMatch(/^[0-9a-f]+$/u);
+      expect(await manager.isClean()).toBe(true);
+      const created = await manager.create({
+        childId: "child-abcdef1234567890",
+        baseCommit: base as string,
+      });
+      expect(await manager.head(created.branch)).toBe(base);
+      await writeFile(join(created.path, "change.txt"), "change", "utf8");
+      await realGit(["add", "change.txt"], { cwd: created.path });
+      await realGit(
+        ["-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "change"],
+        { cwd: created.path },
+      );
+      expect(await manager.isWorktreeClean(created.path)).toBe(true);
+      await manager.remove(created.path);
+      expect(await manager.currentHead()).toBe(base);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   describe("isRepo", () => {
     test("returns true for a git repository", async () => {
       const runGit = createFakeRunGit({ isRepo: true });
@@ -211,15 +275,14 @@ describe("createWorktreeManager", () => {
   });
 
   describe("isWorktreeClean", () => {
-    test("returns true for non-conductor paths (safety)", async () => {
+    test("returns false for non-conductor paths (safety)", async () => {
       const runGit = createFakeRunGit({});
       const mgr = createWorktreeManager({ cwd: CWD, stateDir: STATE_DIR, runGit });
 
-      // Paths not beneath stateDir/worktrees/ are treated as clean
-      // This is a safety check to prevent accidental removal of non-worktree paths
+      // Unowned paths are never treated as safe for cleanup.
       const result = await mgr.isWorktreeClean("/etc/passwd");
 
-      expect(result).toBe(true);
+      expect(result).toBe(false);
     });
 
     test("returns true for clean worktree (git status returns empty output)", async () => {
@@ -258,7 +321,9 @@ describe("createWorktreeManager", () => {
       const runGit = createFakeRunGit({ removeResult: { exitCode: 0, stderr: "" } });
       const mgr = createWorktreeManager({ cwd: CWD, stateDir: STATE_DIR, runGit });
 
-      await expect(mgr.remove(`${STATE_DIR}/worktrees/abcdef1234567890`)).resolves.not.toThrow();
+      await expect(
+        mgr.remove(`${STATE_DIR}/worktrees/child-abcdef1234567890`),
+      ).resolves.not.toThrow();
     });
 
     test("rejects removal of non-conductor paths", async () => {
@@ -272,7 +337,7 @@ describe("createWorktreeManager", () => {
       } catch (err) {
         expect(err).toBeInstanceOf(WorktreeError);
         expect((err as WorktreeError).code).toBe("removal_failed");
-        expect((err as WorktreeError).message).toContain("not beneath");
+        expect((err as WorktreeError).message).toContain("not a conductor-owned worktree");
       }
     });
 

@@ -23,9 +23,11 @@
  */
 
 import { execFile as execFileNode } from "node:child_process";
-import { resolve as pathResolve } from "node:path";
+import { resolve as pathResolve, sep as pathSep, relative } from "node:path";
 import { promisify } from "node:util";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 
 const execFile = promisify(execFileNode);
 
@@ -49,20 +51,21 @@ const ALLOWED_COMMANDS: readonly string[] = [
 
 /** Characters allowed in command arguments (tight allowlist). */
 const SAFE_ARG_PATTERN = /^[A-Za-z0-9_./=:@+-]+$/;
+const runParameters = Type.Object({
+  command: Type.Array(Type.String(), { minItems: 1 }),
+  cwd: Type.Optional(Type.String()),
+});
 
 /** Git sub-commands that require path confinement (spec §7.4). */
-const GIT_SUBCOMMANDS: readonly string[] = [
-  "git",
-  "push",
-  "commit",
-  "branch",
-  "checkout",
-  "add",
+const ALLOWED_GIT_SUBCOMMANDS: readonly string[] = [
   "status",
   "diff",
   "log",
   "show",
   "ls-files",
+  "add",
+  "commit",
+  "rev-parse",
 ] as const;
 
 export interface CreateRunToolArgs {
@@ -98,29 +101,19 @@ function errorResult(text: string): {
  * Registered ONLY for `worktree` children (never `read_only`).
  */
 export function createRunTool(args: CreateRunToolArgs) {
-  const { worktreePath, onError } = args;
+  const { worktreePath, branch, onError } = args;
+  const normalizedWorktreePath = pathResolve(worktreePath);
 
   return defineTool({
     name: "run",
     label: "run",
     description: `Restricted command runner for worktree child (confined to ${worktreePath})`,
-    parameters: {
-      type: "object",
-      properties: {
-        command: {
-          type: "array",
-          items: { type: "string" },
-          description: "Command as an argv array",
-        },
-        cwd: {
-          type: "string",
-          description: "Working directory (must be within the worktree)",
-        },
-      },
-      required: ["command"],
-    },
+    parameters: runParameters,
     execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
-      const p = params as { command?: unknown[]; cwd?: string };
+      if (!Value.Check(runParameters, params)) {
+        return errorResult("command must be a non-empty array of strings");
+      }
+      const p = params as Static<typeof runParameters>;
       const command = p.command;
 
       // Validate command shape.
@@ -164,8 +157,16 @@ export function createRunTool(args: CreateRunToolArgs) {
         }
       }
 
-      // Pre-compute the normalized worktree path for containment checks.
-      const normalizedWorktreePath = pathResolve(worktreePath);
+      // Absolute argv paths must remain inside this generated worktree.
+      for (const arg of cmd.slice(1)) {
+        if (arg.startsWith("/")) {
+          const rel = relative(normalizedWorktreePath, pathResolve(arg));
+          if (rel === ".." || rel.startsWith(`..${pathSep}`) || rel.startsWith(pathSep)) {
+            logError(`path outside worktree in argv: ${arg}`);
+            return errorResult(`Argument "${arg}" resolves outside the worktree`);
+          }
+        }
+      }
 
       // Reject git -C, --git-dir, --work-tree which can escape the worktree.
       // These flags change the repository root, bypassing our cwd containment check.
@@ -184,17 +185,17 @@ export function createRunTool(args: CreateRunToolArgs) {
             return errorResult(`git -C is not allowed to change directory outside the worktree`);
           }
         }
-        // Reject --git-dir=<path> and --work-tree=<path> with = syntax.
-        if ((arg.startsWith("--git-dir=") || arg.startsWith("--work-tree=")) && arg.includes("=")) {
-          const targetPath = arg.split("=", 2)[1] as string;
-          const normalizedTarget = pathResolve(targetPath);
-          if (
-            !normalizedTarget.startsWith(`${normalizedWorktreePath}/`) &&
-            normalizedTarget !== normalizedWorktreePath
-          ) {
-            logError(`${arg} escapes worktree`);
-            return errorResult(`${arg} is not allowed to target paths outside the worktree`);
-          }
+        // Never allow repository-root overrides. A worktree's `.git` file can
+        // point at the primary checkout, so even a lexically-contained value
+        // would bypass the generated worktree boundary.
+        if (
+          arg === "--git-dir" ||
+          arg === "--work-tree" ||
+          arg.startsWith("--git-dir=") ||
+          arg.startsWith("--work-tree=")
+        ) {
+          logError(`${arg} is not permitted`);
+          return errorResult(`${arg} is not permitted for child Git commands`);
         }
         // Also reject -C with = syntax (e.g., git -C=/tmp/repo).
         if (arg.startsWith("-C=")) {
@@ -224,8 +225,28 @@ export function createRunTool(args: CreateRunToolArgs) {
         );
       }
 
-      // For git commands, validate the branch prefix.
-      if (GIT_SUBCOMMANDS.includes(topLevel)) {
+      // For git commands, allow only inspection and commits on the generated branch.
+      if (topLevel === "git") {
+        const subcommand = cmd[1];
+        const branchFlag = cmd.indexOf("-b");
+        const requestedBranch = branchFlag >= 0 ? cmd[branchFlag + 1] : undefined;
+        if (
+          (subcommand === "checkout" || subcommand === "switch" || subcommand === "branch") &&
+          requestedBranch !== undefined &&
+          !requestedBranch.startsWith("conductor/")
+        ) {
+          return errorResult(`Git branch "${requestedBranch}" must start with "conductor/".`);
+        }
+        if (subcommand === undefined || !ALLOWED_GIT_SUBCOMMANDS.includes(subcommand)) {
+          logError(`git subcommand is not allowed: ${subcommand ?? ""}`);
+          return errorResult(
+            "Only bounded inspection, staging, and commit Git commands are allowed",
+          );
+        }
+        if (!/^conductor\/child-[0-9a-f]{1,64}$/u.test(branch)) {
+          logError(`invalid conductor branch: ${branch}`);
+          return errorResult("Child branch is not conductor-owned");
+        }
         // If the command contains a `-b` flag followed by a branch, validate it.
         const branchIdx = cmd.indexOf("-b");
         if (branchIdx >= 0 && cmd[branchIdx + 1] !== undefined) {
