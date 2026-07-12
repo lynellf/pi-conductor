@@ -75,6 +75,8 @@ import type {
   RecordLog,
   RunSeededRecord,
 } from "../persistence/log.js";
+import type { DelegationManager } from "./delegation/manager.js";
+import { reconcileOrphans } from "./delegation/recovery.js";
 import type { Host, RoleSession } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -136,6 +138,13 @@ export interface HostFactoryContext {
    * per-role cost caps and model fallback.
    */
   readonly loadedManifest: LoadedManifest;
+  /**
+   * Phase 3: reconciliation result from orphan child scan on resume.
+   * `null` for fresh `startRun` (no prior records to reconcile).
+   * The host factory uses this to reconstruct the `ChildBudgetLedger`
+   * for the `DelegationManager`.
+   */
+  readonly reconciliation: import("./delegation/recovery.js").ReconciliationResult | null;
 }
 
 // ─── startRun ──────────────────────────────────────────────────────────
@@ -176,7 +185,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   };
   log.append(seedRecord);
 
-  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded, reconciliation: null });
   void opts.goal; // goal is unused by runLoop directly; Task 16.5 wires it into the orchestrator seed
 
   return await runWithCompletion({
@@ -233,7 +242,20 @@ export async function resumeRun(
   // Crash reconciliation (§11.1).
   const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
 
-  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+  // Phase 3: Orphan child reconciliation.
+  // Scans records for subagent_started attempts without a terminal record.
+  // The host factory receives this result to reconstruct the budget ledger.
+  // We pass undefined for worktreeManager here — the actual worktreeManager
+  // is created by the host factory with the correct stateDir.
+  const reconciliation = await reconcileOrphans({
+    runId,
+    records: log.records(runId),
+    worktreeManager: undefined, // Host factory creates the worktree manager with stateDir
+    stateDir: baseDir,
+    onRecord: (record) => log.append(record),
+  });
+
+  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded, reconciliation });
 
   // Restore the original goal from the run log (if available).
   // Falls back to opts.goal (which may be "") for runs that
@@ -308,6 +330,9 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
   let activeSession: RoleSession | null = null;
   let pendingAbortReason: string | null = null;
   let abortRequested = false;
+  // Phase 3: track the active delegation manager for cancelAll.
+  let activeDelegationManager: DelegationManager | null = null;
+
   const abortControl = {
     async setActiveSession(session: RoleSession | null): Promise<void> {
       activeSession = session;
@@ -319,8 +344,17 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
       if (abortRequested) return;
       abortRequested = true;
       pendingAbortReason = reason;
+      // Phase 3: cancel all active children BEFORE aborting the parent session.
+      if (activeDelegationManager !== null) {
+        await activeDelegationManager.cancelAll(reason);
+      }
       if (activeSession === null) return;
       await host.abortSession(activeSession, reason);
+    },
+    async setActiveDelegation(manager: unknown | null): Promise<void> {
+      // Type: unknown because we import DelegationManager here but don't
+      // want to create a circular dependency. The manager is checked at runtime.
+      activeDelegationManager = manager as DelegationManager | null;
     },
   };
 

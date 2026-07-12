@@ -1,12 +1,13 @@
 /**
  * Delegation manager — orchestrates child sub-agent sessions.
- * Phase 2: no budget ledger, no cancellation. Phase 3 adds those.
+ * Phase 2: basic orchestration. Phase 3 adds budget reservation and cancellation.
  *
  * Module structure:
- * - `manager.ts`   — public types + `DelegationManager` orchestration (~280 LOC)
+ * - `manager.ts`   — public types + `DelegationManager` orchestration (~380 LOC)
  * - `child-runner.ts` — per-child session runner (~180 LOC)
  * - `results.ts`   — ordered result assembly (~220 LOC)
  * - `pool.ts`      — bounded concurrency (~80 LOC)
+ * - `child-budget.ts` — budget reservation ledger (Phase 3, ~150 LOC)
  */
 
 import { randomBytes as nodeRandomBytes } from "node:crypto";
@@ -14,6 +15,7 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelEffort, PersistedRecord, Role } from "../../index.js";
 import type { DelegationPolicy } from "../../manifest/types.js";
+import type { ChildBudgetLedger, ReservationResult } from "./child-budget.js";
 import { generateBranchName, generateChildId, generateWorktreePath } from "./ids.js";
 import { runBounded } from "./pool.js";
 import { assembleResults, cancelResult as cancelResultFromResults } from "./results.js";
@@ -83,6 +85,7 @@ export interface CreateDelegationManagerArgs {
   readonly addAdmittedChildren?: (delta: number) => void;
   /** Resolved SDK model inherited by production child sessions. */
   readonly parentModelDefinition?: Model<never>;
+  /** Budget ledger for run-cap reservation. Phase 3: undefined = uncapped (backward compat). */
   readonly budgetLedger?: ChildBudgetLedger;
   readonly abortSignal?: { aborted: boolean };
   /** Logical model string for child sessions (from parent's resolved model). */
@@ -138,17 +141,6 @@ export interface ChildUsage {
   readonly cost: number;
 }
 
-/** Budget ledger interface stub (Phase 3). Phase 2 is no-op. */
-export interface ChildBudgetLedger {
-  reserve(args: {
-    childId: string;
-    amount: number;
-  }): { ok: true; reservationId: string } | { ok: false; reason: "run_cap_would_breach" };
-  settle(reservationId: string, actualCost: number): void;
-  release(reservationId: string): void;
-  reservedTotal(): number;
-}
-
 // ─── Internal mutable state (not exposed) ─────────────────────────────
 
 export interface PoolItem {
@@ -186,6 +178,10 @@ export interface SpawnChildContext {
   readonly childUsages: Map<string, ChildUsage>;
   readonly sessionMetas: Map<string, { sessionFile: string; model: string | null }>;
   readonly childHandles: Map<string, ChildSpawnHandle>;
+  /** Budget ledger (Phase 3). Undefined = uncapped. */
+  readonly budgetLedger: ChildBudgetLedger | undefined;
+  /** Map of childId → reservationId for settlement on terminal (Phase 3). */
+  readonly reservations: Map<string, string>;
 }
 
 // ─── Worktree gate ───────────────────────────────────────────────────
@@ -232,10 +228,25 @@ async function worktreeGate(args: WorktreeGateArgs): Promise<readonly ChildResul
 
 // ─── DelegationManager ───────────────────────────────────────────────
 
-/** Orchestrates child sub-agent sessions for a single `delegate` call. */
+/**
+ * Orchestrates child sub-agent sessions for a single `delegate` call.
+ *
+ * Phase 3 additions:
+ * - Budget reservation via `ChildBudgetLedger`.
+ * - `cancelAll()` for parent/run abort propagation.
+ * - Tracks active child handles and reservations for cancellation.
+ */
 export class DelegationManager {
   private readonly args: CreateDelegationManagerArgs;
   private readonly randomBytes: (n: number) => Buffer;
+  /** Active handles for the current or last batch (used by cancelAll). */
+  private activeHandles: Map<string, ChildSpawnHandle> = new Map();
+  /** Active reservations for the current or last batch (used by cancelAll). */
+  private activeReservations: Map<string, string> = new Map();
+  /** Active pool items for the current or last batch (used by cancelAll). */
+  private activeItems: PoolItem[] = [];
+  /** Flag to ensure cancelAll is idempotent. */
+  private cancelled = false;
 
   constructor(opts: CreateDelegationManagerArgs) {
     this.args = opts;
@@ -257,6 +268,8 @@ export class DelegationManager {
    *
    * Returns an ordered array of `ChildResult` in input task order.
    * Every task in the input produces exactly one result (no omissions).
+   *
+   * Phase 3: reserves budget before spawning, settles on terminal.
    */
   async run(input: readonly DelegateTask[]): Promise<readonly ChildResult[]> {
     const {
@@ -276,7 +289,14 @@ export class DelegationManager {
       parentModel = null,
       parentModelDefinition,
       parentModelEffort = "medium" as ModelEffort,
+      budgetLedger,
     } = this.args;
+
+    // Reset active state for this batch.
+    this.activeHandles = new Map();
+    this.activeReservations = new Map();
+    this.activeItems = [];
+    this.cancelled = false;
 
     // Worktree gate: verify clean primary checkout before any spawn.
     const remaining = getRemainingChildren?.() ?? policy.max_children - admittedChildren;
@@ -287,10 +307,29 @@ export class DelegationManager {
     await worktreeGate({ tasks: input, worktreeManager });
     addAdmittedChildren?.(input.length);
 
-    // Prepare pool items with session metadata placeholders.
-    const poolItems: PoolItem[] = [];
+    // Phase 3: Budget reservation phase.
+    // Reserve budget for each child. If any reservation fails, stop admitting
+    // new children. Already-admitted children are still spawned.
+    const admittedItems: PoolItem[] = [];
+    const reservationMap = new Map<string, string>();
+
     for (const task of input) {
+      // Try to reserve budget (if ledger is provided).
       const childId = generateChildId(this.randomBytes);
+      const reservationResult: ReservationResult = budgetLedger
+        ? budgetLedger.reserve({ childId, amount: policy.max_child_cost_usd })
+        : { ok: true, reservationId: `no-ledger-${childId}` };
+
+      if (!reservationResult.ok) {
+        // Run cap would be breached — this task and remaining are cancelled.
+        // Stop reserving and break out.
+        break;
+      }
+
+      if (reservationResult.ok) {
+        reservationMap.set(childId, reservationResult.reservationId);
+      }
+
       const worktreePath =
         task.workspace === "worktree"
           ? generateWorktreePath(worktreeStateDir ?? primaryCwd ?? "/tmp", childId)
@@ -302,7 +341,7 @@ export class DelegationManager {
         baseCommit = await worktreeManager.currentHead();
       }
 
-      poolItems.push({
+      admittedItems.push({
         task,
         childId,
         attempt: 1,
@@ -310,11 +349,19 @@ export class DelegationManager {
         worktreePath,
         branch,
         baseCommit,
-        // Session metadata: populated via onSessionCreated callback in runChild.
         sessionFile: "",
         model: parentModel,
         modelEffort: parentModelEffort,
       });
+    }
+
+    // Track active state for cancelAll.
+    this.activeReservations = reservationMap;
+    this.activeItems = admittedItems;
+
+    // If no items were admitted due to budget failure, return cancelled results.
+    if (admittedItems.length === 0) {
+      return input.map((task) => cancelResultFromResults(task, "run_cap_would_breach"));
     }
 
     // Per-child mutable state.
@@ -322,6 +369,9 @@ export class DelegationManager {
     const childUsages = new Map<string, ChildUsage>();
     const sessionMetas = new Map<string, { sessionFile: string; model: string | null }>();
     const childHandles = new Map<string, ChildSpawnHandle>();
+
+    // Track active handles for cancelAll.
+    this.activeHandles = childHandles;
 
     // Bounded concurrency context for each child runner.
     const ctx: SpawnChildContext = {
@@ -337,6 +387,8 @@ export class DelegationManager {
       childUsages,
       sessionMetas,
       childHandles,
+      budgetLedger,
+      reservations: reservationMap,
     };
 
     // Import runChild lazily to avoid circular imports.
@@ -344,7 +396,7 @@ export class DelegationManager {
 
     // Run with bounded concurrency.
     await runBounded({
-      items: poolItems,
+      items: admittedItems,
       maxParallel: policy.max_parallel,
       run: async (item) => {
         if (abortSignal?.aborted) throw new Error("Aborted by parent");
@@ -352,25 +404,120 @@ export class DelegationManager {
       },
     });
 
-    // Abort any remaining handles.
+    // Abort any remaining handles (race condition cleanup).
     await Promise.allSettled(
       [...childHandles.values()].map((h) => h.abort().then(() => h.dispose())),
     );
 
+    // Phase 3: Settle reservations with actual costs.
+    for (const item of admittedItems) {
+      const reservationId = reservationMap.get(item.childId);
+      if (reservationId && budgetLedger) {
+        const usage = childUsages.get(item.childId);
+        const actualCost = usage?.cost ?? 0;
+        budgetLedger.settle(reservationId, actualCost);
+      }
+    }
+
     // Assemble ordered results using the now-populated pool items.
-    return assembleResults(input, poolItems, reports, childUsages, sessionMetas, worktreeManager, {
-      parentRole,
-      parentSession,
-      runId,
-      onRecord,
-    });
+    const results = await assembleResults(
+      admittedItems.map((item) => item.task),
+      admittedItems,
+      reports,
+      childUsages,
+      sessionMetas,
+      worktreeManager,
+      { parentRole, parentSession, runId, onRecord },
+    );
+
+    // Build final result set in input order.
+    const admittedMap = new Map<string, ChildResult>();
+    for (const r of results) {
+      admittedMap.set(r.task_id, r);
+    }
+
+    const finalResults: ChildResult[] = [];
+    for (const task of input) {
+      const admittedResult = admittedMap.get(task.id);
+      if (admittedResult) {
+        finalResults.push(admittedResult);
+      } else {
+        // This task was cancelled due to budget failure.
+        finalResults.push(cancelResultFromResults(task, "run_cap_would_breach"));
+      }
+    }
+
+    return finalResults;
   }
 
   /**
    * Cancel all active children (Phase 3: called by RunHandle.abort).
-   * Phase 2: no-op.
+   *
+   * Idempotent: subsequent calls are no-ops.
+   *
+   * For each active child:
+   * 1. Abort the child session.
+   * 2. Persist a `subagent_failed` record with `status: "cancelled"`.
+   * 3. Release any pending budget reservation.
    */
-  async cancelAll(_reason: string): Promise<void> {
-    // Phase 2: no-op.
+  async cancelAll(reason: string): Promise<void> {
+    if (this.cancelled) return;
+    this.cancelled = true;
+
+    const { onRecord, runId, parentRole, parentSession, budgetLedger } = this.args;
+
+    // Abort all active handles and dispose them.
+    const abortPromises: Promise<void>[] = [];
+    for (const [, handle] of this.activeHandles) {
+      abortPromises.push(
+        handle
+          .abort()
+          .then(() => handle.dispose())
+          .catch(() => undefined),
+      );
+    }
+    await Promise.all(abortPromises);
+
+    // Persist cancelled terminals for each active item.
+    const ts = Date.now();
+    for (const item of this.activeItems) {
+      const sessionMeta = item.sessionFile
+        ? { sessionFile: item.sessionFile, model: item.model }
+        : { sessionFile: "", model: item.model };
+
+      onRecord({
+        type: "subagent_failed",
+        run_id: runId,
+        child_id: item.childId,
+        task_id: item.task.id,
+        parent_role: parentRole,
+        parent_session: parentSession,
+        session_file: sessionMeta.sessionFile,
+        attempt: item.attempt,
+        model: sessionMeta.model,
+        model_effort: item.modelEffort,
+        workspace: item.workspace,
+        worktree_path: item.worktreePath,
+        branch: item.branch,
+        base_commit: item.baseCommit,
+        ts,
+        usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
+        status: "cancelled",
+        summary: "",
+        failure_reason: reason,
+      });
+    }
+
+    // Release all pending reservations.
+    for (const [, reservationId] of this.activeReservations) {
+      if (budgetLedger) {
+        budgetLedger.release(reservationId);
+      }
+    }
+
+    // Clear active state.
+    this.activeHandles = new Map();
+    this.activeReservations = new Map();
+    this.activeItems = [];
   }
 }
