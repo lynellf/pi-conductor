@@ -1,12 +1,23 @@
 /**
- * Result assembly — assembles ordered `ChildResult[]` from per-child state
- * and persists terminal records (spec §7.2, issue #17 §7.2).
+ * Result assembly — pure projection only (spec §7.2, issue #17 §7.2).
+ *
+ * Phase 3 Task 3 correction: this module is a pure projection from input state
+ * to ordered `ChildResult[]` and terminal classification. It does NOT persist
+ * records and does NOT remove worktrees.
+ *
+ * Terminal writing is the sole responsibility of `AttemptRegistry.writeTerminal`.
+ * Worktree cleanup is delegated to the recovery module or the manager's
+ * post-terminal cleanup path.
+ *
+ * The separation of concerns:
+ *   - `assembleResults` (this module): pure projection, no side effects.
+ *   - `AttemptRegistry.writeTerminal`: sole terminal writer.
+ *   - `reconcileOrphans` (recovery.ts): orphaned worktree cleanup on resume.
  *
  * Extracted from `manager.ts` to keep the manager below the ~400-line signal.
- * Each method is a pure transformation of input state → output result + records.
  */
 
-import type { PersistedRecord, Role } from "../../index.js";
+import type { PersistedRecord } from "../../index.js";
 import type {
   ChildReportCapture,
   ChildResult,
@@ -18,24 +29,50 @@ import type { WorktreeManager } from "./worktree.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
-interface AssembleResultsContext {
-  readonly parentRole: Role;
-  readonly parentSession: string;
-  readonly runId: string;
-  readonly onRecord: (record: PersistedRecord) => void;
+/**
+ * Terminal classification for a child attempt result.
+ * Computed from the child's report capture and worktree state.
+ */
+export interface TerminalClassification {
+  /** Whether the attempt succeeded (no failure reason). */
+  readonly isSuccess: boolean;
+  /** Failure reason if the attempt failed, null otherwise. */
+  readonly failureReason: string | null;
+  /** Head commit for completed worktree tasks, undefined otherwise. */
+  readonly headCommit: string | undefined;
+  /** Child's summary from the report. */
+  readonly summary: string;
+  /** Child's verification lines from the report. */
+  readonly verification: readonly string[] | undefined;
+  /** The raw report status from the child. */
+  readonly reportStatus: "completed" | "failed" | "no_changes" | undefined;
+}
+
+/**
+ * Per-task projection result returned by `assembleResults`.
+ */
+export interface TaskProjection {
+  readonly result: ChildResult;
+  readonly classification: TerminalClassification;
 }
 
 // ─── Assembly ─────────────────────────────────────────────────────────────
 
 /**
- * Assemble ordered `ChildResult[]` in input task order.
+ * Pure projection: compute ordered `ChildResult[]` and terminal classifications
+ * in input task order.
  *
  * For each task:
  * 1. Looks up the child's report capture and usage from the maps.
  * 2. For worktree tasks: checks dirty state and head commit.
- * 3. Persists the terminal record (subagent_completed or subagent_failed).
- * 4. Removes clean worktrees after terminal persistence.
- * 5. Returns the ordered result set.
+ * 3. Classifies the terminal outcome.
+ * 4. Returns the ordered result set + classifications.
+ *
+ * **No side effects:** does not persist records and does not remove worktrees.
+ *
+ * The caller is responsible for:
+ *   - Calling `AttemptRegistry.writeTerminal` for each task using the classification.
+ *   - Performing worktree cleanup after the terminal records are durably persisted.
  */
 export async function assembleResults(
   input: readonly DelegateTask[],
@@ -44,15 +81,26 @@ export async function assembleResults(
   childUsages: ReadonlyMap<string, ChildUsage>,
   sessionMetas: ReadonlyMap<string, { sessionFile: string; model: string | null }>,
   worktreeManager: WorktreeManager | undefined,
-  ctx: AssembleResultsContext,
-): Promise<readonly ChildResult[]> {
-  const results: ChildResult[] = [];
+  _ctx?: { readonly onRecord?: (record: PersistedRecord) => void },
+): Promise<readonly TaskProjection[]> {
+  void _ctx; // Reserved for future use; currently unused (pure projection)
+  const results: TaskProjection[] = [];
 
   for (const task of input) {
     const item = poolItems.find((p) => p.task.id === task.id) as PoolItem | undefined;
     if (item === undefined) {
-      // Should not happen: every task should have a pool item.
-      results.push(cancelResult(task, "child_session_error"));
+      const result = cancelResult(task, "child_session_error");
+      results.push({
+        result,
+        classification: {
+          isSuccess: false,
+          failureReason: "child_session_error",
+          headCommit: undefined,
+          summary: "",
+          verification: undefined,
+          reportStatus: undefined,
+        },
+      });
       continue;
     }
 
@@ -62,182 +110,118 @@ export async function assembleResults(
       sessionFile: item.sessionFile,
       model: item.model,
     };
-    const status = report?.status ?? "failed";
 
-    // Worktree verification at report time.
-    let finalHeadCommit: string | undefined;
-    let finalFailureReason: string | undefined;
+    const classification = await classifyTerminal({ item, report, worktreeManager });
+    const result = buildChildResult(item, usage, sessionMeta, classification);
 
-    if (item.workspace === "worktree" && item.worktreePath && worktreeManager) {
-      // Check dirty state for completed tasks.
-      const isClean = await worktreeManager.isWorktreeClean(item.worktreePath);
-      if (!isClean && (status === "completed" || status === "no_changes")) {
-        finalFailureReason = "worktree_dirty_exit";
-      }
-
-      // Check head commit for no_changes tasks - must match baseCommit exactly.
-      if (item.branch) {
-        const head = await worktreeManager.head(item.branch);
-        if (status === "no_changes") {
-          if (!head) {
-            // no_changes with no head commit is a failure
-            finalFailureReason = "head_commit_mismatch";
-          } else if (head !== item.baseCommit) {
-            finalFailureReason = "head_commit_mismatch";
-          }
-        } else if (status === "completed") {
-          // A completed worktree task must identify a committed head.
-          if (head === null) finalFailureReason = "head_commit_mismatch";
-          else finalHeadCommit = head;
-        }
-      }
-    }
-
-    if (report?.reportCount !== undefined && report.reportCount > 1) {
-      finalFailureReason = "extra_emission";
-    }
-    if (status === "failed" && finalFailureReason === undefined) {
-      finalFailureReason = "child_session_error";
-    }
-
-    // Persist the terminal record exactly once, after child execution is over.
-    if (finalFailureReason) {
-      persistFailedRecord(item, report, usage, finalFailureReason, sessionMeta, ctx);
-    } else if (status === "completed" || status === "no_changes") {
-      persistCompletedRecord(item, report, usage, finalHeadCommit, sessionMeta, ctx);
-    } else {
-      persistFailedRecord(
-        item,
-        report,
-        usage,
-        finalFailureReason ?? "child_session_error",
-        sessionMeta,
-        ctx,
-      );
-    }
-
-    // Clean worktree removal (after terminal record is appended).
-    // Only remove worktrees for successful outcomes (completed/no_changes) that are clean.
-    // Failed, dirty, or cleanup-error worktrees are preserved.
-    if (
-      item.workspace === "worktree" &&
-      item.worktreePath &&
-      worktreeManager &&
-      !finalFailureReason
-    ) {
-      const isClean = await worktreeManager.isWorktreeClean(item.worktreePath);
-      if (isClean) {
-        await worktreeManager.remove(item.worktreePath).catch(() => undefined);
-      }
-    }
-
-    // Build the result.
-    const result = buildChildResult(
-      item,
-      report,
-      usage,
-      finalHeadCommit,
-      finalFailureReason,
-      sessionMeta,
-    );
-    results.push(result);
+    results.push({ result, classification });
   }
 
   return results;
 }
 
-// ─── Per-item helpers ──────────────────────────────────────────────────
+/**
+ * Classify the terminal outcome for a child attempt.
+ * Pure computation — no persistence or cleanup.
+ */
+export async function classifyTerminal(args: {
+  readonly item: PoolItem;
+  readonly report: ChildReportCapture | undefined;
+  readonly worktreeManager: WorktreeManager | undefined;
+}): Promise<TerminalClassification> {
+  const { item, report, worktreeManager } = args;
 
-function persistCompletedRecord(
-  item: PoolItem,
-  report: ChildReportCapture | undefined,
-  usage: ChildUsage,
-  finalHeadCommit: string | undefined,
-  sessionMeta: { sessionFile: string; model: string | null },
-  ctx: AssembleResultsContext,
-): void {
-  const verification: readonly string[] = report ? (report.verification ?? []) : [];
-  const completedStatus = (report?.status ?? "completed") as "completed" | "no_changes";
-  const record: PersistedRecord = {
-    type: "subagent_completed",
-    run_id: ctx.runId,
-    child_id: item.childId,
-    task_id: item.task.id,
-    parent_role: ctx.parentRole,
-    parent_session: ctx.parentSession,
-    session_file: sessionMeta.sessionFile,
-    attempt: item.attempt,
-    model: sessionMeta.model,
-    model_effort: item.modelEffort,
-    workspace: item.workspace,
-    worktree_path: item.worktreePath,
-    branch: item.branch,
-    base_commit: item.baseCommit,
-    ts: Date.now(),
-    usage: { ...usage },
-    status: completedStatus,
-    summary: report?.summary ?? "",
+  let failureReason: string | null = null;
+  let headCommit: string | undefined;
+  const summary = report?.summary ?? "";
+  const verification = report?.verification;
+  const status = report?.status ?? "failed";
+
+  // Worktree verification at report time.
+  if (item.workspace === "worktree" && item.worktreePath && worktreeManager) {
+    const isClean = await worktreeManager.isWorktreeClean(item.worktreePath);
+
+    if (!isClean && (status === "completed" || status === "no_changes")) {
+      failureReason = "worktree_dirty_exit";
+    }
+
+    if (item.branch) {
+      const head = await worktreeManager.head(item.branch);
+      if (status === "no_changes") {
+        if (!head) {
+          failureReason = "head_commit_mismatch";
+        } else if (head !== item.baseCommit) {
+          failureReason = "head_commit_mismatch";
+        } else {
+          headCommit = head;
+        }
+      } else if (status === "completed") {
+        if (!head) {
+          failureReason = "head_commit_mismatch";
+        } else {
+          headCommit = head;
+        }
+      }
+    }
+  }
+
+  // Schema/contract violations.
+  if (report?.reportCount !== undefined && report.reportCount > 1) {
+    failureReason = "extra_emission";
+  }
+
+  if (status === "failed" && failureReason === null) {
+    failureReason = "child_session_error";
+  }
+
+  return {
+    isSuccess: failureReason === null,
+    failureReason,
+    headCommit,
+    summary,
     verification,
-    ...(finalHeadCommit !== undefined && { head_commit: finalHeadCommit }),
+    reportStatus: report?.status,
   };
-  ctx.onRecord(record);
 }
 
-function persistFailedRecord(
-  item: PoolItem,
-  report: ChildReportCapture | undefined,
-  usage: ChildUsage,
-  failureReason: string,
-  sessionMeta: { sessionFile: string; model: string | null },
-  ctx: AssembleResultsContext,
-): void {
-  ctx.onRecord({
-    type: "subagent_failed",
-    run_id: ctx.runId,
-    child_id: item.childId,
-    task_id: item.task.id,
-    parent_role: ctx.parentRole,
-    parent_session: ctx.parentSession,
-    session_file: sessionMeta.sessionFile,
-    attempt: item.attempt,
-    model: sessionMeta.model,
-    model_effort: item.modelEffort,
-    workspace: item.workspace,
-    worktree_path: item.worktreePath,
-    branch: item.branch,
-    base_commit: item.baseCommit,
-    ts: Date.now(),
-    usage: { ...usage },
-    status: "failed",
-    summary: report?.summary ?? "",
-    failure_reason: failureReason,
-  });
-}
+// ─── Per-item helpers ──────────────────────────────────────────────────
 
 function buildChildResult(
   item: PoolItem,
-  report: ChildReportCapture | undefined,
   usage: ChildUsage,
-  finalHeadCommit: string | undefined,
-  finalFailureReason: string | undefined,
   sessionMeta: { sessionFile: string; model: string | null },
+  classification: TerminalClassification,
 ): ChildResult {
-  const verification: readonly string[] = report ? (report.verification ?? []) : [];
   const branchValue = item.branch !== null ? item.branch : undefined;
 
-  return {
+  // Build the result with only the fields that are defined.
+  // Using a mutable object to avoid exactOptionalPropertyTypes issues.
+  const result: Record<string, unknown> = {
     task_id: item.task.id,
     child_id: item.childId,
     session_file: sessionMeta.sessionFile,
     workspace: item.workspace,
-    ...(branchValue !== undefined && { branch: branchValue }),
-    ...(finalHeadCommit !== undefined && { head_commit: finalHeadCommit }),
     usage: { ...usage },
-    status: finalFailureReason ? "failed" : ((report?.status as ChildResult["status"]) ?? "failed"),
-    summary: report?.summary ?? "",
-    verification,
-    ...(finalFailureReason !== undefined && { failure_reason: finalFailureReason }),
+    status: classification.isSuccess
+      ? ((classification.reportStatus ?? "completed") as "completed" | "no_changes")
+      : "failed",
+    summary: classification.summary,
   };
+
+  if (branchValue !== undefined) {
+    result.branch = branchValue;
+  }
+  if (classification.headCommit !== undefined) {
+    result.head_commit = classification.headCommit;
+  }
+  if (classification.verification !== undefined) {
+    result.verification = classification.verification;
+  }
+  if (classification.failureReason !== null) {
+    result.failure_reason = classification.failureReason;
+  }
+
+  return result as unknown as ChildResult;
 }
 
 // ─── Utility helpers ──────────────────────────────────────────────────
