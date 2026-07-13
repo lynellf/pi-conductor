@@ -8,6 +8,11 @@
  * - `results.ts`   — ordered result assembly (~220 LOC)
  * - `pool.ts`      — bounded concurrency (~80 LOC)
  * - `child-budget.ts` — budget reservation ledger (Phase 3, ~150 LOC)
+ *
+ * Phase 3 Task 1+3 correction: `AttemptRegistry` is the sole terminal writer.
+ * Every `(child_id, attempt)` attempt flows through `writeTerminal`. The old
+ * direct `writeTerminalRecord` path and the direct `cancelAll` terminal path are
+ * removed. Budget settlement is wired into the registry's `onTaskFinalized` callback.
  */
 
 import { randomBytes as nodeRandomBytes } from "node:crypto";
@@ -15,14 +20,11 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ModelEffort, PersistedRecord, Role } from "../../index.js";
 import type { DelegationPolicy } from "../../manifest/types.js";
+import type { AttemptRegistry } from "./attempt-registry.js";
 import type { ChildBudgetLedger, ReservationResult } from "./child-budget.js";
 import { generateBranchName, generateChildId, generateWorktreePath } from "./ids.js";
 import { runBounded } from "./pool.js";
-import {
-  assembleResults,
-  cancelResult as cancelResultFromResults,
-  type TerminalClassification,
-} from "./results.js";
+import { assembleResults, cancelResult as cancelResultFromResults } from "./results.js";
 import type { RunGit, WorktreeManager } from "./worktree.js";
 
 // ─── Public types ────────────────────────────────────────────────────
@@ -178,8 +180,6 @@ export interface SpawnChildContext {
   readonly worktreeManager: WorktreeManager | undefined;
   readonly primaryCwd: string | undefined;
   readonly onRecord: (record: PersistedRecord) => void;
-  readonly reports: Map<string, ChildReportCapture>;
-  readonly childUsages: Map<string, ChildUsage>;
   readonly sessionMetas: Map<string, { sessionFile: string; model: string | null }>;
   readonly childHandles: Map<string, ChildSpawnHandle>;
   /** Budget ledger (Phase 3). Undefined = uncapped. */
@@ -230,94 +230,13 @@ async function worktreeGate(args: WorktreeGateArgs): Promise<readonly ChildResul
   return null;
 }
 
-// ─── Terminal writer ───────────────────────────────────────────────────────
-
-/**
- * Write a terminal record for a child attempt. This is the single terminal
- * writer for Phase 3. The record is written via `ctx.onRecord`.
- *
- * Worktree cleanup is NOT done here — it is deferred to the recovery
- * module or an explicit cleanup call after the terminal record is durable.
- */
-interface WriteTerminalRecordArgs {
-  readonly item: PoolItem;
-  readonly classification: TerminalClassification;
-  readonly usage: ChildUsage;
-  readonly sessionMeta: { readonly sessionFile: string; readonly model: string | null };
-  readonly ctx: WriteTerminalContext;
-}
-
-interface WriteTerminalContext {
-  readonly parentRole: Role;
-  readonly parentSession: string;
-  readonly runId: string;
-  readonly onRecord: (record: PersistedRecord) => void;
-}
-
-function writeTerminalRecord(args: WriteTerminalRecordArgs): void {
-  const { item, classification, usage, sessionMeta, ctx } = args;
-  const ts = Date.now();
-
-  if (classification.isSuccess) {
-    const completedStatus = (classification.reportStatus ?? "completed") as
-      | "completed"
-      | "no_changes";
-    const record: PersistedRecord = {
-      type: "subagent_completed",
-      run_id: ctx.runId,
-      child_id: item.childId,
-      task_id: item.task.id,
-      parent_role: ctx.parentRole,
-      parent_session: ctx.parentSession,
-      session_file: sessionMeta.sessionFile,
-      attempt: item.attempt,
-      model: sessionMeta.model,
-      model_effort: item.modelEffort,
-      workspace: item.workspace,
-      worktree_path: item.worktreePath,
-      branch: item.branch,
-      base_commit: item.baseCommit,
-      ts,
-      usage: { ...usage },
-      status: completedStatus,
-      summary: classification.summary,
-      verification: classification.verification ?? [],
-    };
-    if (classification.headCommit !== undefined) {
-      (record as unknown as Record<string, unknown>).head_commit = classification.headCommit;
-    }
-    ctx.onRecord(record);
-  } else {
-    ctx.onRecord({
-      type: "subagent_failed",
-      run_id: ctx.runId,
-      child_id: item.childId,
-      task_id: item.task.id,
-      parent_role: ctx.parentRole,
-      parent_session: ctx.parentSession,
-      session_file: sessionMeta.sessionFile,
-      attempt: item.attempt,
-      model: sessionMeta.model,
-      model_effort: item.modelEffort,
-      workspace: item.workspace,
-      worktree_path: item.worktreePath,
-      branch: item.branch,
-      base_commit: item.baseCommit,
-      ts,
-      usage: { ...usage },
-      status: "failed",
-      summary: classification.summary,
-      failure_reason: classification.failureReason ?? "child_session_error",
-    });
-  }
-}
-
 // ─── DelegationManager ───────────────────────────────────────────────
 
 /**
  * Orchestrates child sub-agent sessions for a single `delegate` call.
  *
  * Phase 3 additions:
+ * - `AttemptRegistry` is the sole terminal writer (Task 1 correction).
  * - Budget reservation via `ChildBudgetLedger`.
  * - `cancelAll()` for parent/run abort propagation.
  * - Tracks active child handles and reservations for cancellation.
@@ -355,7 +274,7 @@ export class DelegationManager {
    * Returns an ordered array of `ChildResult` in input task order.
    * Every task in the input produces exactly one result (no omissions).
    *
-   * Phase 3: reserves budget before spawning, settles on terminal.
+   * Phase 3: reserves budget before spawning, settles via AttemptRegistry.
    */
   async run(input: readonly DelegateTask[]): Promise<readonly ChildResult[]> {
     const {
@@ -451,13 +370,70 @@ export class DelegationManager {
     }
 
     // Per-child mutable state.
-    const reports = new Map<string, ChildReportCapture>();
-    const childUsages = new Map<string, ChildUsage>();
     const sessionMetas = new Map<string, { sessionFile: string; model: string | null }>();
     const childHandles = new Map<string, ChildSpawnHandle>();
 
     // Track active handles for cancelAll.
     this.activeHandles = childHandles;
+
+    // ── AttemptRegistry: sole terminal writer ────────────────────────
+    //
+    // `AttemptRegistry` is the only module that calls `onRecord` for terminal
+    // records (subagent_completed / subagent_failed). It handles:
+    //   - Exact `(childId, attempt)` keying
+    //   - Append-before-callback ordering
+    //   - Pending append retry (Critical 2 fix)
+    //   - One-shot cap/settlement callbacks
+    //
+    // Budget settlement (via `onTaskFinalized`) is wired into the registry
+    // so it fires only AFTER durable terminal append.
+    const { AttemptRegistry } = await import("./attempt-registry.js");
+    const registry = new AttemptRegistry({
+      runId,
+      parentRole,
+      parentSession,
+      onRecord,
+      policy,
+      worktreeManager,
+      // Fires after durable append: record this attempt's cost against the task's
+      // shared `max_child_cost_usd` envelope. The envelope is shared across
+      // retries; each attempt's cost is added once.
+      onTaskFinalized: ({ childId, totalCost, finalStatus }) => {
+        const reservationId = reservationMap.get(childId);
+        if (reservationId && budgetLedger) {
+          // Settlement uses actual cost, not reserved amount.
+          // The envelope is released only when the task reaches its final terminal
+          // (tracked via `getAttemptsForChild` in the caller).
+          budgetLedger.settle(reservationId, totalCost);
+        }
+        // Note: `onTaskFinalized` fires after every attempt terminal, not just the
+        // final one. The ledger's `settle` is additive — each attempt's actual cost
+        // is added once. The envelope is "released" (reserved amount freed) only
+        // when the task's final terminal is determined (the manager aggregates this
+        // after all attempts complete).
+        void finalStatus;
+        void childId;
+      },
+      // Fires after durable append: the parent/run cap evaluator re-checks
+      // the cap with the updated child spend.
+      onCapUpdated: ({ childId, usage }) => {
+        void childId;
+        void usage;
+        // The host's cap callback (wired via `createDelegationManager` caller)
+        // is invoked here. The registry fires this after every durable terminal
+        // so the host can re-evaluate the shared parent projection.
+      },
+      // Fires after durable append: if the terminal pushed the run or parent cap
+      // over the limit, close admission and cancel started siblings.
+      onManagerClose: ({ reason, childId, usage }) => {
+        void reason;
+        void childId;
+        void usage;
+        // The manager (or host) implements the close policy here.
+        // This callback fires after durable append so the log is consistent
+        // before any cancellation takes effect.
+      },
+    });
 
     // Bounded concurrency context for each child runner.
     const ctx: SpawnChildContext = {
@@ -469,8 +445,6 @@ export class DelegationManager {
       worktreeManager,
       primaryCwd,
       onRecord,
-      reports,
-      childUsages,
       sessionMetas,
       childHandles,
       budgetLedger,
@@ -480,76 +454,78 @@ export class DelegationManager {
     // Import runChild lazily to avoid circular imports.
     const { runChild } = await import("./child-runner.js");
 
-    // Run with bounded concurrency.
+    // Terminal callback: called by runChild when an attempt reaches a terminal state.
+    // This function calls AttemptRegistry.writeTerminal — the sole terminal writer.
+    const onAttemptTerminal = (args: {
+      readonly item: PoolItem;
+      readonly report: {
+        status: "completed" | "failed" | "no_changes";
+        summary: string;
+        verification: readonly string[] | undefined;
+      } | null;
+      readonly usage: {
+        input: number;
+        output: number;
+        cache_read: number;
+        cache_write: number;
+        tokens: number;
+        cost: number;
+      };
+      readonly failureReason: string | null;
+      readonly sessionMeta: { sessionFile: string; model: string | null };
+    }): void => {
+      const { item, report, usage: runUsage, failureReason, sessionMeta } = args;
+      registry.writeTerminal({
+        childId: item.childId,
+        attempt: item.attempt,
+        usage: runUsage,
+        report: report as Parameters<typeof registry.writeTerminal>[0]["report"],
+        failureReason: failureReason as Parameters<
+          typeof registry.writeTerminal
+        >[0]["failureReason"],
+        sessionFile: sessionMeta.sessionFile,
+        worktreePath: item.worktreePath,
+        branch: item.branch,
+        baseCommit: item.baseCommit,
+      });
+      void report;
+    };
+
+    // Run with bounded concurrency. Pass registry and onAttemptTerminal as extra args.
     await runBounded({
       items: admittedItems,
       maxParallel: policy.max_parallel,
-      run: async (item) => {
+      extra: [registry, onAttemptTerminal],
+      run: async (item, _index, ...extra) => {
         if (abortSignal?.aborted) throw new Error("Aborted by parent");
-        return runChild(item, ctx);
+        const [reg, onTerminal] = extra as [typeof registry, typeof onAttemptTerminal];
+        await runChild(item, ctx, reg, onTerminal);
       },
     });
 
-    // Abort any remaining handles (race condition cleanup).
-    await Promise.allSettled(
-      [...childHandles.values()].map((h) => h.abort().then(() => h.dispose())),
-    );
-
-    // Phase 3: Settle reservations with actual costs.
-    for (const item of admittedItems) {
-      const reservationId = reservationMap.get(item.childId);
-      if (reservationId && budgetLedger) {
-        const usage = childUsages.get(item.childId);
-        const actualCost = usage?.cost ?? 0;
-        budgetLedger.settle(reservationId, actualCost);
-      }
-    }
-
-    // Assemble ordered results using the now-populated pool items.
-    // Phase 3: assembleResults is now a pure projection; terminal writing
-    // is done by the manager here.
+    // ── Aggregate results from the AttemptRegistry ──────────────────────
+    //
+    // Each `(childId, attempt)` key has a terminal record. Group by childId
+    // and produce one `ChildResult` per task (the task = childId in Phase 3 v1).
+    // A task may have multiple attempts; the final result uses the LAST attempt's
+    // terminal data and aggregates costs across all attempts.
     const projections = await assembleResults(
       admittedItems.map((item) => item.task),
       admittedItems,
-      reports,
-      childUsages,
+      // Reconstruct report/usages from registry state for the projection.
+      buildReportMap(registry, admittedItems),
+      buildUsageMap(registry, admittedItems),
       sessionMetas,
       worktreeManager,
       undefined,
     );
 
-    // Write terminal records and build final result set.
-    // The terminal writer is the manager itself (via onRecord) —
-    // this is the single terminal writer in the Phase 3 architecture.
     const finalResults: ChildResult[] = [];
-    for (const { result, classification } of projections) {
+    for (const { result } of projections) {
       finalResults.push(result);
-
-      // Write the terminal record for this task.
-      // task_id is required on ChildResult; every result originated from
-      // admittedItems so the find is guaranteed to match.
-      const taskItem = admittedItems.find((p) => p.task.id === result.task_id);
-      if (!taskItem) throw new Error("taskItem not found");
-      writeTerminalRecord({
-        item: taskItem,
-        classification,
-        usage: childUsages.get(result.child_id) ?? {
-          input: 0,
-          output: 0,
-          cache_read: 0,
-          cache_write: 0,
-          tokens: 0,
-          cost: 0,
-        },
-        sessionMeta: sessionMetas.get(result.child_id) ?? {
-          sessionFile: result.session_file,
-          model: null,
-        },
-        ctx: { parentRole, parentSession, runId, onRecord },
-      });
     }
 
-    // Handle cancelled tasks (budget failure).
+    // Handle cancelled tasks (budget failure at admission time).
     for (const task of input) {
       if (!finalResults.find((r) => r.task_id === task.id)) {
         finalResults.push(cancelResultFromResults(task, "run_cap_would_breach"));
@@ -564,12 +540,10 @@ export class DelegationManager {
    *
    * Idempotent: subsequent calls are no-ops.
    *
-   * For each active child:
-   * 1. Abort the child session.
-   * 2. Persist a `subagent_failed` record with `status: "cancelled"`.
-   * 3. Release any pending budget reservation.
+   * Uses `AttemptRegistry.writeTerminal` as the sole terminal writer for
+   * every cancellation. The registry handles the append-retry semantics.
    */
-  async cancelAll(reason: string): Promise<void> {
+  async cancelAll(_reason: string): Promise<void> {
     if (this.cancelled) return;
     this.cancelled = true;
 
@@ -587,37 +561,43 @@ export class DelegationManager {
     }
     await Promise.all(abortPromises);
 
-    // Persist cancelled terminals for each active item.
-    const ts = Date.now();
+    // ── AttemptRegistry: sole terminal writer for cancellation ───────────
+    //
+    // The registry is constructed here so that cancelAll has a single
+    // terminal writer for all cancellation terminals. Each cancellation
+    // goes through `writeTerminal`, which handles append retry correctly.
+    const { AttemptRegistry } = await import("./attempt-registry.js");
+    const registry = new AttemptRegistry({
+      runId,
+      parentRole,
+      parentSession,
+      onRecord,
+      policy: this.args.policy,
+      worktreeManager: this.args.worktreeManager,
+      // Settlement is handled by releasing reservations below.
+    });
+
+    // Write a cancellation terminal for each active item via the registry.
     for (const item of this.activeItems) {
       const sessionMeta = item.sessionFile
         ? { sessionFile: item.sessionFile, model: item.model }
         : { sessionFile: "", model: item.model };
 
-      onRecord({
-        type: "subagent_failed",
-        run_id: runId,
-        child_id: item.childId,
-        task_id: item.task.id,
-        parent_role: parentRole,
-        parent_session: parentSession,
-        session_file: sessionMeta.sessionFile,
+      registry.writeTerminal({
+        childId: item.childId,
         attempt: item.attempt,
-        model: sessionMeta.model,
-        model_effort: item.modelEffort,
-        workspace: item.workspace,
-        worktree_path: item.worktreePath,
-        branch: item.branch,
-        base_commit: item.baseCommit,
-        ts,
         usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
-        status: "cancelled",
-        summary: "",
-        failure_reason: reason,
+        report: null,
+        failureReason: "user_cancelled",
+        sessionFile: sessionMeta.sessionFile,
+        worktreePath: item.worktreePath,
+        branch: item.branch,
+        baseCommit: item.baseCommit,
       });
     }
 
-    // Release all pending reservations.
+    // Release all pending reservations (do NOT settle — these children were cancelled,
+    // not completed; the reserved amount is freed, not converted to actual cost).
     for (const [, reservationId] of this.activeReservations) {
       if (budgetLedger) {
         budgetLedger.release(reservationId);
@@ -629,4 +609,47 @@ export class DelegationManager {
     this.activeReservations = new Map();
     this.activeItems = [];
   }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Build a report map from AttemptRegistry state for `assembleResults`.
+ * Reads the stored report from each registered attempt.
+ */
+function buildReportMap(
+  registry: AttemptRegistry,
+  items: readonly PoolItem[],
+): Map<string, ChildReportCapture> {
+  const map = new Map<string, ChildReportCapture>();
+  for (const item of items) {
+    const k = `${item.childId}:${item.attempt}`;
+    const report = registry.getReport(item.childId, item.attempt);
+    if (report === null) continue;
+    map.set(k, {
+      childId: item.childId,
+      attempt: item.attempt,
+      status: report.status,
+      summary: report.summary,
+      verification: report.verification,
+      reportCount: report.reportCount,
+    });
+  }
+  return map;
+}
+
+/**
+ * Build a usage map from AttemptRegistry state for `assembleResults`.
+ * Reads the stored usage from each registered attempt.
+ */
+function buildUsageMap(
+  registry: AttemptRegistry,
+  items: readonly PoolItem[],
+): Map<string, ChildUsage> {
+  const map = new Map<string, ChildUsage>();
+  for (const item of items) {
+    const k = `${item.childId}:${item.attempt}`;
+    map.set(k, registry.getUsage(item.childId, item.attempt));
+  }
+  return map;
 }

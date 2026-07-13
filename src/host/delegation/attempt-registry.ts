@@ -86,10 +86,18 @@ interface AttemptState {
   usage: ChildUsage;
   /** The child's raw report capture. */
   report: ChildReport | null;
+  /** Number of times `recordReport` has been called (for `extra_emission` detection). */
+  reportCount: number;
   /** Whether callbacks have been fired for this attempt (one-shot). */
   callbacksFired: boolean;
-  /** Whether the terminal record has been written. */
+  /** Whether the terminal record was durably appended. Set only after `onRecord` succeeds. */
   terminalWritten: boolean;
+  /**
+   * Pending terminal record retained when `onRecord` throws.
+   * The next `writeTerminal` call for this key retries this record.
+   * Cleared to `null` once the append succeeds.
+   */
+  pendingRecord: PendingTerminal | null;
 }
 
 /** Raw report capture from the child's `report_result` tool. */
@@ -100,6 +108,16 @@ export interface ChildReport {
   readonly reportCount: number;
 }
 
+/**
+ * An immutable pending terminal record that was not yet durably appended.
+ * Retained so a subsequent `writeTerminal` call can retry the exact same record
+ * without double-settling the budget.
+ */
+export interface PendingTerminal {
+  readonly record: SubagentCompletedRecord | SubagentFailedRecord;
+  readonly ts: number;
+}
+
 /** Arguments for `createAttemptRegistry`. */
 export interface CreateAttemptRegistryArgs {
   readonly runId: string;
@@ -107,8 +125,8 @@ export interface CreateAttemptRegistryArgs {
   readonly parentSession: string;
   readonly onRecord: (record: PersistedRecord) => void;
   readonly policy: DelegationPolicy;
-  /** Worktree manager for cleanup. */
-  readonly worktreeManager?: WorktreeManager;
+  /** Worktree manager for cleanup. Optional — omit or pass `undefined` when no worktree manager is available. */
+  readonly worktreeManager?: WorktreeManager | undefined;
   /**
    * Callback when the task's final terminal is written and its cost
    * envelope should be released.
@@ -235,8 +253,10 @@ export class AttemptRegistry {
         cost: 0,
       },
       report: null,
+      reportCount: 0,
       callbacksFired: false,
       terminalWritten: false,
+      pendingRecord: null,
     });
   }
 
@@ -251,13 +271,19 @@ export class AttemptRegistry {
   }
 
   /**
-   * Record the child's report for an attempt.
+   * Record the child's report for an attempt. Increments `reportCount` on each call
+   * so the registry can detect `extra_emission`.
+   *
+   * Safe to call before `registerAttempt` (e.g., during `spawnChild` before the
+   * handle is returned) — silently ignores unregistered attempts.
    */
   recordReport(childId: string, attempt: number, report: ChildReport): void {
     const k = this.key(childId, attempt);
     const state = this.attempts.get(k);
+    // Silently ignore if attempt is not yet registered (called before registerAttempt).
     if (state === undefined) return;
-    state.report = report;
+    state.reportCount += 1;
+    state.report = { ...report, reportCount: state.reportCount };
   }
 
   /**
@@ -350,8 +376,10 @@ export class AttemptRegistry {
           handle: null,
           usage,
           report,
+          reportCount: 0,
           callbacksFired: false,
           terminalWritten: false,
+          pendingRecord: null,
         };
         this.attempts.set(k, minimal);
         this.writeTerminal(args);
@@ -431,7 +459,14 @@ export class AttemptRegistry {
 
   /**
    * Persist the record and fire callbacks. If persistence fails, retain
-   * pending state for retry (the settlement is NOT applied until append succeeds).
+   * the exact record in `state.pendingRecord` for retry. The settlement is
+   * NOT applied until append succeeds.
+   *
+   * `terminalWritten` is set only AFTER successful append. This means a
+   * subsequent `writeTerminal` call for the same key WILL retry the pending
+   * record (it hits the early-return only if `terminalWritten` is true).
+   * Callers that need to retry a failed append must call `writeTerminal`
+   * again for the same `(childId, attempt)` key.
    */
   private persistAndCallback(
     record: SubagentCompletedRecord | SubagentFailedRecord,
@@ -447,16 +482,18 @@ export class AttemptRegistry {
       persistenceFailed = true;
     }
 
-    state.terminalWritten = true;
-
     if (persistenceFailed) {
-      // Append failed — retain the pending settlement for retry.
-      // The settlement amount will be re-evaluated when the retry succeeds.
+      // Append failed — retain the pending record for retry.
+      // DO NOT mark terminalWritten; the next writeTerminal call will retry.
       // DO NOT fire callbacks — they must fire only after durable append.
+      const ts = Date.now();
+      state.pendingRecord = { record, ts };
       return;
     }
 
-    // Append succeeded — fire callbacks in order.
+    // Append succeeded — mark terminal as written and fire callbacks.
+    state.terminalWritten = true;
+    state.pendingRecord = null;
     this.fireCallbacks(state, childId, attempt);
   }
 
@@ -554,5 +591,35 @@ export class AttemptRegistry {
       if (attempt > max) max = attempt;
     }
     return max;
+  }
+
+  /**
+   * Get the stored report for an attempt (including the accurate `reportCount`).
+   * Used by the manager to reconstruct `ChildReportCapture` maps for `assembleResults`.
+   */
+  getReport(childId: string, attempt: number): ChildReport | null {
+    const k = this.key(childId, attempt);
+    const state = this.attempts.get(k);
+    if (state?.report === null) return null;
+    return state?.report ?? null;
+  }
+
+  /**
+   * Get the stored usage for an attempt. Used by the manager to reconstruct
+   * `ChildUsage` maps for `assembleResults`.
+   */
+  getUsage(childId: string, attempt: number): ChildUsage {
+    const k = this.key(childId, attempt);
+    const state = this.attempts.get(k);
+    return (
+      state?.usage ?? {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        tokens: 0,
+        cost: 0,
+      }
+    );
   }
 }
