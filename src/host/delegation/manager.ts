@@ -18,7 +18,11 @@ import type { DelegationPolicy } from "../../manifest/types.js";
 import type { ChildBudgetLedger, ReservationResult } from "./child-budget.js";
 import { generateBranchName, generateChildId, generateWorktreePath } from "./ids.js";
 import { runBounded } from "./pool.js";
-import { assembleResults, cancelResult as cancelResultFromResults } from "./results.js";
+import {
+  assembleResults,
+  cancelResult as cancelResultFromResults,
+  type TerminalClassification,
+} from "./results.js";
 import type { RunGit, WorktreeManager } from "./worktree.js";
 
 // ─── Public types ────────────────────────────────────────────────────
@@ -226,6 +230,88 @@ async function worktreeGate(args: WorktreeGateArgs): Promise<readonly ChildResul
   return null;
 }
 
+// ─── Terminal writer ───────────────────────────────────────────────────────
+
+/**
+ * Write a terminal record for a child attempt. This is the single terminal
+ * writer for Phase 3. The record is written via `ctx.onRecord`.
+ *
+ * Worktree cleanup is NOT done here — it is deferred to the recovery
+ * module or an explicit cleanup call after the terminal record is durable.
+ */
+interface WriteTerminalRecordArgs {
+  readonly item: PoolItem;
+  readonly classification: TerminalClassification;
+  readonly usage: ChildUsage;
+  readonly sessionMeta: { readonly sessionFile: string; readonly model: string | null };
+  readonly ctx: WriteTerminalContext;
+}
+
+interface WriteTerminalContext {
+  readonly parentRole: Role;
+  readonly parentSession: string;
+  readonly runId: string;
+  readonly onRecord: (record: PersistedRecord) => void;
+}
+
+function writeTerminalRecord(args: WriteTerminalRecordArgs): void {
+  const { item, classification, usage, sessionMeta, ctx } = args;
+  const ts = Date.now();
+
+  if (classification.isSuccess) {
+    const completedStatus = (classification.reportStatus ?? "completed") as
+      | "completed"
+      | "no_changes";
+    const record: PersistedRecord = {
+      type: "subagent_completed",
+      run_id: ctx.runId,
+      child_id: item.childId,
+      task_id: item.task.id,
+      parent_role: ctx.parentRole,
+      parent_session: ctx.parentSession,
+      session_file: sessionMeta.sessionFile,
+      attempt: item.attempt,
+      model: sessionMeta.model,
+      model_effort: item.modelEffort,
+      workspace: item.workspace,
+      worktree_path: item.worktreePath,
+      branch: item.branch,
+      base_commit: item.baseCommit,
+      ts,
+      usage: { ...usage },
+      status: completedStatus,
+      summary: classification.summary,
+      verification: classification.verification ?? [],
+    };
+    if (classification.headCommit !== undefined) {
+      (record as unknown as Record<string, unknown>).head_commit = classification.headCommit;
+    }
+    ctx.onRecord(record);
+  } else {
+    ctx.onRecord({
+      type: "subagent_failed",
+      run_id: ctx.runId,
+      child_id: item.childId,
+      task_id: item.task.id,
+      parent_role: ctx.parentRole,
+      parent_session: ctx.parentSession,
+      session_file: sessionMeta.sessionFile,
+      attempt: item.attempt,
+      model: sessionMeta.model,
+      model_effort: item.modelEffort,
+      workspace: item.workspace,
+      worktree_path: item.worktreePath,
+      branch: item.branch,
+      base_commit: item.baseCommit,
+      ts,
+      usage: { ...usage },
+      status: "failed",
+      summary: classification.summary,
+      failure_reason: classification.failureReason ?? "child_session_error",
+    });
+  }
+}
+
 // ─── DelegationManager ───────────────────────────────────────────────
 
 /**
@@ -420,29 +506,52 @@ export class DelegationManager {
     }
 
     // Assemble ordered results using the now-populated pool items.
-    const results = await assembleResults(
+    // Phase 3: assembleResults is now a pure projection; terminal writing
+    // is done by the manager here.
+    const projections = await assembleResults(
       admittedItems.map((item) => item.task),
       admittedItems,
       reports,
       childUsages,
       sessionMetas,
       worktreeManager,
-      { parentRole, parentSession, runId, onRecord },
+      undefined,
     );
 
-    // Build final result set in input order.
-    const admittedMap = new Map<string, ChildResult>();
-    for (const r of results) {
-      admittedMap.set(r.task_id, r);
+    // Write terminal records and build final result set.
+    // The terminal writer is the manager itself (via onRecord) —
+    // this is the single terminal writer in the Phase 3 architecture.
+    const finalResults: ChildResult[] = [];
+    for (const { result, classification } of projections) {
+      finalResults.push(result);
+
+      // Write the terminal record for this task.
+      // task_id is required on ChildResult; every result originated from
+      // admittedItems so the find is guaranteed to match.
+      const taskItem = admittedItems.find((p) => p.task.id === result.task_id);
+      if (!taskItem) throw new Error("taskItem not found");
+      writeTerminalRecord({
+        item: taskItem,
+        classification,
+        usage: childUsages.get(result.child_id) ?? {
+          input: 0,
+          output: 0,
+          cache_read: 0,
+          cache_write: 0,
+          tokens: 0,
+          cost: 0,
+        },
+        sessionMeta: sessionMetas.get(result.child_id) ?? {
+          sessionFile: result.session_file,
+          model: null,
+        },
+        ctx: { parentRole, parentSession, runId, onRecord },
+      });
     }
 
-    const finalResults: ChildResult[] = [];
+    // Handle cancelled tasks (budget failure).
     for (const task of input) {
-      const admittedResult = admittedMap.get(task.id);
-      if (admittedResult) {
-        finalResults.push(admittedResult);
-      } else {
-        // This task was cancelled due to budget failure.
+      if (!finalResults.find((r) => r.task_id === task.id)) {
         finalResults.push(cancelResultFromResults(task, "run_cap_would_breach"));
       }
     }
