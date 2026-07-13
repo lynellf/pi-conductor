@@ -1,7 +1,19 @@
-/** Runs one admitted child attempt from worktree/session creation to cleanup. */
+/**
+ * Runs one admitted child attempt from worktree/session creation to terminal.
+ *
+ * ## Terminal writing
+ *
+ * `AttemptRegistry.writeTerminal` is the sole terminal writer for every attempt.
+ * When the attempt completes (success, failure, or error), this function calls
+ * `onAttemptTerminal(...)` with the captured usage, report, and failure reason.
+ * The callback is responsible for calling `attemptRegistry.writeTerminal()`.
+ * This separation keeps `runChild` as a single-attempt runner and lets the
+ * manager implement retry logic in its loop.
+ */
 
 import type { Usage } from "@earendil-works/pi-ai";
 import { normalizeUsage } from "../cost.js";
+import type { AttemptRegistry } from "./attempt-registry.js";
 import { buildChildSystemPrompt } from "./child-prompt.js";
 import { buildChildToolsAllowlist } from "./child-tool-policy.js";
 import type { ChildSpawnHandle, PoolItem, SpawnChildContext } from "./manager.js";
@@ -10,6 +22,8 @@ interface MutableReport {
   status: "completed" | "failed" | "no_changes";
   summary: string;
   verification: readonly string[] | undefined;
+  /** Number of times onReport has been called (for extra_emission detection). */
+  reportCount: number;
 }
 
 interface MutableUsage {
@@ -21,8 +35,29 @@ interface MutableUsage {
   cost: number;
 }
 
-/** Run one child; `results.ts` is the sole terminal-record writer. */
-export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<void> {
+/**
+ * Callback fired when an attempt reaches a terminal state.
+ * The callback is responsible for calling `attemptRegistry.writeTerminal()`.
+ */
+export type AttemptTerminalCallback = (args: {
+  readonly item: PoolItem;
+  readonly report: {
+    status: "completed" | "failed" | "no_changes";
+    summary: string;
+    verification: readonly string[] | undefined;
+  } | null;
+  readonly usage: MutableUsage;
+  readonly failureReason: string | null;
+  readonly sessionMeta: { sessionFile: string; model: string | null };
+}) => void;
+
+/** Run one child attempt; `AttemptRegistry` is the sole terminal writer. */
+export async function runChild(
+  item: PoolItem,
+  ctx: SpawnChildContext,
+  attemptRegistry: AttemptRegistry,
+  onAttemptTerminal: AttemptTerminalCallback,
+): Promise<void> {
   const { task, childId, attempt, workspace, baseCommit } = item;
   const {
     parentRole,
@@ -33,13 +68,16 @@ export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<
     worktreeManager,
     primaryCwd,
     onRecord,
-    reports,
-    childUsages,
     sessionMetas,
     childHandles,
   } = ctx;
 
-  const report: MutableReport = { status: "failed", summary: "", verification: undefined };
+  const report: MutableReport = {
+    status: "failed",
+    summary: "",
+    verification: undefined,
+    reportCount: 0,
+  };
   const usage: MutableUsage = {
     input: 0,
     output: 0,
@@ -58,13 +96,15 @@ export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<
       childPath = created.path;
       childBranch = created.branch;
     } catch (cause: unknown) {
-      reports.set(childId, {
-        childId,
-        attempt,
-        status: "failed",
-        summary: String(cause),
-        verification: undefined,
-        reportCount: 0,
+      report.status = "failed";
+      report.summary = String(cause);
+      // Emit terminal via the callback — AttemptRegistry.writeTerminal persists the record.
+      onAttemptTerminal({
+        item: { ...item, worktreePath: childPath, branch: childBranch },
+        report,
+        usage,
+        failureReason: "worktree_creation_failed",
+        sessionMeta: { sessionFile: item.sessionFile, model: item.model },
       });
       return;
     }
@@ -92,15 +132,10 @@ export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<
       parentSession,
       onReport: (capture) => {
         Object.assign(report, capture);
-        const previous = reports.get(childId);
-        reports.set(childId, {
-          ...capture,
-          reportCount: (previous?.reportCount ?? 0) + 1,
-        });
+        report.reportCount += 1;
       },
       onComplete: (captured) => {
         Object.assign(usage, captured);
-        childUsages.set(childId, { ...usage });
       },
       onError: (reason) => {
         report.status = "failed";
@@ -117,18 +152,50 @@ export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<
       },
     });
   } catch (cause: unknown) {
-    reports.set(childId, {
-      childId,
-      attempt,
-      status: "failed",
-      summary: String(cause),
-      verification: undefined,
-      reportCount: 0,
+    report.status = "failed";
+    report.summary = String(cause);
+    onAttemptTerminal({
+      item,
+      report,
+      usage,
+      failureReason: "child_session_error",
+      sessionMeta,
     });
     return;
   }
 
   childHandles.set(childId, handle);
+
+  // Register the attempt with AttemptRegistry BEFORE appending subagent_started.
+  // This ensures the registry has the state when writeTerminal is called.
+  // Also sync any report data already accumulated (e.g., from synchronous onReport
+  // calls during spawnChild, before the child session has run).
+  attemptRegistry.registerAttempt({
+    childId,
+    taskId: task.id,
+    attempt,
+    workspace,
+    worktreePath: childPath,
+    branch: childBranch,
+    baseCommit,
+    sessionFile: sessionMeta.sessionFile,
+    model: sessionMeta.model,
+    modelEffort: item.modelEffort,
+    handle,
+  });
+
+  // Sync any reportCount already accumulated in the mutable report (e.g., from
+  // synchronous onReport calls during spawnChild, before the child session has run).
+  if (report.reportCount > 0) {
+    attemptRegistry.recordReport(childId, attempt, {
+      status: report.status as "completed" | "failed" | "no_changes",
+      summary: report.summary,
+      verification: report.verification,
+      reportCount: report.reportCount,
+    });
+  }
+
+  // Durable start append — only after registration succeeds.
   onRecord({
     type: "subagent_started",
     run_id: runId,
@@ -163,7 +230,7 @@ export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<
   const unsubscribe = handle.subscribe((event: unknown) => {
     const candidate = event as { type?: string; message?: { usage?: Usage; role?: string } };
     if (candidate.type !== "message_end" || candidate.message?.role !== "assistant") return;
-    const raw = candidate.message.usage;
+    const raw = candidate.message?.usage;
     if (raw === undefined) return;
     const normalized = normalizeUsage(raw);
     usage.input += normalized.input;
@@ -179,18 +246,38 @@ export async function runChild(item: PoolItem, ctx: SpawnChildContext): Promise<
   } catch (cause: unknown) {
     report.status = "failed";
     report.summary = String(cause);
-    reports.set(childId, {
-      childId,
-      attempt,
-      status: "failed",
-      summary: report.summary,
-      verification: undefined,
-      reportCount: 0,
-    });
   }
 
   unsubscribe();
-  childUsages.set(childId, { ...usage });
   await handle.dispose().catch(() => undefined);
   childHandles.delete(childId);
+
+  // Emit terminal via the callback — AttemptRegistry.writeTerminal persists the record.
+  // `failureReason` derivation rules:
+  // 1. Extra emissions (reportCount > 1) → always fail with "extra_emission" regardless of status.
+  //    This must be checked first; extra emissions override any status.
+  // 2. report.status === "failed" → derive reason from summary, or "child_session_error" as fallback.
+  //    Retryable errors (rate_limit / timeout) get "retryable_model_error".
+  // 3. Otherwise (completed / no_changes) → null. The child succeeded; any summary is the task result,
+  //    not a failure reason. Passing a non-null failureReason here would incorrectly cause
+  //    writeTerminal to write subagent_failed even when the child reported success (Critical:
+  //    child reports "completed" but terminal says "failed" with failure_reason = summary text).
+  const isRetryable =
+    report.status === "failed" &&
+    (report.summary.includes("rate_limit") || report.summary.includes("timeout"));
+  const failureReason: string | null =
+    report.reportCount > 1
+      ? "extra_emission"
+      : report.status === "failed"
+        ? isRetryable
+          ? "retryable_model_error"
+          : report.summary || "child_session_error"
+        : null;
+  onAttemptTerminal({
+    item: { ...item, worktreePath: childPath, branch: childBranch },
+    report,
+    usage,
+    failureReason,
+    sessionMeta,
+  });
 }

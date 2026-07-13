@@ -1,5 +1,12 @@
 /**
  * Tests for delegation/manager.ts — DelegationManager orchestration.
+ *
+ * Phase 3 Task 1 correction: DelegationManager now uses AttemptRegistry as the
+ * sole terminal writer. Tests updated to:
+ *   - Mock `spawnChild` must fire `onSessionCreated` with the session file.
+ *   - Report tracking uses `reportCount` via the `onReport` callback.
+ *   - `extra_emission` is caught via the registry's `reportCount` in the
+ *     `ChildReport` stored by `recordReport`.
  */
 
 import { describe, expect, test, vi } from "vitest";
@@ -26,7 +33,12 @@ const minimalTask: DelegateTask = {
 };
 
 function createMockSpawnChild(results?: { sessionId?: string; sessionFile?: string }) {
-  return vi.fn().mockImplementation(async (_args: SpawnChildArgs): Promise<ChildSpawnHandle> => {
+  return vi.fn().mockImplementation(async (args: SpawnChildArgs): Promise<ChildSpawnHandle> => {
+    // Fire onSessionCreated so the manager has a real session file.
+    args.onSessionCreated?.({
+      sessionFile: results?.sessionFile ?? "/tmp/stub-session-1.jsonl",
+      model: null,
+    });
     return {
       sessionId: results?.sessionId ?? "stub-session-1",
       sessionFile: results?.sessionFile ?? "/tmp/stub-session-1.jsonl",
@@ -204,21 +216,34 @@ describe("DelegationManager", () => {
 
     test("classifies duplicate report_result emissions as one failed child", async () => {
       const onRecord = createMockOnRecord();
+      let reportCallCount = 0;
       const spawnChild = vi.fn().mockImplementation(async (args: SpawnChildArgs) => {
+        // Fire onSessionCreated so the manager has a real session file.
+        args.onSessionCreated?.({
+          sessionFile: "/tmp/duplicate-report.jsonl",
+          model: null,
+        });
+        // Simulate the child calling report_result twice (reportCount tracks emissions).
+        // runChild increments report.reportCount on each onReport call, so we pass
+        // 1 for the first and 2 for the second. After both calls, reportCount = 2.
         args.onReport({
           childId: args.childId,
           attempt: args.attempt,
           status: "completed",
           summary: "first",
           verification: undefined,
+          reportCount: 1,
         });
+        reportCallCount++;
         args.onReport({
           childId: args.childId,
           attempt: args.attempt,
           status: "completed",
           summary: "second",
           verification: undefined,
+          reportCount: 2,
         });
+        reportCallCount++;
         return {
           sessionId: "duplicate-report-session",
           sessionFile: "/tmp/duplicate-report.jsonl",
@@ -239,6 +264,7 @@ describe("DelegationManager", () => {
       });
 
       const [result] = await mgr.run([minimalTask]);
+      expect(reportCallCount).toBe(2); // Verify the mock fired onReport twice
       expect(result?.status).toBe("failed");
       expect(result?.failure_reason).toBe("extra_emission");
       expect(

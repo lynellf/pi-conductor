@@ -104,9 +104,9 @@ export async function assembleResults(
       continue;
     }
 
-    const report = reports.get(item.childId);
-    const usage = childUsages.get(item.childId) ?? zeroUsage();
-    const sessionMeta = sessionMetas.get(item.childId) ?? {
+    const report = reports.get(`${item.childId}:${item.attempt}`);
+    const usage = childUsages.get(`${item.childId}:${item.attempt}`) ?? zeroUsage();
+    const sessionMeta = sessionMetas.get(`${item.childId}:${item.attempt}`) ?? {
       sessionFile: item.sessionFile,
       model: item.model,
     };

@@ -29,7 +29,9 @@ export type PoolResult<T> =
 export interface RunBoundedOptions<T> {
   readonly items: readonly T[];
   readonly maxParallel: number;
-  readonly run: (item: T, index: number) => Promise<unknown>;
+  readonly run: (item: T, index: number, ...extra: readonly unknown[]) => Promise<unknown>;
+  /** Extra arguments passed to every `run` call. */
+  readonly extra?: readonly unknown[];
 }
 
 /**
@@ -65,7 +67,7 @@ export async function runBounded<T>(
     const current = nextIndex++;
     const item = items[current] as (typeof items)[number];
     try {
-      const value = await run(item, current);
+      const value = await run(item, current, ...(opts.extra ?? []));
       results[current] = { ok: true, value };
     } catch (reason) {
       results[current] = { ok: false, reason };
