@@ -1,5 +1,5 @@
 /**
- * `PersistedRecord` union and the `RecordLog` interface — spec §11.1–§11.5.
+ * `PersistedRecord` union and the `RecordLog` interface — spec §11.1–§11.5 / issue-17-delegation-lite §7.
  *
  * Every record the host appends to its `run_id`-keyed append-only log is
  * a member of `PersistedRecord`. The union covers:
@@ -15,9 +15,8 @@
  *  - `run_seeded` (host-owned, non-machine-event record carrying the
  *    run's original goal at `startRun` time; used by `resumeRun` to
  *    restore the goal context).
- *  - Issue #17 `subagent_started` / `subagent_completed` / `subagent_failed`
- *    (host-owned auxiliary session lifecycle; reducer never branches on them,
- *    spec §12.1 invariant 1).
+ *  - Delegation lite §7: `subagent_started` / `subagent_completed` /
+ *    `subagent_failed` (host-owned child session observability records).
  *
  * **`RecordLog`** is the host-side persistence contract. The pure core
  * ships the interface and an in-memory implementation for unit tests.
@@ -29,7 +28,6 @@
 
 import type {
   Checkpoint,
-  ModelEffort,
   ModelFallback,
   ModelRetry,
   SessionLifecycleEvent,
@@ -37,8 +35,6 @@ import type {
   TransitionRejected,
   UsageRecord,
 } from "../core/types.js";
-
-// ─── §11.1: Checkpoint snapshot ─────────────────────────────────────────
 
 /**
  * §11.1: a checkpoint snapshot is a full Checkpoint, snapshotted after
@@ -50,8 +46,6 @@ export interface CheckpointSnapshot {
   readonly type: "checkpoint_snapshot";
   readonly checkpoint: Checkpoint;
 }
-
-// ─── Run seed ────────────────────────────────────────────────────────────
 
 /**
  * Host-owned, non-machine-event record carrying the run's original goal
@@ -68,99 +62,79 @@ export interface RunSeededRecord {
   readonly ts: number;
 }
 
-// ─── Issue #17: subagent records ────────────────────────────────────────
+// ─── Delegation lite §7: subagent records ──────────────────────────────
+
+/** Delegation lite §7: usage contributed to perRun, perModel, and perSubagent rollups. */
+export interface SubagentUsage extends UsageRecord {}
 
 /**
- * Issue #17 §9: record written when the host starts a child auxiliary
- * session. The reducer never branches on this record (spec §12.1 invariant 1).
+ * Delegation lite §7.1: appended after the child SDK session exists and its
+ * real session file, worktree path, branch, and base commit are known, before prompt.
  *
- * The host writes this record before spawning the child. It is paired with
- * exactly one terminal record (`subagent_completed` or `subagent_failed`)
- * by `session_file` and `attempt`.
+ * This is host-owned observability data only; it never enters the parent
+ * lifecycle usage or `perRole`.
  */
 export interface SubagentStartedRecord {
   readonly type: "subagent_started";
   readonly run_id: string;
   readonly child_id: string;
   readonly task_id: string;
-  readonly parent_role: string;
-  readonly parent_session: string;
+  readonly subagent: string;
+  /** Resolved profile model retained for recovery and terminal roll-up. */
+  readonly model: string;
   readonly session_file: string;
-  readonly attempt: number;
-  readonly model: string | null;
-  readonly model_effort: ModelEffort;
-  readonly workspace: "read_only" | "worktree";
-  /** Non-null for `worktree` mode; null for `read_only` mode. */
-  readonly worktree_path: string | null;
-  /** Non-null for `worktree` mode; null for `read_only` mode. */
-  readonly branch: string | null;
-  readonly base_commit: string | null;
+  readonly worktree_path: string;
+  readonly branch: string;
+  readonly base_commit: string;
   readonly ts: number;
 }
 
 /**
- * Issue #17 §9: terminal record for a successful subagent attempt.
- * Consumed by the cost rollup for `perRun` / `perModel` / `perSubagent`.
- *
- * A `completed` status means the child produced a committed head commit.
- * A `no_changes` status means the child ran without modifying the worktree.
+ * Delegation lite §7.1: appended after a child session terminates successfully
+ * (`completed` or `no_changes`).
  */
 export interface SubagentCompletedRecord {
   readonly type: "subagent_completed";
   readonly run_id: string;
   readonly child_id: string;
   readonly task_id: string;
-  readonly parent_role: string;
-  readonly parent_session: string;
-  readonly session_file: string;
-  readonly attempt: number;
-  readonly model: string | null;
-  readonly model_effort: ModelEffort;
-  readonly workspace: "read_only" | "worktree";
-  /** Non-null for `worktree` mode; null for `read_only` mode. */
-  readonly worktree_path: string | null;
-  /** Non-null for `worktree` mode; null for `read_only` mode. */
-  readonly branch: string | null;
-  readonly base_commit: string | null;
+  readonly subagent: string;
+  /** Resolved profile model; child terminal cost rolls into perModel. */
+  readonly model: string;
   readonly status: "completed" | "no_changes";
   readonly summary: string;
   readonly verification?: readonly string[];
-  readonly head_commit?: string;
-  readonly usage: UsageRecord;
+  readonly branch: string;
+  readonly worktree_path: string;
+  readonly base_commit: string;
+  readonly head_commit: string;
+  readonly session_file: string;
+  readonly usage: SubagentUsage;
   readonly ts: number;
 }
 
 /**
- * Issue #17 §9: terminal record for a failed or cancelled subagent attempt.
- * Consumed by the cost rollup for `perRun` / `perModel` / `perSubagent`.
+ * Delegation lite §7.1: appended after a child session fails or is cancelled.
  *
- * A `failed` status means the child exhausted its model retry/fallback
- * budget or emitted an invalid/extra report.
- * A `cancelled` status means the parent or run was aborted.
+ * `status: "failed"` — child encountered an error during execution.
+ * `status: "cancelled"` — child was cancelled due to run abort or resume recovery.
  */
 export interface SubagentFailedRecord {
   readonly type: "subagent_failed";
   readonly run_id: string;
   readonly child_id: string;
   readonly task_id: string;
-  readonly parent_role: string;
-  readonly parent_session: string;
-  readonly session_file: string;
-  readonly attempt: number;
-  readonly model: string | null;
-  readonly model_effort: ModelEffort;
-  readonly workspace: "read_only" | "worktree";
-  /** Non-null for `worktree` mode; null for `read_only` mode. */
-  readonly worktree_path: string | null;
-  /** Non-null for `worktree` mode; null for `read_only` mode. */
-  readonly branch: string | null;
-  readonly base_commit: string | null;
+  readonly subagent: string;
+  /** Resolved profile model; child terminal cost rolls into perModel. */
+  readonly model: string;
   readonly status: "failed" | "cancelled";
-  readonly summary: string;
-  readonly verification?: readonly string[];
-  readonly head_commit?: string;
   readonly failure_reason: string;
-  readonly usage: UsageRecord;
+  readonly branch: string;
+  readonly worktree_path: string;
+  readonly base_commit: string;
+  readonly head_commit: string | null;
+  readonly session_file: string | null;
+  readonly usage: SubagentUsage | null;
   readonly ts: number;
 }
 

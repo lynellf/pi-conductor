@@ -53,7 +53,7 @@
  * record + checkpoint transition.
  */
 
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -75,9 +75,6 @@ import type {
   RecordLog,
   RunSeededRecord,
 } from "../persistence/log.js";
-import type { DelegationManager } from "./delegation/manager.js";
-import { reconcileOrphans } from "./delegation/recovery.js";
-import { acquireResumeLock } from "./delegation/recovery-lock.js";
 import type { Host, RoleSession } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -139,21 +136,6 @@ export interface HostFactoryContext {
    * per-role cost caps and model fallback.
    */
   readonly loadedManifest: LoadedManifest;
-  /**
-   * Phase 3: reconciliation result from orphan child scan on resume.
-   * `null` for fresh `startRun` (no prior records to reconcile).
-   * The host factory uses this to reconstruct the `ChildBudgetLedger`
-   * for the `DelegationManager`.
-   */
-  readonly reconciliation: import("./delegation/recovery.js").ReconciliationResult | null;
-  /**
-   * Phase 3 / Task 6: the run's state directory, used as the root for
-   * session files, worktrees, child sessions, and the recovery lock.
-   * For `startRun`: `<baseDir>/<runId>` (created by the host factory).
-   * For `resumeRun`: `<baseDir>/<runId>` (created before crash reconciliation,
-   * with the recovery lock acquired at this path).
-   */
-  readonly runStateDir?: string;
 }
 
 // ─── startRun ──────────────────────────────────────────────────────────
@@ -194,15 +176,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   };
   log.append(seedRecord);
 
-  const runStateDir = join(baseDir, runId);
-  const host = opts.hostFactory({
-    runId,
-    def,
-    log,
-    loadedManifest: loaded,
-    reconciliation: null,
-    runStateDir,
-  });
+  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
   void opts.goal; // goal is unused by runLoop directly; Task 16.5 wires it into the orchestrator seed
 
   return await runWithCompletion({
@@ -225,23 +199,6 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
  * its `manifest_version` matches the snapshot's pinned version,
  * reconciles a crash-mid-session if any, and re-enters the
  * orchestration loop at `current_role`.
- *
- * ## Atomic resume lock (Task 6 / B1)
- *
- * The per-run execution lock is acquired BEFORE `reconcileCrash`.
- * This prevents two concurrent resume calls for the same `run_id`
- * from both observing an active main session with no terminal and
- * appending duplicate `session_failed` records. The lock covers:
- *
- *   1. Main crash reconciliation (`reconcileCrash`).
- *   2. Orphan child reconciliation (`reconcileOrphans`).
- *   3. Cleanup retry derived from prior terminals.
- *   4. Budget synchronization from post-recovery records.
- *
- * The lock is released after `runWithCompletion` starts — the loop
- * then runs without the lock, which is correct: a second resume
- * attempt after the first has already entered the loop should be
- * rejected with `resume_in_progress`.
  */
 export async function resumeRun(
   manifestPath: string,
@@ -260,6 +217,8 @@ export async function resumeRun(
   // The snapshot's manifest_version is the canonical link to the
   // manifest that was active when the run started; a mismatch
   // means the manifest was edited mid-run, which §10 forbids.
+  // The optional modelRegistry also runs the advisory provider-registration
+  // check on resume — same registry → same warnings, no double-fire concern.
   const loaded = await loadManifest(
     manifestPath,
     opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
@@ -271,72 +230,26 @@ export async function resumeRun(
   }
   const def = loaded.def;
 
-  // Task 6: Create runStateDir and acquire atomic lock BEFORE reconcileCrash.
-  const runStateDir = join(baseDir, runId);
-  await mkdir(runStateDir, { recursive: true });
-  const lock = await acquireResumeLock(runStateDir);
+  // Crash reconciliation (§11.1).
+  const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
 
-  try {
-    // Crash reconciliation (§11.1). Done while holding the lock so
-    // concurrent resumes cannot both append session_failed for the
-    // same active session.
-    const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
+  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
 
-    // Phase 3: Orphan child reconciliation.
-    // Scans records for subagent_started attempts without a terminal record.
-    // The host factory receives this result to reconstruct the budget ledger.
-    const reconciliation = await reconcileOrphans({
-      runId,
-      records: log.records(runId),
-      worktreeManager: undefined, // Host factory creates the worktree manager with stateDir
-      stateDir: runStateDir,
-      onRecord: (record) => log.append(record),
-    });
+  // Restore the original goal from the run log (if available).
+  // Falls back to opts.goal (which may be "") for runs that
+  // pre-date this feature.
+  const seedGoal = log.latestRunSeed(runId);
+  const goal = seedGoal !== null ? seedGoal : opts.goal;
 
-    // Build the host factory context.
-    const hostFactoryCtx = {
-      runId,
-      def,
-      log,
-      loadedManifest: loaded,
-      reconciliation,
-      runStateDir,
-    };
-
-    const host = opts.hostFactory(hostFactoryCtx);
-
-    // Restore the original goal from the run log (if available).
-    const seedGoal = log.latestRunSeed(runId);
-    const goal = seedGoal !== null ? seedGoal : opts.goal;
-
-    // Release the lock after post-recovery sync and before runWithCompletion
-    // starts its async loop. A concurrent resume will see the lock is gone
-    // and proceed to acquire it (the second one wins), which correctly
-    // rejects the first attempt.
-    //
-    // Note: the lock is released BEFORE runWithCompletion's async loop runs,
-    // not after it completes. This is intentional: the loop itself does not
-    // need the lock (only resume operations do).
-    await lock.release();
-
-    return await runWithCompletion({
-      runId,
-      def,
-      log,
-      host,
-      initialCheckpoint: reconciledCheckpoint,
-      goal,
-      loadedManifest: loaded,
-    });
-  } finally {
-    // Safety net: if anything throws before the intentional release above,
-    // release the lock so a process crash doesn't strand it.
-    // The lock file is automatically removed when the OS closes the fd on crash,
-    // but releasing explicitly is cleaner.
-    await lock.release().catch(() => {
-      void 0;
-    });
-  }
+  return await runWithCompletion({
+    runId,
+    def,
+    log,
+    host,
+    initialCheckpoint: reconciledCheckpoint,
+    goal,
+    loadedManifest: loaded,
+  });
 }
 
 // ─── listRuns ──────────────────────────────────────────────────────────
@@ -395,9 +308,6 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
   let activeSession: RoleSession | null = null;
   let pendingAbortReason: string | null = null;
   let abortRequested = false;
-  // Phase 3: track the active delegation manager for cancelAll.
-  let activeDelegationManager: DelegationManager | null = null;
-
   const abortControl = {
     async setActiveSession(session: RoleSession | null): Promise<void> {
       activeSession = session;
@@ -409,17 +319,8 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
       if (abortRequested) return;
       abortRequested = true;
       pendingAbortReason = reason;
-      // Phase 3: cancel all active children BEFORE aborting the parent session.
-      if (activeDelegationManager !== null) {
-        await activeDelegationManager.cancelAll(reason);
-      }
       if (activeSession === null) return;
       await host.abortSession(activeSession, reason);
-    },
-    async setActiveDelegation(manager: unknown | null): Promise<void> {
-      // Type: unknown because we import DelegationManager here but don't
-      // want to create a circular dependency. The manager is checked at runtime.
-      activeDelegationManager = manager as DelegationManager | null;
     },
   };
 
@@ -485,6 +386,7 @@ function reconcileCrash(
   def: MachineDefinition,
   log: RecordLog,
 ): Checkpoint {
+  reconcileLostChildren(runId, log);
   const active = checkpoint.active_role_session;
   if (active === null) return checkpoint;
 
@@ -564,6 +466,37 @@ function reconcileCrash(
   };
   log.append(snapshot);
   return result.checkpoint;
+}
+
+/** Resume never relaunches a child; unmatched starts become one durable cancellation (§7). */
+export function reconcileLostChildren(runId: string, log: RecordLog): void {
+  const records = log.records(runId);
+  const terminalChildIds = new Set(
+    records
+      .filter((record) => record.type === "subagent_completed" || record.type === "subagent_failed")
+      .map((record) => record.child_id),
+  );
+  for (const record of records) {
+    if (record.type !== "subagent_started" || terminalChildIds.has(record.child_id)) continue;
+    log.append({
+      type: "subagent_failed",
+      run_id: runId,
+      child_id: record.child_id,
+      task_id: record.task_id,
+      subagent: record.subagent,
+      model: record.model,
+      status: "cancelled",
+      failure_reason: "recovered_child_lost",
+      branch: record.branch,
+      worktree_path: record.worktree_path,
+      base_commit: record.base_commit,
+      head_commit: null,
+      session_file: record.session_file,
+      usage: null,
+      ts: Date.now(),
+    });
+    terminalChildIds.add(record.child_id);
+  }
 }
 
 async function resolveBaseDir(baseDir: string | undefined): Promise<string> {

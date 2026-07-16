@@ -35,8 +35,6 @@
  * re-dispatch escalation.
  */
 
-import type { Buffer } from "node:buffer";
-
 import type { Usage } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -59,17 +57,14 @@ import type {
   UsageRecord,
 } from "../index.js";
 import { SessionState } from "./cost.js";
-import { createDelegateTool } from "./delegation/delegate-tool.js";
-import type { DelegationManager } from "./delegation/manager.js";
+import { DelegationManager } from "./delegation/manager.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
-import { buildToolsAllowlist } from "./production-host-resolve.js";
 import { notifyListeners } from "./record-emitter.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
-import { StubHostDelegation } from "./stub-host-delegation.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
 export interface StubHostOptions {
@@ -88,21 +83,11 @@ export interface StubHostOptions {
    */
   readonly loadedManifest?: LoadedManifest;
   /**
-   * Per-child StubStep scripts for delegation (issue #17 Phase 2).
-   * Keyed by `taskId` (the `id` from the delegate tool's `tasks[]` array).
-   * When the parent emits `emit_delegate`, the `DelegationManager`
-   * calls `spawnChild` for each task, which looks up the child's
-   * steps here by `taskId` and drives them through a separate stub session.
+   * Working directory for delegation child sessions. In the stub host
+   * this is only used for computing child worktree paths; the stub
+   * session itself runs in-memory. Default: `/tmp/stub-cwd`.
    */
-  readonly childSteps?: ReadonlyMap<string, readonly StubStep[]>;
-  /**
-   * Deterministic random-bytes source for the `DelegationManager`.
-   * Used by tests to produce predictable child IDs so `childSteps`
-   * can be keyed by the same IDs.
-   *
-   * When omitted, defaults to `node:crypto.randomBytes` (unpredictable).
-   */
-  readonly randomBytes?: (n: number) => Buffer;
+  readonly cwd?: string;
 }
 
 /**
@@ -127,17 +112,13 @@ export class StubHost implements Host {
    * guard, only the same-role re-dispatch does).
    */
   private unavailableRole: Role | null = null;
-  /** Delegation helpers (issue #17 Phase 2). */
-  private readonly delegation: StubHostDelegation;
+  private readonly delegationManager = new DelegationManager();
+  private readonly cwd: string;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
     this.runId = opts.runId;
     this.loadedManifestValue = opts.loadedManifest;
-    this.delegation = new StubHostDelegation({
-      ...(opts.childSteps !== undefined ? { childSteps: opts.childSteps } : {}),
-      ...(opts.randomBytes !== undefined ? { randomBytes: opts.randomBytes } : {}),
-    });
 
     const authStorage = AuthStorage.inMemory();
     this.modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -151,6 +132,7 @@ export class StubHost implements Host {
       streamSimple: streamFn,
     });
     this.sessionManager = SessionManager.inMemory();
+    this.cwd = opts.cwd ?? "/tmp/stub-cwd";
   }
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
@@ -235,58 +217,58 @@ export class StubHost implements Host {
         ? null
         : createHandoffContextTool(opts.handoffContextRef);
 
-    // biome-ignore lint/suspicious/noExplicitAny: SDK erases generics at customTools boundary
-    const customTools: any[] = [handoff, end];
-    if (handoffContext !== null) customTools.push(handoffContext);
-
-    // ── Issue #17 Phase 2: delegate tool for delegation-enabled roles.
-    const delegationPolicy = roleConfig?.delegation;
-    const hasDelegateTool = roleConfig?.tools?.includes("delegate") ?? false;
-    let delegMgr: DelegationManager | undefined;
-    if (delegationPolicy !== undefined && hasDelegateTool) {
-      delegMgr = this.delegation.createDelegationManager({
-        parentRole: role,
-        parentSession: "",
-        policy: delegationPolicy,
+    // ── Delegation lite §4: build delegate tool if the role is delegating.
+    // A role receives `delegate` only when it declares BOTH `tools: [delegate]`
+    // AND a `delegation` block (§3 rule 1). The manifest validator surfaces a
+    // warning when the block exists without the tool entry.
+    let delegateTool: ReturnType<
+      typeof import("../host/delegation/delegate-tool-factory.js").createDelegateTool
+    > | null = null;
+    const manifest = this.loadedManifestValue?.manifest;
+    if (
+      roleConfig?.delegation !== undefined &&
+      roleConfig.tools?.includes("delegate") &&
+      manifest !== undefined
+    ) {
+      const remaining = roleConfig.delegation.max_children_per_session;
+      const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
+      delegateTool = createDelegateTool({
+        role: roleConfig,
+        subagents: manifest.subagents ?? [],
+        remainingChildren: remaining,
         runId: this.runId,
-        onRecord: (record) => this.persistRecord(record),
-        admittedChildren: this.delegation.admittedChildCount(role),
-        parentModel: logicalModel,
-        parentModelEffort: effort,
-      });
-    }
-    if (delegMgr !== undefined && delegationPolicy !== undefined) {
-      const delegateTool = createDelegateTool({
         parentRole: role,
-        parentSession: "",
-        policy: delegationPolicy,
-        manager: delegMgr,
-        admittedChildren: this.delegation.admittedChildCount(role),
-        getRemainingChildren: () =>
-          delegationPolicy.max_children - this.delegation.admittedChildCount(role),
+        primaryCheckout: this.cwd,
+        runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
+        log: this.log,
+        agentDir: `${this.cwd}/.pi-conductor/agent`,
+        systemPromptRoot: delegationPromptRoot(this.loadedManifestValue, this.cwd),
+        modelRegistry: this.modelRegistry,
+        resolveChildModel: () => this.model,
+        sessionDir: `${this.cwd}/.pi-conductor/runs/${this.runId}/sessions`,
+        manager: this.delegationManager,
       });
-      customTools.push(delegateTool as unknown as (typeof customTools)[number]);
     }
 
-    const roleTools = roleConfig?.tools;
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       model: this.model,
       modelRegistry: this.modelRegistry,
-      // Use buildToolsAllowlist (mirrors ProductionHost behavior).
-      // Spread to mutable string[] as required by createAgentSession.
-      tools: [...buildToolsAllowlist(roleTools, handoffContext !== null)],
-      customTools,
+      tools: [
+        "handoff",
+        "end",
+        ...(handoffContext === null ? [] : ["handoff_context"]),
+        ...(delegateTool === null ? [] : ["delegate"]),
+      ],
+      customTools: [
+        handoff,
+        end,
+        ...(handoffContext === null ? [] : [handoffContext]),
+        ...(delegateTool === null ? [] : [delegateTool]),
+      ],
       sessionManager: this.sessionManager,
     };
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
-
-    // Update the delegation manager with the real parent session file.
-    if (delegMgr !== undefined) {
-      const parentSessionFile =
-        session.sessionFile ?? `/tmp/stub-session-${this.stubSessionCounter + 1}.jsonl`;
-      delegMgr.updateParentSession(parentSessionFile);
-    }
 
     this.stubSessionCounter += 1;
     const stubId = `stub-session-${this.stubSessionCounter}`;
@@ -382,15 +364,16 @@ export class StubHost implements Host {
   }
 
   runCostSoFar(): number {
-    // Sum `usage.cost` across all session_ended + session_failed
-    // records in the run. Both terminals cost (§11.4). The loop
-    // adds the current terminal's usage on top of this when
-    // evaluating the cap (§11.7: "persisted roll-up plus the
-    // current terminal's captured usage before reducing the
-    // role's captured machine event").
+    // Sum `usage.cost` across all terminal records in the run:
+    // - Parent lifecycle terminals: session_ended + session_failed (§11.4).
+    // - Delegation lite §7: child terminals also cost against the run cap.
+    //   Both subagent_completed and subagent_failed contribute.
     let total = 0;
     for (const r of this.log.records(this.runId)) {
       if ((r.type === "session_ended" || r.type === "session_failed") && r.usage) {
+        total += r.usage.cost;
+      }
+      if ((r.type === "subagent_completed" || r.type === "subagent_failed") && r.usage) {
         total += r.usage.cost;
       }
     }
@@ -410,6 +393,7 @@ export class StubHost implements Host {
   }
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
+    await this.delegationManager.abortAll();
     const state = this.sessionStates.get(session.sessionId);
     const agent = this.agentsBySessionId.get(session.sessionId);
     if (state === undefined || agent === undefined) return;
@@ -437,4 +421,12 @@ export class StubHost implements Host {
     if (loaded === undefined) return undefined;
     return loaded.manifest.roles.find((r) => r.name === role);
   }
+}
+
+function delegationPromptRoot(loaded: LoadedManifest | undefined, cwd: string): string {
+  if (loaded === undefined || loaded.manifestVersion < 2) return cwd;
+  if (loaded.manifestDir === null) {
+    throw new Error("delegation requires a manifest directory for v2 profile system prompts");
+  }
+  return loaded.manifestDir;
 }

@@ -1,10 +1,17 @@
 /**
- * Manifest static checks — spec §13.
+ * Manifest static checks — spec §13 / issue-17-delegation-lite §3.
  *
  * Implements every §13 rule, distinguishing hard errors (which block
  * `toMachineDefinition`) from soft warnings (which the host can surface
  * but does not block on). Run at host load time against `.pi/conductor.yaml`
  * before a `MachineDefinition` is derived.
+ *
+ * Delegation lite §3 validation rules:
+ * - `allowed_subagents` is a non-empty, duplicate-free list of declared profiles.
+ * - `max_children_per_session` and `max_parallel` are finite positive integers.
+ * - `max_parallel <= max_children_per_session`.
+ * - Subagent names are unique and cannot collide with FSM role names.
+ * - Every profile declares a finite positive `max_session_cost_usd`.
  *
  * "No silent fallbacks" (AGENTS.md): when input is ambiguous, throw via
  * the parser (§8) — validation here only flags what's structurally
@@ -14,7 +21,7 @@
 import type { ModelEffort, Role } from "../core/types.js";
 import type { Manifest } from "./types.js";
 
-// ─── Result types ──────────────────────────────────────────────────────
+// ─── Result types ─────────────────────────────────────────────────────
 
 export type ManifestErrorCode =
   /** Exactly one role with `is_orchestrator: true` is required; found 0. */
@@ -29,14 +36,18 @@ export type ManifestErrorCode =
   | "bare-model-alias"
   /** A `models:` entry has an invalid effort token (§8.1). */
   | "invalid-model-effort"
-  /** A role has `delegation:` but no `tools: [delegate]` (spec §6 / issue #17). */
-  | "delegation-without-delegate-tool"
-  /** A role has `tools: [delegate]` but no `delegation:` block (spec §6 / issue #17). */
-  | "delegation-without-block"
-  /** A delegation policy field violates the §6 constraints (spec §6 / issue #17). */
-  | "delegation-invalid-policy"
-  /** `workspace_modes` in a delegation policy contains a duplicate (spec §6 / issue #17). */
-  | "delegation-duplicate-workspace-mode";
+  /** Delegation lite §3.3: `max_parallel > max_children_per_session`. */
+  | "delegation-max-parallel-exceeds-slot-limit"
+  /** Delegation lite §3.3: `allowed_subagents` references an undeclared profile. */
+  | "delegation-undeclared-subagent"
+  /** Delegation lite §3.5: subagent name collides with an FSM role name. */
+  | "subagent-name-collision"
+  /** Delegation lite §3.5: duplicate subagent name. */
+  | "duplicate-subagent-name"
+  /** Delegation lite §3.3: `allowed_subagents` is empty. */
+  | "delegation-empty-allowed-subagents"
+  /** Delegation lite §3.2: `allowed_subagents` contains duplicates. */
+  | "delegation-duplicate-allowed-subagent";
 
 export type ManifestWarningCode =
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
@@ -44,7 +55,9 @@ export type ManifestWarningCode =
   /** A role's `tools:` omits `handoff` or `end`; host force-injects (§8.1). */
   | "missing-required-tool"
   /** A role's `models[].entry` provider is not registered in the runtime `ModelRegistry` (host-side advisory check). */
-  | "unregistered-provider";
+  | "unregistered-provider"
+  /** Delegation lite §3: role has `delegation` but not `delegate` in tools. */
+  | "delegation-missing-delegate-tool";
 
 export interface ManifestError {
   readonly code: ManifestErrorCode;
@@ -104,6 +117,43 @@ export function validateManifest(m: Manifest): ManifestReport {
       code: "multiple-orchestrators",
       message: `manifest must declare exactly one role with \`is_orchestrator: true\` (found ${orchestrators.length})`,
     });
+  }
+
+  // ─── Delegation lite §3: collect role and subagent names ───────────
+  const roleNames = new Set(m.roles.map((r) => r.name));
+
+  // Delegation lite §3.5: subagent name uniqueness and FSM collision.
+  const subagentNames = new Set<string>();
+  if (m.subagents) {
+    for (const profile of m.subagents) {
+      if (subagentNames.has(profile.name)) {
+        errors.push({
+          code: "duplicate-subagent-name",
+          message: `subagent profile '${profile.name}' is declared more than once`,
+        });
+      }
+      subagentNames.add(profile.name);
+      if (roleNames.has(profile.name)) {
+        errors.push({
+          code: "subagent-name-collision",
+          message: `subagent profile name '${profile.name}' collides with FSM role name '${profile.name}'`,
+        });
+      }
+      for (const [index, model] of profile.models.entries()) {
+        if (!PROVIDER_ID_FORM.test(model.model)) {
+          errors.push({
+            code: "bare-model-alias",
+            message: `subagent '${profile.name}' has models[${index}].model '${model.model}' which is not in 'provider:id' form`,
+          });
+        }
+        if (!isModelEffort(model.effort)) {
+          errors.push({
+            code: "invalid-model-effort",
+            message: `subagent '${profile.name}' has models[${index}].effort '${model.effort}' which is not a valid thinking level`,
+          });
+        }
+      }
+    }
   }
 
   for (const role of m.roles) {
@@ -170,78 +220,58 @@ export function validateManifest(m: Manifest): ManifestReport {
       }
     }
 
-    // Issue #17 §6: cross-check delegation block + delegate tool.
-    const hasDelegation = role.delegation !== undefined;
-    const hasDelegateTool = role.tools?.includes("delegate") ?? false;
+    // ─── Delegation lite §3 validation ────────────────────────────────
+    if (role.delegation) {
+      const policy = role.delegation;
 
-    if (hasDelegation && !hasDelegateTool) {
-      errors.push({
-        code: "delegation-without-delegate-tool",
-        message: `role '${role.name}' has a \`delegation:\` block but is missing 'delegate' in \`tools:\`; both are required for delegation to be enabled (spec §6 / issue #17 §5 decision 1)`,
-        role: role.name,
-      });
-    }
-
-    if (hasDelegateTool && !hasDelegation) {
-      errors.push({
-        code: "delegation-without-block",
-        message: `role '${role.name}' has 'delegate' in \`tools:\` but no \`delegation:\` block; both are required for delegation to be enabled (spec §6 / issue #17 §5 decision 1)`,
-        role: role.name,
-      });
-    }
-
-    // Issue #17 §6: validate delegation policy shape (after parse-level
-    // coercion — these are the remaining semantic checks not caught by
-    // structural coercion).
-    if (hasDelegation) {
-      const dp = role.delegation;
-      const violations: string[] = [];
-
-      if (
-        !Number.isFinite(dp.max_parallel) ||
-        dp.max_parallel < 1 ||
-        !Number.isInteger(dp.max_parallel)
-      ) {
-        violations.push(`max_parallel must be a finite positive integer; got ${dp.max_parallel}`);
-      }
-      if (
-        !Number.isFinite(dp.max_children) ||
-        dp.max_children < 1 ||
-        !Number.isInteger(dp.max_children)
-      ) {
-        violations.push(`max_children must be a finite positive integer; got ${dp.max_children}`);
-      }
-      if (dp.max_depth !== 1) {
-        violations.push(`max_depth must be the literal 1 in v1; got ${dp.max_depth}`);
-      }
-      if (!Array.isArray(dp.workspace_modes) || dp.workspace_modes.length === 0) {
-        violations.push(
-          `workspace_modes must be a non-empty array; got ${JSON.stringify(dp.workspace_modes)}`,
-        );
-      }
-      if (!Number.isFinite(dp.max_child_cost_usd) || dp.max_child_cost_usd <= 0) {
-        violations.push(
-          `max_child_cost_usd must be a positive finite number; got ${dp.max_child_cost_usd}`,
-        );
-      }
-      // §6: duplicates in workspace_modes — emitted as a separate typed error
-      // so the consumer can route on the `delegation-duplicate-workspace-mode`
-      // code; bundling it into `delegation-invalid-policy` would make the
-      // single-violation test (Task 1.6) ambiguous.
-      if (dp.workspace_modes.length !== new Set(dp.workspace_modes).size) {
-        const seen = new Set<string>();
-        const dup = dp.workspace_modes.find((m) => seen.has(m) || !seen.add(m));
+      // §3.3: `allowed_subagents` must be non-empty.
+      if (policy.allowed_subagents.length === 0) {
         errors.push({
-          code: "delegation-duplicate-workspace-mode",
-          message: `role '${role.name}' has duplicate workspace mode "${dup}" in its delegation policy (spec §6 / issue #17)`,
+          code: "delegation-empty-allowed-subagents",
+          message: `role '${role.name}' has \`delegation.allowed_subagents\` but it is empty; at least one profile must be allowed`,
           role: role.name,
         });
       }
 
-      if (violations.length > 0) {
+      // §3.3: `allowed_subagents` must be duplicate-free.
+      const seenAllowedSubagents = new Set<string>();
+      for (const subagent of policy.allowed_subagents) {
+        if (seenAllowedSubagents.has(subagent)) {
+          errors.push({
+            code: "delegation-duplicate-allowed-subagent",
+            message: `role '${role.name}' has duplicate subagent '${subagent}' in \`delegation.allowed_subagents\``,
+            role: role.name,
+          });
+        } else {
+          seenAllowedSubagents.add(subagent);
+        }
+      }
+
+      // §3.3: every allowed_subagent must be declared.
+      for (const subagent of policy.allowed_subagents) {
+        if (!subagentNames.has(subagent)) {
+          errors.push({
+            code: "delegation-undeclared-subagent",
+            message: `role '${role.name}' allows subagent '${subagent}' but it is not declared in \`subagents:\``,
+            role: role.name,
+          });
+        }
+      }
+
+      // §3.3: `max_parallel <= max_children_per_session`.
+      if (policy.max_parallel > policy.max_children_per_session) {
         errors.push({
-          code: "delegation-invalid-policy",
-          message: `role '${role.name}' has an invalid delegation policy: ${violations.join("; ")} (spec §6 / issue #17)`,
+          code: "delegation-max-parallel-exceeds-slot-limit",
+          message: `role '${role.name}' has \`delegation.max_parallel\` (${policy.max_parallel}) greater than \`delegation.max_children_per_session\` (${policy.max_children_per_session})`,
+          role: role.name,
+        });
+      }
+
+      // §3.1: delegation requires `delegate` in tools.
+      if (!role.tools?.includes("delegate")) {
+        warnings.push({
+          code: "delegation-missing-delegate-tool",
+          message: `role '${role.name}' has a \`delegation\` block but does not include 'delegate' in \`tools:\`; the tool will not be available`,
           role: role.name,
         });
       }

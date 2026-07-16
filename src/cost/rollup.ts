@@ -1,5 +1,5 @@
 /**
- * `rollup` — pure usage/cost roll-up over persisted records (spec §11.6).
+ * `rollup` — pure usage/cost roll-up over persisted records (spec §11.6 / issue-17-delegation-lite §7).
  *
  * Aggregates the `usage` blocks captured on terminal lifecycle events
  * (`session_ended` AND `session_failed` — both terminals cost, §11.4)
@@ -11,23 +11,21 @@
  *                             role that ran, workers AND orchestrator.
  *  - `perModel`             — totals per model. Reveals load split when a
  *                             role has fallbacks (§8.2).
- *  - `orchestratorOverhead`  — orchestrator cost labeled separately for
+ *  - `orchestratorOverhead` — orchestrator cost labeled separately for
  *                             emphasis (§11.6: "isolated from worker
  *                             cost"). Same numbers as `perRole[orchestrator]`
  *                             — the isolation is a *consumer* concern,
  *                             not a separate accounting. Without separation
  *                             a cheap run looks expensive because the
  *                             orchestrator ran many times.
- *  - `perSubagent`          — totals per child, keyed by `child_id`.
- *                             Additive; `perRole` is unchanged (children
- *                             are auxiliary, not FSM roles — spec §12.1
- *                             invariant 1 avoids double-attribution).
- *                             Issue #17 §9.
+ *  - `perSubagent`          — totals per subagent profile (delegation lite §7).
+ *                             Child usage contributes here; never enters
+ *                             `perRole` or parent lifecycle usage.
  *
  * Records that do not carry `usage` (transition_accepted /
- * transition_rejected / session_started / subagent_started) do not
- * contribute to the cost roll-up. The rollup does NOT inspect payload
- * content — it reads `usage` only (§11.4 normalized shape).
+ * transition_rejected / session_started) do not contribute to the cost
+ * roll-up. The rollup does NOT inspect payload content — it reads
+ * `usage` only (§11.4 normalized shape).
  *
  * **Cache caveat (§11.6):** the rollup exposes raw `cache_read` /
  * `cache_write` token sums per dimension. It does NOT synthesize a
@@ -43,7 +41,7 @@
  */
 
 import type { Role, UsageRecord } from "../core/types.js";
-import type { PersistedRecord } from "../persistence/log.js";
+import type { PersistedRecord, SubagentUsage } from "../persistence/log.js";
 
 /**
  * Stable sentinel key for sessions that ran on the system default model
@@ -80,23 +78,18 @@ const ZERO_AGGREGATE: UsageAggregate = Object.freeze({
   sessions: 0,
 }) as UsageAggregate;
 
-/** §11.6: the rollup result. All dimensions share the same aggregate shape. */
+/** §11.6 / delegation lite §7: the rollup result. All dimensions share the same aggregate shape. */
 export interface RunRollup {
   readonly perRun: UsageAggregate;
   readonly perRole: Readonly<Record<Role, UsageAggregate>>;
   readonly perModel: Readonly<Record<string, UsageAggregate>>;
   readonly orchestratorOverhead: UsageAggregate;
-  /**
-   * Totals per child sub-agent, keyed by `child_id`. Additive: children
-   * are auxiliary sessions, not FSM roles, so they do not appear in
-   * `perRole`. This avoids double-attribution of child cost to a role
-   * (spec §12.1 invariant 1). Issue #17 §9.
-   */
+  /** Delegation lite §7: totals per subagent profile. */
   readonly perSubagent: Readonly<Record<string, UsageAggregate>>;
 }
 
 /**
- * Compute the §11.6 usage roll-up for one run.
+ * Compute the §11.6 / delegation lite §7 usage roll-up for one run.
  *
  * @param records — the full append-only log; filtered to `runId` here
  *                  so a single call over a multi-run log returns a
@@ -121,37 +114,48 @@ export function rollup(
   const perSubagent = new Map<string, UsageAggregate>();
 
   for (const record of records) {
-    // Only records with usage contribute: terminal lifecycle events and
-    // terminal subagent records.
-    const usage = getUsage(record, runId);
+    // run_id filter (§11.6: roll-up is keyed by run_id).
+    // CheckpointSnapshot wraps the run_id in its checkpoint field.
+    const recordRunId =
+      record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
+    if (recordRunId !== runId) {
+      continue;
+    }
+
+    // Delegation lite §7: subagent terminal records contribute to
+    // perRun, perModel, and perSubagent. They never enter perRole.
+    if (record.type === "subagent_completed" || record.type === "subagent_failed") {
+      if (record.usage) {
+        perRun = addUsage(perRun, record.usage);
+        const subagentAgg = perSubagent.get(record.subagent) ?? ZERO_AGGREGATE;
+        perSubagent.set(record.subagent, addUsage(subagentAgg, record.usage));
+        const modelAgg = perModel.get(record.model) ?? ZERO_AGGREGATE;
+        perModel.set(record.model, addUsage(modelAgg, record.usage));
+      }
+      continue;
+    }
+
+    // Parent lifecycle events: only terminal sessions contribute.
+    if (record.type !== "session_ended" && record.type !== "session_failed") {
+      continue;
+    }
+
+    const usage: UsageRecord | undefined = record.usage;
     if (usage === undefined) {
+      // Defensive: reduceLifecycle requires usage on terminals. If a
+      // record was constructed without it, skip rather than throw — the
+      // rollup is a read query, not a write.
       continue;
     }
 
     perRun = addUsage(perRun, usage);
 
-    // ── Main-role session terminals ──────────────────────────────
-    if (record.type === "session_ended" || record.type === "session_failed") {
-      const roleAgg = perRole.get(record.role) ?? ZERO_AGGREGATE;
-      perRole.set(record.role, addUsage(roleAgg, usage));
+    const roleAgg = perRole.get(record.role) ?? ZERO_AGGREGATE;
+    perRole.set(record.role, addUsage(roleAgg, usage));
 
-      const modelKey = record.model ?? SYSTEM_DEFAULT_MODEL_KEY;
-      const modelAgg = perModel.get(modelKey) ?? ZERO_AGGREGATE;
-      perModel.set(modelKey, addUsage(modelAgg, usage));
-    }
-
-    // ── Subagent terminal records (issue #17 §9) ─────────────────
-    // Children never enter perRole (no double-attribution, spec §12.1
-    // invariant 1). They enter perModel (children use models too) and
-    // perSubagent (observability per child).
-    if (record.type === "subagent_completed" || record.type === "subagent_failed") {
-      const modelKey = record.model ?? SYSTEM_DEFAULT_MODEL_KEY;
-      const modelAgg = perModel.get(modelKey) ?? ZERO_AGGREGATE;
-      perModel.set(modelKey, addUsage(modelAgg, usage));
-
-      const childAgg = perSubagent.get(record.child_id) ?? ZERO_AGGREGATE;
-      perSubagent.set(record.child_id, addUsage(childAgg, usage));
-    }
+    const modelKey = record.model ?? SYSTEM_DEFAULT_MODEL_KEY;
+    const modelAgg = perModel.get(modelKey) ?? ZERO_AGGREGATE;
+    perModel.set(modelKey, addUsage(modelAgg, usage));
   }
 
   // §11.6 isolation: orchestrator overhead is the orchestrator's entry
@@ -165,25 +169,7 @@ export function rollup(
   return finalize(perRun, perRole, perModel, perSubagent, orchestratorOverhead);
 }
 
-/**
- * Extract usage from a record if it carries usage and belongs to the
- * requested run. Returns `undefined` for records that don't contribute
- * to the roll-up or belong to a different run.
- */
-function getUsage(record: PersistedRecord, runId: string): UsageRecord | undefined {
-  switch (record.type) {
-    case "session_ended":
-    case "session_failed":
-      return record.run_id === runId ? record.usage : undefined;
-    case "subagent_completed":
-    case "subagent_failed":
-      return record.run_id === runId ? record.usage : undefined;
-    default:
-      return undefined;
-  }
-}
-
-function addUsage(a: UsageAggregate, u: UsageRecord): UsageAggregate {
+function addUsage(a: UsageAggregate, u: SubagentUsage | UsageRecord): UsageAggregate {
   return {
     input: a.input + u.input,
     output: a.output + u.output,
@@ -211,14 +197,14 @@ function finalize(
     perModelOut[model] = Object.freeze({ ...agg }) as UsageAggregate;
   }
   const perSubagentOut: Record<string, UsageAggregate> = {};
-  for (const [child_id, agg] of perSubagent.entries()) {
-    perSubagentOut[child_id] = Object.freeze({ ...agg }) as UsageAggregate;
+  for (const [subagent, agg] of perSubagent.entries()) {
+    perSubagentOut[subagent] = Object.freeze({ ...agg }) as UsageAggregate;
   }
   return {
     perRun: Object.freeze({ ...perRun }) as UsageAggregate,
     perRole: Object.freeze(perRoleOut),
     perModel: Object.freeze(perModelOut),
-    perSubagent: Object.freeze(perSubagentOut),
     orchestratorOverhead: Object.freeze({ ...orchestratorOverhead }) as UsageAggregate,
+    perSubagent: Object.freeze(perSubagentOut),
   };
 }
