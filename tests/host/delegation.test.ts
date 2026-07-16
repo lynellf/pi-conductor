@@ -1,11 +1,12 @@
 /** Delegation-lite boundaries — spec §4, §5, §7. */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { rollup } from "../../src/cost/rollup.js";
@@ -18,6 +19,7 @@ import {
   determineChildStatus,
   verifyWorktree,
 } from "../../src/host/delegation/worktree.js";
+import { makeStubModel } from "../../src/host/stub-provider.js";
 import type { DelegationPolicy, SubagentProfile } from "../../src/manifest/types.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
 
@@ -117,13 +119,13 @@ describe("bounded child pool (§4)", () => {
 
 describe("confined run tool (§6)", () => {
   it("rejects an absolute path hidden in an option value", async () => {
-    const [run] = buildChildTools({
+    const run = buildChildTools({
       worktreePath: "/tmp/worktree",
       runId: "run",
       childId: "child",
       parentRole: "parent",
       taskId: "task",
-    });
+    }).find((tool) => tool.name === "run");
     if (run === undefined) throw new Error("missing constrained run tool");
     const result = await run.execute(
       "tool-call",
@@ -135,6 +137,82 @@ describe("confined run tool (§6)", () => {
     expect(result.content).toEqual([
       expect.objectContaining({ text: expect.stringContaining("outside path") }),
     ]);
+  });
+});
+
+describe("child file tools (§6, issue #24)", () => {
+  let sandbox: string | undefined;
+
+  afterEach(async () => {
+    if (sandbox !== undefined) await rm(sandbox, { recursive: true, force: true });
+  });
+
+  it("replaces the SDK file tools in the actual child session and rejects outside paths", async () => {
+    sandbox = await mkdtemp(join(tmpdir(), "pi-conductor-child-tools-"));
+    const worktree = join(sandbox, "worktree");
+    const outside = join(sandbox, "outside");
+    await mkdir(worktree);
+    await mkdir(outside);
+    await writeFile(join(worktree, "inside.txt"), "inside\n");
+    await writeFile(join(outside, "outside.txt"), "outside\n");
+    await symlink(outside, join(worktree, "outside-link"));
+
+    const { session } = await createAgentSession({
+      cwd: worktree,
+      model: makeStubModel(),
+      sessionManager: SessionManager.inMemory(worktree),
+      customTools: buildChildTools({
+        worktreePath: worktree,
+        runId: "run",
+        childId: "child",
+        parentRole: "parent",
+        taskId: "task",
+      }),
+      tools: ["read", "grep", "find", "ls", "edit", "write", "run"],
+    });
+
+    try {
+      const read = requiredTool(session, "read");
+      const grep = requiredTool(session, "grep");
+      const find = requiredTool(session, "find");
+      const ls = requiredTool(session, "ls");
+      const edit = requiredTool(session, "edit");
+      const write = requiredTool(session, "write");
+
+      await expectBlocked(read, { path: join(outside, "outside.txt") });
+      await expectBlocked(grep, { pattern: "outside", path: "../outside" });
+      await expectBlocked(find, { pattern: "*", path: "outside-link" });
+      await expectBlocked(ls, { path: join(outside, "outside.txt") });
+      await expectBlocked(edit, {
+        path: join(outside, "outside.txt"),
+        edits: [{ oldText: "outside", newText: "changed" }],
+      });
+      await expectBlocked(write, { path: "outside-link/created.txt", content: "blocked" });
+
+      const readInside = await read.execute(
+        "tool-call",
+        { path: "inside.txt" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(readInside.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("inside") }),
+      ]);
+
+      const writeInside = await write.execute(
+        "tool-call",
+        { path: "created.txt", content: "created" },
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(writeInside.content).toEqual([
+        expect.objectContaining({ text: expect.stringContaining("Successfully wrote") }),
+      ]);
+    } finally {
+      session.dispose();
+    }
   });
 });
 
@@ -228,4 +306,23 @@ describe("resume child reconciliation (§7)", () => {
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd });
   return stdout;
+}
+
+function requiredTool(
+  session: Awaited<ReturnType<typeof createAgentSession>>["session"],
+  name: string,
+) {
+  const tool = session.getToolDefinition(name);
+  if (tool === undefined) throw new Error(`missing child tool '${name}'`);
+  return tool;
+}
+
+async function expectBlocked(
+  tool: ReturnType<typeof requiredTool>,
+  params: Record<string, unknown>,
+): Promise<void> {
+  const result = await tool.execute("tool-call", params, undefined, undefined, {} as never);
+  expect(result.content).toEqual([
+    expect.objectContaining({ text: expect.stringContaining("child worktree") }),
+  ]);
 }
