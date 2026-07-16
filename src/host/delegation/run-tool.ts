@@ -1,14 +1,22 @@
 /** Path-confined child tools — delegation lite §6. */
 
 import { execFile } from "node:child_process";
-import { resolve, sep } from "node:path";
+import { realpath } from "node:fs/promises";
+import { dirname, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import {
   type AgentToolResult,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
   defineTool,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 
 const execFileAsync = promisify(execFile);
@@ -34,9 +42,21 @@ export interface ChildToolOptions {
   readonly taskId: string;
 }
 
-/** Build the argv-only child `run` tool; built-in file tools use the child cwd (§6). */
+/** Build the child file and argv tools, all confined to its generated worktree (§6). */
 export function buildChildTools(opts: ChildToolOptions): ToolDefinition[] {
-  return [buildConstrainedRunTool(opts)];
+  const root = resolve(opts.worktreePath);
+  const tools = [
+    confinePathTool(createReadToolDefinition(root), root),
+    confinePathTool(createGrepToolDefinition(root), root),
+    confinePathTool(createFindToolDefinition(root), root),
+    confinePathTool(createLsToolDefinition(root), root),
+    confinePathTool(createEditToolDefinition(root), root),
+    confinePathTool(createWriteToolDefinition(root), root),
+    buildConstrainedRunTool(opts),
+  ];
+  // The SDK's `customTools` boundary erases each definition's parameter
+  // schema. Preserve the factories' precise types above, then erase only here.
+  return tools as unknown as ToolDefinition[];
 }
 
 interface RunDetails {
@@ -174,6 +194,61 @@ function hasTraversal(value: string): boolean {
 
 function isWithinRoot(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}${sep}`);
+}
+
+function confinePathTool<TParams extends TSchema, TDetails, TState>(
+  tool: ToolDefinition<TParams, TDetails, TState>,
+  root: string,
+): ToolDefinition<TParams, TDetails, TState> {
+  return {
+    ...tool,
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const path = (params as Static<TParams> & { path?: unknown }).path;
+      const failure = await validateChildPath(path, root);
+      if (failure !== null) return fileToolError<TDetails>(failure);
+      return tool.execute(toolCallId, params, signal, onUpdate, ctx);
+    },
+  };
+}
+
+async function validateChildPath(path: unknown, root: string): Promise<string | null> {
+  if (path !== undefined && typeof path !== "string") {
+    return "path must be a string inside the child worktree";
+  }
+  const requested = path ?? ".";
+  if (isAbsolutePath(requested) || requested.startsWith("~") || hasTraversal(requested)) {
+    return "path must be relative and inside the child worktree";
+  }
+
+  const rootReal = await realpath(root);
+  let candidate = resolve(rootReal, requested);
+  if (!isWithinRoot(candidate, rootReal)) {
+    return "path must be inside the child worktree";
+  }
+
+  for (;;) {
+    try {
+      const resolved = await realpath(candidate);
+      return isWithinRoot(resolved, rootReal) ? null : "path resolves outside the child worktree";
+    } catch (cause) {
+      if (!isNotFound(cause)) throw cause;
+      const parent = dirname(candidate);
+      if (parent === candidate) return "path must be inside the child worktree";
+      candidate = parent;
+    }
+  }
+}
+
+function isNotFound(cause: unknown): boolean {
+  return typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT";
+}
+
+function fileToolError<TDetails>(text: string): AgentToolResult<TDetails> {
+  return {
+    content: [{ type: "text", text }],
+    details: undefined as TDetails,
+    terminate: false,
+  };
 }
 
 function toolError(text: string): AgentToolResult<RunDetails> {
