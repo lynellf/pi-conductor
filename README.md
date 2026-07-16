@@ -343,10 +343,12 @@ or invalid Git state becomes `failed`.
 ### Child boundary and branch integration
 
 Each child receives only `read`, `grep`, `find`, `ls`, `edit`, `write`, `run`,
-and `report_result`, rooted in its generated worktree. `run` accepts argv, not a
-shell string; its allowlist is `git`, `pnpm`, `npm`, `node`, `npx`, `grep`,
-`find`, and `ls`. Children cannot call `handoff`, `end`, `ask_user`, `delegate`,
-or `bash`.
+and `report_result`, rooted in its generated worktree. Every child file tool
+rejects absolute paths, `..` traversal, and paths that resolve through a symlink
+outside that worktree; this is path confinement, not an OS or credential
+sandbox. `run` accepts argv, not a shell string; its allowlist is `git`, `pnpm`,
+`npm`, `node`, `npx`, `grep`, `find`, and `ls`. Children cannot call `handoff`,
+`end`, `ask_user`, `delegate`, or `bash`.
 
 The host creates `conductor/<runId>/<childId>` and keeps both branch and
 worktree under the run state directory. It **never** merges, cherry-picks,
