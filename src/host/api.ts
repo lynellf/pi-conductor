@@ -386,6 +386,7 @@ function reconcileCrash(
   def: MachineDefinition,
   log: RecordLog,
 ): Checkpoint {
+  reconcileLostChildren(runId, log);
   const active = checkpoint.active_role_session;
   if (active === null) return checkpoint;
 
@@ -465,6 +466,37 @@ function reconcileCrash(
   };
   log.append(snapshot);
   return result.checkpoint;
+}
+
+/** Resume never relaunches a child; unmatched starts become one durable cancellation (§7). */
+export function reconcileLostChildren(runId: string, log: RecordLog): void {
+  const records = log.records(runId);
+  const terminalChildIds = new Set(
+    records
+      .filter((record) => record.type === "subagent_completed" || record.type === "subagent_failed")
+      .map((record) => record.child_id),
+  );
+  for (const record of records) {
+    if (record.type !== "subagent_started" || terminalChildIds.has(record.child_id)) continue;
+    log.append({
+      type: "subagent_failed",
+      run_id: runId,
+      child_id: record.child_id,
+      task_id: record.task_id,
+      subagent: record.subagent,
+      model: record.model,
+      status: "cancelled",
+      failure_reason: "recovered_child_lost",
+      branch: record.branch,
+      worktree_path: record.worktree_path,
+      base_commit: record.base_commit,
+      head_commit: null,
+      session_file: record.session_file,
+      usage: null,
+      ts: Date.now(),
+    });
+    terminalChildIds.add(record.child_id);
+  }
 }
 
 async function resolveBaseDir(baseDir: string | undefined): Promise<string> {

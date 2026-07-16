@@ -63,6 +63,7 @@ import type { ModelConfig, RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
+import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
@@ -195,6 +196,7 @@ export class ProductionHost implements Host {
    * policy doesn't cross a "real duplication" threshold).
    */
   private unavailableRole: Role | null = null;
+  private readonly delegationManager = new DelegationManager();
 
   // ─── Host methods ──────────────────────────────────────────────────
   // `spawnRole` is wired (7A.3). The remaining methods throw a
@@ -298,6 +300,35 @@ export class ProductionHost implements Host {
         : createHandoffContextTool(opts.handoffContextRef);
     const tools = buildToolsAllowlist(roleTools, handoffContext !== null);
 
+    // ── Delegation lite §4: build delegate tool if the role is delegating.
+    // A role receives `delegate` only when it declares BOTH `tools: [delegate]`
+    // AND a `delegation` block (§3 rule 1). The manifest validator surfaces a
+    // warning when the block exists without the tool entry.
+    let delegateTool: ReturnType<
+      typeof import("./delegation/delegate-tool-factory.js").createDelegateTool
+    > | null = null;
+    if (roleConfig?.delegation !== undefined && roleConfig.tools?.includes("delegate")) {
+      const manifest = this.loadedManifest.manifest;
+      const remaining = roleConfig.delegation.max_children_per_session;
+      const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
+      const runStateDir = join(this.cwd, ".pi-conductor", "runs", this.runId);
+      delegateTool = createDelegateTool({
+        role: roleConfig,
+        subagents: manifest.subagents ?? [],
+        remainingChildren: remaining,
+        runId: this.runId,
+        parentRole: role,
+        primaryCheckout: this.cwd,
+        runStateDir,
+        log: this.log,
+        agentDir: this.agentDir,
+        systemPromptRoot: delegationPromptRoot(this.loadedManifest, this.cwd),
+        modelRegistry: this.modelRegistry,
+        sessionDir: this.sessionDir,
+        manager: this.delegationManager,
+      });
+    }
+
     // 5. Build the file-backed `SessionManager` rooted under the
     //    conductor's per-run directory (NOT pi's own session tree).
     //    `SessionManager.create(cwd, sessionDir)` puts each session's
@@ -325,8 +356,14 @@ export class ProductionHost implements Host {
       modelRegistry: this.modelRegistry,
       resourceLoader: loader,
       sessionManager,
-      customTools: [handoff, end, askUser, ...(handoffContext === null ? [] : [handoffContext])],
-      tools: [...tools],
+      customTools: [
+        handoff,
+        end,
+        askUser,
+        ...(handoffContext === null ? [] : [handoffContext]),
+        ...(delegateTool === null ? [] : [delegateTool]),
+      ],
+      tools: [...tools, ...(delegateTool === null ? [] : ["delegate"])],
     };
     if (model !== undefined) {
       // The SDK's `model` is `Model<any>`; `resolveModel` returns
@@ -481,15 +518,16 @@ export class ProductionHost implements Host {
   }
 
   runCostSoFar(): number {
-    // Sum `usage.cost` across all session_ended + session_failed
-    // records in the run. Both terminals cost (§11.4). The
-    // loop adds the current terminal's usage on top of this
-    // when evaluating the cap (§11.7: "persisted roll-up plus
-    // the current terminal's captured usage before reducing
-    // the role's captured machine event").
+    // Sum `usage.cost` across all terminal records in the run:
+    // - Parent lifecycle terminals: session_ended + session_failed (§11.4).
+    // - Delegation lite §7: child terminals also cost against the run cap.
+    //   Both subagent_completed and subagent_failed contribute.
     let total = 0;
     for (const r of this.log.records(this.runId)) {
       if ((r.type === "session_ended" || r.type === "session_failed") && r.usage) {
+        total += r.usage.cost;
+      }
+      if ((r.type === "subagent_completed" || r.type === "subagent_failed") && r.usage) {
         total += r.usage.cost;
       }
     }
@@ -497,6 +535,7 @@ export class ProductionHost implements Host {
   }
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
+    await this.delegationManager.abortAll();
     const state = this.sessionStates.get(session.sessionId);
     const agent = this.agentsBySessionId.get(session.sessionId);
     if (state === undefined || agent === undefined) return;
@@ -511,4 +550,12 @@ export class ProductionHost implements Host {
     // (Task 15.5) flipping `SessionSeam.isSealed`. This method
     // is reserved for external consumers.
   }
+}
+
+function delegationPromptRoot(loaded: LoadedManifest, cwd: string): string {
+  if (loaded.manifestVersion < 2) return cwd;
+  if (loaded.manifestDir === null) {
+    throw new Error("delegation requires a manifest directory for v2 profile system prompts");
+  }
+  return loaded.manifestDir;
 }

@@ -1,5 +1,5 @@
 /**
- * Manifest YAML loader — spec §8.
+ * Manifest YAML loader — spec §8 / issue-17-delegation-lite §3.
  *
  * Reads a raw `.pi/conductor.yaml` string and returns a `Manifest`.
  * This function only checks shape (parse + structural completeness).
@@ -11,6 +11,7 @@
  * - Missing or non-integer top-level `version:` (§10).
  * - Missing or non-array `roles:`.
  * - Role entries missing `name` or having non-string `name`.
+ * - Invalid delegation or subagent profile fields.
  *
  * The function returns frozen objects so accidental mutation is caught
  * at runtime; records are immutable throughout the system.
@@ -19,7 +20,13 @@
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
-import type { Manifest, ModelConfig, RoleConfig } from "./types.js";
+import type {
+  DelegationPolicy,
+  Manifest,
+  ModelConfig,
+  RoleConfig,
+  SubagentProfile,
+} from "./types.js";
 import { ManifestParseError } from "./types.js";
 
 const MAX_MODEL_RETRY_DELAY_MS = 60_000;
@@ -66,11 +73,82 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     roles.push(parseRoleConfig(entry, i));
   }
 
+  const subagentsRaw = obj.subagents;
+  const subagents = subagentsRaw !== undefined ? parseSubagentProfiles(subagentsRaw) : undefined;
+
   return Object.freeze({
     version,
     roles: Object.freeze(roles),
+    ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
   }) as Manifest;
 }
+
+// ─── Delegation lite §3: subagent profile parsing ───────────────────────
+
+function parseSubagentProfiles(raw: unknown): SubagentProfile[] {
+  if (!Array.isArray(raw)) {
+    throw new ManifestParseError("`subagents:` must be an array");
+  }
+  const profiles: SubagentProfile[] = [];
+  for (const [i, entry] of raw.entries()) {
+    profiles.push(parseSubagentProfile(entry, i));
+  }
+  return profiles;
+}
+
+function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError(`subagents[${index}] must be a YAML mapping (object)`);
+  }
+  const entry = raw as Record<string, unknown>;
+  const path = `subagents[${index}]`;
+
+  const name = toNonEmptyString(entry.name, `${path}.name`);
+  const models = parseModelConfigArray(entry.models, `${path}.models`);
+  if (models.length === 0) {
+    throw new ManifestParseError(`${path}.models must contain at least one model`);
+  }
+  const max_session_cost_usd = toPositiveFiniteNumber(
+    entry.max_session_cost_usd,
+    `${path}.max_session_cost_usd`,
+  );
+  const system_prompt = toNonEmptyString(entry.system_prompt, `${path}.system_prompt`);
+
+  return Object.freeze({
+    name,
+    models,
+    max_session_cost_usd,
+    system_prompt,
+  }) as SubagentProfile;
+}
+
+// ─── Delegation lite §3: delegation policy parsing ────────────────────
+
+function parseDelegationPolicy(raw: unknown, roleIndex: number): DelegationPolicy {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError(`roles[${roleIndex}].delegation must be a YAML mapping (object)`);
+  }
+  const entry = raw as Record<string, unknown>;
+  const path = `roles[${roleIndex}].delegation`;
+
+  const allowed_subagents = toNonEmptyStringArray(
+    entry.allowed_subagents,
+    `${path}.allowed_subagents`,
+  );
+  const max_children_per_session = toPositiveInt(
+    entry.max_children_per_session,
+    `${path}.max_children_per_session`,
+  );
+  const max_parallel = toPositiveInt(entry.max_parallel, `${path}.max_parallel`);
+
+  return Object.freeze({
+    allowed_subagents,
+    max_children_per_session,
+    max_parallel,
+  }) as DelegationPolicy;
+}
+
+// ─── Role config parsing ─────────────────────────────────────────────
 
 function parseRoleConfig(raw: unknown, index: number): RoleConfig {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
@@ -93,7 +171,7 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
       max_visits: toFiniteInt(entry.max_visits, `${path}.max_visits`),
     }),
     ...(entry.models !== undefined && {
-      models: toModelConfigArray(entry.models, `${path}.models`),
+      models: parseModelConfigArray(entry.models, `${path}.models`),
     }),
     ...(entry.max_session_cost_usd !== undefined && {
       max_session_cost_usd: toFiniteNumber(
@@ -110,12 +188,15 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     ...(entry.tools !== undefined && {
       tools: toStringArray(entry.tools, `${path}.tools`),
     }),
+    ...(entry.delegation !== undefined && {
+      delegation: parseDelegationPolicy(entry.delegation, index),
+    }),
   }) as RoleConfig;
 
   return role;
 }
 
-// ─── Field coercion helpers ────────────────────────────────────────────
+// ─── Field coercion helpers ───────────────────────────────────────────
 
 function toBool(value: unknown, path: string): boolean {
   if (typeof value !== "boolean") {
@@ -145,11 +226,36 @@ function toFiniteNumber(value: unknown, path: string): number {
   return value;
 }
 
+function toPositiveFiniteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new ManifestParseError(`${path} must be a positive finite number`);
+  }
+  return value;
+}
+
+function toPositiveInt(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw new ManifestParseError(`${path} must be a positive integer (>= 1)`);
+  }
+  return value;
+}
+
 function toNonEmptyString(value: unknown, path: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new ManifestParseError(`${path} must be a non-empty string`);
   }
   return value;
+}
+
+function toNonEmptyStringArray(value: unknown, path: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be an array`);
+  }
+  const out: string[] = [];
+  for (const [index, item] of value.entries()) {
+    out.push(toNonEmptyString(item, `${path}[${index}]`));
+  }
+  return Object.freeze(out);
 }
 
 function toStringArray(value: unknown, path: string): readonly string[] {
@@ -163,7 +269,7 @@ function toStringArray(value: unknown, path: string): readonly string[] {
   return Object.freeze(out);
 }
 
-function toModelConfigArray(value: unknown, path: string): readonly ModelConfig[] {
+function parseModelConfigArray(value: unknown, path: string): readonly ModelConfig[] {
   if (!Array.isArray(value)) {
     throw new ManifestParseError(`${path} must be an array`);
   }

@@ -1,5 +1,5 @@
 /**
- * `PersistedRecord` union and the `RecordLog` interface — spec §11.1–§11.5.
+ * `PersistedRecord` union and the `RecordLog` interface — spec §11.1–§11.5 / issue-17-delegation-lite §7.
  *
  * Every record the host appends to its `run_id`-keyed append-only log is
  * a member of `PersistedRecord`. The union covers:
@@ -15,6 +15,8 @@
  *  - `run_seeded` (host-owned, non-machine-event record carrying the
  *    run's original goal at `startRun` time; used by `resumeRun` to
  *    restore the goal context).
+ *  - Delegation lite §7: `subagent_started` / `subagent_completed` /
+ *    `subagent_failed` (host-owned child session observability records).
  *
  * **`RecordLog`** is the host-side persistence contract. The pure core
  * ships the interface and an in-memory implementation for unit tests.
@@ -31,6 +33,7 @@ import type {
   SessionLifecycleEvent,
   TransitionAccepted,
   TransitionRejected,
+  UsageRecord,
 } from "../core/types.js";
 
 /**
@@ -59,6 +62,82 @@ export interface RunSeededRecord {
   readonly ts: number;
 }
 
+// ─── Delegation lite §7: subagent records ──────────────────────────────
+
+/** Delegation lite §7: usage contributed to perRun, perModel, and perSubagent rollups. */
+export interface SubagentUsage extends UsageRecord {}
+
+/**
+ * Delegation lite §7.1: appended after the child SDK session exists and its
+ * real session file, worktree path, branch, and base commit are known, before prompt.
+ *
+ * This is host-owned observability data only; it never enters the parent
+ * lifecycle usage or `perRole`.
+ */
+export interface SubagentStartedRecord {
+  readonly type: "subagent_started";
+  readonly run_id: string;
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly subagent: string;
+  /** Resolved profile model retained for recovery and terminal roll-up. */
+  readonly model: string;
+  readonly session_file: string;
+  readonly worktree_path: string;
+  readonly branch: string;
+  readonly base_commit: string;
+  readonly ts: number;
+}
+
+/**
+ * Delegation lite §7.1: appended after a child session terminates successfully
+ * (`completed` or `no_changes`).
+ */
+export interface SubagentCompletedRecord {
+  readonly type: "subagent_completed";
+  readonly run_id: string;
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly subagent: string;
+  /** Resolved profile model; child terminal cost rolls into perModel. */
+  readonly model: string;
+  readonly status: "completed" | "no_changes";
+  readonly summary: string;
+  readonly verification?: readonly string[];
+  readonly branch: string;
+  readonly worktree_path: string;
+  readonly base_commit: string;
+  readonly head_commit: string;
+  readonly session_file: string;
+  readonly usage: SubagentUsage;
+  readonly ts: number;
+}
+
+/**
+ * Delegation lite §7.1: appended after a child session fails or is cancelled.
+ *
+ * `status: "failed"` — child encountered an error during execution.
+ * `status: "cancelled"` — child was cancelled due to run abort or resume recovery.
+ */
+export interface SubagentFailedRecord {
+  readonly type: "subagent_failed";
+  readonly run_id: string;
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly subagent: string;
+  /** Resolved profile model; child terminal cost rolls into perModel. */
+  readonly model: string;
+  readonly status: "failed" | "cancelled";
+  readonly failure_reason: string;
+  readonly branch: string;
+  readonly worktree_path: string;
+  readonly base_commit: string;
+  readonly head_commit: string | null;
+  readonly session_file: string | null;
+  readonly usage: SubagentUsage | null;
+  readonly ts: number;
+}
+
 /** Union of every record the host appends to its run_id-keyed log. */
 export type PersistedRecord =
   | TransitionAccepted
@@ -67,7 +146,10 @@ export type PersistedRecord =
   | ModelFallback
   | ModelRetry
   | CheckpointSnapshot
-  | RunSeededRecord;
+  | RunSeededRecord
+  | SubagentStartedRecord
+  | SubagentCompletedRecord
+  | SubagentFailedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
