@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.0] - 2026-07-16
+
+### Enhancements
+
+- **Opt-in worktree subagent delegation** (issue #17). Roles can now declare
+  named subagent profiles and a bounded `delegation` policy, then use the
+  `delegate` tool to run independent child tasks concurrently in isolated Git
+  worktrees. Children receive restricted tools and return a structured
+  `report_result`; their worktrees and branches remain available for explicit
+  review.
+- **Observable child lifecycle and costs.** The run log now records child
+  start, completion, and failure events. Terminal child usage contributes to
+  run-, model-, and subagent-level rollups without being attributed to FSM
+  roles. Abort and resume paths reconcile active child work without relaunching
+  it.
+
+### Notes
+
+- Delegation is additive and disabled unless a role declares both a
+  `delegation` block and `delegate` in its tool allowlist. This lite release
+  deliberately excludes child retry/fallback chains, budget reservations,
+  automatic cleanup, merge/cherry-pick, global queues, and child relaunch.
+
 ## [0.8.2] - 2026-07-11
 
 ### Enhancements
