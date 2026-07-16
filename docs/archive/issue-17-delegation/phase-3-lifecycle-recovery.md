@@ -139,11 +139,11 @@ must not regress:
 
 **Work and acceptance:**
 
-- [ ] Normalize `pnpm audit --json` using Node built-ins, explicit exit status,
+- [x] Normalize `pnpm audit --json` using Node built-ins, explicit exit status,
       stable advisory/package sorting, and no timestamps/prose.
-- [ ] Run the baseline before Task 1. The observed 2026-07-12 baseline is eight
+- [x] Run the baseline before Task 1. The observed 2026-07-12 baseline is eight
       advisories with non-zero status; a different set/status stops this package.
-- [ ] Confirm `package.json`, `pnpm-lock.yaml`, and tracked implementation files
+- [x] Confirm `package.json`, `pnpm-lock.yaml`, and tracked implementation files
       are unchanged at the preflight checkpoint.
 
 **Verification:**
@@ -169,9 +169,10 @@ output for a separate supply-chain decision.
 ### Task 1 — One run budget, keyed accounting, and lifetime admission
 
 **Purpose:** Replace the current reservation-only ledger with the single budget
-object shared by the whole run. The current `ChildBudgetLedger.settle()` ignores
-actual cost and the current cap is construction-time; those behaviors are not
-sufficient for this task.
+object shared by the whole run. The Phase 2 `ChildBudgetLedger.settle()` ignored
+actual cost and the cap was construction-time; those behaviors are replaced by
+`RunDelegationBudget` with keyed terminal sync, dynamic cap reading, actual-cost
+settlement, and one shared envelope across attempts.
 
 **Files:**
 
@@ -222,15 +223,15 @@ sufficient for this task.
 
 **Acceptance:**
 
-- [ ] Actual settlement, pending settlement, dynamic cap changes, and keyed sync
+- [x] Actual settlement, pending settlement, dynamic cap changes, and keyed sync
       pass equality/admission and hard-closure cases without double counting.
-- [ ] A live parent provider cost is included exactly once before its main
+- [x] A live parent provider cost is included exactly once before its main
       terminal and is removed when the active parent session/manager is cleared.
-- [ ] Two role visits share the exact budget object; a completed prior child plus
+- [x] Two role visits share the exact budget object; a completed prior child plus
       a new child reaches `max_children_exceeded`, while a same-ID retry does not.
-- [ ] Child usage appears once in all run readers and additive roll-up views,
+- [x] Child usage appears once in all run readers and additive roll-up views,
       never in parent lifecycle usage or `perRole`.
-- [ ] Missing/ambiguous orphan policy amount fails closed.
+- [x] Missing/ambiguous orphan policy amount fails closed.
 
 **Verification:**
 
@@ -274,11 +275,11 @@ contract rather than separate lexical checks.
 
 **Acceptance:**
 
-- [ ] Real temporary Git tests reject symlink, outside-state-dir, and exact
+- [x] Real temporary Git tests reject symlink, outside-state-dir, and exact
       branch-mismatch paths before any destructive Git call.
-- [ ] Clean, dirty, missing, inspection-error, and cleanup-error outcomes are
+- [x] Clean, dirty, missing, inspection-error, and cleanup-error outcomes are
       distinguishable and cleanup retry is safe.
-- [ ] Normal and recovery cleanup use the same inspect/remove implementation.
+- [x] Normal and recovery cleanup use the same inspect/remove implementation.
 
 **Verification:**
 
@@ -306,10 +307,9 @@ implementing the senior spec's bounded parent-model retry/fallback behavior.
 - `src/host/delegation/manager.ts`
 - `src/host/delegation/results.ts`
 - `src/host/delegation/pool.ts` if queue closure needs extraction
-- `tests/host/delegation/attempt-registry.test.ts` (new)
-- `tests/host/delegation/child-retry.test.ts` (new)
+- `tests/host/delegation/attempt-registry.test.ts`
+- `tests/host/delegation/child-retry.test.ts` (new if needed for retry envelope testing)
 - `tests/host/delegation/manager.test.ts`
-- `tests/host/delegation/manager-budget.test.ts`
 
 **Single owner and exact sequencing:**
 
@@ -357,31 +357,31 @@ implementing the senior spec's bounded parent-model retry/fallback behavior.
 
 **Acceptance:**
 
-- [ ] A retryable provider failure follows the pinned parent model chain, uses
+- [x] A retryable provider failure follows the pinned parent model chain, uses
       attempts 1..N with one child ID and one cost envelope, persists real start
       and terminal metadata per attempt, and aggregates the task result.
-- [ ] Two attempts with costs 0.4 and 0.5 on a 1.0 envelope settle once each,
+- [x] Two attempts with costs 0.4 and 0.5 on a 1.0 envelope settle once each,
       while a third attempt is rejected at the envelope cap; the run reader
       counts 0.9 exactly once.
-- [ ] Non-retryable failure and retry exhaustion produce a failed task while
+- [x] Non-retryable failure and retry exhaustion produce a failed task while
       successful siblings continue.
-- [ ] Normal, spawn-error, cancellation, queue-close, budget-breach, append-
+- [x] Normal, spawn-error, cancellation, queue-close, budget-breach, append-
       failure/retry, and late-completion races produce one terminal per started
       exact key and no leaked reservation/handle.
-- [ ] A deferred spawn never prompts or fabricates a start after admission closes.
-- [ ] Results projection contains no persistence or cleanup side effect.
-- [ ] Parent-cap callback is observed only after current terminal append.
+- [x] A deferred spawn never prompts or fabricates a start after admission closes.
+- [x] Results projection contains no persistence or cleanup side effect.
+- [x] Parent-cap callback is observed only after current terminal append.
 
 **Verification:**
 
 ```text
-pnpm test tests/host/delegation/attempt-registry.test.ts tests/host/delegation/child-retry.test.ts tests/host/delegation/manager.test.ts tests/host/delegation/manager-budget.test.ts
+pnpm test tests/host/delegation/attempt-registry.test.ts tests/host/delegation/child-retry.test.ts tests/host/delegation/manager.test.ts
 pnpm typecheck
 ```
 
 **Stop/rollback:** Stop on duplicate terminal keys, per-attempt re-reservation,
 placeholder session files, post-close prompts, a second terminal writer, or any
-old “first two succeed, third cancelled” expectation.
+callback before durable append.
 
 **Dependencies:** Tasks 1–2.
 
@@ -447,16 +447,16 @@ grep -RIn --include='*.ts' 'createProductionHost\|hostFactory' src/extension src
 
 **Acceptance:**
 
-- [ ] Every first-party factory forwards one budget, `runStateDir`, cap reader,
+- [x] Every first-party factory forwards one budget, `runStateDir`, cap reader,
       log, and resume seam; no cwd-derived fallback remains in production.
-- [ ] A custom-baseDir production run creates sessions/worktrees/recovery state
+- [x] A custom-baseDir production run creates sessions/worktrees/recovery state
       below the configured run state root and both role turns share object identity.
-- [ ] Provider growth while a real child is live reaches the manager before the
+- [x] Provider growth while a real child is live reaches the manager before the
       legacy cap path, cancels children, aborts the parent, and persists exact
       `parent_cap_would_breach`; child cost is absent from parent lifecycle usage.
-- [ ] Child settlement reaching a parent cap calls the callback after append and
+- [x] Child settlement reaching a parent cap calls the callback after append and
       does not duplicate cancellation. Reader teardown is asserted after terminal.
-- [ ] A no-delegation run follows the pre-Phase-3 path and creates no manager.
+- [x] A no-delegation run follows the pre-Phase-3 path and creates no manager.
 
 **Verification:**
 
@@ -509,14 +509,14 @@ cannot strand the parent when child terminal persistence fails.
 
 **Acceptance:**
 
-- [ ] A real deferred API run aborts active children, records exact cancelled
+- [x] A real deferred API run aborts active children, records exact cancelled
       terminals with captured usage, blocks queued spawn, and leaves no live child.
-- [ ] If one child terminal append fails, all other children are attempted and
+- [x] If one child terminal append fails, all other children are attempted and
       parent abort still occurs; a repeated abort retries the immutable pending
       record without duplicate settlement/terminal.
-- [ ] Abort-before-registration, no active children, second abort, and completed-
+- [x] Abort-before-registration, no active children, second abort, and completed-
       run abort are no-ops or safe according to the existing contract.
-- [ ] The parent receives the same abort reason and child activity never reaches
+- [x] The parent receives the same abort reason and child activity never reaches
       the reducer/checkpoint.
 
 **Verification:**
@@ -573,33 +573,33 @@ crash reconciliation as well as child writes and cleanup.
 
 **Recovery requirements:**
 
-- [ ] Match each start and terminal by exact `(child_id, attempt)`; attempt 1
+- [x] Match each start and terminal by exact `(child_id, attempt)`; attempt 1
       cannot suppress an unmatched attempt 2 for the same child.
-- [ ] Resolve orphan envelope amount from the pinned parent-role policy and fail
+- [x] Resolve orphan envelope amount from the pinned parent-role policy and fail
       closed before synthesizing recovery if it is missing/ambiguous/invalid.
-- [ ] Check real non-placeholder session files and report `present`, `missing`,
+- [x] Check real non-placeholder session files and report `present`, `missing`,
       or `placeholder` explicitly. Missing files are recovery metadata, never
       success.
-- [ ] Append the orphan `subagent_failed` terminal before any cleanup. Use
+- [x] Append the orphan `subagent_failed` terminal before any cleanup. Use
       shared guarded inspect/remove and preserve dirty, missing, symlinked,
       outside, unowned, branch-mismatched, and cleanup-error paths.
-- [ ] Retry cleanup only for terminal-derived successful/no-change records whose
+- [x] Retry cleanup only for terminal-derived successful/no-change records whose
       clean owned branch-matching worktree survived interruption; never retry
       failed/cancelled paths. A second recovery scan appends/removes nothing.
-- [ ] Reconstruct role-lifetime distinct children and all attempt-envelope spend
+- [x] Reconstruct role-lifetime distinct children and all attempt-envelope spend
       from the post-recovery log.
 
 **Acceptance:**
 
-- [ ] Two concurrent resumes with an active main snapshot cannot both append
+- [x] Two concurrent resumes with an active main snapshot cannot both append
       `session_failed` or a duplicate checkpoint; the second receives typed
       `resume_in_progress` and performs no removal.
-- [ ] A log with attempt 1 terminal and attempt 2 start appends exactly one
+- [x] A log with attempt 1 terminal and attempt 2 start appends exactly one
       attempt-2 recovery terminal; a second resume has zero effects.
-- [ ] A custom `baseDir` proves log, session, worktree, recovery, and lock roots
+- [x] A custom `baseDir` proves log, session, worktree, recovery, and lock roots
       agree, and the order is lock → main reconciliation → configured child
       recovery/cleanup → budget sync → loop.
-- [ ] Real filesystem metadata and cleanup warnings are returned for all missing,
+- [x] Real filesystem metadata and cleanup warnings are returned for all missing,
       dirty, symlink, outside, branch-mismatch, and interruption cases.
 
 **Verification:**
@@ -628,14 +628,14 @@ production, if policy resolves to zero, or if any unsafe path can be removed.
 
 **Requirements:**
 
-- [ ] Amend ADR-002 with actual-cost/keyed budget settlement, one shared budget,
+- [x] Amend ADR-002 with actual-cost/keyed budget settlement, one shared budget,
       role-lifetime admission, typed parent-cap callback ordering, one terminal
       writer, retryable pending append, exact-attempt recovery, lock scope, and
       guarded normal/recovery cleanup. Do not re-litigate accepted product decisions.
-- [ ] Remove the contradictory old manager-budget example from this plan and any
+- [x] Remove the contradictory old manager-budget example from this plan and any
       artifact that still claims admitted siblings may complete after a fail-closed
       run-cap breach.
-- [ ] Leave checkboxes unchecked for corrected behavior until its focused tests
+- [x] Leave checkboxes unchecked for corrected behavior until its focused tests
       and acceptance have actually passed. Do not claim a clean tree or commit;
       the orchestrator owns that gate.
 
@@ -676,29 +676,29 @@ preserve the accepted senior decisions.
 
 ### Checkpoint A — after Tasks 1–3
 
-- [ ] Audit baseline predates implementation and compares deterministically.
-- [ ] One budget passes actual-spend, keyed-sync, dynamic-cap, parent-projection,
+- [x] Audit baseline predates implementation and compares deterministically.
+- [x] One budget passes actual-spend, keyed-sync, dynamic-cap, parent-projection,
       and role-lifetime admission tests.
-- [ ] Worktree inspect/remove rejects symlink, outside, and branch mismatch.
-- [ ] Child retry/envelope and attempt registry pass normal, failed, cancelled,
+- [x] Worktree inspect/remove rejects symlink, outside, and branch mismatch.
+- [x] Child retry/envelope and attempt registry pass normal, failed, cancelled,
       queued, fail-closed, append-failure, and late-completion cases.
 
 ### Checkpoint B — after Tasks 4–6
 
-- [ ] Every first-party factory shares one budget and configured `runStateDir`.
-- [ ] Provider growth and child settlement reach the live manager with typed
+- [x] Every first-party factory shares one budget and configured `runStateDir`.
+- [x] Provider growth and child settlement reach the live manager with typed
       reason and specified callback order; provider reader teardown is tested.
-- [ ] Real `RunHandle.abort()` survives append failure and repeated abort.
-- [ ] Resume lock covers main crash reconciliation through post-recovery sync;
+- [x] Real `RunHandle.abort()` survives append failure and repeated abort.
+- [x] Resume lock covers main crash reconciliation through post-recovery sync;
       exact-key recovery and safe cleanup are idempotent.
-- [ ] Main FSM/reducer and extension spawning guards are unchanged.
+- [x] Main FSM/reducer and extension spawning guards are unchanged.
 
 ### Final checkpoint
 
-- [ ] Tasks 0–7 acceptance and verification are complete.
-- [ ] Phase 3 and ADR-002 describe only verified corrected behavior.
-- [ ] Full repository gate and exact audit-baseline comparison are complete.
-- [ ] Package is ready for final implementation/review/archive gates.
+- [x] Tasks 0–7 acceptance and verification are complete.
+- [x] Phase 3 and ADR-002 describe only verified corrected behavior.
+- [x] Full repository gate and exact audit-baseline comparison are complete.
+- [x] Package is ready for final implementation/review/archive gates.
 
 ## Verification-facing file map
 

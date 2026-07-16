@@ -1,268 +1,210 @@
 /**
- * Git worktree lifecycle manager (spec §10, issue #17 §10).
+ * Worktree lifecycle — delegation lite §5.
  *
- * Wraps `node:child_process.execFile` in a `runGit(args)` seam so the
- * manager is testable with a fake `runGit` (StubHost tests) and uses
- * real `execFile` in ProductionHost.
+ * Manages Git worktree creation for child sessions:
+ * - Captures the primary checkout's HEAD as the batch base commit
+ * - Creates a unique worktree + branch per task
+ * - Verifies the worktree state at terminal time
  *
- * The worktree manager:
- * - Verifies the primary checkout is a clean Git repo before admitting worktree tasks
- * - Creates worktrees from a pinned base commit
- * - Verifies worktree cleanliness at exit time
- * - Removes clean worktrees; preserves dirty ones
- *
- * All `runGit` calls use argv arrays; no shell interpolation anywhere.
- * The manager sanitizes inputs by checking that `childId` matches the
- * host-generated format before constructing any git command.
- *
- * Cleanup path invariants (Phase 3):
- * - Removes only paths beneath `<stateDir>/worktrees/`
- * - Removes only branches with the `conductor/` prefix
- * - The primary checkout is never removed (it is never in `<stateDir>/worktrees/`)
+ * Uses argv arrays for all Git commands (never shell strings).
  */
 
-import { resolve as pathResolve, sep as pathSep, relative } from "node:path";
+import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import { promisify } from "node:util";
 
-import { isValidChildId } from "./ids.js";
+import type { ChildId } from "./ids.js";
 
-export interface RunGitOptions {
-  readonly cwd?: string;
-}
+const execFileAsync = promisify(execFile);
 
-/** Result of a `runGit` call. */
-export interface RunGitResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
+// ─── Worktree creation ─────────────────────────────────────────────────
 
 /**
- * Abstraction over `node:child_process.execFile` for git commands.
- * Allows StubHost tests to inject a fake without mocking.
+ * Error from worktree operations.
  */
-export type RunGit = (args: readonly string[], opts?: RunGitOptions) => Promise<RunGitResult>;
-
-export interface CreateWorktreeManagerArgs {
-  /** The primary checkout working directory (must be a git repo). */
-  readonly cwd: string;
-  /** The run's state directory (worktrees are created beneath `<stateDir>/worktrees/`). */
-  readonly stateDir: string;
-  /** Git command runner. Production: real execFile. Tests: fake. */
-  readonly runGit: RunGit;
-}
-
-/** Result of a worktree creation. */
-export interface WorktreeCreateResult {
-  readonly path: string;
-  readonly branch: string;
-}
-
-/** Worktree manager error codes. */
-export type WorktreeErrorCode =
-  | "not_a_repo"
-  | "dirty_checkout"
-  | "git_error"
-  | "invalid_child_id"
-  | "branch_exists"
-  | "worktree_not_clean"
-  | "removal_failed";
-
 export class WorktreeError extends Error {
-  readonly code: WorktreeErrorCode;
-  constructor(code: WorktreeErrorCode, message: string) {
-    super(message);
-    this.code = code;
+  constructor(
+    message: string,
+    public readonly code: "git-failed" | "worktree-exists" | "invalid-commit",
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
     this.name = "WorktreeError";
   }
 }
 
 /**
- * Git worktree lifecycle manager.
- *
- * Created via `createWorktreeManager({ cwd, stateDir, runGit })`.
- * All methods are async and return typed results or throw `WorktreeError`.
+ * Result of a successful worktree setup.
  */
-export interface WorktreeManager {
-  /**
-   * Check whether `cwd` is a Git repository.
-   * Returns `true` iff `git -C <cwd> rev-parse --show-toplevel` exits with code 0.
-   */
-  isRepo(): Promise<boolean>;
-
-  /**
-   * Get the current HEAD commit hash of the primary checkout.
-   * Returns the trimmed stdout, or `null` if there is no HEAD (empty repo).
-   */
-  currentHead(): Promise<string | null>;
-
-  /**
-   * Check whether the primary checkout has uncommitted changes.
-   * Returns `true` iff `git status --porcelain=v1 --untracked-files=all` is empty.
-   */
-  isClean(): Promise<boolean>;
-
-  /**
-   * Create a new worktree for a child.
-   * Runs `git -C <cwd> worktree add -b conductor/<childId> <stateDir>/worktrees/<childId> <baseCommit>`.
-   *
-   * @throws WorktreeError if the childId is malformed, the branch already exists,
-   *   or the git command fails.
-   */
-  create(args: { childId: string; baseCommit: string }): Promise<WorktreeCreateResult>;
-
-  /**
-   * Check whether a conductor-owned branch exists.
-   * Returns the trimmed commit hash, or `null` if the branch doesn't exist.
-   */
-  head(branch: string): Promise<string | null>;
-
-  /**
-   * Check whether a worktree has uncommitted changes.
-   * Returns `true` iff `git -C <path> status --porcelain=v1 --untracked-files=all` is empty.
-   */
-  isWorktreeClean(path: string): Promise<boolean>;
-
-  /**
-   * Remove a worktree.
-   * Runs `git worktree remove --force <path>`.
-   * Only removes paths beneath `stateDir/worktrees/` (verified by childId pattern).
-   * The primary checkout is never removed (it is not in `<stateDir>/worktrees/`).
-   *
-   * @throws WorktreeError if the path is not a conductor-owned worktree or removal fails.
-   */
-  remove(path: string): Promise<void>;
+export interface WorktreeSetup {
+  readonly childId: ChildId;
+  readonly worktreePath: string;
+  readonly branchName: string;
+  readonly baseCommit: string;
+  readonly headCommit: string;
 }
 
-export function createWorktreeManager(args: CreateWorktreeManagerArgs): WorktreeManager {
-  const { cwd, stateDir, runGit } = args;
-  const normalizedStateDir = pathResolve(stateDir);
-  const worktreesRoot = pathResolve(normalizedStateDir, "worktrees");
-
-  function isOwnedPath(candidate: string): boolean {
-    const rel = relative(worktreesRoot, pathResolve(candidate));
-    return /^child-[0-9a-f]{16}$/u.test(rel) && !rel.includes(pathSep);
+/**
+ * Capture the current HEAD commit of the primary checkout.
+ * Used as the base commit for all children in the batch.
+ *
+ * @param primaryCheckout - path to the primary Git checkout (cwd or explicit)
+ */
+export async function captureBaseCommit(primaryCheckout: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: primaryCheckout,
+    });
+    return stdout.trim();
+  } catch (cause) {
+    throw new WorktreeError(
+      `failed to capture HEAD commit of primary checkout: ${(cause as Error).message}`,
+      "git-failed",
+      { cause },
+    );
   }
+}
 
-  function isOwnedBranch(branch: string): boolean {
-    return /^conductor\/child-[0-9a-f]{16}$/u.test(branch);
+/**
+ * Create a Git worktree and branch for a child task.
+ *
+ * Runs: `git worktree add -b <branch> <worktree> <baseCommit>`
+ *
+ * @param worktreePath - absolute path for the new worktree
+ * @param branchName - name for the new branch
+ * @param baseCommit - commit to start the branch from
+ * @param primaryCheckout - path to the primary Git checkout
+ */
+export async function createWorktree(
+  worktreePath: string,
+  branchName: string,
+  baseCommit: string,
+  primaryCheckout: string,
+): Promise<void> {
+  try {
+    // `git worktree add -b <branch> <path> <commit>`
+    // The -b flag creates and checks out a new branch.
+    await execFileAsync("git", ["worktree", "add", "-b", branchName, worktreePath, baseCommit], {
+      cwd: primaryCheckout,
+    });
+  } catch (cause) {
+    const msg = (cause as Error).message;
+    if (msg.includes("already exists")) {
+      throw new WorktreeError(`worktree path '${worktreePath}' already exists`, "worktree-exists", {
+        cause,
+      });
+    }
+    throw new WorktreeError(
+      `failed to create worktree '${worktreePath}' at commit '${baseCommit}': ${msg}`,
+      "git-failed",
+      { cause },
+    );
   }
+}
 
-  const mgr: WorktreeManager = {
-    async isRepo(): Promise<boolean> {
-      try {
-        const result = await runGit(["rev-parse", "--show-toplevel"], { cwd });
-        return result.exitCode === 0;
-      } catch {
-        return false;
-      }
-    },
+/**
+ * Verify a child worktree's state at terminal time.
+ *
+ * Returns the worktree's current HEAD commit and whether the worktree is clean.
+ *
+ * @param worktreePath - path to the child worktree
+ * @param expectedBranch - the branch name we expect the worktree to be on
+ */
+export async function verifyWorktree(
+  worktreePath: string,
+  expectedBranch: string,
+): Promise<{ headCommit: string; isClean: boolean }> {
+  try {
+    const [expectedPath, actualPath] = await Promise.all([
+      realpath(worktreePath),
+      execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: worktreePath }).then(
+        ({ stdout }) => realpath(stdout.trim()),
+      ),
+    ]);
+    if (actualPath !== expectedPath) {
+      throw new WorktreeError(
+        `worktree '${worktreePath}' resolves to '${actualPath}', not its generated path`,
+        "git-failed",
+      );
+    }
 
-    async currentHead(): Promise<string | null> {
-      try {
-        const result = await runGit(["rev-parse", "--verify", "HEAD"], { cwd });
-        if (result.exitCode !== 0) return null;
-        return result.stdout.trim() || null;
-      } catch {
-        return null;
-      }
-    },
+    // Check which branch the worktree is on.
+    const { stdout: branchStdout } = await execFileAsync("git", ["branch", "--show-current"], {
+      cwd: worktreePath,
+    });
+    const actualBranch = branchStdout.trim();
+    if (actualBranch !== expectedBranch) {
+      throw new WorktreeError(
+        `worktree '${worktreePath}' is on branch '${actualBranch}', expected '${expectedBranch}'`,
+        "git-failed",
+      );
+    }
 
-    async isClean(): Promise<boolean> {
-      try {
-        const result = await runGit(["status", "--porcelain=v1", "--untracked-files=all"], { cwd });
-        return result.exitCode === 0 && result.stdout.trim() === "";
-      } catch {
-        return false;
-      }
-    },
+    // Get the current HEAD.
+    const { stdout: headStdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: worktreePath,
+    });
+    const headCommit = headStdout.trim();
 
-    async create(createArgs: {
-      childId: string;
-      baseCommit: string;
-    }): Promise<WorktreeCreateResult> {
-      const { childId, baseCommit } = createArgs;
+    // Check if the worktree is clean.
+    const { stdout: statusStdout } = await execFileAsync(
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      { cwd: worktreePath },
+    );
+    const isClean = statusStdout.trim().length === 0;
 
-      // Defensive: validate childId format before constructing any git command.
-      if (!isValidChildId(childId)) {
-        throw new WorktreeError(
-          "invalid_child_id",
-          `Invalid childId format: "${childId}". Expected format: child-<hex16>`,
-        );
-      }
+    return { headCommit, isClean };
+  } catch (cause) {
+    if (cause instanceof WorktreeError) throw cause;
+    throw new WorktreeError(
+      `failed to verify worktree '${worktreePath}': ${(cause as Error).message}`,
+      "git-failed",
+      { cause },
+    );
+  }
+}
 
-      if (!/^[0-9a-f]{7,64}$/u.test(baseCommit)) {
-        throw new WorktreeError("git_error", `Invalid base commit: "${baseCommit}"`);
-      }
+/**
+ * Determine the child result status based on worktree state.
+ *
+ * - `completed`: child left a clean worktree with HEAD different from base
+ * - `no_changes`: child left a clean worktree with HEAD same as base
+ * - `failed`: child left a dirty worktree or HEAD is invalid
+ */
+export function determineChildStatus(
+  headCommit: string,
+  baseCommit: string,
+  isClean: boolean,
+): "completed" | "no_changes" | "failed" {
+  if (!isClean) return "failed";
+  if (headCommit === baseCommit) return "no_changes";
+  return "completed";
+}
 
-      const worktreePath = pathResolve(worktreesRoot, childId);
-      const branch = `conductor/${childId}`;
+/**
+ * Check if the primary checkout is a Git repository and if it's clean.
+ *
+ * Runs: `git status --porcelain=v1 --untracked-files=all`
+ */
+export async function checkPrimaryGitStatus(
+  primaryCheckout: string,
+): Promise<{ isGit: boolean; isClean: boolean; headCommit: string | null }> {
+  try {
+    const { stdout: statusStdout } = await execFileAsync(
+      "git",
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      { cwd: primaryCheckout },
+    );
+    const isClean = statusStdout.trim().length === 0;
 
-      try {
-        const result = await runGit(["worktree", "add", "-b", branch, worktreePath, baseCommit], {
-          cwd,
-        });
-        if (result.exitCode !== 0) {
-          // Check if it's a "branch already exists" case.
-          if (result.stderr.includes("already exists")) {
-            throw new WorktreeError(
-              "branch_exists",
-              `Branch "${branch}" already exists: ${result.stderr}`,
-            );
-          }
-          throw new WorktreeError("git_error", `git worktree add failed: ${result.stderr}`);
-        }
-        return { path: worktreePath, branch };
-      } catch (err) {
-        if (err instanceof WorktreeError) throw err;
-        throw new WorktreeError("git_error", `git worktree add failed: ${String(err)}`);
-      }
-    },
+    const { stdout: headStdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: primaryCheckout,
+    });
+    const headCommit = headStdout.trim();
 
-    async head(branch: string): Promise<string | null> {
-      // Defensive: only accept an exact host-generated conductor branch.
-      if (!isOwnedBranch(branch)) return null;
-      try {
-        const result = await runGit(["rev-parse", "--verify", branch], { cwd });
-        if (result.exitCode !== 0) return null;
-        return result.stdout.trim() || null;
-      } catch {
-        return null;
-      }
-    },
-
-    async isWorktreeClean(path: string): Promise<boolean> {
-      // An unowned path must never be treated as safe for cleanup.
-      if (!isOwnedPath(path)) return false;
-      try {
-        const result = await runGit(["status", "--porcelain=v1", "--untracked-files=all"], {
-          cwd: pathResolve(path),
-        });
-        return result.exitCode === 0 && result.stdout.trim() === "";
-      } catch {
-        return false;
-      }
-    },
-
-    async remove(path: string): Promise<void> {
-      // Defensive: only remove a generated child worktree path.
-      if (!isOwnedPath(path)) {
-        throw new WorktreeError(
-          "removal_failed",
-          `Refusing to remove path "${path}" — not a conductor-owned worktree`,
-        );
-      }
-
-      try {
-        const result = await runGit(["worktree", "remove", "--force", pathResolve(path)], { cwd });
-        if (result.exitCode !== 0) {
-          throw new WorktreeError("removal_failed", `git worktree remove failed: ${result.stderr}`);
-        }
-      } catch (err) {
-        if (err instanceof WorktreeError) throw err;
-        throw new WorktreeError("removal_failed", `git worktree remove failed: ${String(err)}`);
-      }
-    },
-  };
-
-  return mgr;
+    return { isGit: true, isClean, headCommit };
+  } catch {
+    return { isGit: false, isClean: false, headCommit: null };
+  }
 }

@@ -291,7 +291,6 @@ function makeRun(
   abortControl?: {
     setActiveSession(session: RoleSession | null): Promise<void>;
     requestAbort(reason: string): Promise<void>;
-    setActiveDelegation(manager: unknown | null): Promise<void>;
   },
 ) {
   return runLoop({
@@ -835,9 +834,6 @@ describe("runLoop — host hook usage", () => {
       async requestAbort(reason: string): Promise<void> {
         if (activeSession === null) return;
         await host.abortSession(activeSession, reason);
-      },
-      async setActiveDelegation(_manager: unknown | null): Promise<void> {
-        // No-op for this test.
       },
     };
 

@@ -167,7 +167,8 @@ confirmation dialog; confirming aborts the run just like `/conduct:abort`.
 | `max_session_cost_usd` | any role          | Per-invocation cap, **shared across model fallbacks** within that invocation (§8.1, §11.7).                                                                                                                                                               |
 | `max_run_cost_usd`     | orchestrator only | Run-level cap. Rejected on workers (§13).                                                                                                                                                                                                                 |
 | `system_prompt`        | any role          | Path to a per-role system-prompt file the host loads. Plain prose, not frontmatter.                                                                                                                                                                       |
-| `tools`                | any role          | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. See [Tools available to roles](#tools-available-to-roles) below for the full tool model and the `tools:`-omission footgun. |
+| `tools`                | any role          | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. `delegate` is available only when it is listed here **and** the role declares `delegation`. See [Tools available to roles](#tools-available-to-roles) below for the full tool model and the `tools:`-omission footgun. |
+| `delegation`           | parent roles only | Enables bounded worktree subagents for this role. Requires `tools: [..., delegate]`; see [Worktree subagent delegation](#worktree-subagent-delegation) below. |
 
 `version` is a human-bumped integer, **pinned at run-start and never mutated
 mid-run** (spec §10). `resumeRun` rejects a manifest whose version disagrees
@@ -252,6 +253,118 @@ work. Declare every tool a role actually needs.
 
 ---
 
+## Worktree subagent delegation
+
+Yes: `delegate` is a host-provided tool, but **only a role that explicitly opts
+in receives it**. It is not an FSM transition and subagents are not conductor
+roles: the parent remains responsible for reviewing the result and deciding
+whether to integrate a child branch.
+
+### Configure a parent and profiles
+
+Add `delegate` and a `delegation` policy to the parent role, then define the
+named child profiles at top level:
+
+```yaml
+version: 1
+roles:
+  - name: implementer
+    max_visits: 3
+    models: [anthropic:claude-sonnet-4-5]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, grep, edit, write, bash, handoff, end, delegate]
+    delegation:
+      allowed_subagents: [api-implementer, test-writer]
+      max_children_per_session: 6
+      max_parallel: 2
+
+subagents:
+  - name: api-implementer
+    models:
+      - model: anthropic:claude-sonnet-4-5
+        effort: high
+    max_session_cost_usd: 2.00
+    system_prompt: .pi/subagents/api-implementer.md
+
+  - name: test-writer
+    models: [anthropic:claude-sonnet-4-5]
+    max_session_cost_usd: 1.00
+    system_prompt: .pi/subagents/test-writer.md
+```
+
+`allowed_subagents` must name declared profiles without duplicates.
+`max_children_per_session` is the total child-task allowance for one parent
+session; completed children do not free a slot. `max_parallel` bounds concurrent
+children and cannot exceed that allowance. Profile names cannot collide with
+FSM role names. Bump `version` when changing this policy or a profile.
+
+The child profile's `system_prompt` is a normal prompt file. Tell it to make a
+focused change, run appropriate verification, commit a clean result in its
+worktree, and call `report_result`. The host supplies the child task and its
+worktree path; do not put parent transcripts or FSM routing instructions in the
+child prompt.
+
+### Ask the parent to delegate
+
+The enabled parent calls `delegate` with one or more independent tasks:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "api",
+      "subagent": "api-implementer",
+      "objective": "Add the endpoint validation described in issue 42.",
+      "expected_output": "A committed implementation and relevant unit tests."
+    },
+    {
+      "id": "tests",
+      "subagent": "test-writer",
+      "objective": "Add edge-case coverage for the endpoint contract.",
+      "expected_output": "Committed tests and the test command used."
+    }
+  ]
+}
+```
+
+Task IDs match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`; `objective` and
+`expected_output` must each be 1–8,192 characters. The entire batch is
+validated before any worktree is created. Delegation requires a clean primary
+checkout (`git status --porcelain=v1 --untracked-files=all`) and a resolvable
+`HEAD`; commit or stash ordinary and untracked changes first.
+
+The tool waits for all children and returns results in input order. Each result
+contains its authoritative status, branch, worktree path, base/head commits,
+session file, usage, summary, and any failure reason. `completed` requires a
+clean worktree with a committed head different from the batch base; `no_changes`
+requires a clean worktree still at that base. A mismatched report, dirty tree,
+or invalid Git state becomes `failed`.
+
+### Child boundary and branch integration
+
+Each child receives only `read`, `grep`, `find`, `ls`, `edit`, `write`, `run`,
+and `report_result`, rooted in its generated worktree. `run` accepts argv, not a
+shell string; its allowlist is `git`, `pnpm`, `npm`, `node`, `npx`, `grep`,
+`find`, and `ls`. Children cannot call `handoff`, `end`, `ask_user`, `delegate`,
+or `bash`.
+
+The host creates `conductor/<runId>/<childId>` and keeps both branch and
+worktree under the run state directory. It **never** merges, cherry-picks,
+resets, deletes, or automatically cleans up a child branch. After reviewing a
+successful result, the parent or operator explicitly integrates it, for example:
+
+```bash
+git diff conductor/<runId>/<childId>
+git cherry-pick conductor/<runId>/<childId>
+```
+
+Worktree confinement is a path-control boundary, not an OS, network,
+credential, or process sandbox. Child failures do not cancel siblings. A run
+abort cancels active children and then the parent; resume marks in-flight
+children as cancelled (`recovered_child_lost`) rather than relaunching them.
+
+---
+
 ## Advanced: library use
 
 The pure FSM core + SDK host driver are importable as a library. The public API:
@@ -327,11 +440,12 @@ const unsubscribe = subscribeToRecords((record: PersistedRecord) => {
 });
 ```
 
-`PersistedRecord` is the existing union from `src/persistence/log.ts`:
+`PersistedRecord` is the union from `src/persistence/log.ts`:
 `transition_accepted`, `transition_rejected`, `session_started` /
-`session_ended` / `session_failed`, `model_fallback`, and
-`checkpoint_snapshot`. No new record types are added; the emitter is a
-transparent fan-out of what the host already persists.
+`session_ended` / `session_failed`, `model_fallback`, `checkpoint_snapshot`,
+and delegation's `subagent_started`, `subagent_completed`, and
+`subagent_failed` records. The emitter is a transparent fan-out of what the
+host persists.
 
 The contract — FIFO subscription order, fire-and-forget async delivery,
 sync-throw and async-rejection isolation, re-entrant subscribe /
@@ -420,8 +534,9 @@ the rationale.
   its own registry. The consumer is responsible for cross-process
   de-duplication (typically by record index or hash, using the per-run
   JSONL file as the source).
-- **No new record types.** The emitter is a transparent fan-out of the
-  existing `PersistedRecord` union.
+- **No emitter-specific record types.** The emitter is a transparent fan-out
+  of the existing `PersistedRecord` union, including delegation records when
+  delegation is enabled.
 - **No change to the orchestration loop.** The host's `persistRecord` is
   the chokepoint; the loop does not need to know the emitter exists.
 

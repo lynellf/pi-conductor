@@ -1,5 +1,5 @@
 /**
- * Manifest types — spec §8.
+ * Manifest types — spec §8 / issue-17-delegation-lite §3.
  *
  * This is the on-disk config (parsed from `.pi/conductor.yaml`).
  * The reducer NEVER sees a `Manifest`; the host validates this shape
@@ -11,9 +11,39 @@
  * `validateManifest` (Phase 1 Task 4). The split keeps parse cheap and
  * preserves the layering — parsing is a structural concern, validation
  * is a semantic concern.
+ *
+ * Subagent profile types are host-only configuration (not part of the
+ * FSM `MachineDefinition`).
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+
+// ─── Subagent profile types (delegation lite §3) ───────────────────────
+
+/**
+ * §3: a named subagent profile in the manifest's `subagents` block.
+ *
+ * A subagent profile is NOT an FSM `Role`; it cannot appear in
+ * `MachineDefinition` and cannot be a reducer target.
+ */
+export interface SubagentProfile {
+  readonly name: string;
+  readonly models: readonly ModelConfig[];
+  readonly max_session_cost_usd: number;
+  readonly system_prompt: string;
+}
+
+/**
+ * §3: the delegation policy attached to a parent role.
+ *
+ * A role receives `delegate` only when it declares BOTH `tools: [delegate]`
+ * AND a `delegation` block. Neither is injected implicitly.
+ */
+export interface DelegationPolicy {
+  readonly allowed_subagents: readonly string[];
+  readonly max_children_per_session: number;
+  readonly max_parallel: number;
+}
 
 /** Parsed manifest model entry: logical model id plus conductor-owned effort. */
 export interface ModelConfig {
@@ -25,35 +55,15 @@ export interface ModelConfig {
   readonly retry_delay_ms?: number;
 }
 
-/** §8 / §10: raw manifest shape parsed from `.pi/conductor.yaml`. */
+/**
+ * §8 / §10 / delegation lite §3: raw manifest shape parsed from `.pi/conductor.yaml`.
+ */
 export interface Manifest {
   /** §10: human-bumped integer, pinned at run-start, never mutated. */
   readonly version: number;
   readonly roles: readonly RoleConfig[];
-}
-
-/**
- * Delegation policy for a role (spec §6 / issue #17 §6).
- *
- * Enables a role to call the host-owned `delegate` tool with bounded
- * concurrent auxiliary sub-agent tasks. Policy is host-only:
- * `MachineDefinition` never includes it and the reducer never branches
- * on it (spec §12.1 invariant 1).
- *
- * Enable requires both `delegation:` in the manifest AND `delegate` in
- * the role's `tools:` list. Neither is force-injected (spec §5 decision 1).
- */
-export interface DelegationPolicy {
-  /** Max concurrent child sessions per delegation batch. Must be a finite positive integer. */
-  readonly max_parallel: number;
-  /** Max total children in the role's lifetime. Must be a finite positive integer. */
-  readonly max_children: number;
-  /** Fixed to `1` in v1; recursive delegation is out of scope (spec §4 non-goal). */
-  readonly max_depth: 1;
-  /** Workspace modes available to child tasks (spec §7.4). Non-empty, no duplicates. */
-  readonly workspace_modes: readonly ("read_only" | "worktree")[];
-  /** Max USD budget for a single child session (spec §9 / issue #17 §11). */
-  readonly max_child_cost_usd: number;
+  /** Delegation lite §3: optional subagent profile declarations. */
+  readonly subagents?: readonly SubagentProfile[];
 }
 
 /**
@@ -77,8 +87,7 @@ export interface DelegationPolicy {
  * - `tools`: declared tool allowlist. `handoff` and `end` are force-
  *   injected by the host regardless (§8.1); §13 emits a warning when
  *   the manifest omits them.
- * - `delegation`: opt-in sub-agent delegation policy (spec §6 / issue #17).
- *   Host-only; never added to `MachineDefinition`.
+ * - `delegation`: delegation policy for parent roles (delegation lite §3).
  */
 export interface RoleConfig {
   readonly name: Role;
@@ -89,7 +98,7 @@ export interface RoleConfig {
   readonly max_run_cost_usd?: number;
   readonly system_prompt?: string;
   readonly tools?: readonly string[];
-  /** Opt-in delegation policy (spec §6 / issue #17). Host-only. */
+  /** Delegation lite §3: delegation policy for parent roles. */
   readonly delegation?: DelegationPolicy;
 }
 

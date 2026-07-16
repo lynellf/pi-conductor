@@ -105,13 +105,6 @@ export interface RunAbortControl {
   setActiveSession(session: RoleSession | null): Promise<void>;
   /** Request abort for the active session (if any). */
   requestAbort(reason: string): Promise<void>;
-  /**
-   * Register the active delegation manager (Phase 3).
-   * When `abort()` is called, the manager's `cancelAll()` is invoked
-   * to abort all active children before aborting the parent session.
-   * `null` = no active delegation (no-op).
-   */
-  setActiveDelegation(manager: unknown | null): Promise<void>;
 }
 
 export interface RunLoopOptions {
