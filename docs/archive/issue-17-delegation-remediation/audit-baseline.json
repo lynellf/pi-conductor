@@ -1,0 +1,105 @@
+{
+  "exitStatus": 1,
+  "metadata": {
+    "totalDependencies": 261,
+    "dependencies": 261
+  },
+  "advisories": {
+    "1120680": {
+      "advisory_id": "1120680",
+      "title": "esbuild allows arbitrary file read when running the development server on Windows",
+      "url": "https://github.com/advisories/GHSA-g7r4-m6w7-qqqr",
+      "severity": "low",
+      "cwe": ["CWE-22"],
+      "cvss": {
+        "score": 2.5,
+        "vectorString": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:L/A:N"
+      },
+      "range": ""
+    },
+    "1121186": {
+      "advisory_id": "1121186",
+      "title": "undici vulnerable to TLS certificate validation bypass via dropped requestTls in SOCKS5 ProxyAgent",
+      "url": "https://github.com/advisories/GHSA-vmh5-mc38-953g",
+      "severity": "high",
+      "cwe": ["CWE-295"],
+      "cvss": {
+        "score": 7.4,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+      },
+      "range": ""
+    },
+    "1121190": {
+      "advisory_id": "1121190",
+      "title": "undici WebSocket client vulnerable to denial of service via cumulative fragment bypass",
+      "url": "https://github.com/advisories/GHSA-38rv-x7px-6hhq",
+      "severity": "high",
+      "cwe": ["CWE-400", "CWE-770"],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "range": ""
+    },
+    "1121240": {
+      "advisory_id": "1121240",
+      "title": "undici vulnerable to HTTP header injection via Set-Cookie percent-decoding",
+      "url": "https://github.com/advisories/GHSA-p88m-4jfj-68fv",
+      "severity": "moderate",
+      "cwe": ["CWE-93"],
+      "cvss": {
+        "score": 5.9,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:H/A:N"
+      },
+      "range": ""
+    },
+    "1121243": {
+      "advisory_id": "1121243",
+      "title": "undici WebSocket client vulnerable to denial of service via fragment count bypass",
+      "url": "https://github.com/advisories/GHSA-vxpw-j846-p89q",
+      "severity": "high",
+      "cwe": ["CWE-400", "CWE-770"],
+      "cvss": {
+        "score": 7.5,
+        "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+      },
+      "range": ""
+    },
+    "1121248": {
+      "advisory_id": "1121248",
+      "title": "undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse",
+      "url": "https://github.com/advisories/GHSA-35p6-xmwp-9g52",
+      "severity": "low",
+      "cwe": ["CWE-367"],
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      },
+      "range": ""
+    },
+    "1121253": {
+      "advisory_id": "1121253",
+      "title": "undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching",
+      "url": "https://github.com/advisories/GHSA-g8m3-5g58-fq7m",
+      "severity": "low",
+      "cwe": ["CWE-183"],
+      "cvss": {
+        "score": 3.7,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+      },
+      "range": ""
+    },
+    "1121427": {
+      "advisory_id": "1121427",
+      "title": "undici vulnerable to cross-user information disclosure via shared cache whitespace bypass",
+      "url": "https://github.com/advisories/GHSA-pr7r-676h-xcf6",
+      "severity": "moderate",
+      "cwe": ["CWE-524"],
+      "cvss": {
+        "score": 5.9,
+        "vectorString": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+      },
+      "range": ""
+    }
+  }
+}

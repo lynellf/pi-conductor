@@ -57,6 +57,7 @@ import type {
   UsageRecord,
 } from "../index.js";
 import { SessionState } from "./cost.js";
+import { DelegationManager } from "./delegation/manager.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
@@ -81,6 +82,12 @@ export interface StubHostOptions {
    * model and never throws `NoMoreModelsError`.
    */
   readonly loadedManifest?: LoadedManifest;
+  /**
+   * Working directory for delegation child sessions. In the stub host
+   * this is only used for computing child worktree paths; the stub
+   * session itself runs in-memory. Default: `/tmp/stub-cwd`.
+   */
+  readonly cwd?: string;
 }
 
 /**
@@ -105,6 +112,8 @@ export class StubHost implements Host {
    * guard, only the same-role re-dispatch does).
    */
   private unavailableRole: Role | null = null;
+  private readonly delegationManager = new DelegationManager();
+  private readonly cwd: string;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
@@ -123,6 +132,7 @@ export class StubHost implements Host {
       streamSimple: streamFn,
     });
     this.sessionManager = SessionManager.inMemory();
+    this.cwd = opts.cwd ?? "/tmp/stub-cwd";
   }
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
@@ -207,11 +217,54 @@ export class StubHost implements Host {
         ? null
         : createHandoffContextTool(opts.handoffContextRef);
 
+    // ── Delegation lite §4: build delegate tool if the role is delegating.
+    // A role receives `delegate` only when it declares BOTH `tools: [delegate]`
+    // AND a `delegation` block (§3 rule 1). The manifest validator surfaces a
+    // warning when the block exists without the tool entry.
+    let delegateTool: ReturnType<
+      typeof import("../host/delegation/delegate-tool-factory.js").createDelegateTool
+    > | null = null;
+    const manifest = this.loadedManifestValue?.manifest;
+    if (
+      roleConfig?.delegation !== undefined &&
+      roleConfig.tools?.includes("delegate") &&
+      manifest !== undefined
+    ) {
+      const remaining = roleConfig.delegation.max_children_per_session;
+      const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
+      delegateTool = createDelegateTool({
+        role: roleConfig,
+        subagents: manifest.subagents ?? [],
+        remainingChildren: remaining,
+        runId: this.runId,
+        parentRole: role,
+        primaryCheckout: this.cwd,
+        runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
+        log: this.log,
+        agentDir: `${this.cwd}/.pi-conductor/agent`,
+        systemPromptRoot: delegationPromptRoot(this.loadedManifestValue, this.cwd),
+        modelRegistry: this.modelRegistry,
+        resolveChildModel: () => this.model,
+        sessionDir: `${this.cwd}/.pi-conductor/runs/${this.runId}/sessions`,
+        manager: this.delegationManager,
+      });
+    }
+
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       model: this.model,
       modelRegistry: this.modelRegistry,
-      tools: ["handoff", "end", ...(handoffContext === null ? [] : ["handoff_context"])],
-      customTools: [handoff, end, ...(handoffContext === null ? [] : [handoffContext])],
+      tools: [
+        "handoff",
+        "end",
+        ...(handoffContext === null ? [] : ["handoff_context"]),
+        ...(delegateTool === null ? [] : ["delegate"]),
+      ],
+      customTools: [
+        handoff,
+        end,
+        ...(handoffContext === null ? [] : [handoffContext]),
+        ...(delegateTool === null ? [] : [delegateTool]),
+      ],
       sessionManager: this.sessionManager,
     };
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
@@ -311,15 +364,16 @@ export class StubHost implements Host {
   }
 
   runCostSoFar(): number {
-    // Sum `usage.cost` across all session_ended + session_failed
-    // records in the run. Both terminals cost (§11.4). The loop
-    // adds the current terminal's usage on top of this when
-    // evaluating the cap (§11.7: "persisted roll-up plus the
-    // current terminal's captured usage before reducing the
-    // role's captured machine event").
+    // Sum `usage.cost` across all terminal records in the run:
+    // - Parent lifecycle terminals: session_ended + session_failed (§11.4).
+    // - Delegation lite §7: child terminals also cost against the run cap.
+    //   Both subagent_completed and subagent_failed contribute.
     let total = 0;
     for (const r of this.log.records(this.runId)) {
       if ((r.type === "session_ended" || r.type === "session_failed") && r.usage) {
+        total += r.usage.cost;
+      }
+      if ((r.type === "subagent_completed" || r.type === "subagent_failed") && r.usage) {
         total += r.usage.cost;
       }
     }
@@ -339,6 +393,7 @@ export class StubHost implements Host {
   }
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
+    await this.delegationManager.abortAll();
     const state = this.sessionStates.get(session.sessionId);
     const agent = this.agentsBySessionId.get(session.sessionId);
     if (state === undefined || agent === undefined) return;
@@ -366,4 +421,12 @@ export class StubHost implements Host {
     if (loaded === undefined) return undefined;
     return loaded.manifest.roles.find((r) => r.name === role);
   }
+}
+
+function delegationPromptRoot(loaded: LoadedManifest | undefined, cwd: string): string {
+  if (loaded === undefined || loaded.manifestVersion < 2) return cwd;
+  if (loaded.manifestDir === null) {
+    throw new Error("delegation requires a manifest directory for v2 profile system prompts");
+  }
+  return loaded.manifestDir;
 }

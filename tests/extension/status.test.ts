@@ -54,6 +54,7 @@ function makeStats(overrides: Partial<RunStatsFixture> = {}): RunStatsFixture {
         },
       },
       perModel: {},
+      perSubagent: {},
       orchestratorOverhead: {
         input: 0,
         output: 0,
