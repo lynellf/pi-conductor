@@ -11,8 +11,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { rollup } from "../../src/cost/rollup.js";
 import { reconcileLostChildren } from "../../src/host/api.js";
+import { executeDelegate } from "../../src/host/delegation/delegate-tool.js";
 import { runBoundedPool } from "../../src/host/delegation/pool.js";
-import { buildChildTools } from "../../src/host/delegation/run-tool.js";
+import { buildChildTools, CHILD_FILE_TOOL_NAMES } from "../../src/host/delegation/run-tool.js";
 import { validateBatch } from "../../src/host/delegation/validate-batch.js";
 import {
   createWorktree,
@@ -117,37 +118,14 @@ describe("bounded child pool (§4)", () => {
   });
 });
 
-describe("confined run tool (§6)", () => {
-  it("rejects an absolute path hidden in an option value", async () => {
-    const run = buildChildTools({
-      worktreePath: "/tmp/worktree",
-      runId: "run",
-      childId: "child",
-      parentRole: "parent",
-      taskId: "task",
-    }).find((tool) => tool.name === "run");
-    if (run === undefined) throw new Error("missing constrained run tool");
-    const result = await run.execute(
-      "tool-call",
-      { argv: ["node", "--require=/tmp/outside.js"] },
-      undefined,
-      undefined,
-      {} as never,
-    );
-    expect(result.content).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("outside path") }),
-    ]);
-  });
-});
-
-describe("child file tools (§6, issue #24)", () => {
+describe("child file tools (§6, issues #24 and #26)", () => {
   let sandbox: string | undefined;
 
   afterEach(async () => {
     if (sandbox !== undefined) await rm(sandbox, { recursive: true, force: true });
   });
 
-  it("replaces the SDK file tools in the actual child session and rejects outside paths", async () => {
+  it("exposes only confined file tools to the actual child SDK session", async () => {
     sandbox = await mkdtemp(join(tmpdir(), "pi-conductor-child-tools-"));
     const worktree = join(sandbox, "worktree");
     const outside = join(sandbox, "outside");
@@ -163,15 +141,15 @@ describe("child file tools (§6, issue #24)", () => {
       sessionManager: SessionManager.inMemory(worktree),
       customTools: buildChildTools({
         worktreePath: worktree,
-        runId: "run",
-        childId: "child",
-        parentRole: "parent",
-        taskId: "task",
       }),
-      tools: ["read", "grep", "find", "ls", "edit", "write", "run"],
+      tools: [...CHILD_FILE_TOOL_NAMES],
     });
 
     try {
+      expect(session.getActiveToolNames()).toEqual(CHILD_FILE_TOOL_NAMES);
+      expect(session.getActiveToolNames()).not.toContain("run");
+      expect(session.getActiveToolNames()).not.toContain("bash");
+
       const read = requiredTool(session, "read");
       const grep = requiredTool(session, "grep");
       const find = requiredTool(session, "find");
@@ -218,12 +196,14 @@ describe("child file tools (§6, issue #24)", () => {
 
 describe("worktree verification (§5)", () => {
   let repository: string;
+  let promptRoot: string;
 
   afterEach(async () => {
     if (repository !== undefined) await rm(repository, { recursive: true, force: true });
+    if (promptRoot !== undefined) await rm(promptRoot, { recursive: true, force: true });
   });
 
-  it("requires the generated branch, a clean worktree, and a changed commit for completed", async () => {
+  it("treats uncommitted child edits as completed and a clean base worktree as no_changes", async () => {
     repository = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-"));
     await git(repository, "init");
     await git(repository, "config", "user.email", "test@example.com");
@@ -239,10 +219,48 @@ describe("worktree verification (§5)", () => {
     expect(determineChildStatus(unchanged.headCommit, base, unchanged.isClean)).toBe("no_changes");
 
     await writeFile(join(worktree, "README.md"), "changed\n");
-    await git(worktree, "add", "README.md");
-    await git(worktree, "commit", "-m", "child change");
     const changed = await verifyWorktree(worktree, "conductor/run/child");
     expect(determineChildStatus(changed.headCommit, base, changed.isClean)).toBe("completed");
+  });
+
+  it("normalizes a completed report without edits to no_changes", async () => {
+    repository = await createRepository();
+    promptRoot = await mkdtemp(join(tmpdir(), "pi-conductor-prompts-"));
+    await writeFile(join(promptRoot, "child.md"), "Make the requested change.");
+
+    const result = await executeDelegate({
+      args: {
+        tasks: [
+          {
+            id: "task-1",
+            subagent: "implementer",
+            objective: "Inspect the repository.",
+            expected_output: "Report findings.",
+          },
+        ],
+      },
+      policy,
+      profiles: [profile],
+      remainingChildren: 1,
+      runStateDir: join(repository, ".runs", "run-1"),
+      runId: "run-1",
+      parentRole: "parent",
+      primaryCheckout: repository,
+      systemPromptRoot: promptRoot,
+      spawnAndRunChild: async () => ({
+        started: true,
+        model: "stub:model",
+        status: "completed",
+        summary: "No changes required.",
+        headCommit: null,
+        sessionFile: "child.jsonl",
+        usage,
+      }),
+    });
+
+    expect(result.results).toEqual([
+      expect.objectContaining({ status: "no_changes", summary: "No changes required." }),
+    ]);
   });
 });
 
@@ -306,6 +324,17 @@ describe("resume child reconciliation (§7)", () => {
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd });
   return stdout;
+}
+
+async function createRepository(): Promise<string> {
+  const repository = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-"));
+  await git(repository, "init");
+  await git(repository, "config", "user.email", "test@example.com");
+  await git(repository, "config", "user.name", "Test User");
+  await writeFile(join(repository, "README.md"), "base\n");
+  await git(repository, "add", "README.md");
+  await git(repository, "commit", "-m", "base");
+  return repository;
 }
 
 function requiredTool(

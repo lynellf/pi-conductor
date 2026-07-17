@@ -22,7 +22,7 @@ import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
 import { executeDelegate } from "./delegate-tool.js";
 import type { DelegationManager } from "./manager.js";
 import type { PoolCompletedResult, PoolFailedResult } from "./pool.js";
-import { buildChildTools } from "./run-tool.js";
+import { buildChildTools, CHILD_FILE_TOOL_NAMES } from "./run-tool.js";
 
 /** Dependencies for a parent role's delegate tool. */
 export interface DelegateToolFactoryOptions {
@@ -199,14 +199,10 @@ async function createChildSession(
     customTools: [
       ...buildChildTools({
         worktreePath: config.worktreePath,
-        runId: opts.runId,
-        childId: config.childId,
-        parentRole: opts.parentRole,
-        taskId: config.taskId,
       }),
       buildReportResultTool(),
     ],
-    tools: ["read", "grep", "find", "ls", "edit", "write", "run", "report_result"],
+    tools: [...CHILD_FILE_TOOL_NAMES, "report_result"],
     thinkingLevel: entry.effort as never,
   });
   if (session.sessionFile === undefined) {
@@ -318,7 +314,7 @@ function childTaskSeed(config: SpawnChildConfig): string {
   return [
     `Task ID: ${config.taskId}`,
     `Worktree: ${config.worktreePath}`,
-    "Begin the assigned task. Commit meaningful changes, then call report_result.",
+    "Begin the assigned task. Modify files in this worktree, then call report_result.",
   ].join("\n");
 }
 
