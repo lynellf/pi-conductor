@@ -129,6 +129,12 @@ export interface RoleSession {
    */
   resetCaptureBuffer(): void;
 
+  /** Return and clear incomplete-handoff attempts for loop persistence. */
+  takeHandoffValidationFailures?(): readonly {
+    readonly missingFields: readonly string[];
+    readonly invalidFields: readonly string[];
+  }[];
+
   /** Subscribe to session events (Task 17: capture usage on `message_end`,
    *  evaluate session-cap on `turn_end`). Returns an unsubscribe fn. */
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;

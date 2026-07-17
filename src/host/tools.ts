@@ -61,7 +61,12 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 
-import { endArgsSchema, handoffArgsSchema } from "../seam/schema.js";
+import {
+  endArgsSchema,
+  type HandoffArgs,
+  handoffArgsSchema,
+  validateActionableHandoff,
+} from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import type { SessionSeam } from "./seam.js";
 
@@ -77,8 +82,10 @@ import type { SessionSeam } from "./seam.js";
  */
 export interface EmissionToolDetails {
   readonly ok: boolean;
-  readonly reason?: "schema_invalid" | "extra_emission";
+  readonly reason?: "schema_invalid" | "extra_emission" | "handoff_incomplete";
   readonly target_role?: string;
+  readonly missing_fields?: readonly string[];
+  readonly invalid_fields?: readonly string[];
 }
 
 // ─── Internal factory: shared logic for handoff + end ──────────────────
@@ -201,6 +208,32 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
 
       // ── First machine-event call: validate at the seam ───────────
       const validated = validateEmission([{ toolName, args: params }]);
+
+      if (validated.kind === "ok" && validated.event.type === "handoff") {
+        const failure = validateActionableHandoff(validated.event.payload as HandoffArgs);
+        if (failure !== null) {
+          seam.rejectHandoff(failure);
+          const fields = [
+            ...failure.missingFields.map((field) => `missing '${field}'`),
+            ...failure.invalidFields.map((field) => `invalid '${field}'`),
+          ];
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `incomplete handoff: ${fields.join(", ")}. Add the actionable handoff envelope and try again in this session.`,
+              },
+            ],
+            details: {
+              ok: false,
+              reason: "handoff_incomplete",
+              missing_fields: failure.missingFields,
+              invalid_fields: failure.invalidFields,
+            } satisfies EmissionToolDetails,
+            terminate: false,
+          };
+        }
+      }
 
       // Always push the call's args to the buffer — both valid and
       // schema-invalid captures are recorded. The loop's
