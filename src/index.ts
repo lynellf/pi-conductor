@@ -125,6 +125,7 @@ export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";
 // reads the last snapshot — never replays records. The host's resume
 // path (§11.9) reconstructs from this single read.
 
+export type { FileMutationRecord, HunkLine, TouchedFile } from "./persistence/file-mutation.js";
 export type { CheckpointSnapshot, PersistedRecord, RecordLog } from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
 

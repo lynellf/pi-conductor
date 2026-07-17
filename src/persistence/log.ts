@@ -17,6 +17,7 @@
  *    restore the goal context).
  *  - Delegation lite §7: `subagent_started` / `subagent_completed` /
  *    `subagent_failed` (host-owned child session observability records).
+ *  - Issue #22: `file_mutation` (successful `write` / `edit` telemetry).
  *
  * **`RecordLog`** is the host-side persistence contract. The pure core
  * ships the interface and an in-memory implementation for unit tests.
@@ -36,6 +37,7 @@ import type {
   TransitionRejected,
   UsageRecord,
 } from "../core/types.js";
+import type { FileMutationRecord } from "./file-mutation.js";
 
 /**
  * §11.1: a checkpoint snapshot is a full Checkpoint, snapshotted after
@@ -163,7 +165,8 @@ export type PersistedRecord =
   | HandoffValidationRejectedRecord
   | SubagentStartedRecord
   | SubagentCompletedRecord
-  | SubagentFailedRecord;
+  | SubagentFailedRecord
+  | FileMutationRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
