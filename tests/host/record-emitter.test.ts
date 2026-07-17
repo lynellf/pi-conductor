@@ -30,6 +30,7 @@ import { runLoop } from "../../src/host/loop.js";
 import {
   type Checkpoint,
   createInitialCheckpoint,
+  type FileMutationRecord,
   InMemoryRecordLog,
   type MachineDefinition,
   type PersistedRecord,
@@ -123,6 +124,32 @@ describe("Case 1 — listener fires on every persistRecord", () => {
     const orchStartIdx = types.indexOf("session_started");
     const orchAcceptIdx = types.indexOf("transition_accepted");
     expect(orchStartIdx).toBeLessThan(orchAcceptIdx);
+  });
+});
+
+describe("file-mutation telemetry — issue #22", () => {
+  it("fans out a durable file-mutation record to record subscribers", () => {
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({ runId: "run-22", log, steps: [] });
+    const record: FileMutationRecord = {
+      type: "file_mutation",
+      run_id: "run-22",
+      role: "worker",
+      session_id: "session-22",
+      session_file: "/tmp/session-22.jsonl",
+      tool_name: "edit",
+      files: [{ path: "/app/main.ts", additions: 5, deletions: 6 }],
+      ts: 1_700_000_000_000,
+    };
+    const seen: FileMutationRecord[] = [];
+    const unsub = subscribeToRecords((persisted) => {
+      if (persisted.type === "file_mutation") seen.push(persisted);
+    });
+
+    host.persistRecord(record);
+    unsub();
+
+    expect(seen).toEqual([record]);
   });
 });
 

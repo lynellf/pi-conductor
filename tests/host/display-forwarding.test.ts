@@ -79,6 +79,8 @@ function makeAssistantMessageWithRedactedThinking(): AssistantMessage {
 function makeSession() {
   let listener: ((event: unknown) => void) | undefined;
   return {
+    sessionId: "display-session-1",
+    sessionFile: "/tmp/display-session-1.jsonl",
     abort: vi.fn().mockResolvedValue(undefined),
     subscribe: vi.fn((fn: (event: unknown) => void) => {
       listener = fn;
@@ -649,6 +651,107 @@ describe("attachSessionEventHandler — display sink", () => {
       expect(event.kind).toBe("text");
       expect("files" in event).toBe(false);
     });
+  });
+});
+
+describe("file-mutation telemetry — issue #22", () => {
+  it("persists a successful edit with role, session, and hunk context", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const persist = vi.fn();
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      fileMutation: {
+        runId: "run-22",
+        sessionId: "display-session-1",
+        sessionFile: "/tmp/display-session-1.jsonl",
+        persist,
+      },
+    });
+
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-telemetry-edit",
+      toolName: "edit",
+      args: { path: "/app/main.ts", edits: [{ oldText: "before", newText: "after" }] },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-telemetry-edit",
+      toolName: "edit",
+      result: { ok: true },
+      isError: false,
+    });
+
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalledWith({
+      type: "file_mutation",
+      run_id: "run-22",
+      role: "worker",
+      session_id: "display-session-1",
+      session_file: "/tmp/display-session-1.jsonl",
+      tool_name: "edit",
+      files: [
+        {
+          path: "/app/main.ts",
+          additions: 5,
+          deletions: 6,
+          hunks: [
+            { lineNumber: 1, content: "-before", kind: "del" },
+            { lineNumber: 1, content: "+after", kind: "add" },
+          ],
+        },
+      ],
+      ts: expect.any(Number),
+    });
+  });
+
+  it("does not persist failed or malformed file mutations", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const persist = vi.fn();
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      fileMutation: {
+        runId: "run-22",
+        sessionId: "display-session-1",
+        sessionFile: "/tmp/display-session-1.jsonl",
+        persist,
+      },
+    });
+
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-failed-write",
+      toolName: "write",
+      args: { path: "/app/blocked.ts", content: "blocked" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-failed-write",
+      toolName: "write",
+      result: "permission denied",
+      isError: true,
+    });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "call-malformed-write",
+      toolName: "write",
+      args: { path: "/app/incomplete.ts" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "call-malformed-write",
+      toolName: "write",
+      result: { ok: true },
+      isError: false,
+    });
+
+    expect(persist).not.toHaveBeenCalled();
   });
 });
 
