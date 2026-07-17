@@ -42,22 +42,23 @@ export const askUserArgsSchema = Type.Object(
       type: "string",
       enum: ["input", "confirm", "select"],
       description:
-        "Dialog control: input for free-form text, confirm for yes/no, select for one option.",
+        "Dialog control for exactly one decision: input for free-form text, confirm for yes/no, select for one option.",
     }),
     prompt: Type.String({
       minLength: 1,
-      description: "The question shown to the user.",
+      description:
+        "Exactly one question shown to the user. Use separate sequential calls for several questions.",
     }),
     options: Type.Optional(
       Type.Array(Type.String({ minLength: 1 }), {
         minItems: 1,
-        description: "Choices for select only; omit this field for input and confirm.",
+        description: "Choices for one select question only; omit this field for input and confirm.",
       }),
     ),
   },
   {
     additionalProperties: false,
-    description: "Ask a user for free-form text, a yes/no answer, or one supplied choice.",
+    description: "Ask a user for exactly one free-form, yes/no, or supplied-choice decision.",
     examples: [
       { kind: "input", prompt: "What should I clarify?" },
       { kind: "confirm", prompt: "Proceed with the migration?" },
@@ -109,17 +110,42 @@ function formatAnswer(kind: AskUserKind, answer: string | boolean | undefined): 
   return (answer as string | undefined) ?? "(no selection)";
 }
 
+const OPEN_ENDED_QUESTION = /^\s*(?:who|what|which|where|when|why|how)\b/i;
+const QUESTION_LIST_ITEM =
+  /^\s*(?:\d+[.)]|[-*•])\s+(?:(?:who|what|which|where|when|why|how)\b|.*\?)/gim;
+
+function containsBundledQuestions(prompt: string): boolean {
+  const questionMarks = prompt.match(/\?/g)?.length ?? 0;
+  if (questionMarks > 1) return true;
+
+  const questionListItems = prompt.match(QUESTION_LIST_ITEM)?.length ?? 0;
+  return questionListItems > 1;
+}
+
+function bundledQuestionsError(): Error {
+  return new Error(
+    "ask_user: prompt must contain exactly one question; split bundled questions into separate sequential ask_user calls",
+  );
+}
+
 function validateAskUserArgs(params: AskUserArgs): void {
   if (params.kind === "select") {
     if (params.options === undefined || params.options.length < 1) {
       throw new Error("ask_user: 'select' kind requires a non-empty 'options' array");
     }
-    return;
-  }
-
-  if (params.options !== undefined) {
+  } else if (params.options !== undefined) {
     throw new Error(
       `ask_user: '${params.kind}' kind does not accept 'options'; use 'select' for multiple-choice questions`,
+    );
+  }
+
+  if (containsBundledQuestions(params.prompt)) {
+    throw bundledQuestionsError();
+  }
+
+  if (params.kind === "confirm" && OPEN_ENDED_QUESTION.test(params.prompt)) {
+    throw new Error(
+      "ask_user: 'confirm' requires one yes/no question; split bundled questions into separate sequential ask_user calls and use 'input', 'confirm', or 'select' as appropriate",
     );
   }
 }
@@ -143,7 +169,7 @@ export function createAskUserTool(): ToolDefinition<typeof askUserArgsSchema, As
   return defineTool({
     name: "ask_user",
     label: "Ask user",
-    description: "Ask the user a clarifying question and return the answer.",
+    description: "Ask the user exactly one clarifying question and return the answer.",
     parameters: askUserArgsSchema,
     executionMode: "sequential",
     execute: async (_toolCallId, params, signal, _onUpdate, ctx) => {
