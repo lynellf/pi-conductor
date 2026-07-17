@@ -189,19 +189,25 @@ disable them.
 
 - **`handoff`** — terminate this role's session and route to another declared
   role. Workers may only hand off to the orchestrator; the orchestrator may hand
-  off to any declared worker (subject to visit caps, §7.3). Args:
-  `target_role: Role` (required, non-empty), plus optional `reason: string` and
-  `suggests_next: Role` (workers only, non-binding — the orchestrator still
-  emits its own legal handoff).
+  off to any declared worker (subject to visit caps, §7.3). Every
+  model-emitted handoff must include a non-empty actionable envelope:
+  `status` (`ready`, `blocked`, or `complete`), `objective`, `summary`, and
+  `requested_action`, alongside `target_role: Role`. `reason` and
+  `suggests_next: Role` remain optional (the latter is workers-only and
+  non-binding). An incomplete envelope returns an actionable error without
+  advancing, persisting an accepted transition, or sealing the role session, so
+  the role can correct it immediately.
 - **`end`** — terminate this role's session and declare the run complete. Legal
   only from the orchestrator (§7.2); a worker calling `end` produces a
   `transition_rejected` record with `legal_targets` surfaced. Args: optional
   `reason: string`.
 
 Both tools only **validate and record intent** into a per-session capture buffer
-and return a terminating message; they do **not** call `reduce` and do **not**
-persist — the loop owns those exclusively (§12.1). After a role's first valid
-`handoff`/`end` capture, the session is **sealed**: every other tool
+and return a terminating message after a valid capture; they do **not** call
+`reduce` and do **not** persist — the loop owns those exclusively (§12.1). An
+incomplete handoff is the exception: it records a host-observable validation
+failure and returns a non-terminating correction prompt. After a role's first
+valid `handoff`/`end` capture, the session is **sealed**: every other tool
 short-circuits, so work-after-handoff cannot mutate the workspace.
 
 **2. Built-in + custom tools — pass-through to pi's tool registry.**

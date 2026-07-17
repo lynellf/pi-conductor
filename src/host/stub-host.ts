@@ -295,6 +295,7 @@ export class StubHost implements Host {
       retryDelayMs,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
+      takeHandoffValidationFailures: () => seam.takeHandoffValidationFailures(),
       subscribe: (listener) => session.subscribe(listener),
       prompt: (text) => session.prompt(text),
       dispose: async () => {

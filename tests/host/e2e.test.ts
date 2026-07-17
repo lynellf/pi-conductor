@@ -137,6 +137,48 @@ describe("stub provider — drives one createAgentSession turn (Task 16 acceptan
 // ─── (2) Full linear loop via the stub ─────────────────────────────────
 
 describe("stub provider — full orch → worker → orch → end via runLoop (Task 16 acceptance #2)", () => {
+  it("keeps an incomplete handoff in-session until the role corrects it", async () => {
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      steps: [
+        {
+          kind: "emit_tool_calls",
+          calls: [{ name: "handoff", arguments: { target_role: "worker" } }],
+        },
+        { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
+        {
+          kind: "emit_tool_calls",
+          calls: [{ name: "handoff", arguments: { target_role: "orchestrator" } }],
+        },
+        { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
+        { kind: "emit_end", reason: "all done" },
+      ],
+    });
+
+    const result = await runLoop({
+      def: makeDef(),
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+    const records = log.records(initialCheckpoint.run_id);
+    const rejected = records.filter((record) => record.type === "handoff_validation_rejected");
+
+    expect(result.exitReason).toBe("done");
+    expect(rejected).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "orchestrator" }),
+        expect.objectContaining({ role: "worker" }),
+      ]),
+    );
+    expect(rejected).toHaveLength(2);
+    expect(records.filter((record) => record.type === "transition_accepted")).toHaveLength(3);
+    expect(records.some((record) => record.type === "session_failed")).toBe(false);
+  });
+
   it("completes with no network and asserts persisted record shapes", async () => {
     // 3 visits: orchestrator → worker, worker → orchestrator,
     // orchestrator → end.

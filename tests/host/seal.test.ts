@@ -60,6 +60,16 @@ function makeBash(probeFile: string, callCount: { n: number }) {
   });
 }
 
+function actionableHandoff(targetRole: string): Record<string, string> {
+  return {
+    target_role: targetRole,
+    status: "ready",
+    objective: "Perform the assigned work.",
+    summary: "The predecessor prepared the required context.",
+    requested_action: "Complete the assigned work and report the result.",
+  };
+}
+
 // ─── Unit tests: wrapToolWithSeal ──────────────────────────────────────
 
 describe("wrapToolWithSeal — unit", () => {
@@ -197,7 +207,7 @@ describe("post-emission sealing — handoff then bash blocks side effects", () =
       const wrappedBash = wrapToolWithSeal(bash, () => seam.isSealed);
 
       // 1. Model calls handoff first (valid).
-      const handoffResult = await invoke(handoff, { target_role: "worker" });
+      const handoffResult = await invoke(handoff, actionableHandoff("worker"));
       expect((handoffResult as { details: { ok: boolean } }).details.ok).toBe(true);
       expect(seam.isSealed).toBe(true);
       expect(seam.read()).toHaveLength(1);
@@ -243,7 +253,7 @@ describe("post-emission sealing — handoff then bash blocks side effects", () =
       expect(callCount.n).toBe(1);
 
       // 3. Model then calls handoff. Seam flips to sealed.
-      const handoffResult = await invoke(handoff, { target_role: "worker" });
+      const handoffResult = await invoke(handoff, actionableHandoff("worker"));
       expect((handoffResult as { details: { ok: boolean } }).details.ok).toBe(true);
       expect(seam.isSealed).toBe(true);
       expect(seam.read()).toHaveLength(1);
@@ -266,7 +276,7 @@ describe("post-emission sealing — handoff then bash blocks side effects", () =
       expect(callCount.n).toBe(1);
 
       // Handoff seals.
-      await invoke(handoff, { target_role: "worker" });
+      await invoke(handoff, actionableHandoff("worker"));
       expect(seam.isSealed).toBe(true);
 
       // Three more bash calls: all blocked.
@@ -290,12 +300,12 @@ describe("post-emission sealing — handoff then bash blocks side effects", () =
     const handoff = createHandoffTool(seam);
 
     // First handoff: valid, sealed.
-    const first = await invoke(handoff, { target_role: "worker" });
+    const first = await invoke(handoff, actionableHandoff("worker"));
     expect((first as { details: { ok: boolean } }).details.ok).toBe(true);
     expect(seam.isSealed).toBe(true);
 
     // Second handoff: extra_emission (Task 14's contract).
-    const second = await invoke(handoff, { target_role: "reviewer" });
+    const second = await invoke(handoff, actionableHandoff("reviewer"));
     expect((second as { details: { ok: boolean; reason?: string } }).details).toEqual({
       ok: false,
       reason: "extra_emission",
