@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.10.0] - 2026-07-16
+
+### Enhancements
+
+- **File-only, worktree-confined child subagents** (issues #24 and #26).
+  Delegated children now receive only conductor-owned file tools scoped to
+  their generated worktree; process-execution tools are unavailable. The
+  parent retains ownership of verification, commits, and integration.
+- **Actionable handoff contracts** (issue #21). Model-emitted handoffs now
+  require non-empty `status`, `objective`, `summary`, and `requested_action`
+  fields. Incomplete handoffs remain correctable in the same session and are
+  recorded for observability.
+- **Durable changed-file telemetry** (issue #22). Successful `write` and
+  `edit` calls now append replayable `file_mutation` records with run and
+  session context, changed-file counts, and optional diff hunks for analytics
+  consumers.
+
+### Bug fixes
+
+- **Validate `ask_user` prompt semantics** (issue #20). Bundled decisions and
+  incompatible confirmation prompts now fail before opening the UI, keeping
+  each user interaction to one clear decision.
+
+### Security
+
+- **Resolve production `undici` audit findings** (issue #19) by updating the
+  development pi SDK graph to the patched `undici@8.5.0` dependency.
+
 ## [0.9.0] - 2026-07-16
 
 ### Enhancements
