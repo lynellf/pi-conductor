@@ -417,6 +417,7 @@ export class ProductionHost implements Host {
       retryDelayMs,
       readCaptureBuffer: () => seam.read(),
       resetCaptureBuffer: () => seam.reset(),
+      takeHandoffValidationFailures: () => seam.takeHandoffValidationFailures(),
       subscribe: (listener: (event: AgentSessionEvent) => void) => session.subscribe(listener),
       prompt: (text: string) => session.prompt(text),
       dispose: async () => {

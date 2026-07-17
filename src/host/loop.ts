@@ -419,6 +419,19 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             throw promptError;
           }
 
+          for (const failure of session.takeHandoffValidationFailures?.() ?? []) {
+            host.persistRecord({
+              type: "handoff_validation_rejected",
+              run_id: checkpoint.run_id,
+              role,
+              session_id: sessionId,
+              session_file: sessionFile,
+              missing_fields: failure.missingFields,
+              invalid_fields: failure.invalidFields,
+              ts: Date.now(),
+            });
+          }
+
           const captures = session.readCaptureBuffer();
           const validated = validateEmission(captures);
 
@@ -919,7 +932,7 @@ function formatRoleUnavailableSeed(role: Role): string {
     `  - hand off to a different role (NOT '${role}'), OR`,
     `  - hand off to '${role}' (this will escalate per §9.4).`,
     "No readable source session exists for this synthesized handoff.",
-    "When done, emit exactly one handoff (target_role=<next role>) or end.",
+    "When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or end.",
   ].join("\n");
 }
 
@@ -960,7 +973,7 @@ function formatHandoffSeed(
     payloadStr,
     suggestsLine,
     "",
-    "Continue your work for this role. When done, emit exactly one handoff (target_role=<next role>) or, if you are the orchestrator, end.",
+    "Continue your work for this role. When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or, if you are the orchestrator, end.",
   ].join("\n");
 }
 

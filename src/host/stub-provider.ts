@@ -270,6 +270,10 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
           name: "handoff",
           arguments: {
             target_role: step.target_role,
+            status: "ready",
+            objective: `Continue the run as ${step.target_role}.`,
+            summary: step.reason ?? `Handoff to ${step.target_role}.`,
+            requested_action: `Complete the next ${step.target_role} step and report the result.`,
             ...(step.reason !== undefined && { reason: step.reason }),
             ...(step.suggests_next !== undefined && { suggests_next: step.suggests_next }),
           },

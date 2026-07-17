@@ -30,7 +30,7 @@
 import type { RunMemory } from "../core/run-memory.js";
 
 const TERMINAL_LINE =
-  "Continue your orchestration. Call handoff(target_role=<worker>) to dispatch work, or call end if the goal is complete and next_candidates is empty.";
+  "Continue your orchestration. Call handoff with target_role, status, objective, summary, and requested_action to dispatch work, or call end if the goal is complete and next_candidates is empty.";
 
 /**
  * Format a `RunMemory` artifact as a structured prompt for the next
