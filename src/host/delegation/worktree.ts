@@ -168,18 +168,18 @@ export async function verifyWorktree(
 /**
  * Determine the child result status based on worktree state.
  *
- * - `completed`: child left a clean worktree with HEAD different from base
- * - `no_changes`: child left a clean worktree with HEAD same as base
- * - `failed`: child left a dirty worktree or HEAD is invalid
+ * - `completed`: child left uncommitted changes in its generated worktree
+ * - `no_changes`: child left the base commit clean
+ * - `failed`: a child unexpectedly changed the checked-out commit
  */
 export function determineChildStatus(
   headCommit: string,
   baseCommit: string,
   isClean: boolean,
 ): "completed" | "no_changes" | "failed" {
-  if (!isClean) return "failed";
+  if (!isClean) return "completed";
   if (headCommit === baseCommit) return "no_changes";
-  return "completed";
+  return "failed";
 }
 
 /**

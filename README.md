@@ -335,28 +335,36 @@ checkout (`git status --porcelain=v1 --untracked-files=all`) and a resolvable
 
 The tool waits for all children and returns results in input order. Each result
 contains its authoritative status, branch, worktree path, base/head commits,
-session file, usage, summary, and any failure reason. `completed` requires a
-clean worktree with a committed head different from the batch base; `no_changes`
-requires a clean worktree still at that base. A mismatched report, dirty tree,
-or invalid Git state becomes `failed`.
+session file, usage, summary, and any failure reason. `completed` requires
+verified uncommitted changes in the child worktree; `no_changes` requires a
+clean worktree at the batch base. A `completed` report without changes becomes
+`no_changes`; an unexpected commit or invalid Git state becomes `failed`.
 
 ### Child boundary and branch integration
 
-Each child receives only `read`, `grep`, `find`, `ls`, `edit`, `write`, `run`,
-and `report_result`, rooted in its generated worktree. Every child file tool
+Each child receives only `read`, `grep`, `find`, `ls`, `edit`, `write`, and
+`report_result`, rooted in its generated worktree. Every child file tool
 rejects absolute paths, `..` traversal, and paths that resolve through a symlink
 outside that worktree; this is path confinement, not an OS or credential
-sandbox. `run` accepts argv, not a shell string; its allowlist is `git`, `pnpm`,
-`npm`, `node`, `npx`, `grep`, `find`, and `ls`. Children cannot call `handoff`,
-`end`, `ask_user`, `delegate`, or `bash`.
+sandbox. Children cannot call `run`, `bash`, `handoff`, `end`, `ask_user`, or
+`delegate`.
+
+The parent receives the worktree path and branch, then owns testing, formatting,
+builds, Git inspection, commits, and integration. For example, it may run
+`pnpm --dir <worktree_path> test`, inspect `git -C <worktree_path> diff`, and
+commit accepted changes. The conductor never performs those actions automatically.
 
 The host creates `conductor/<runId>/<childId>` and keeps both branch and
 worktree under the run state directory. It **never** merges, cherry-picks,
 resets, deletes, or automatically cleans up a child branch. After reviewing a
-successful result, the parent or operator explicitly integrates it, for example:
+successful result, the parent or operator explicitly verifies, commits, and
+integrates it, for example:
 
 ```bash
-git diff conductor/<runId>/<childId>
+pnpm --dir <worktree_path> test
+git -C <worktree_path> diff
+git -C <worktree_path> add --all
+git -C <worktree_path> commit -m "Implement delegated task"
 git cherry-pick conductor/<runId>/<childId>
 ```
 
