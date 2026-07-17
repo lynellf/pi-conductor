@@ -20,8 +20,9 @@
  *
  * `additionalProperties: true` honors §5.1: handoff payloads carry "plus
  * role-defined fields." The schema validates the structural contract
- * (`target_role` is a non-empty string; `reason` and `suggests_next` are
- * strings when present) without restricting what roles can attach.
+ * (`target_role` is a non-empty string; reserved handoff-envelope fields,
+ * `reason`, and `suggests_next` are strings when present) without restricting
+ * what roles can attach.
  */
 
 // TypeBox schemas — single source of truth for tool-args, seam validation,
@@ -35,9 +36,10 @@ import { type Static, Type } from "typebox";
 // ─── Core FSM tools (§5.1) ────────────────────────────────────────────
 
 /**
- * §5.1 handoff payload schema. `target_role` is the only required field;
- * `reason` and `suggests_next` are optional. Role-defined fields are
- * permitted (additionalProperties: true).
+ * §5.1 handoff payload schema. `target_role` is structurally required; the
+ * optional reserved fields are semantically required for model-emitted
+ * handoffs by `validateActionableHandoff`. Role-defined fields are permitted
+ * (additionalProperties: true).
  *
  * `target_role` is a non-empty string. The reducer (Phase 2) separately
  * checks that the role is declared; this schema only pins shape.
@@ -45,6 +47,10 @@ import { type Static, Type } from "typebox";
 export const handoffArgsSchema = Type.Object(
   {
     target_role: Type.String({ minLength: 1 }),
+    status: Type.Optional(Type.String()),
+    objective: Type.Optional(Type.String()),
+    summary: Type.Optional(Type.String()),
+    requested_action: Type.Optional(Type.String()),
     reason: Type.Optional(Type.String()),
     suggests_next: Type.Optional(Type.String()),
   },
@@ -53,6 +59,47 @@ export const handoffArgsSchema = Type.Object(
 
 /** Typed view of a validated handoff args object. Host-side use. */
 export type HandoffArgs = Static<typeof handoffArgsSchema>;
+
+/** Reserved handoff status values for a recipient-facing work contract. */
+export const HANDOFF_STATUSES = ["ready", "blocked", "complete"] as const;
+
+/** Field names required by every model-emitted actionable handoff. */
+export const ACTIONABLE_HANDOFF_FIELDS = [
+  "status",
+  "objective",
+  "summary",
+  "requested_action",
+] as const;
+
+export type ActionableHandoffField = (typeof ACTIONABLE_HANDOFF_FIELDS)[number];
+
+/** Actionable-envelope errors returned to the emitting role for correction. */
+export interface HandoffActionabilityFailure {
+  readonly missingFields: readonly ActionableHandoffField[];
+  readonly invalidFields: readonly ActionableHandoffField[];
+}
+
+/** Check the reserved recipient-facing contract without constraining role payloads. */
+export function validateActionableHandoff(args: HandoffArgs): HandoffActionabilityFailure | null {
+  const missingFields: ActionableHandoffField[] = [];
+  const invalidFields: ActionableHandoffField[] = [];
+  for (const field of ACTIONABLE_HANDOFF_FIELDS) {
+    const value = args[field];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      missingFields.push(field);
+    }
+  }
+  if (
+    typeof args.status === "string" &&
+    args.status.trim().length > 0 &&
+    !HANDOFF_STATUSES.includes(args.status as (typeof HANDOFF_STATUSES)[number])
+  ) {
+    invalidFields.push("status");
+  }
+  return missingFields.length === 0 && invalidFields.length === 0
+    ? null
+    : { missingFields, invalidFields };
+}
 
 /**
  * §5.1 end payload schema. `reason` is optional. Role-defined fields are

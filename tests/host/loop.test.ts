@@ -114,10 +114,15 @@ class FakeSession {
         const next = this.script.shift();
         if (next === undefined || next.kind === "no_emission") return;
         if (next.kind === "emit_handoff" || next.kind === "emit_illegal_handoff") {
+          const reason = next.kind === "emit_handoff" ? next.reason : undefined;
           this.captureBuffer.push({
             toolName: "handoff",
             args: {
               target_role: next.target_role,
+              status: "ready",
+              objective: `Continue the run as ${next.target_role}.`,
+              summary: reason ?? `Handoff to ${next.target_role}.`,
+              requested_action: `Complete the next ${next.target_role} step and report the result.`,
               ...(next.kind === "emit_handoff" &&
                 next.reason !== undefined && {
                   reason: next.reason,

@@ -73,17 +73,17 @@ these channels separate is what lets the machine stay small.
 ## 5. Events
 
 The machine recognizes only mechanics. Semantic intent (`plan_ready`,
-`concerns_raised`, `approved`, `needs_replan`, …) is **not** a machine concept: it
-lives in the LLM's reasoning and, optionally, a free-form `reason` field in the handoff
-payload that the machine stores for observability but never branches on. The machine
-branches on *whether a handoff occurred, to whom, and whether the session ended* —
-nothing more.
+`concerns_raised`, `approved`, `needs_replan`, …) is **not** a machine concept:
+the host/seam requires a minimally actionable envelope for the recipient, but
+the reducer stores it as opaque payload and never branches on its content. The
+machine branches on *whether a handoff occurred, to whom, and whether the
+session ended* — nothing more.
 
 ### 5.1 Machine events (role-issued)
 
 | Event | Semantics | Payload |
 |---|---|---|
-| `handoff` | Role terminates its session and routes to another role | `target_role: Role`, `reason?: string`, `suggests_next?: Role`, plus role-defined fields |
+| `handoff` | Role terminates its session and routes to another role | `target_role: Role`, non-empty `status`, `objective`, `summary`, and `requested_action`, plus optional `reason`, `suggests_next`, and role-defined fields |
 | `end` | Role declares the overarching session complete | `reason?: string` |
 
 The LLM decides which to emit and (for `handoff`) which `target_role`. The machine

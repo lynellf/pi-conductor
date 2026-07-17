@@ -51,6 +51,10 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
               arguments: {
                 target_role: "worker",
                 reason: "plan ready",
+                status: "ready",
+                objective: "Implement the approved plan.",
+                summary: "The planner prepared the implementation work.",
+                requested_action: "Implement the plan and report the changed files.",
                 context_ref: {
                   run_id: "attacker-run",
                   source_role: "attacker",

@@ -32,10 +32,12 @@
  * it stores. The `defineTool` import lives in `tools.ts`, not here.
  */
 
+import type { HandoffActionabilityFailure } from "../seam/schema.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 
 export class SessionSeam {
   private readonly _captures: EmissionCapture[] = [];
+  private readonly _handoffValidationFailures: HandoffActionabilityFailure[] = [];
   private _sealed = false;
 
   /**
@@ -60,6 +62,18 @@ export class SessionSeam {
    */
   read(): readonly EmissionCapture[] {
     return Object.freeze([...this._captures]);
+  }
+
+  /** Record an incomplete handoff without turning it into a machine event. */
+  rejectHandoff(failure: HandoffActionabilityFailure): void {
+    this._handoffValidationFailures.push(failure);
+  }
+
+  /** Return and clear pending handoff-validation failures for loop persistence. */
+  takeHandoffValidationFailures(): readonly HandoffActionabilityFailure[] {
+    const failures = Object.freeze([...this._handoffValidationFailures]);
+    this._handoffValidationFailures.length = 0;
+    return failures;
   }
 
   /**
@@ -88,6 +102,7 @@ export class SessionSeam {
    */
   reset(): void {
     this._captures.length = 0;
+    this._handoffValidationFailures.length = 0;
     this._sealed = false;
   }
 }

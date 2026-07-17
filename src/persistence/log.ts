@@ -30,6 +30,7 @@ import type {
   Checkpoint,
   ModelFallback,
   ModelRetry,
+  Role,
   SessionLifecycleEvent,
   TransitionAccepted,
   TransitionRejected,
@@ -59,6 +60,18 @@ export interface RunSeededRecord {
   readonly type: "run_seeded";
   readonly run_id: string;
   readonly goal: string;
+  readonly ts: number;
+}
+
+/** Host-owned observability record for a handoff rejected before reduction. */
+export interface HandoffValidationRejectedRecord {
+  readonly type: "handoff_validation_rejected";
+  readonly run_id: string;
+  readonly role: Role;
+  readonly session_id: string;
+  readonly session_file: string;
+  readonly missing_fields: readonly string[];
+  readonly invalid_fields: readonly string[];
   readonly ts: number;
 }
 
@@ -147,6 +160,7 @@ export type PersistedRecord =
   | ModelRetry
   | CheckpointSnapshot
   | RunSeededRecord
+  | HandoffValidationRejectedRecord
   | SubagentStartedRecord
   | SubagentCompletedRecord
   | SubagentFailedRecord;

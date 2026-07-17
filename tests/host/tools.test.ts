@@ -63,12 +63,24 @@ describe("emission tools — valid first call", () => {
       target_role: "implementer",
       reason: "plan ready",
       suggests_next: "reviewer",
+      status: "ready",
+      objective: "Implement the approved plan.",
+      summary: "The planner completed the design and identified the required files.",
+      requested_action: "Implement the plan and report the changed files.",
     });
 
     expect(seam.read()).toHaveLength(1);
     expect(seam.read()[0]).toEqual({
       toolName: "handoff",
-      args: { target_role: "implementer", reason: "plan ready", suggests_next: "reviewer" },
+      args: {
+        target_role: "implementer",
+        reason: "plan ready",
+        suggests_next: "reviewer",
+        status: "ready",
+        objective: "Implement the approved plan.",
+        summary: "The planner completed the design and identified the required files.",
+        requested_action: "Implement the plan and report the changed files.",
+      },
     });
     expect(seam.isSealed).toBe(true);
     expect(result.details).toEqual({
@@ -87,6 +99,10 @@ describe("emission tools — valid first call", () => {
           target_role: "implementer",
           reason: "plan ready",
           suggests_next: "reviewer",
+          status: "ready",
+          objective: "Implement the approved plan.",
+          summary: "The planner completed the design and identified the required files.",
+          requested_action: "Implement the plan and report the changed files.",
         },
       },
     });
@@ -114,16 +130,43 @@ describe("emission tools — valid first call", () => {
     });
   });
 
-  it("handoff accepts minimal args (target_role only)", async () => {
+  it("rejects an incomplete handoff without sealing or terminating the session", async () => {
     const seam = new SessionSeam();
     const tool = createHandoffTool(seam);
 
     const result = await invoke(tool, { target_role: "implementer" });
 
-    expect(result.details.ok).toBe(true);
-    expect(result.details.target_role).toBe("implementer");
-    expect(seam.read()).toHaveLength(1);
-    expect(seam.isSealed).toBe(true);
+    expect(result.details.ok).toBe(false);
+    expect(result.terminate).toBe(false);
+    expect(seam.read()).toHaveLength(0);
+    expect(seam.isSealed).toBe(false);
+    expect(seam.takeHandoffValidationFailures()).toEqual([
+      {
+        missingFields: ["status", "objective", "summary", "requested_action"],
+        invalidFields: [],
+      },
+    ]);
+  });
+
+  it("rejects whitespace-only actionable fields and names each missing field", async () => {
+    const seam = new SessionSeam();
+    const tool = createHandoffTool(seam);
+
+    const result = await invoke(tool, {
+      target_role: "implementer",
+      status: " ",
+      objective: "\t",
+      summary: "\n",
+      requested_action: "  ",
+    });
+
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "handoff_incomplete",
+      missing_fields: ["status", "objective", "summary", "requested_action"],
+    });
+    expect(result.terminate).toBe(false);
+    expect(seam.read()).toEqual([]);
   });
 });
 
@@ -205,7 +248,7 @@ describe("emission tools — extra emission", () => {
     const handoff = createHandoffTool(seam);
     const end = createEndTool(seam);
 
-    const first = await invoke(handoff, { target_role: "implementer" });
+    const first = await invoke(handoff, actionableHandoff("implementer"));
     expect(first.details.ok).toBe(true);
     expect(seam.read()).toHaveLength(1);
     expect(seam.isSealed).toBe(true);
@@ -219,7 +262,7 @@ describe("emission tools — extra emission", () => {
     expect(buffer).toHaveLength(2);
     expect(buffer[0]).toEqual({
       toolName: "handoff",
-      args: { target_role: "implementer" },
+      args: actionableHandoff("implementer"),
     });
     expect(buffer[1]).toEqual({
       toolName: "end",
@@ -241,14 +284,14 @@ describe("emission tools — extra emission", () => {
     const seam = new SessionSeam();
     const handoff = createHandoffTool(seam);
 
-    await invoke(handoff, { target_role: "implementer" });
-    const second = await invoke(handoff, { target_role: "reviewer" });
+    await invoke(handoff, actionableHandoff("implementer"));
+    const second = await invoke(handoff, actionableHandoff("reviewer"));
 
     expect(second.details.reason).toBe("extra_emission");
     const buffer = seam.read();
     expect(buffer).toHaveLength(2);
-    expect(buffer[0]?.args).toEqual({ target_role: "implementer" });
-    expect(buffer[1]?.args).toEqual({ target_role: "reviewer" });
+    expect(buffer[0]?.args).toEqual(actionableHandoff("implementer"));
+    expect(buffer[1]?.args).toEqual(actionableHandoff("reviewer"));
   });
 
   it("schema-invalid handoff then valid end → buffer=2, loop sees extra_emission (precedence over schema_invalid)", async () => {
@@ -287,6 +330,16 @@ describe("emission tools — extra emission", () => {
   });
 });
 
+function actionableHandoff(targetRole: string): Record<string, string> {
+  return {
+    target_role: targetRole,
+    status: "ready",
+    objective: "Perform the assigned work.",
+    summary: "The predecessor prepared the required context.",
+    requested_action: "Complete the assigned work and report the result.",
+  };
+}
+
 // ─── Single-owner rule: tool does not reduce or persist ───────────────
 
 describe("emission tools — single-owner rule", () => {
@@ -295,7 +348,7 @@ describe("emission tools — single-owner rule", () => {
     const log = new InMemoryRecordLog();
     const handoff = createHandoffTool(seam);
 
-    await invoke(handoff, { target_role: "implementer" });
+    await invoke(handoff, actionableHandoff("implementer"));
 
     // The tool's only observable effect is on `seam` — no records
     // were persisted. The loop (Task 15) is the sole caller of
@@ -313,7 +366,7 @@ describe("emission tools — single-owner rule", () => {
     expect(before).toEqual([]);
     expect(seam.isSealed).toBe(false);
 
-    await invoke(handoff, { target_role: "implementer" });
+    await invoke(handoff, actionableHandoff("implementer"));
 
     // After: seam has 1 entry and is sealed. No other host state was
     // touched (no reduce side-effects, no persistence).
