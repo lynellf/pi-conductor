@@ -127,13 +127,18 @@ describe("createAskUserTool", () => {
     ui.confirm.mockResolvedValue(false);
     const tool = createAskUserTool();
 
-    const result = await invoke(tool, { kind: "confirm", prompt: "Continue?" }, undefined, {
-      hasUI: true,
-      mode: "tui",
-      ui,
-    } as never);
+    const result = await invoke(
+      tool,
+      { kind: "confirm", prompt: "Proceed with the migration?" },
+      undefined,
+      {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never,
+    );
 
-    expect(ui.confirm).toHaveBeenCalledWith("Ask user", "Continue?", undefined);
+    expect(ui.confirm).toHaveBeenCalledWith("Ask user", "Proceed with the migration?", undefined);
     expect(result.terminate).toBe(false);
     expect(result.details).toEqual({ kind: "confirm", answer: false });
     expect(result.content).toEqual([{ type: "text", text: "false" }]);
@@ -246,6 +251,91 @@ describe("createAskUserTool", () => {
       } as never),
     ).rejects.toThrow("ask_user: 'confirm' kind does not accept 'options'; use 'select'");
     expect(ui.confirm).not.toHaveBeenCalled();
+  });
+
+  // ─── Issue #20: semantic prompt compatibility ─────────────
+
+  it.each([
+    {
+      kind: "confirm",
+      prompt: "1. Who owns this release?\n2. Proceed with the migration?",
+      options: undefined,
+    },
+    {
+      kind: "input",
+      prompt: "- Who owns this release?\n- When should it ship?",
+      options: undefined,
+    },
+    {
+      kind: "select",
+      prompt: "Who owns this release? And which plan should we use?",
+      options: ["Plan A", "Plan B"],
+    },
+  ] as const)("rejects bundled $kind questions before opening a dialog", async ({
+    kind,
+    prompt,
+    options,
+  }) => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind, prompt, ...(options === undefined ? {} : { options }) }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: prompt must contain exactly one question");
+    expect(ui.input).not.toHaveBeenCalled();
+    expect(ui.confirm).not.toHaveBeenCalled();
+    expect(ui.select).not.toHaveBeenCalled();
+  });
+
+  it("rejects an open-ended confirm prompt before opening a confirmation dialog", async () => {
+    const ui = makeUi();
+    const tool = createAskUserTool();
+
+    await expect(
+      invoke(tool, { kind: "confirm", prompt: "Who owns this release?" }, undefined, {
+        hasUI: true,
+        mode: "tui",
+        ui,
+      } as never),
+    ).rejects.toThrow("ask_user: 'confirm' requires one yes/no question");
+    expect(ui.confirm).not.toHaveBeenCalled();
+  });
+
+  it("accepts an open-ended input prompt", async () => {
+    const ui = makeUi();
+    ui.input.mockResolvedValue("Release engineering");
+    const tool = createAskUserTool();
+
+    await invoke(tool, { kind: "input", prompt: "Who owns this release?" }, undefined, {
+      hasUI: true,
+      mode: "tui",
+      ui,
+    } as never);
+
+    expect(ui.input).toHaveBeenCalledWith("Who owns this release?", undefined, undefined);
+  });
+
+  it("accepts a single-question select prompt", async () => {
+    const ui = makeUi();
+    ui.select.mockResolvedValue("Plan A");
+    const tool = createAskUserTool();
+
+    await invoke(
+      tool,
+      { kind: "select", prompt: "Which plan should we use?", options: ["Plan A", "Plan B"] },
+      undefined,
+      { hasUI: true, mode: "tui", ui } as never,
+    );
+
+    expect(ui.select).toHaveBeenCalledWith(
+      "Which plan should we use?",
+      ["Plan A", "Plan B"],
+      undefined,
+    );
   });
 
   // ─── run fceb3964 fix: executionMode + mutex serialization ───────────
@@ -408,7 +498,7 @@ describe("askUserArgsSchema (flat, portable)", () => {
       type: "string",
       enum: ["input", "confirm", "select"],
       description:
-        "Dialog control: input for free-form text, confirm for yes/no, select for one option.",
+        "Dialog control for exactly one decision: input for free-form text, confirm for yes/no, select for one option.",
     });
   });
 });
