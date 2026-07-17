@@ -167,10 +167,11 @@ For each admitted task, the host:
 5. At terminal time, verifies the worktree belongs to the generated path and
    branch and checks its Git status and `HEAD`.
 
-A `completed` child must leave a clean worktree with a committed `HEAD` different
-from `base_commit`. A `no_changes` child must leave a clean worktree at
-`base_commit`. Otherwise the host changes the result to `failed` and preserves
-all artifacts.
+A `completed` child must leave uncommitted file changes in its worktree. A
+`no_changes` child leaves the worktree clean at `base_commit`. The host derives
+the authoritative terminal status from that verified state; a child that reports
+`completed` without changes becomes `no_changes`. A checked-out commit different
+from `base_commit` is rejected because child sessions cannot create commits.
 
 **No automatic cleanup occurs.** Every worktree and branch is retained for the
 parent/operator to inspect, diff, cherry-pick, or remove manually. This removes
@@ -187,7 +188,7 @@ contract; it does not include the parent transcript.
 The child gets path-confined file tools rooted in its worktree:
 
 ```text
-read, grep, find, ls, edit, write, run, report_result
+read, grep, find, ls, edit, write, report_result
 ```
 
 `report_result` is host-bound to the generated child/task identity and terminates
@@ -201,22 +202,15 @@ the child after a valid call:
 }
 ```
 
-`run` is required because an implementer must run tests and Git commit its work.
-It accepts an argv array, never a shell command. It confines every path/cwd to
-the worktree; rejects absolute/outside paths, `..` escapes, shell metacharacters,
-and Git options that redirect repository state (`-C`, `--git-dir`,
-`--work-tree`). Its small allowlist is `git`, `pnpm`, `npm`, `node`, `npx`,
-`grep`, `find`, and `ls`. Permitted Git operations are status/diff/add/commit and
-branch/HEAD inspection for the generated branch only.
+Children receive no process-execution tool. The parent runs tests, linters,
+formatters, builds, Git inspection, commits, and integration after it receives
+the child worktree path. This deliberately avoids claiming that a restricted
+process allowlist is a sandbox.
 
-This is necessary containment, not feature expansion: an unrestricted `bash`
-would let a child modify the primary checkout despite having a worktree `cwd`.
-The policy is not an OS, network, credential, database, or process sandbox.
-
-Children never receive `handoff`, `end`, `ask_user`, `delegate`, `bash`, any
-parent custom tool, or arbitrary path access. A missing/invalid report, provider
-error, child session-cap breach, or abort produces a host-generated terminal
-result. There are no child retries or model fallbacks in this version.
+Children never receive `handoff`, `end`, `ask_user`, `delegate`, `run`, `bash`,
+any parent custom tool, or arbitrary path access. A missing/invalid report,
+provider error, child session-cap breach, or abort produces a host-generated
+terminal result. There are no child retries or model fallbacks in this version.
 
 ## 7. Persistence, accounting, cancellation, and resume
 
@@ -317,9 +311,10 @@ sessions; no API key or live provider is required.
 3. Three tasks with `max_parallel: 2` overlap but never exceed two active
    sessions; results retain input order despite completion order.
 4. Every child gets a unique worktree/branch at the pinned clean base and cannot
-   access FSM tools, unrestricted shell, or the primary checkout.
-5. Completed results require a clean committed changed head; `no_changes` requires
-   the base head; dirty/incoherent results fail and remain preserved.
+   access FSM tools, process execution, or the primary checkout.
+5. Completed results require verified uncommitted changes; `no_changes` requires
+   a clean base worktree; unexpected committed/incoherent results fail and remain
+   preserved.
 6. Child start/terminal records contain real session/Git metadata; usage appears
    once in run/model/subagent rollups and not parent lifecycle usage or `perRole`.
 7. One child failure leaves sibling tasks running and returns all terminal results.

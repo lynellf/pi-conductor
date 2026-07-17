@@ -260,7 +260,9 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     const verified = await verifyWorktree(worktreePath, branch);
     headCommit = verified.headCommit;
     const verifiedStatus = determineChildStatus(verified.headCommit, baseCommit, verified.isClean);
-    if (
+    if (status === "completed" && verifiedStatus === "no_changes") {
+      status = "no_changes";
+    } else if (
       (status === "completed" && verifiedStatus !== "completed") ||
       (status === "no_changes" && verifiedStatus !== "no_changes")
     ) {
