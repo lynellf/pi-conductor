@@ -29,6 +29,9 @@
 import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
 
 import type { Role } from "../core/types.js";
+import type { HunkLine, TouchedFile } from "../persistence/file-mutation.js";
+
+export type { HunkLine, TouchedFile } from "../persistence/file-mutation.js";
 
 /**
  * Display event kind forwarded from a role session.
@@ -42,92 +45,6 @@ import type { Role } from "../core/types.js";
  * but is no longer emitted by the host (Phase 1).
  */
 export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_result";
-
-/**
- * A single line in a structured diff hunk (issue #13).
- *
- * `lineNumber` is the position of the line in the appropriate file:
- *   - `add` lines → line number in the **new** file.
- *   - `del` lines → line number in the **old** file.
- *   - `context` lines → line number in the **new** file.
- *
- * `content` carries the rendered line text with a marker prefix
- * (`+` for `add`, `-` for `del`, none for `context`) so consumers
- * can render unified-diff-style output without re-classifying.
- *
- * **Edit-only line numbers:** for `edit` tool hunks (no surrounding
- * context), `add` line numbers count from 1 (synthetic new-file
- * position) and `del` line numbers count from 1 (synthetic old-file
- * position). The issue body explicitly accepts "hunks may be
- * edit-only without full-file context" — the alternative is to read
- * the file at `tool_execution_start`, which is deferred.
- *
- * For `write` tool hunks (full file read), `lineNumber` reflects
- * the real file positions because we diff against the captured
- * pre-write content.
- */
-export interface HunkLine {
-  readonly lineNumber: number;
-  /** Line content with `+`/`-` prefix for `add`/`del` lines. */
-  readonly content: string;
-  readonly kind: "add" | "del" | "context";
-}
-
-/**
- * A single file mutation observed from a tool invocation.
- *
- * `additions` and `deletions` are **char-count** metrics derived from
- * the tool's args — we don't have pre-write file content for `write`,
- * so `write` always reports `deletions: 0`; `edit` sums `oldText` /
- * `newText` length across its `edits[]` array. Char-count is the only
- * metric derivable from args alone; a future iteration could swap in
- * line-counts if RunDeck or other consumers require precision.
- *
- * `hunks` is a structured line-level diff, populated only when the
- * host can compute one (issue #13):
- *   - `edit` — pure derivation from `args.edits[]` (changed lines
- *     only; sequential line numbers).
- *   - `write` — async I/O against the previous file content,
- *     captured at `tool_execution_start`. New files (no prior content)
- *     get all-`add` hunks starting from line 1.
- *   - Absent for read-only, machine, and `bash` tools; absent when
- *     args are malformed or the disk read fails (graceful degradation:
- *     char-counts still flow, `hunks` is absent).
- *
- * Optional and additive — consumers that don't read `hunks` are
- * unaffected.
- *
- * @see extractFileMutations — populates `additions` / `deletions`.
- * @see extractFileHunks — populates `hunks` for `edit`.
- */
-export interface TouchedFile {
-  readonly path: string;
-  /** Char-count of new content introduced by the tool call. */
-  readonly additions?: number;
-  /** Char-count of content removed by the tool call. */
-  readonly deletions?: number;
-  /**
-   * Structured diff hunks for this file (issue #13).
-   *
-   * Populated only on successful tool invocations when hunks can be
-   * computed:
-   *   - `edit` — pure derivation from `args.edits[]` (changed lines
-   *     only; sequential line numbers).
-   *   - `write` — async I/O against the previous file content,
-   *     captured at `tool_execution_start`. New files (no prior
-   *     content) get all-`add` hunks starting from line 1.
-   *
-   * Absent for read-only tools (`read`, `grep`, `find`, `ls`),
-   * machine tools (`handoff`, `end`, `ask_user`), `bash` (out of
-   * scope for v1), and any case where the args are malformed or
-   * the disk read fails (graceful degradation: char-counts still
-   * flow, `hunks` is absent).
-   *
-   * Optional and additive — consumers that don't read `hunks` are
-   * unaffected.
-   */
-  readonly hunks?: ReadonlyArray<HunkLine>;
-}
 
 /** Single display event from a role session. */
 export interface DisplayEvent {

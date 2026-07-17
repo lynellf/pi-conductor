@@ -381,10 +381,12 @@ export class ProductionHost implements Host {
     // 8. Track per-session state (Task 17 / 7A.4). The host's
     //    `captureUsage` and `sessionTerminalReason` read from
     //    this; `dispose` cleans up the maps.
+    const sessionId = session.sessionId;
+    const sessionFile = session.sessionFile ?? `${this.sessionDir}/${sessionId}.jsonl`;
     const cap = roleConfig?.max_session_cost_usd ?? null;
     const state = new SessionState({ cap, model: logical });
-    this.sessionStates.set(session.sessionId, state);
-    this.agentsBySessionId.set(session.sessionId, session);
+    this.sessionStates.set(sessionId, state);
+    this.agentsBySessionId.set(sessionId, session);
     rejector.bindState(state);
 
     // 9. Subscribe the session to the shared event handler
@@ -394,6 +396,12 @@ export class ProductionHost implements Host {
       session,
       state,
       role,
+      fileMutation: {
+        runId: this.runId,
+        sessionId,
+        sessionFile,
+        persist: (record) => this.persistRecord(record),
+      },
       ...(this.displaySink !== undefined && { onDisplay: this.displaySink }),
     });
 
@@ -406,11 +414,10 @@ export class ProductionHost implements Host {
     //     `getActiveToolNames` (a method). These are NOT part of
     //     the `RoleSession` interface — the loop doesn't read them
     //     — but the wiring tests do (via a typed cast).
-    const sessionId = session.sessionId;
     const wrapper = {
       role,
       sessionId,
-      sessionFile: session.sessionFile ?? `${this.sessionDir}/${sessionId}.jsonl`,
+      sessionFile,
       model: logical,
       effort,
       retries,

@@ -17,6 +17,15 @@ or TUI bridges).
 The durable JSONL log (one file per run) remains the system of record;
 the emitter is an in-process convenience layer that avoids polling.
 
+### File-mutation telemetry (issue #22)
+
+Successful `write` and `edit` calls append a `file_mutation` record through
+`Host.persistRecord`. Subscribers receive it after the JSONL append, just as
+with every other persisted record. The record includes `run_id`, `ts`, `role`,
+`session_id`, `session_file`, `tool_name`, and `files`; each file carries its
+path, char-count additions/deletions, and optional structured hunks. Failed
+calls and calls without valid file metadata do not emit this record.
+
 ## §2 — Module-level design
 
 - **Process-global registry.** One `Set<Listener>` for the entire pi

@@ -40,13 +40,13 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
+import type { FileMutationRecord, HunkLine, TouchedFile } from "../persistence/file-mutation.js";
 import type { SessionState } from "./cost.js";
 import {
   type DisplaySink,
   extractAssistantText,
   extractFileHunks,
   extractFileMutations,
-  type HunkLine,
 } from "./display-sink.js";
 import { loadWriteHunksForArgs } from "./hunk-diff.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
@@ -72,12 +72,17 @@ import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.j
  * Issue #13 (open-issues-round-3): `files[].hunks` is populated for
  * `edit` (synchronous) and `write` (synchronous via pre-read at
  * `tool_execution_start`) when structured diff hunks can be computed.
+ *
+ * **File-mutation telemetry (`fileMutation`):** successful `write` and `edit`
+ * calls with structured file metadata append a durable record through the
+ * host-owned callback (issue #22).
  */
 export function attachSessionEventHandler(args: {
   session: AgentSession;
   state: SessionState;
   role: Role;
   onDisplay?: DisplaySink;
+  fileMutation?: FileMutationTelemetry;
 }): void {
   // Per-session buffer: toolCallId → { summary, args, writeHunks }.
   // The args are needed at `tool_execution_end` to populate
@@ -103,8 +108,24 @@ export function attachSessionEventHandler(args: {
   >();
 
   args.session.subscribe((event) =>
-    onSessionEvent(args.session, args.state, args.role, args.onDisplay, event, pending),
+    onSessionEvent(
+      args.session,
+      args.state,
+      args.role,
+      args.onDisplay,
+      args.fileMutation,
+      event,
+      pending,
+    ),
   );
+}
+
+/** Host-owned persistence context for file-mutation telemetry (issue #22). */
+export interface FileMutationTelemetry {
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly sessionFile: string;
+  persist(record: FileMutationRecord): void;
 }
 
 /**
@@ -148,10 +169,9 @@ export function createCaptureRejector(): CaptureRejector {
 // ─── Internals ──────────────────────────────────────────────────────
 
 /**
- * Per-session event handler. Pure side-effect: writes to the
- * `SessionState` and (for cap detection) calls
- * `session.abort()`. The loop owns the rest (record shape,
- * `reduceLifecycle`, persistence).
+ * Per-session event handler. Writes to `SessionState`, emits display events,
+ * persists file telemetry through the host callback, and calls `session.abort()`
+ * for cap detection. The loop owns machine reduction and lifecycle persistence.
  *
  * **Issue #13 (`hunks`):** `tool_execution_end` emits `files[].hunks`
  * for `edit` (synchronous) and `write` (synchronous via pre-read).
@@ -161,6 +181,7 @@ function onSessionEvent(
   state: SessionState,
   role: Role,
   onDisplay: DisplaySink | undefined,
+  fileMutation: FileMutationTelemetry | undefined,
   event: AgentSessionEvent,
   pending: Map<
     string,
@@ -214,13 +235,15 @@ function onSessionEvent(
 
     const mutations = extractFileMutations(event.toolName, buffered?.args);
 
-    // Helper: emit a `tool_result` display event with the given hunks
-    // attached to the existing mutations (or omit hunks if none).
+    // Build a shared touched-file value for both the display projection and
+    // durable telemetry, preventing analytics and the interactive view from
+    // diverging (issue #22).
     const emit = (hunks?: ReadonlyArray<HunkLine>): void => {
       const files =
         mutations !== undefined && mutations.length > 0
           ? mutations.map((f) => (hunks && hunks.length > 0 ? { ...f, hunks } : f))
           : undefined;
+      persistFileMutation(fileMutation, role, event.toolName, files);
       onDisplay?.({
         role,
         kind: "tool_result",
@@ -312,4 +335,28 @@ function onSessionEvent(
       void session.abort();
     }
   }
+}
+
+/** Persist telemetry only for successful `write` / `edit` events with known files. */
+function persistFileMutation(
+  telemetry: FileMutationTelemetry | undefined,
+  role: Role,
+  toolName: string,
+  files: ReadonlyArray<TouchedFile> | undefined,
+): void {
+  if (telemetry === undefined || files === undefined || !isFileMutationTool(toolName)) return;
+  telemetry.persist({
+    type: "file_mutation",
+    run_id: telemetry.runId,
+    role,
+    session_id: telemetry.sessionId,
+    session_file: telemetry.sessionFile,
+    tool_name: toolName,
+    files,
+    ts: Date.now(),
+  });
+}
+
+function isFileMutationTool(toolName: string): toolName is FileMutationRecord["tool_name"] {
+  return toolName === "write" || toolName === "edit";
 }

@@ -272,23 +272,35 @@ export class StubHost implements Host {
 
     this.stubSessionCounter += 1;
     const stubId = `stub-session-${this.stubSessionCounter}`;
+    const sessionId = session.sessionId;
+    const sessionFile = session.sessionFile ?? `/tmp/${stubId}.jsonl`;
 
     // ── Task 17: per-session state. The host accumulates usage
     // here; `captureUsage` and `sessionTerminalReason` read from it.
     const state = new SessionState({ cap, model: logicalModel });
-    this.sessionStates.set(session.sessionId, state);
-    this.agentsBySessionId.set(session.sessionId, session);
+    this.sessionStates.set(sessionId, state);
+    this.agentsBySessionId.set(sessionId, session);
     rejector.bindState(state);
 
     // ── Task 17: subscribe to the session's events. The shared
     // handler (session-event-handler.ts) accumulates usage,
     // detects model errors, and enforces the per-session cap.
-    attachSessionEventHandler({ session, state, role });
+    attachSessionEventHandler({
+      session,
+      state,
+      role,
+      fileMutation: {
+        runId: this.runId,
+        sessionId,
+        sessionFile,
+        persist: (record) => this.persistRecord(record),
+      },
+    });
 
     return {
       role,
-      sessionId: session.sessionId,
-      sessionFile: session.sessionFile ?? `/tmp/${stubId}.jsonl`,
+      sessionId,
+      sessionFile,
       model: logicalModel,
       effort,
       retries,
@@ -300,8 +312,8 @@ export class StubHost implements Host {
       prompt: (text) => session.prompt(text),
       dispose: async () => {
         await session.dispose();
-        this.sessionStates.delete(session.sessionId);
-        this.agentsBySessionId.delete(session.sessionId);
+        this.sessionStates.delete(sessionId);
+        this.agentsBySessionId.delete(sessionId);
       },
     };
   }
