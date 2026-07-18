@@ -53,13 +53,21 @@ describe("extension shell — Task 7B.1: registration", () => {
     expect(ext.flags).toBeInstanceOf(Map);
   });
 
-  it("registers the four commands with stable names", async () => {
+  it("registers all seven commands with stable names", async () => {
     const ext = await loadExtension("<test>", cwd);
     const names = Array.from(ext.commands.keys()).sort();
     // The plan's 7B.1 acceptance: `/conduct`,
     // `/conduct:resume`, `/conduct:list`, `/conduct:abort`
     // are all registered.
-    expect(names).toEqual(["conduct", "conduct:abort", "conduct:list", "conduct:resume"]);
+    expect(names).toEqual([
+      "conduct",
+      "conduct:abort",
+      "conduct:copy",
+      "conduct:followup",
+      "conduct:list",
+      "conduct:resume",
+      "conduct:steer",
+    ]);
   });
 
   it("registers the --conduct-manifest flag with type=string and no pinned default", async () => {
@@ -87,7 +95,15 @@ describe("extension shell — Task 7B.1: registration", () => {
 
   it("attaches a non-empty description to each command", async () => {
     const ext = await loadExtension("<test>", cwd);
-    for (const name of ["conduct", "conduct:resume", "conduct:list", "conduct:abort"]) {
+    for (const name of [
+      "conduct",
+      "conduct:resume",
+      "conduct:list",
+      "conduct:abort",
+      "conduct:steer",
+      "conduct:followup",
+      "conduct:copy",
+    ]) {
       const cmd = ext.commands.get(name);
       expect(cmd?.description).toBeDefined();
       expect(cmd?.description?.length ?? 0).toBeGreaterThan(0);

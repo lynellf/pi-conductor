@@ -64,6 +64,7 @@ import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
+import { createRoleSessionAdapter } from "./role-session.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
@@ -301,25 +302,21 @@ export class StubHost implements Host {
       },
     });
 
-    return {
+    return createRoleSessionAdapter({
       role,
+      session,
+      seam,
       sessionId,
       sessionFile,
       model: logicalModel,
       effort,
       retries,
       retryDelayMs,
-      readCaptureBuffer: () => seam.read(),
-      resetCaptureBuffer: () => seam.reset(),
-      takeHandoffValidationFailures: () => seam.takeHandoffValidationFailures(),
-      subscribe: (listener) => session.subscribe(listener),
-      prompt: (text) => session.prompt(text),
-      dispose: async () => {
-        await session.dispose();
+      onDispose: () => {
         this.sessionStates.delete(sessionId);
         this.agentsBySessionId.delete(sessionId);
       },
-    };
+    });
   }
 
   captureUsage(session: RoleSession): UsageRecord {

@@ -33,13 +33,16 @@ pi install npm:pi-conductor
 pi install git:github.com/lynellf/pi-conductor
 ```
 
-After install, four slash commands are available inside any pi session:
+After install, seven slash commands are available inside any pi session:
 
 ```text
 /conduct <goal>          Start a run for <goal> using .pi/conductor.yaml
 /conduct:resume <run_id> Resume a previously-started run by run_id
 /conduct:list            List known runs in the conductor log
 /conduct:abort           Abort the active run
+/conduct:steer <message> Guide the active role before its next model call
+/conduct:followup <message> Queue guidance for the next conductor prompt boundary
+/conduct:copy            Copy the latest completed role response
 ```
 
 Plus a flag:
@@ -157,6 +160,10 @@ the system/default model path) for the current worker. The run reaches a
 terminal state and notifies with the run_id, and `/conduct:list` shows the same
 model and effort tokens for active runs. While the run is active, `Esc` opens a
 confirmation dialog; confirming aborts the run just like `/conduct:abort`.
+Use `/conduct:steer` to redirect the addressable active role, or
+`/conduct:followup` to carry guidance across the next handoff. `/conduct:copy`
+copies the latest completed assistant response without tool summaries and remains
+available for the most recently completed run in the current pi process.
 
 ### `RoleConfig` fields
 
@@ -421,6 +428,22 @@ const handle = await startRun(".pi/conductor.yaml", {
 
 const { finalCheckpoint, exitReason } = await handle.completion();
 ```
+
+While the run is live, library consumers can use the same control state as the
+extension:
+
+```ts
+await handle.steer("Check the migration rollback path before continuing.");
+await handle.followUp("Include the final verification commands in the response.");
+
+const latest = handle.latestResponse();
+console.log(latest?.role, latest?.text);
+```
+
+`steer` targets an addressable active role or queues at a role boundary.
+`followUp` always queues for the next conductor prompt, so it follows a handoff.
+`latestResponse()` returns assistant text and readable displayed reasoning while
+excluding tool summaries. Clipboard access remains a UI concern.
 
 `Host` is the seam between the pure loop and the pi SDK. It owns session
 creation, event subscription + usage accumulation, the run-keyed log, and
