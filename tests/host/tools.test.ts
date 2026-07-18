@@ -26,7 +26,7 @@
  */
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MachineDefinition } from "../../src/core/types.js";
 import {
   createEndTool,
@@ -476,6 +476,21 @@ describe("emission tools — single-owner rule", () => {
 // ─── Idempotence of the sealed flag ───────────────────────────────────
 
 describe("SessionSeam — sealed flag semantics", () => {
+  it("notifies sealed subscribers exactly once and supports unsubscribe", () => {
+    const seam = new SessionSeam();
+    const listener = vi.fn();
+    const removed = vi.fn();
+    seam.subscribeSealed(listener);
+    const unsubscribe = seam.subscribeSealed(removed);
+    unsubscribe();
+
+    seam.seal();
+    seam.seal();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(removed).not.toHaveBeenCalled();
+  });
+
   it("seal() is idempotent (a no-op when already sealed)", () => {
     const seam = new SessionSeam();
     expect(seam.isSealed).toBe(false);

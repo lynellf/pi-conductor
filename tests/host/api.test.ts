@@ -122,6 +122,8 @@ describe("startRun with modelRegistry (T2.10)", () => {
     expect(unregistered[0]?.message).toContain("unknown:provider-a");
     // Abort immediately — the handle is valid but we don't need the run to complete.
     await handle.abort("test cleanup");
+    await handle.completion();
+    await expect(handle.followUp("too late")).rejects.toMatchObject({ code: "run_terminal" });
   });
 
   it("startRun without modelRegistry → no unregistered-provider warnings", async () => {
@@ -194,6 +196,8 @@ describe("resumeRun with modelRegistry (T2.10)", () => {
     expect(unregistered.length).toBeGreaterThan(0);
     expect(unregistered.every((w) => w.message.includes("unknown"))).toBe(true);
     await handle.abort("test cleanup");
+    await handle.completion();
+    await expect(handle.steer("too late")).rejects.toMatchObject({ code: "run_terminal" });
   });
 
   it("resumeRun without modelRegistry → no unregistered-provider warnings", async () => {

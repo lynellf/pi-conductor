@@ -75,10 +75,11 @@ import type {
   RecordLog,
   RunSeededRecord,
 } from "../persistence/log.js";
-import type { Host, RoleSession } from "./host.js";
+import type { Host } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
+import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
@@ -302,27 +303,10 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     return orchestratorConfig?.max_run_cost_usd ?? null;
   };
 
-  // The initial orchestrator session is seeded with `goal` via the
-  // runLoop's initialGoal parameter. Task 16.5 replaces this with a
-  // per-turn run-memory injection.
-  let activeSession: RoleSession | null = null;
-  let pendingAbortReason: string | null = null;
-  let abortRequested = false;
-  const abortControl = {
-    async setActiveSession(session: RoleSession | null): Promise<void> {
-      activeSession = session;
-      if (session === null) return;
-      if (!abortRequested || pendingAbortReason === null) return;
-      await host.abortSession(session, pendingAbortReason);
-    },
-    async requestAbort(reason: string): Promise<void> {
-      if (abortRequested) return;
-      abortRequested = true;
-      pendingAbortReason = reason;
-      if (activeSession === null) return;
-      await host.abortSession(activeSession, reason);
-    },
-  };
+  const runControl = new RunControl({
+    runId,
+    abortSession: (session, reason) => host.abortSession(session, reason),
+  });
 
   const completionPromise = runLoop({
     def,
@@ -331,15 +315,16 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     initialGoal: goal,
     initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
     getRunCostCap,
-    abortControl,
-  });
+    runControl,
+  }).finally(() => runControl.close());
   return new RunHandle({
     runId,
     def,
     log,
     loadedManifest,
     configOverrideContainer,
-    requestAbort: abortControl.requestAbort,
+    requestAbort: (reason) => runControl.requestAbort(reason),
+    runControl,
     completionPromise: completionPromise.then((r) => ({
       finalCheckpoint: r.finalCheckpoint,
       exitReason: r.exitReason,
