@@ -23,6 +23,7 @@ export type {
   ActiveRoleSession,
   Checkpoint,
   Effect,
+  EndRequest,
   HandoffContextRef,
   LegalTargets,
   MachineDefinition,

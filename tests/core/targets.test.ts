@@ -20,6 +20,7 @@ const ONE_WORKER: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer"]),
   max_visits: Object.freeze({ implementer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const THREE_WORKERS: MachineDefinition = Object.freeze({
@@ -27,6 +28,7 @@ const THREE_WORKERS: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["alpha", "beta", "gamma"]),
   max_visits: Object.freeze({ alpha: 1, beta: 2, gamma: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const SPEC_EXAMPLE: MachineDefinition = Object.freeze({
@@ -34,6 +36,7 @@ const SPEC_EXAMPLE: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 function ck(
@@ -46,6 +49,7 @@ function ck(
     manifest_version: def.manifest_version,
     current_role,
     visit_count: Object.freeze({ ...visit_count }),
+    end_request: null,
     active_role_session: null,
     updated_at: 0,
   };

@@ -76,6 +76,40 @@ describe("parseManifest", () => {
     expect(() => parseManifest("version: 1\n")).toThrow(ManifestParseError);
   });
 
+  it("parses and freezes end_request_roles when configured", () => {
+    const manifest = parseManifest(`
+version: 2
+end_request_roles: [reviewer, okf-curator]
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: reviewer
+    max_visits: 1
+  - name: okf-curator
+    max_visits: 1
+`);
+
+    expect(manifest.end_request_roles).toEqual(["reviewer", "okf-curator"]);
+    expect(Object.isFrozen(manifest.end_request_roles)).toBe(true);
+  });
+
+  it("preserves legacy mode when end_request_roles is omitted", () => {
+    const manifest = parseManifest(VALID_YAML);
+    expect(manifest.end_request_roles).toBeUndefined();
+  });
+
+  it("rejects a non-array end_request_roles field", () => {
+    expect(() =>
+      parseManifest(`
+version: 2
+end_request_roles: reviewer
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+`),
+    ).toThrow("end_request_roles");
+  });
+
   it("throws ManifestParseError on invalid model effort", () => {
     expect(() =>
       parseManifest(

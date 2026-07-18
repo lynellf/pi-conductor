@@ -61,13 +61,14 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 
-import {
-  endArgsSchema,
-  type HandoffArgs,
-  handoffArgsSchema,
-  validateActionableHandoff,
-} from "../seam/schema.js";
+import { endArgsSchema, type HandoffCandidate, handoffArgsSchema } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
+import {
+  formatHandoffCorrection,
+  formatHandoffDescription,
+  type HandoffContractContext,
+  validateRoleHandoff,
+} from "./handoff-contract.js";
 import type { SessionSeam } from "./seam.js";
 
 // ─── Structured details for the tool result ────────────────────────────
@@ -96,6 +97,7 @@ interface EmissionToolFactoryOptions {
   readonly schema: TSchema;
   readonly description: string;
   readonly label: string;
+  readonly handoffContext?: HandoffContractContext;
   /**
    * Optional: host-supplied predicate consulted at the start of
    * `execute`. When the predicate returns `true`, the tool returns
@@ -121,7 +123,7 @@ interface EmissionToolFactoryOptions {
 }
 
 function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
-  const { seam, toolName, schema, description, label, shouldRejectCapture } = opts;
+  const { seam, toolName, schema, description, label, handoffContext, shouldRejectCapture } = opts;
 
   return defineTool({
     name: toolName,
@@ -206,22 +208,16 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
         };
       }
 
-      // ── First machine-event call: validate at the seam ───────────
-      const validated = validateEmission([{ toolName, args: params }]);
-
-      if (validated.kind === "ok" && validated.event.type === "handoff") {
-        const failure = validateActionableHandoff(validated.event.payload as HandoffArgs);
+      // ── First handoff call: same-session actionable correction ───
+      if (toolName === "handoff" && isObject(params) && typeof params.target_role === "string") {
+        const failure = validateRoleHandoff(params as HandoffCandidate, handoffContext);
         if (failure !== null) {
           seam.rejectHandoff(failure);
-          const fields = [
-            ...failure.missingFields.map((field) => `missing '${field}'`),
-            ...failure.invalidFields.map((field) => `invalid '${field}'`),
-          ];
           return {
             content: [
               {
                 type: "text" as const,
-                text: `incomplete handoff: ${fields.join(", ")}. Add the actionable handoff envelope and try again in this session.`,
+                text: formatHandoffCorrection(failure, handoffContext),
               },
             ],
             details: {
@@ -234,6 +230,9 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
           };
         }
       }
+
+      // ── First machine-event call: validate at the seam ───────────
+      const validated = validateEmission([{ toolName, args: params }]);
 
       // Always push the call's args to the buffer — both valid and
       // schema-invalid captures are recorded. The loop's
@@ -301,16 +300,21 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
 export function createHandoffTool(
   seam: SessionSeam,
   shouldRejectCapture?: () => boolean,
+  context?: HandoffContractContext,
 ): ToolDefinition {
   return createEmissionTool({
     seam,
     toolName: "handoff",
     schema: handoffArgsSchema,
     label: "Handoff",
-    description:
-      "Terminate this role's session and route to another declared role. Workers may only hand off back to the orchestrator; the orchestrator may hand off to any declared worker (subject to visit caps).",
+    description: formatHandoffDescription(context),
+    ...(context !== undefined && { handoffContext: context }),
     ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
   });
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

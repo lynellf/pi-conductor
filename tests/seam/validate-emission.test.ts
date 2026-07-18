@@ -26,14 +26,33 @@ import { validateEmission } from "../../src/seam/validate-emission.js";
 // ─── handoffArgsSchema shape (§5.1 + §3 rule 2) ─────────────────────────
 
 describe("handoffArgsSchema (TypeBox)", () => {
-  it("accepts a well-formed handoff args object (target_role only)", () => {
-    expect(Value.Check(handoffArgsSchema, { target_role: "implementer" })).toBe(true);
+  it("requires the full actionable envelope in the provider-visible schema", () => {
+    expect(Value.Check(handoffArgsSchema, { target_role: "implementer" })).toBe(false);
+    expect(handoffArgsSchema.required).toEqual([
+      "target_role",
+      "status",
+      "objective",
+      "summary",
+      "requested_action",
+    ]);
+  });
+
+  it("accepts a well-formed actionable handoff", () => {
+    expect(Value.Check(handoffArgsSchema, actionableHandoff("implementer"))).toBe(true);
+  });
+
+  it("exposes status as the three literal values", () => {
+    expect(handoffArgsSchema.properties.status.anyOf).toEqual([
+      { const: "ready", type: "string" },
+      { const: "blocked", type: "string" },
+      { const: "complete", type: "string" },
+    ]);
   });
 
   it("accepts a handoff with optional reason and suggests_next", () => {
     expect(
       Value.Check(handoffArgsSchema, {
-        target_role: "reviewer",
+        ...actionableHandoff("reviewer"),
         reason: "ready for review",
         suggests_next: "reviewer",
       }),
@@ -43,7 +62,7 @@ describe("handoffArgsSchema (TypeBox)", () => {
   it("accepts role-defined additional fields (§5.1: 'plus role-defined fields')", () => {
     expect(
       Value.Check(handoffArgsSchema, {
-        target_role: "implementer",
+        ...actionableHandoff("implementer"),
         summary: "implemented X",
         artifacts: ["foo.ts", "bar.ts"],
       }),
@@ -63,11 +82,22 @@ describe("handoffArgsSchema (TypeBox)", () => {
   });
 
   it("rejects a handoff with a non-string optional reason", () => {
-    expect(Value.Check(handoffArgsSchema, { target_role: "x", reason: 7 })).toBe(false);
+    expect(Value.Check(handoffArgsSchema, { ...actionableHandoff("x"), reason: 7 })).toBe(false);
   });
 
   it("rejects a handoff with a non-string optional suggests_next", () => {
-    expect(Value.Check(handoffArgsSchema, { target_role: "x", suggests_next: true })).toBe(false);
+    expect(Value.Check(handoffArgsSchema, { ...actionableHandoff("x"), suggests_next: true })).toBe(
+      false,
+    );
+  });
+
+  it("accepts an optional boolean end request and rejects non-booleans", () => {
+    expect(
+      Value.Check(handoffArgsSchema, { ...actionableHandoff("orchestrator"), request_end: true }),
+    ).toBe(true);
+    expect(
+      Value.Check(handoffArgsSchema, { ...actionableHandoff("orchestrator"), request_end: "yes" }),
+    ).toBe(false);
   });
 
   it("rejects non-object args (string)", () => {
@@ -108,7 +138,7 @@ describe("endArgsSchema (TypeBox)", () => {
 describe("validateEmission: ok path", () => {
   it("accepts a single handoff emission and returns a MachineEvent", () => {
     const captures: EmissionCapture[] = [
-      { toolName: "handoff", args: { target_role: "implementer" } },
+      { toolName: "handoff", args: actionableHandoff("implementer") },
     ];
     const result = validateEmission(captures);
     expect(result.kind).toBe("ok");
@@ -118,7 +148,8 @@ describe("validateEmission: ok path", () => {
     expect(result.event.target_role).toBe("implementer");
     // The full validated args flow through as payload (Phase 4 uses it
     // to seed the next session; the reducer treats payload as unknown).
-    expect(result.event.payload).toEqual({ target_role: "implementer" });
+    expect(result.event.payload).toEqual(actionableHandoff("implementer"));
+    expect(result.event.request_end).toBe(false);
   });
 
   it("accepts a single end emission and returns a MachineEvent", () => {
@@ -137,7 +168,7 @@ describe("validateEmission: ok path", () => {
     const captures: EmissionCapture[] = [
       {
         toolName: "handoff",
-        args: { target_role: "reviewer", summary: "implemented X", artifacts: ["a.ts"] },
+        args: { ...actionableHandoff("reviewer"), summary: "implemented X", artifacts: ["a.ts"] },
       },
     ];
     const result = validateEmission(captures);
@@ -147,6 +178,16 @@ describe("validateEmission: ok path", () => {
     expect(result.event.payload).toMatchObject({ summary: "implemented X", artifacts: ["a.ts"] });
   });
 });
+
+function actionableHandoff(targetRole: string) {
+  return {
+    target_role: targetRole,
+    status: "ready" as const,
+    objective: "Perform the assigned work.",
+    summary: "Prepared the next role's context.",
+    requested_action: "Complete the assigned work and report the result.",
+  };
+}
 
 // ─── validateEmission: breach reasons (§11.3) ──────────────────────────
 

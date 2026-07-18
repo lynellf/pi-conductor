@@ -62,6 +62,7 @@ export type { DisplayEvent, DisplayEventKind, DisplaySink } from "./display-sink
 // ─── bounded predecessor context (issue #14) ────────────────────────
 export type { HandoffContextToolDetails } from "./handoff-context-tool.js";
 export { createHandoffContextTool, handoffContextArgsSchema } from "./handoff-context-tool.js";
+export type { HandoffContractContext } from "./handoff-contract.js";
 export type { EmissionToolDetails } from "./tools.js";
 export { createEndTool, createHandoffTool } from "./tools.js";
 

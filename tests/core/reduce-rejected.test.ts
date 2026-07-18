@@ -27,6 +27,7 @@ const DEF: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TIGHT: MachineDefinition = Object.freeze({
@@ -34,6 +35,7 @@ const TIGHT: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["alpha", "beta"]),
   max_visits: Object.freeze({ alpha: 1, beta: 2 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -48,6 +50,7 @@ function ck(
     manifest_version: def.manifest_version,
     current_role,
     visit_count: Object.freeze({ ...visit_count }),
+    end_request: null,
     active_role_session: null,
     updated_at: 0,
   };
@@ -58,11 +61,16 @@ function ck(
 describe("reduce: from orchestrator — illegal_event rejections (§7.3)", () => {
   it("rejects handoff to an undeclared role (not in def.workers)", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     expect(result.kind).toBe("rejected");
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("illegal_event");
@@ -71,11 +79,16 @@ describe("reduce: from orchestrator — illegal_event rejections (§7.3)", () =>
 
   it("rejects handoff to a worker when at the visit cap (guard_failed, not illegal_event)", () => {
     const cp = ck(TIGHT, "orchestrator", { alpha: 1 });
-    const result = reduce(cp, { type: "handoff", target_role: "alpha", payload: {} }, TIGHT, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "alpha", payload: {} },
+      TIGHT,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     expect(result.kind).toBe("rejected");
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("guard_failed");
@@ -88,34 +101,50 @@ describe("reduce: from orchestrator — illegal_event rejections (§7.3)", () =>
       orchestrator: "orchestrator",
       workers: Object.freeze(["ghost"]),
       max_visits: Object.freeze({ ghost: 0 }),
+      end_request_roles: null,
     }) as MachineDefinition;
     const cp = ck(zeroCap, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, zeroCap, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      zeroCap,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("guard_failed");
   });
 
   it("accepts handoff to a worker at exactly cap-1 visits", () => {
     const cp = ck(TIGHT, "orchestrator", { beta: 1 }); // beta max=2
-    const result = reduce(cp, { type: "handoff", target_role: "beta", payload: {} }, TIGHT, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "beta", payload: {} },
+      TIGHT,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     expect(result.kind).toBe("accepted");
   });
 
   it("rejects the next handoff to a worker at exactly its cap", () => {
     const cp = ck(TIGHT, "orchestrator", { beta: 2 }); // beta max=2
-    const result = reduce(cp, { type: "handoff", target_role: "beta", payload: {} }, TIGHT, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "beta", payload: {} },
+      TIGHT,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("guard_failed");
   });
@@ -126,11 +155,16 @@ describe("reduce: from orchestrator — illegal_event rejections (§7.3)", () =>
 describe("reduce: from worker — illegal_event rejections (§7.3)", () => {
   it("rejects worker → worker handoff (only the orchestrator is a legal target)", () => {
     const cp = ck(DEF, "implementer");
-    const result = reduce(cp, { type: "handoff", target_role: "reviewer", payload: {} }, DEF, {
-      role: "implementer",
-      sessionFile: "/tmp/impl.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "reviewer", payload: {} },
+      DEF,
+      {
+        role: "implementer",
+        sessionFile: "/tmp/impl.jsonl",
+        ts: TS,
+      },
+    );
     expect(result.kind).toBe("rejected");
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("illegal_event");
@@ -139,7 +173,7 @@ describe("reduce: from worker — illegal_event rejections (§7.3)", () => {
 
   it("rejects worker → end (only the orchestrator may end)", () => {
     const cp = ck(DEF, "implementer");
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, {
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
       role: "implementer",
       sessionFile: "/tmp/impl.jsonl",
       ts: TS,
@@ -153,11 +187,16 @@ describe("reduce: from worker — illegal_event rejections (§7.3)", () => {
 
   it("rejects worker → undeclared role handoff", () => {
     const cp = ck(DEF, "reviewer");
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
-      role: "reviewer",
-      sessionFile: "/tmp/rev.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      DEF,
+      {
+        role: "reviewer",
+        sessionFile: "/tmp/rev.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("illegal_event");
   });
@@ -171,11 +210,16 @@ describe("reduce: from done — every event is illegal_event (§7.3)", () => {
     // BEFORE dispatch. From done, meta.role must be 'done' for the call
     // to enter the done-branch — which is what we test here.
     const cp = ck(DEF, "done");
-    const result = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "done",
-      sessionFile: "/tmp/done.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "done",
+        sessionFile: "/tmp/done.jsonl",
+        ts: TS,
+      },
+    );
     expect(result.kind).toBe("rejected");
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.reason).toBe("illegal_event");
@@ -184,7 +228,7 @@ describe("reduce: from done — every event is illegal_event (§7.3)", () => {
 
   it("rejects end from done", () => {
     const cp = ck(DEF, "done");
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, {
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
       role: "done",
       sessionFile: "/tmp/done.jsonl",
       ts: TS,
@@ -201,40 +245,55 @@ describe("reduce: from done — every event is illegal_event (§7.3)", () => {
 describe("reduce: legal_targets on rejected records is cap-aware (§11.3)", () => {
   it("from orchestrator with all workers under cap: legal_targets lists every worker + end:true", () => {
     const cp = ck(TIGHT, "orchestrator", { alpha: 0, beta: 1 });
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, TIGHT, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      TIGHT,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.legal_targets).toEqual({ handoff: ["alpha", "beta"], end: true });
   });
 
   it("from orchestrator with one worker capped: legal_targets omits the capped worker", () => {
     const cp = ck(TIGHT, "orchestrator", { alpha: 1 }); // alpha max=1, capped
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, TIGHT, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      TIGHT,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.legal_targets).toEqual({ handoff: ["beta"], end: true });
   });
 
   it("from orchestrator with all workers capped: legal_targets = {handoff:[], end:true}", () => {
     const cp = ck(TIGHT, "orchestrator", { alpha: 1, beta: 2 });
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, TIGHT, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      TIGHT,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.legal_targets).toEqual({ handoff: [], end: true });
   });
 
   it("from a worker: legal_targets = {handoff:[orchestrator], end:false}", () => {
     const cp = ck(DEF, "implementer");
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, {
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
       role: "implementer",
       sessionFile: "/tmp/impl.jsonl",
       ts: TS,
@@ -245,11 +304,16 @@ describe("reduce: legal_targets on rejected records is cap-aware (§11.3)", () =
 
   it("from done: legal_targets = {handoff:[], end:false} (terminal)", () => {
     const cp = ck(DEF, "done");
-    const result = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "done",
-      sessionFile: "/tmp/done.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "done",
+        sessionFile: "/tmp/done.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.legal_targets).toEqual({ handoff: [], end: false });
   });
@@ -258,7 +322,7 @@ describe("reduce: legal_targets on rejected records is cap-aware (§11.3)", () =
     const cp = ck(TIGHT, "orchestrator", { alpha: 1, beta: 1 });
     const result = reduce(
       cp,
-      { type: "handoff", target_role: "alpha", payload: {} }, // alpha capped
+      { type: "handoff", request_end: false, target_role: "alpha", payload: {} }, // alpha capped
       TIGHT,
       { role: "orchestrator", sessionFile: "/tmp/orch.jsonl", ts: TS },
     );
@@ -284,34 +348,39 @@ describe("reduce: never returns a breach reason (§11.3)", () => {
       {
         def: DEF,
         state: "orchestrator",
-        event: { type: "end", payload: {} },
+        event: { type: "end", authority: "role", payload: {} },
         meta_role: "orchestrator",
       },
       {
         def: DEF,
         state: "implementer",
-        event: { type: "end", payload: {} },
+        event: { type: "end", authority: "role", payload: {} },
         meta_role: "implementer",
       },
       {
         def: DEF,
         state: "implementer",
-        event: { type: "handoff", target_role: "reviewer", payload: {} },
+        event: { type: "handoff", request_end: false, target_role: "reviewer", payload: {} },
         meta_role: "implementer",
       },
       {
         def: DEF,
         state: "orchestrator",
-        event: { type: "handoff", target_role: "ghost", payload: {} },
+        event: { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
         meta_role: "orchestrator",
       },
       {
         def: DEF,
         state: "done",
-        event: { type: "handoff", target_role: "implementer", payload: {} },
+        event: { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
         meta_role: "done",
       },
-      { def: DEF, state: "done", event: { type: "end", payload: {} }, meta_role: "done" },
+      {
+        def: DEF,
+        state: "done",
+        event: { type: "end", authority: "role", payload: {} },
+        meta_role: "done",
+      },
     ];
     for (const c of cases) {
       const cp = ck(c.def, c.state);
@@ -334,11 +403,16 @@ describe("reduce: never returns a breach reason (§11.3)", () => {
 describe("reduce: TransitionRejected record fields (§11.3)", () => {
   it("from orchestrator handoff to ghost: record carries from/state/role/session_file/ts", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.record.type).toBe("transition_rejected");
     expect(result.record.run_id).toBe("run-1");
@@ -352,7 +426,7 @@ describe("reduce: TransitionRejected record fields (§11.3)", () => {
 
   it("from worker end: record.target_role is null", () => {
     const cp = ck(DEF, "implementer");
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, {
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
       role: "implementer",
       sessionFile: "/tmp/impl.jsonl",
       ts: TS,
@@ -368,11 +442,16 @@ describe("reduce: TransitionRejected record fields (§11.3)", () => {
 describe("reduce: rejected calls return a fresh Checkpoint snapshot (§11.1)", () => {
   it("result.checkpoint has the same current_role and visit_count as input", () => {
     const cp = ck(DEF, "orchestrator", { implementer: 2 });
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.checkpoint.current_role).toBe("orchestrator");
     expect(result.checkpoint.visit_count.implementer).toBe(2);
@@ -380,11 +459,16 @@ describe("reduce: rejected calls return a fresh Checkpoint snapshot (§11.1)", (
 
   it("result.checkpoint is a fresh object reference (snapshot immutability)", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "rejected") throw new Error("unreachable");
     expect(result.checkpoint).not.toBe(cp);
   });
@@ -392,7 +476,7 @@ describe("reduce: rejected calls return a fresh Checkpoint snapshot (§11.1)", (
   it("input checkpoint is not mutated on rejection", () => {
     const cp = ck(DEF, "orchestrator", { implementer: 1 });
     const snapshot = JSON.stringify(cp);
-    reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
+    reduce(cp, { type: "handoff", request_end: false, target_role: "ghost", payload: {} }, DEF, {
       role: "orchestrator",
       sessionFile: "/tmp/orch.jsonl",
       ts: TS,

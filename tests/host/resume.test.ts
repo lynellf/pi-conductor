@@ -44,11 +44,26 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
+    end_request_roles: null,
   }) as MachineDefinition;
 }
 
 const VALID_MANIFEST_YAML = `
 version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    system_prompt: .pi/roles/orchestrator.md
+    tools: [handoff, end]
+  - name: worker
+    max_visits: 3
+    system_prompt: .pi/roles/worker.md
+    tools: [handoff, end]
+`;
+
+const GATED_MANIFEST_YAML = `
+version: 1
+end_request_roles: [worker]
 roles:
   - name: orchestrator
     is_orchestrator: true
@@ -171,6 +186,9 @@ describe("Task 13.5 — file-backed log + resume", () => {
       to: "worker",
       event: "handoff",
       target_role: "worker",
+      request_end: false,
+      end_authority: null,
+      end_requested_by: null,
       role: "orchestrator",
       suggests_next: null,
       payload_summary: { field_names: [] },
@@ -226,6 +244,7 @@ describe("Task 13.5 — file-backed log + resume", () => {
         ...initialCheckpoint,
         current_role: "worker",
         visit_count: { worker: 1 },
+        end_request: null,
         active_role_session: {
           id: workerId,
           role: "worker",
@@ -358,6 +377,50 @@ describe("Task 13.5 — file-backed log + resume", () => {
     const recordsAfter = new FileRecordLog({ baseDir }).records(handle.runId);
     const failedAfter = recordsAfter.filter((r) => r.type === "session_failed");
     expect(failedAfter).toHaveLength(0);
+  });
+
+  it("resume preserves a pending end request and lets the orchestrator consume it", async () => {
+    await writeFile(manifestPath, GATED_MANIFEST_YAML, "utf8");
+    const def: MachineDefinition = {
+      ...makeDef(),
+      end_request_roles: ["worker"],
+    };
+    const checkpoint = {
+      ...createInitialCheckpoint(def),
+      end_request: { role: "worker", session_file: "/tmp/worker-review.jsonl" },
+    };
+    const log = new FileRecordLog({ baseDir });
+    log.append({ type: "checkpoint_snapshot", checkpoint });
+    log.append({
+      type: "run_seeded",
+      run_id: checkpoint.run_id,
+      goal: "finish after worker approval",
+      ts: 1,
+    });
+
+    const handle = await resumeRun(manifestPath, checkpoint.run_id, {
+      goal: "",
+      baseDir,
+      hostFactory: ({ runId, log: resumedLog, loadedManifest }) =>
+        new StubHost({
+          runId,
+          log: resumedLog,
+          loadedManifest,
+          steps: [{ kind: "emit_end", reason: "approved" }],
+        }),
+    });
+    const result = await handle.completion();
+
+    expect(result.exitReason).toBe("done");
+    expect(result.finalCheckpoint.end_request).toBeNull();
+    const end = new FileRecordLog({ baseDir })
+      .records(checkpoint.run_id)
+      .find(
+        (record): record is TransitionAccepted =>
+          record.type === "transition_accepted" && record.event === "end",
+      );
+    expect(end?.end_requested_by).toBe("worker");
+    expect(end?.end_authority).toBe("role");
   });
 
   it("listRuns enumerates the runs in a baseDir", async () => {

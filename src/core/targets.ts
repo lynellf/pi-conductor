@@ -19,7 +19,7 @@ import type { Checkpoint, LegalTargets, MachineDefinition, Role } from "./types.
  * The uniform transition table (§7.2) ignoring visit caps.
  *
  * - From the orchestrator: every declared worker is a legal handoff
- *   target; `end` is legal.
+ *   target; `end` is legal in legacy mode.
  * - From any worker: the orchestrator is the only legal handoff target;
  *   `end` is illegal.
  * - From `done`: nothing is legal (terminal).
@@ -29,7 +29,7 @@ export function declaredTargets(state: Role | "done", def: MachineDefinition): L
     return { handoff: Object.freeze([]), end: false };
   }
   if (state === def.orchestrator) {
-    return { handoff: Object.freeze([...def.workers]), end: true };
+    return { handoff: Object.freeze([...def.workers]), end: def.end_request_roles === null };
   }
   // Worker → orchestrator only; `end` is illegal from a worker.
   return { handoff: Object.freeze([def.orchestrator]), end: false };
@@ -44,18 +44,22 @@ export function declaredTargets(state: Role | "done", def: MachineDefinition): L
  */
 export function availableTargets(checkpoint: Checkpoint, def: MachineDefinition): LegalTargets {
   const base = declaredTargets(checkpoint.current_role, def);
+  const end =
+    checkpoint.current_role === def.orchestrator
+      ? base.end || (checkpoint.end_request !== null && checkpoint.end_request !== undefined)
+      : base.end;
 
   // The orchestrator's `done` branch and a worker's [orchestrator]-only
   // branch have no cap-relevant handoff targets, so short-circuit.
   if (base.handoff.length === 0) {
-    return base;
+    return { handoff: base.handoff, end };
   }
 
   // Only the orchestrator's handoff set contains workers (and is therefore
   // cap-relevant). A worker's only target is the orchestrator, which has
   // no cap.
   if (checkpoint.current_role !== def.orchestrator) {
-    return base;
+    return { handoff: base.handoff, end };
   }
 
   const allowed: Role[] = [];
@@ -73,5 +77,5 @@ export function availableTargets(checkpoint: Checkpoint, def: MachineDefinition)
     }
   }
 
-  return { handoff: Object.freeze(allowed), end: base.end };
+  return { handoff: Object.freeze(allowed), end };
 }
