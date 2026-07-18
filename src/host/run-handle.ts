@@ -9,6 +9,10 @@
  *    `Checkpoint`.
  *  - `abort(reason)` — request the loop to stop on the next
  *    `turn_end` / `session_ended` boundary.
+ *  - `steer(text)` / `followUp(text)` — deliver live operator guidance
+ *    through the run-owned control state.
+ *  - `latestResponse()` — retrieve the latest completed assistant text
+ *    without extension-only clipboard coupling.
  *  - `runStats()` — render the current run's state, transition
  *    history, and cost roll-up from persisted records
  *    (§11.6 / §11.8). Delegates to the pure `runStats` function
@@ -42,6 +46,7 @@ import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import type { RecordLog } from "../persistence/log.js";
 import { applyRunConfigOverride } from "./config.js";
 import type { LoadedManifest } from "./manifest.js";
+import { type RunControl, RunControlError, type RunResponse } from "./run-control.js";
 import { type RunStats, runStats, type TransitionRecord } from "./stats.js";
 
 // Re-export the public types so existing consumers
@@ -94,6 +99,7 @@ export class RunHandle {
     exitReason: "done" | "session_failed" | "aborted";
   }>;
   private readonly requestAbort: (reason: string) => Promise<void>;
+  private readonly runControl: RunControl | undefined;
   private aborted = false;
   private abortedReason: string | null = null;
   /**
@@ -112,6 +118,7 @@ export class RunHandle {
     loadedManifest: LoadedManifest;
     configOverrideContainer: ConfigOverrideContainer;
     requestAbort: (reason: string) => Promise<void>;
+    runControl?: RunControl;
     completionPromise: Promise<{
       finalCheckpoint: Checkpoint;
       exitReason: "done" | "session_failed" | "aborted";
@@ -123,6 +130,7 @@ export class RunHandle {
     this.loadedManifest = opts.loadedManifest;
     this.configOverrideContainer = opts.configOverrideContainer;
     this.requestAbort = opts.requestAbort;
+    this.runControl = opts.runControl;
     this.completionPromise = opts.completionPromise;
   }
 
@@ -148,7 +156,28 @@ export class RunHandle {
     if (this.computeExitReason() !== "running") return;
     this.aborted = true;
     this.abortedReason = reason;
-    await this.requestAbort(reason);
+    if (this.runControl !== undefined) {
+      await this.runControl.requestAbort(reason);
+    } else {
+      await this.requestAbort(reason);
+    }
+  }
+
+  /** Send operator guidance to the addressable active role or next role boundary. */
+  async steer(text: string): Promise<void> {
+    if (this.runControl === undefined) throw new RunControlError("steering_unavailable");
+    await this.runControl.steer(text);
+  }
+
+  /** Queue operator guidance for the next conductor prompt boundary. */
+  async followUp(text: string): Promise<void> {
+    if (this.runControl === undefined) throw new RunControlError("steering_unavailable");
+    await this.runControl.followUp(text);
+  }
+
+  /** Return the latest successful completed assistant response for this run. */
+  latestResponse(): RunResponse | null {
+    return this.runControl?.latestResponse() ?? null;
   }
 
   /**

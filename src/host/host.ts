@@ -139,6 +139,18 @@ export interface RoleSession {
    *  evaluate session-cap on `turn_end`). Returns an unsubscribe fn. */
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
 
+  /** Queue guidance into the live SDK turn when the host supports native steering. */
+  steer?(text: string): Promise<void>;
+
+  /** Clear native SDK guidance queues and return messages that were not consumed. */
+  clearQueue?(): { steering: string[]; followUp: string[] };
+
+  /** Whether a valid machine emission has made this session non-addressable. */
+  isSealed?(): boolean;
+
+  /** Subscribe to false-to-true machine-emission seal transitions. */
+  subscribeSealed?(listener: () => void): () => void;
+
   /** Send a prompt and await completion of the role's turn. The
    *  orchestrator or worker speaks once; the loop awaits resolution
    *  before reading the capture buffer. */

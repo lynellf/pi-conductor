@@ -38,6 +38,7 @@ import type { EmissionCapture } from "../seam/validate-emission.js";
 export class SessionSeam {
   private readonly _captures: EmissionCapture[] = [];
   private readonly _handoffValidationFailures: HandoffActionabilityFailure[] = [];
+  private readonly _sealedListeners = new Set<() => void>();
   private _sealed = false;
 
   /**
@@ -82,7 +83,15 @@ export class SessionSeam {
    * (Task 15.5) reads `isSealed` to decide whether to short-circuit.
    */
   seal(): void {
+    if (this._sealed) return;
     this._sealed = true;
+    for (const listener of this._sealedListeners) listener();
+  }
+
+  /** Subscribe to false-to-true seal transitions for live-session control handoff. */
+  subscribeSealed(listener: () => void): () => void {
+    this._sealedListeners.add(listener);
+    return () => this._sealedListeners.delete(listener);
   }
 
   /**

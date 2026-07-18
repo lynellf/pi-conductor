@@ -6,9 +6,8 @@
  * stops the active one, `/conduct:resume` reconstructs a run
  * (which becomes the new active one). The plan calls for
  * "Command state small and explicit" — this module is the
- * smallest possible state: a mutable slot holding the current
- * `RunHandle` (or `null`), with two accessors the command
- * handlers share.
+ * smallest possible state: one mutable active slot plus the most
+ * recently started handle retained for `/conduct:copy` after completion.
  *
  * ## Why module-level state, not the extension closure
  *
@@ -18,7 +17,7 @@
  * closure, every command would see the same handle — but the
  * factory also runs in invocations that never start a run (e.g.
  * `pi --help`), and the closed-over state would leak. A
- * module-level `let` is bounded to the actual runs the
+ * module-level state is bounded to the actual runs the
  * extension starts, and the factory stays side-effect free
  * (the 7B.1 acceptance).
  *
@@ -37,6 +36,8 @@
  * log; the new handle becomes the active one. The previous
  * active run (if any) was terminal by the time `/conduct:resume`
  * is called — the user is explicitly starting over.
+ * Clearing the active slot intentionally retains the most recent
+ * handle so response copying remains available after completion.
  */
 
 import type { RunHandle } from "../host/index.js";
@@ -49,6 +50,7 @@ import type { RunHandle } from "../host/index.js";
  * multi-run concurrency from a single extension invocation).
  */
 let activeRun: RunHandle | null = null;
+let mostRecentRun: RunHandle | null = null;
 
 /**
  * Read the current active run. Returns `null` when no run is
@@ -58,6 +60,11 @@ let activeRun: RunHandle | null = null;
  */
 export function getActiveRun(): RunHandle | null {
   return activeRun;
+}
+
+/** Return the most recently started or resumed run in this process. */
+export function getMostRecentRun(): RunHandle | null {
+  return mostRecentRun;
 }
 
 /**
@@ -70,4 +77,11 @@ export function getActiveRun(): RunHandle | null {
  */
 export function setActiveRun(handle: RunHandle | null): void {
   activeRun = handle;
+  if (handle !== null) mostRecentRun = handle;
+}
+
+/** Clear both tracker slots for process teardown and deterministic tests. */
+export function clearTrackedRuns(): void {
+  activeRun = null;
+  mostRecentRun = null;
 }

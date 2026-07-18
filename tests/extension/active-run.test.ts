@@ -17,12 +17,18 @@
 
 import { describe, expect, it } from "vitest";
 
-import { getActiveRun, setActiveRun } from "../../src/extension/active-run.js";
+import {
+  clearTrackedRuns,
+  getActiveRun,
+  getMostRecentRun,
+  setActiveRun,
+} from "../../src/extension/active-run.js";
 
 describe("active-run tracker", () => {
   it("returns null when no run has been set", () => {
-    setActiveRun(null);
+    clearTrackedRuns();
     expect(getActiveRun()).toBeNull();
+    expect(getMostRecentRun()).toBeNull();
   });
 
   it("returns the handle that was set", () => {
@@ -44,5 +50,18 @@ describe("active-run tracker", () => {
     expect(getActiveRun()).toBe(handle);
     setActiveRun(null);
     expect(getActiveRun()).toBeNull();
+    expect(getMostRecentRun()).toBe(handle);
+    clearTrackedRuns();
+  });
+
+  it("replaces the most recent handle when a new run becomes active", () => {
+    const first = { runId: "first" } as unknown as Parameters<typeof setActiveRun>[0];
+    const second = { runId: "second" } as unknown as Parameters<typeof setActiveRun>[0];
+    setActiveRun(first);
+    setActiveRun(null);
+    setActiveRun(second);
+
+    expect(getMostRecentRun()).toBe(second);
+    clearTrackedRuns();
   });
 });

@@ -96,6 +96,7 @@ import type {
   SessionTerminalReason,
   SpawnRoleOptions,
 } from "./host.js";
+import { formatGuidedPrompt, type RunControl } from "./run-control.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -153,6 +154,8 @@ export interface RunLoopOptions {
   readonly runCostCap?: number | null;
   /** Optional abort bridge used by `RunHandle.abort()` / Escape. */
   readonly abortControl?: RunAbortControl;
+  /** Run-owned steering, follow-up mailbox, abort, and response state. */
+  readonly runControl?: RunControl;
 }
 
 /** Result of `runLoop`. */
@@ -396,7 +399,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
 
         // ── Inner loop: prompt → validate → reduce (with retry on rejection) ──
         while (true) {
-          await opts.abortControl?.setActiveSession(session);
+          if (opts.runControl !== undefined) {
+            await opts.runControl.setActiveSession(session);
+          } else {
+            await opts.abortControl?.setActiveSession(session);
+          }
           const prePromptHostReason = host.sessionTerminalReason(session);
           if (prePromptHostReason === "user_aborted") {
             capturedUsage = host.captureUsage(session);
@@ -406,7 +413,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
 
           let promptError: unknown = null;
           try {
-            await session.prompt(nextSeed);
+            const promptSeed = formatGuidedPrompt(
+              nextSeed,
+              opts.runControl?.takePendingGuidance() ?? [],
+            );
+            await session.prompt(promptSeed);
           } catch (err) {
             promptError = err;
           }
@@ -577,6 +588,18 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             break;
           }
 
+          // Operator guidance that arrives after a valid `end` capture but
+          // before reduction wins this boundary. The end has not been
+          // committed, so discard the capture, reopen the same orchestrator
+          // session, and deliver the guidance through the next prompt.
+          if (validated.event.type === "end" && opts.runControl?.hasPendingGuidance() === true) {
+            session.resetCaptureBuffer();
+            opts.runControl.reopenActiveSession(session);
+            nextSeed = formatDeferredEndPrompt();
+            recoveringFromNoEmission = false;
+            continue;
+          }
+
           // ── Single valid emission — call reduce (§12) ──────────────
           const reduceResult = reduce(checkpoint, validated.event, def, {
             role,
@@ -707,10 +730,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         // suppress it here and route to structured logging once Task 5's
         // observability seam lands. This is a deliberate, documented
         // suppression — not a silent fallback on ambiguity.
+        opts.runControl?.releaseActiveSession(session);
         await session.dispose().catch((disposeError) => {
           void disposeError;
         });
-        await opts.abortControl?.setActiveSession(null);
+        if (opts.runControl === undefined) await opts.abortControl?.setActiveSession(null);
       }
 
       // ── Task 18: model_error → fallback to next model ──────────
@@ -838,6 +862,13 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   }
 
   return { finalCheckpoint: checkpoint, exitReason: "done" };
+}
+
+function formatDeferredEndPrompt(): string {
+  return [
+    "The previous end request was deferred because new operator guidance arrived.",
+    "Address the guidance below, then emit exactly one actionable handoff or end event.",
+  ].join("\n");
 }
 
 // ─── Internals ─────────────────────────────────────────────────────────

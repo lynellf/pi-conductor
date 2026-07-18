@@ -41,7 +41,6 @@ import { join } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
-  type AgentSessionEvent,
   createAgentSession,
   DefaultResourceLoader,
   type ExtensionUIContext,
@@ -76,6 +75,7 @@ import {
   selectModelEntry,
 } from "./production-host-resolve.js";
 import { notifyListeners } from "./record-emitter.js";
+import { createRoleSessionAdapter } from "./role-session.js";
 import { SessionSeam } from "./seam.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
@@ -410,40 +410,29 @@ export class ProductionHost implements Host {
 
     // 10. Wrap the SDK session in the loop's `RoleSession` seam.
     //     The wrapper explicitly forwards the SDK methods the loop
-    //     uses (`subscribe`, `prompt`, `dispose`) — the SDK's
+    //     uses (`subscribe`, `steer`, `clearQueue`, `prompt`, `dispose`) — the SDK's
     //     `AgentSession` has these on the prototype, so a spread
     //     would miss them. Two SDK fields are also exposed as
-    //     extra properties: `systemPrompt` (a getter) and
+    //     seal state comes from the per-session seam. Two SDK fields remain
+    //     available for test introspection: `systemPrompt` (a getter) and
     //     `getActiveToolNames` (a method). These are NOT part of
     //     the `RoleSession` interface — the loop doesn't read them
     //     — but the wiring tests do (via a typed cast).
-    const wrapper = {
+    return createRoleSessionAdapter({
       role,
+      session,
+      seam,
       sessionId,
       sessionFile,
       model: logical,
       effort,
       retries,
       retryDelayMs,
-      readCaptureBuffer: () => seam.read(),
-      resetCaptureBuffer: () => seam.reset(),
-      takeHandoffValidationFailures: () => seam.takeHandoffValidationFailures(),
-      subscribe: (listener: (event: AgentSessionEvent) => void) => session.subscribe(listener),
-      prompt: (text: string) => session.prompt(text),
-      dispose: async () => {
-        session.dispose();
+      onDispose: () => {
         this.sessionStates.delete(sessionId);
         this.agentsBySessionId.delete(sessionId);
       },
-      // Test-introspection escape hatches. The loop never reads
-      // these; the wiring tests cast through `unknown` to verify
-      // the resource loader + tools allowlist are wired correctly.
-      get systemPrompt(): string {
-        return session.systemPrompt;
-      },
-      getActiveToolNames: () => session.getActiveToolNames(),
-    };
-    return wrapper as unknown as RoleSession;
+    });
   }
 
   /**
