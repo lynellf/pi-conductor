@@ -8,7 +8,8 @@
  * non-pi consumers and for scripted runs that don't need the TUI.
  *
  * Usage:
- *   conduct <manifestPath> <goal...>
+ *   conduct [--non-interactive] [--log-dir <path>] [--json]
+ *     <manifestPath> <goal...>
  *
  * Exit codes:
  *   0 — run reached a terminal state (success or expected failure)
@@ -41,21 +42,16 @@
  *
  * ## Module size
  *
- * ~180 LOC including the auto-execution guard. The CLI is
- * intentionally small; orchestration lives in `src/host/`.
+ * Kept below the repo's ~400 LOC ceiling by placing UI and signal
+ * adapters in sibling modules. Orchestration lives in `src/host/`.
  */
 
-import { access } from "node:fs/promises";
+import { access, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import {
-  AuthStorage,
-  type ExtensionUIContext,
-  ModelRegistry,
-} from "@earendil-works/pi-coding-agent";
+import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import {
   createProductionHost,
@@ -65,6 +61,12 @@ import {
   type StartRunOptions,
   startRun,
 } from "../index.js";
+import {
+  type CliSignalSource,
+  installCliSignalHandlers,
+  processSignalSource,
+} from "./cli-signals.js";
+import { createCliUiContext, createNonInteractiveUiContext } from "./cli-ui.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -94,78 +96,106 @@ export interface CliDeps {
   readonly stdin?: Readable;
   /** Output stream for CLI `ask_user` prompts. Defaults to `process.stdout`. */
   readonly stdout?: Writable;
+  /** Diagnostic stream used by `ask_user` in JSON mode. Defaults to `process.stderr`. */
+  readonly stderr?: Writable;
+  /** Signal subscription boundary. Defaults to the current Node.js process. */
+  readonly signals?: CliSignalSource;
+}
+
+/** Versioned machine-readable terminal response emitted by `conduct --json`. */
+export interface CliJsonResult {
+  readonly schema_version: 1;
+  readonly run_id: string;
+  readonly exit_reason: "done" | "session_failed" | "aborted";
+  readonly final_role: string;
+  readonly latest_response: {
+    readonly role: string;
+    readonly text: string;
+    readonly completed_at: number;
+  } | null;
+  readonly run_stats: ReturnType<RunHandle["runStats"]>;
 }
 
 // ─── Argv parsing ──────────────────────────────────────────────────────
 
-const USAGE = "Usage: conduct <manifestPath> <goal...>";
+const USAGE =
+  "Usage: conduct [--non-interactive] [--log-dir <path>] [--json] <manifestPath> <goal...>";
 
-/**
- * Parse argv into (manifestPath, goal). Whitespace-only goal is
- * treated as missing (the spec/plan require a non-empty goal
- * string; the run loop would otherwise surface a noisier error).
- * Returns null when args are missing or malformed.
- */
-function parseArgv(argv: readonly string[]): { manifestPath: string; goal: string } | null {
-  const [manifestPath, ...goalWords] = argv;
-  if (!manifestPath) return null;
-  const goal = goalWords.join(" ").trim();
-  if (goal.length === 0) return null;
-  return { manifestPath, goal };
+interface ParsedArgs {
+  readonly manifestPath: string;
+  readonly goal: string;
+  readonly nonInteractive: boolean;
+  readonly logDir?: string;
+  readonly json: boolean;
 }
 
+type ParseArgvResult =
+  | { readonly ok: true; readonly args: ParsedArgs }
+  | { readonly ok: false; readonly message?: string };
+
 /**
- * Minimal stdin/stdout-backed UI for non-TUI `ask_user` calls.
- * Only dialog methods are interactive; the rest of the UI surface
- * is intentionally inert because the CLI has no status bar,
- * widgets, or custom-message renderer.
+ * Parse recognized options before the positional manifest + goal.
+ * Once the manifest is found, every remaining word belongs to the
+ * goal so legacy goals containing option-looking text are unchanged.
  */
-function createCliUiContext(input: Readable, output: Writable): ExtensionUIContext {
-  const ask = async (prompt: string): Promise<string> => {
-    const rl = createInterface({ input, output });
-    try {
-      return await rl.question(prompt);
-    } finally {
-      rl.close();
+function parseArgv(argv: readonly string[]): ParseArgvResult {
+  let index = 0;
+  let nonInteractive = false;
+  let logDir: string | undefined;
+  let json = false;
+
+  while (index < argv.length) {
+    const arg = argv[index];
+    if (arg === "--non-interactive") {
+      nonInteractive = true;
+      index += 1;
+      continue;
     }
-  };
+    if (arg === "--json") {
+      json = true;
+      index += 1;
+      continue;
+    }
+    if (arg === "--log-dir") {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("--")) {
+        return { ok: false, message: "pi-conductor: --log-dir requires a path" };
+      }
+      logDir = value;
+      index += 2;
+      continue;
+    }
+    break;
+  }
+
+  const manifestPath = argv[index];
+  if (!manifestPath) return { ok: false };
+  const goalWords = argv.slice(index + 1);
+  const goal = goalWords.join(" ").trim();
+  if (goal.length === 0) return { ok: false };
 
   return {
-    select: async (title: string, options: string[]) => {
-      output.write(`${title}\n`);
-      for (const [index, option] of options.entries()) {
-        output.write(`${index + 1}. ${option}\n`);
-      }
-      const answer = (await ask("> ")).trim();
-      const selectedIndex = Number.parseInt(answer, 10);
-      if (
-        Number.isInteger(selectedIndex) &&
-        selectedIndex >= 1 &&
-        selectedIndex <= options.length
-      ) {
-        return options[selectedIndex - 1];
-      }
-      return options.find((option: string) => option === answer);
+    ok: true,
+    args: {
+      manifestPath,
+      goal,
+      nonInteractive,
+      ...(logDir !== undefined && { logDir }),
+      json,
     },
-    confirm: async (title: string, message: string) => {
-      output.write(`${title}: ${message}\n`);
-      const answer = (await ask("[y/N] ")).trim().toLowerCase();
-      return answer === "y" || answer === "yes";
-    },
-    input: (title: string, placeholder?: string) =>
-      ask(`${title}${placeholder ? ` (${placeholder})` : ""}: `),
-    notify: (message: string, type = "info") => output.write(`[${type}] ${message}\n`),
-    onTerminalInput: () => () => {},
-    setStatus: () => {},
-    setWorkingMessage: () => {},
-    setWorkingVisible: () => {},
-    setWorkingIndicator: () => {},
-    setHiddenThinkingLabel: () => {},
-    setWidget: () => {},
-    setFooter: () => {},
-    setHeader: () => {},
-    setTitle: () => {},
-  } as unknown as ExtensionUIContext;
+  };
+}
+
+function writeOutput(stream: Writable, value: string): Promise<void> {
+  return new Promise((resolveWrite, rejectWrite) => {
+    stream.write(value, (error) => {
+      if (error !== null && error !== undefined) {
+        rejectWrite(error);
+        return;
+      }
+      resolveWrite();
+    });
+  });
 }
 
 // ─── runCli ────────────────────────────────────────────────────────────
@@ -189,14 +219,18 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     cwd,
     stdin = process.stdin,
     stdout = process.stdout,
+    stderr = process.stderr,
+    signals = processSignalSource,
   } = deps;
 
-  const parsed = parseArgv(argv);
-  if (parsed === null) {
+  const parseResult = parseArgv(argv);
+  if (!parseResult.ok) {
+    if (parseResult.message !== undefined) out.error(parseResult.message);
     out.error(USAGE);
     exit(2);
     return 2;
   }
+  const parsed = parseResult.args;
 
   // Verify the manifest exists on disk. `startRun` would also
   // fail, but with a less specific error; fail fast with a clear
@@ -210,13 +244,29 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     return 3;
   }
 
+  let baseDir: string | undefined;
+  if (parsed.logDir !== undefined) {
+    baseDir = resolve(cwd, parsed.logDir);
+    try {
+      await mkdir(baseDir, { recursive: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      out.error(`pi-conductor: Cannot create log directory '${parsed.logDir}': ${message}`);
+      return 1;
+    }
+  }
+
+  const uiContext = parsed.nonInteractive
+    ? createNonInteractiveUiContext()
+    : createCliUiContext(stdin, parsed.json ? stderr : stdout);
+
   // Build a host factory that constructs a `ProductionHost` from
   // the registry + cwd. The factory is called once per `startRun`
   // invocation — the host is bound to a single run; it is NOT
   // reused across resumes.
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
-      extension: { modelRegistry, cwd, uiContext: createCliUiContext(stdin, stdout) },
+      extension: { modelRegistry, cwd, uiContext },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest,
@@ -229,27 +279,62 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
       goal: parsed.goal,
       hostFactory,
       modelRegistry,
+      ...(baseDir !== undefined && { baseDir }),
     });
 
-    // Surface any load-time provider-registration warnings (advisory only).
-    // Warnings are printed to stderr before `runLoop` so the user sees
-    // the preflight result before any runtime errors. The aggregated
-    // message names every affected role + entry.
-    const unregisteredWarnings = handle.loadedManifest.warnings.filter(
-      (w) => w.code === "unregistered-provider",
-    );
-    if (unregisteredWarnings.length > 0) {
-      const entries = unregisteredWarnings.map((w) => w.message).join("; ");
-      out.error(
-        `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
-      );
-    }
+    const removeSignalHandlers = installCliSignalHandlers({
+      handle,
+      source: signals,
+      exit,
+      onAbortError: (error, signal) => {
+        const message = error instanceof Error ? error.message : String(error);
+        out.error(`pi-conductor: abort requested by ${signal} failed: ${message}`);
+      },
+    });
 
-    const { finalCheckpoint, exitReason } = await handle.completion();
-    out.log(
-      `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}`,
-    );
-    return 0;
+    try {
+      // Surface any load-time provider-registration warnings (advisory only).
+      // Warnings are printed to stderr before `runLoop` so the user sees
+      // the preflight result before any runtime errors. The aggregated
+      // message names every affected role + entry.
+      const unregisteredWarnings = handle.loadedManifest.warnings.filter(
+        (w) => w.code === "unregistered-provider",
+      );
+      if (unregisteredWarnings.length > 0) {
+        const entries = unregisteredWarnings.map((w) => w.message).join("; ");
+        out.error(
+          `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
+        );
+      }
+
+      const { finalCheckpoint, exitReason } = await handle.completion();
+      if (parsed.json) {
+        const latestResponse = handle.latestResponse();
+        const result: CliJsonResult = {
+          schema_version: 1,
+          run_id: handle.runId,
+          exit_reason: exitReason,
+          final_role: finalCheckpoint.current_role,
+          latest_response:
+            latestResponse === null
+              ? null
+              : {
+                  role: latestResponse.role,
+                  text: latestResponse.text,
+                  completed_at: latestResponse.completedAt,
+                },
+          run_stats: handle.runStats(),
+        };
+        await writeOutput(stdout, `${JSON.stringify(result)}\n`);
+      } else {
+        out.log(
+          `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}`,
+        );
+      }
+      return 0;
+    } finally {
+      removeSignalHandlers();
+    }
   } catch (err) {
     // Typed errors carry the role + missing value in their
     // message (Phase 7A.1 acceptance). Surfacing the full message
@@ -275,6 +360,7 @@ async function main(): Promise<number> {
     cwd: process.cwd(),
     stdin: process.stdin,
     stdout: process.stdout,
+    stderr: process.stderr,
   });
 }
 
