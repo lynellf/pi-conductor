@@ -53,7 +53,14 @@ import {
 
 /** A scripted emission the fake session produces on its next `prompt()`. */
 type ScriptedEmission =
-  | { kind: "emit_handoff"; target_role: string; reason?: string; suggests_next?: string }
+  | {
+      kind: "emit_handoff";
+      target_role: string;
+      reason?: string;
+      suggests_next?: string;
+      status?: "ready" | "blocked" | "complete";
+      request_end?: boolean;
+    }
   | { kind: "emit_end"; reason?: string }
   /** Emit a handoff that the reducer will reject (illegal target or
    *  guard_failed). Used to drive the §11.3 retry path. */
@@ -119,7 +126,7 @@ class FakeSession {
             toolName: "handoff",
             args: {
               target_role: next.target_role,
-              status: "ready",
+              status: next.kind === "emit_handoff" ? (next.status ?? "ready") : "ready",
               objective: `Continue the run as ${next.target_role}.`,
               summary: reason ?? `Handoff to ${next.target_role}.`,
               requested_action: `Complete the next ${next.target_role} step and report the result.`,
@@ -130,6 +137,10 @@ class FakeSession {
               ...(next.kind === "emit_handoff" &&
                 next.suggests_next !== undefined && {
                   suggests_next: next.suggests_next,
+                }),
+              ...(next.kind === "emit_handoff" &&
+                next.request_end !== undefined && {
+                  request_end: next.request_end,
                 }),
             },
           });
@@ -206,6 +217,11 @@ class FakeHost implements Host {
       current_role: "orchestrator",
       state: "orchestrator",
       last_message: null,
+      end_request:
+        args.checkpoint.end_request === null ? null : { role: args.checkpoint.end_request.role },
+      can_end:
+        args.checkpoint.current_role === args.def.orchestrator &&
+        (args.def.end_request_roles === null || args.checkpoint.end_request !== null),
       visit_history: [],
       run_cost_to_date: 0,
       run_cost_cap: args.runCostCap,
@@ -287,6 +303,7 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
+    end_request_roles: null,
   }) as MachineDefinition;
 }
 
@@ -310,6 +327,56 @@ function makeRun(
 // ─── Happy path: orchestrator → worker → orchestrator → end ───────────
 
 describe("runLoop — happy path", () => {
+  it("carries an authorized worker end request into the next orchestrator end", async () => {
+    const def: MachineDefinition = {
+      manifest_version: "1",
+      orchestrator: "orchestrator",
+      workers: ["worker"],
+      max_visits: { worker: 2 },
+      end_request_roles: ["worker"],
+    };
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    host.enqueue(
+      new FakeSession("orchestrator", "orch-1", [{ kind: "emit_handoff", target_role: "worker" }]),
+    );
+    host.enqueue(
+      new FakeSession("worker", "worker-1", [
+        {
+          kind: "emit_handoff",
+          target_role: "orchestrator",
+          status: "complete",
+          request_end: true,
+        },
+      ]),
+    );
+    host.enqueue(new FakeSession("orchestrator", "orch-2", [{ kind: "emit_end" }]));
+
+    const result = await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "finish after review",
+    });
+
+    expect(result.exitReason).toBe("done");
+    expect(result.finalCheckpoint.end_request).toBeNull();
+    const accepted = log
+      .records(initialCheckpoint.run_id)
+      .filter((record): record is TransitionAccepted => record.type === "transition_accepted");
+    expect(accepted[1]).toMatchObject({
+      event: "handoff",
+      role: "worker",
+      request_end: true,
+    });
+    expect(accepted[2]).toMatchObject({
+      event: "end",
+      end_authority: "role",
+      end_requested_by: "worker",
+    });
+  });
+
   it("orchestrator → worker → orchestrator → end", async () => {
     const log = new InMemoryRecordLog();
     const host = new FakeHost("run-1", log);
@@ -429,6 +496,8 @@ describe("runLoop — contract breach (§11.3)", () => {
     expect(result.finalCheckpoint.current_role).toBe("done");
     expect(sess.prompts).toHaveLength(2);
     expect(sess.prompts[1]).toContain("did not call `handoff` or `end`");
+    expect(sess.prompts[1]).toContain("status: ready | blocked | complete");
+    expect(sess.prompts[1]).toContain("objective, summary, requested_action");
 
     const records = log.records(initialCheckpoint.run_id);
     const accepted = records.find((r): r is TransitionAccepted => r.type === "transition_accepted");

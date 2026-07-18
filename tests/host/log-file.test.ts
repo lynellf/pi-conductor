@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { type FileMutationRecord, FileRecordLog } from "../../src/index.js";
+import { type Checkpoint, type FileMutationRecord, FileRecordLog } from "../../src/index.js";
 
 let baseDir: string | undefined;
 
@@ -17,6 +17,22 @@ afterEach(async () => {
 });
 
 describe("FileRecordLog", () => {
+  it("normalizes an older checkpoint snapshot without end_request", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const log = new FileRecordLog({ baseDir });
+    const legacyCheckpoint = {
+      run_id: "legacy-run",
+      manifest_version: "1",
+      current_role: "orchestrator",
+      visit_count: {},
+      active_role_session: null,
+      updated_at: 0,
+    } as Checkpoint;
+    log.append({ type: "checkpoint_snapshot", checkpoint: legacyCheckpoint });
+
+    expect(log.latestCheckpoint("legacy-run")?.end_request).toBeNull();
+  });
+
   it("replays file-mutation records without losing file telemetry", async () => {
     baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
     const log = new FileRecordLog({ baseDir });

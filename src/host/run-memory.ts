@@ -18,19 +18,17 @@
  * orchestrator can rely on the shape across turns:
  *
  *   - run_id, goal, current_role, state — identity
+ *   - end_request, can_end — completion authority
  *   - run_cost_to_date, remaining_budget, run_cost_cap — budget
  *   - visit_history — past sessions
  *   - per_role_cost — cost roll-up
  *   - next_candidates — workers still dispatchable
  *
  * The orchestrator is told explicitly what to do: dispatch via
- * `handoff(target_role=<worker>)` or `end` if no candidates.
+ * `handoff(target_role=<worker>)`, and call `end` only when `can_end` is true.
  */
 
 import type { RunMemory } from "../core/run-memory.js";
-
-const TERMINAL_LINE =
-  "Continue your orchestration. Call handoff with target_role, status, objective, summary, and requested_action to dispatch work, or call end if the goal is complete and next_candidates is empty.";
 
 /**
  * Format a `RunMemory` artifact as a structured prompt for the next
@@ -62,7 +60,13 @@ export function formatRunMemorySeed(memory: RunMemory): string {
   const candidatesText =
     memory.next_candidates.length > 0
       ? `Available workers (visit-capped AND run-budget-uncapped): ${memory.next_candidates.join(", ")}.`
-      : "No candidates: all workers are visit-capped or the run budget is exhausted. Call end.";
+      : "No candidates: all workers are visit-capped or the run budget is exhausted.";
+
+  const endRequestText =
+    memory.end_request === null ? "(none)" : `role: ${memory.end_request.role}`;
+  const terminalLine = memory.can_end
+    ? "Continue your orchestration. Call handoff with target_role, status, objective, summary, and requested_action to dispatch work, or call end if the goal is complete."
+    : "Continue your orchestration. Call handoff with target_role, status, objective, summary, and requested_action to dispatch work. Do not call end: this gated run has no pending authorized end request.";
 
   const lastMessageText =
     memory.last_message === null
@@ -93,6 +97,8 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     `goal: ${memory.goal}`,
     `current_role: ${memory.current_role}`,
     `state: ${memory.state}`,
+    `end_request: ${endRequestText}`,
+    `can_end: ${String(memory.can_end)}`,
     `run_cost_to_date: $${memory.run_cost_to_date.toFixed(4)} (${remaining})`,
     `run_cost_cap: ${
       memory.run_cost_cap === null ? "uncapped" : `$${memory.run_cost_cap.toFixed(4)}`
@@ -110,6 +116,6 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     "next_candidates:",
     candidatesText,
     "",
-    TERMINAL_LINE,
+    terminalLine,
   ].join("\n");
 }

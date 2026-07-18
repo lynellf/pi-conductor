@@ -79,6 +79,62 @@ describe("validateManifest: hard errors (§13)", () => {
     expect(r.errors.map((e) => e.code)).toContain("max-run-cost-on-worker");
   });
 
+  it("end-request-roles-empty: rejects an explicitly empty allowlist", () => {
+    const manifest: Manifest = {
+      version: 2,
+      end_request_roles: [],
+      roles: [
+        { name: "orch", is_orchestrator: true },
+        { name: "reviewer", max_visits: 1 },
+      ],
+    };
+    expect(validateManifest(manifest).errors.map((e) => e.code)).toContain(
+      "end-request-roles-empty",
+    );
+  });
+
+  it("end-request-role-duplicate: rejects duplicate requester roles", () => {
+    const manifest: Manifest = {
+      version: 2,
+      end_request_roles: ["reviewer", "reviewer"],
+      roles: [
+        { name: "orch", is_orchestrator: true },
+        { name: "reviewer", max_visits: 1 },
+      ],
+    };
+    expect(validateManifest(manifest).errors.map((e) => e.code)).toContain(
+      "end-request-role-duplicate",
+    );
+  });
+
+  it("end-request-role-undeclared: rejects an unknown requester role", () => {
+    const manifest: Manifest = {
+      version: 2,
+      end_request_roles: ["ghost"],
+      roles: [
+        { name: "orch", is_orchestrator: true },
+        { name: "reviewer", max_visits: 1 },
+      ],
+    };
+    expect(validateManifest(manifest).errors.map((e) => e.code)).toContain(
+      "end-request-role-undeclared",
+    );
+  });
+
+  it("end-request-role-orchestrator: rejects the finalizer as a requester", () => {
+    const manifest: Manifest = {
+      version: 2,
+      end_request_roles: ["orch"],
+      roles: [
+        { name: "orch", is_orchestrator: true },
+        { name: "reviewer", max_visits: 1 },
+      ],
+    };
+    expect(validateManifest(manifest).errors.map((e) => e.code)).toContain(
+      "end-request-role-orchestrator",
+    );
+  });
+
   it("bare-model-alias: rejects a models entry that is not provider:id", () => {
     const manifest = m([
       {
@@ -221,11 +277,31 @@ describe("toMachineDefinition", () => {
     expect(def.max_visits.reviewer).toBe(3);
   });
 
-  it("returns a frozen object (top level + workers + max_visits)", () => {
+  it("pins null end_request_roles for a legacy manifest", () => {
+    expect(toMachineDefinition(manifest).end_request_roles).toBeNull();
+  });
+
+  it("pins and freezes configured end_request_roles", () => {
+    const configured = parseManifest(`
+version: 2
+end_request_roles: [reviewer]
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: reviewer
+    max_visits: 1
+`);
+    const def = toMachineDefinition(configured);
+    expect(def.end_request_roles).toEqual(["reviewer"]);
+    expect(Object.isFrozen(def.end_request_roles)).toBe(true);
+  });
+
+  it("returns a frozen object (top level + workers + max_visits + end request roles)", () => {
     const def = toMachineDefinition(manifest);
     expect(Object.isFrozen(def)).toBe(true);
     expect(Object.isFrozen(def.workers)).toBe(true);
     expect(Object.isFrozen(def.max_visits)).toBe(true);
+    expect(def.end_request_roles).toBeNull();
   });
 
   it("throws when called on a manifest with hard errors (no silent fallback)", () => {

@@ -210,7 +210,11 @@ export class StubHost implements Host {
     // session is constructed (the state needs the
     // `sessionId`).
     const rejector = createCaptureRejector();
-    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
+    const handoffContractContext =
+      this.loadedManifestValue === undefined
+        ? undefined
+        : { role, def: this.loadedManifestValue.def };
+    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture, handoffContractContext);
     const end = createEndTool(seam, rejector.shouldRejectCapture);
     const handoffContext =
       opts.handoffContextRef === undefined

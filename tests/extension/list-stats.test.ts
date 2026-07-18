@@ -22,6 +22,7 @@ function ck(overrides: Partial<Checkpoint> = {}): Checkpoint {
     manifest_version: "1",
     current_role: "orchestrator",
     visit_count: {},
+    end_request: null,
     active_role_session: null,
     updated_at: 0,
     ...overrides,

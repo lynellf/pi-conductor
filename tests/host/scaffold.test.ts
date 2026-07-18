@@ -272,6 +272,8 @@ describe("Host interface — type-level sanity check", () => {
           current_role: "orchestrator",
           state: "orchestrator",
           last_message: null,
+          end_request: null,
+          can_end: true,
           visit_history: [],
           run_cost_to_date: 0,
           run_cost_cap: null,

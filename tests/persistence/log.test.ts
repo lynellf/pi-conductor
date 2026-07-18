@@ -23,6 +23,7 @@ function ck(current_role: Checkpoint["current_role"]): Checkpoint {
     manifest_version: "1",
     current_role,
     visit_count: Object.freeze({}),
+    end_request: null,
     active_role_session: null,
     updated_at: 0,
   };
@@ -90,6 +91,17 @@ describe("InMemoryRecordLog", () => {
     log.append(snap1);
     log.append(snap2);
     expect(log.latestCheckpoint("run-1")?.current_role).toBe("implementer");
+  });
+
+  it("normalizes a pre-feature checkpoint without end_request", () => {
+    const log = new InMemoryRecordLog();
+    const { end_request: _omitted, ...legacyCheckpoint } = ck("orchestrator");
+    log.append({
+      type: "checkpoint_snapshot",
+      checkpoint: legacyCheckpoint as Checkpoint,
+    });
+
+    expect(log.latestCheckpoint("run-1")?.end_request).toBeNull();
   });
 
   it("latestCheckpoint returns null when no snapshot has been appended yet", () => {

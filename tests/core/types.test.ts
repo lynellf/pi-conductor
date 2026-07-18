@@ -62,6 +62,7 @@ describe("core types public surface", () => {
     // If `payload` ever becomes typed, this assignment stops compiling.
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "implementer",
       payload: undefined,
     };

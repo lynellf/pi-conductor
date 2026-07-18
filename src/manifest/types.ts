@@ -61,6 +61,8 @@ export interface ModelConfig {
 export interface Manifest {
   /** §10: human-bumped integer, pinned at run-start, never mutated. */
   readonly version: number;
+  /** Authorized worker roles that may request completion through handoff. */
+  readonly end_request_roles?: readonly Role[];
   readonly roles: readonly RoleConfig[];
   /** Delegation lite §3: optional subagent profile declarations. */
   readonly subagents?: readonly SubagentProfile[];

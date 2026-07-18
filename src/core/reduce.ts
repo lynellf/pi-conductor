@@ -37,6 +37,7 @@ import { availableTargets } from "./targets.js";
 import type {
   Checkpoint,
   Effect,
+  EndRequest,
   LegalTargets,
   MachineDefinition,
   MachineEvent,
@@ -92,6 +93,7 @@ export function createInitialCheckpoint(def: MachineDefinition): Checkpoint {
     manifest_version: def.manifest_version,
     current_role: def.orchestrator,
     visit_count: Object.freeze(visit_count),
+    end_request: null,
     active_role_session: null,
     updated_at: Date.now(),
   }) as Checkpoint;
@@ -143,14 +145,22 @@ function reduceFromOrchestrator(
   def: MachineDefinition,
   meta: { readonly role: Role; readonly sessionFile: string; readonly ts: number },
 ): TransitionResult {
-  // end → done: always legal from the orchestrator; no effect, no guard.
+  // A driver-owned cost-cap close bypasses normal end-request gating.
   if (event.type === "end") {
+    if (
+      event.authority === "role" &&
+      def.end_request_roles !== null &&
+      (checkpoint.end_request ?? null) === null
+    ) {
+      return reject(checkpoint, event, def, meta, "end_request_required");
+    }
     return accept(checkpoint, event, def, meta, {
       from: def.orchestrator,
       to: "done",
       target_role: null,
       effects: [],
       guard: null,
+      end_request: null,
     });
   }
 
@@ -185,6 +195,7 @@ function reduceFromOrchestrator(
       target_role: target,
       effects: [`visit_count[${target}] += 1`],
       guard: `visit_count[${target}] < max_visits[${target}]`,
+      end_request: null,
     });
   }
 
@@ -204,12 +215,19 @@ function reduceFromWorker(
   // end from a worker is illegal; handoff to a non-orchestrator role
   // (including another worker) is illegal.
   if (event.type === "handoff" && event.target_role === def.orchestrator) {
+    if (event.request_end && !def.end_request_roles?.includes(checkpoint.current_role)) {
+      return reject(checkpoint, event, def, meta, "end_request_unauthorized");
+    }
+    const endRequest: EndRequest | null = event.request_end
+      ? Object.freeze({ role: checkpoint.current_role, session_file: meta.sessionFile })
+      : (checkpoint.end_request ?? null);
     return accept(checkpoint, event, def, meta, {
       from: checkpoint.current_role,
       to: def.orchestrator,
       target_role: def.orchestrator,
       effects: [], // no visit_count change (orchestrator has no cap)
       guard: null,
+      end_request: endRequest,
     });
   }
   return reject(checkpoint, event, def, meta, "illegal_event");
@@ -223,6 +241,7 @@ interface AcceptPlan {
   readonly target_role: Role | null;
   readonly effects: readonly Effect[];
   readonly guard: string | null;
+  readonly end_request: EndRequest | null;
 }
 
 function accept(
@@ -256,6 +275,7 @@ function accept(
     manifest_version: checkpoint.manifest_version,
     current_role: plan.to,
     visit_count,
+    end_request: plan.end_request,
     // active_role_session is unchanged by reduce; reduceLifecycle owns it.
     active_role_session: checkpoint.active_role_session,
     updated_at: meta.ts,
@@ -268,6 +288,12 @@ function accept(
     to: plan.to,
     event: event.type,
     target_role: plan.target_role,
+    request_end: event.type === "handoff" ? event.request_end : false,
+    end_authority: event.type === "end" ? event.authority : null,
+    end_requested_by:
+      event.type === "end" && event.authority === "role"
+        ? (checkpoint.end_request?.role ?? null)
+        : null,
     role: meta.role,
     suggests_next: extractSuggestsNext(event.payload),
     // Structural placeholder (§11.2). The Phase 3 seam enriches this
@@ -312,6 +338,7 @@ function reject(
     state: checkpoint.current_role,
     event: eventField,
     target_role,
+    request_end: event.type === "handoff" ? event.request_end : false,
     reason,
     legal_targets,
     role: meta.role,
@@ -332,6 +359,7 @@ function reject(
     manifest_version: checkpoint.manifest_version,
     current_role: checkpoint.current_role,
     visit_count: Object.freeze(visit_countBase),
+    end_request: checkpoint.end_request ?? null,
     active_role_session: checkpoint.active_role_session,
     updated_at: meta.ts,
   }) as Checkpoint;
