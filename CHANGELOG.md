@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.12.0] - 2026-07-18
+
+### Enhancements
+
+- **Benchmark-safe headless CLI execution** (issue #34). The `conduct` CLI now
+  supports composable `--non-interactive`, `--log-dir`, and `--json` options.
+  Non-interactive runs fail immediately if a role attempts to call `ask_user`,
+  explicit log directories contain the complete run tree, and JSON mode emits
+  one versioned terminal document on stdout while keeping diagnostics on
+  stderr.
+- **Graceful process-signal handling.** The first `SIGINT` or `SIGTERM` asks the
+  active run to abort cleanly so terminal state is persisted; a second signal
+  exits immediately. Signal listeners are removed when the run finishes.
+
+### Notes
+
+- Legacy positional CLI invocations remain compatible. Terminal conductor
+  outcomes exit successfully for benchmark harnesses, while startup and runtime
+  exceptions retain non-zero exit codes.
+
 ## [0.11.0] - 2026-07-18
 
 ### Enhancements
