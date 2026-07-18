@@ -114,6 +114,7 @@ function sessionStarted(
     manifest_version: checkpoint.manifest_version,
     current_role: checkpoint.current_role, // unchanged
     visit_count: checkpoint.visit_count, // unchanged
+    end_request: checkpoint.end_request ?? null,
     active_role_session: Object.freeze(active_role_session) as ActiveRoleSession,
     updated_at: meta.ts,
   }) as Checkpoint;
@@ -187,6 +188,7 @@ function sessionTerminal(
     // (rejected-handoff retry / model-retry scenarios).
     current_role: checkpoint.current_role,
     visit_count: checkpoint.visit_count,
+    end_request: checkpoint.end_request ?? null,
     active_role_session: null,
     updated_at: meta.ts,
   }) as Checkpoint;

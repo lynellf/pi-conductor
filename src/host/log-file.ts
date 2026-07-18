@@ -35,7 +35,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from
 import { join } from "node:path";
 
 import type { Checkpoint } from "../core/types.js";
-import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { normalizeCheckpoint, type PersistedRecord, type RecordLog } from "../persistence/log.js";
 
 export interface FileRecordLogOptions {
   /** Directory holding the run_id-keyed JSONL files. Created on construction. */
@@ -61,7 +61,7 @@ export class FileRecordLog implements RecordLog {
     for (let i = records.length - 1; i >= 0; i--) {
       const r = records[i];
       if (r && r.type === "checkpoint_snapshot") {
-        return r.checkpoint;
+        return normalizeCheckpoint(r.checkpoint);
       }
     }
     return null;

@@ -35,6 +35,7 @@ const DEF: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -65,6 +66,7 @@ function ck(
     manifest_version: "1",
     current_role,
     visit_count: Object.freeze({ ...visit_count }),
+    end_request: null,
     active_role_session,
     updated_at: 0,
   };
@@ -86,11 +88,16 @@ describe("composition: canonical §12.1 flow for an accepted handoff A → B", (
     );
 
     // Step 1: reduce(handoff orch → implementer)
-    const r1 = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/orch-1.jsonl",
-      ts: TS,
-    });
+    const r1 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/orch-1.jsonl",
+        ts: TS,
+      },
+    );
     expect(r1.kind).toBe("accepted");
     if (r1.kind !== "accepted") throw new Error("unreachable");
     // After reduce: current_role = implementer; visit_count.implementer = 1.
@@ -162,11 +169,16 @@ describe("composition: canonical §12.1 flow for an accepted handoff A → B", (
     );
 
     // Step 1: implementer → orchestrator
-    const r1 = reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-      role: "implementer",
-      sessionFile: "/impl-1.jsonl",
-      ts: TS,
-    });
+    const r1 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+      DEF,
+      {
+        role: "implementer",
+        sessionFile: "/impl-1.jsonl",
+        ts: TS,
+      },
+    );
     expect(r1.kind).toBe("accepted");
     if (r1.kind !== "accepted") throw new Error("unreachable");
     expect(r1.checkpoint.current_role).toBe("orchestrator");
@@ -218,11 +230,16 @@ describe("composition: rejected handoff — no lifecycle change, same role retri
     );
 
     // Rejected handoff: orchestrator → ghost (undeclared role).
-    const r1 = reduce(cp, { type: "handoff", target_role: "ghost", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/orch-1.jsonl",
-      ts: TS,
-    });
+    const r1 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "ghost", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/orch-1.jsonl",
+        ts: TS,
+      },
+    );
     expect(r1.kind).toBe("rejected");
     if (r1.kind !== "rejected") throw new Error("unreachable");
     // The checkpoint state is unchanged: current_role still orchestrator,
@@ -236,11 +253,16 @@ describe("composition: rejected handoff — no lifecycle change, same role retri
     expect(cp.active_role_session?.id).toBe("orch-1");
 
     // A subsequent accepted handoff uses the SAME active session id.
-    const r2 = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/orch-1.jsonl",
-      ts: TS + 1,
-    });
+    const r2 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/orch-1.jsonl",
+        ts: TS + 1,
+      },
+    );
     expect(r2.kind).toBe("accepted");
     if (r2.kind !== "accepted") throw new Error("unreachable");
     // active_role_session is STILL orch-1 (reduce never touches it).
@@ -355,11 +377,16 @@ describe("composition: determinism modulo ts", () => {
           session_file: "/orch-1.jsonl",
         },
       );
-      const r1 = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-        role: "orchestrator",
-        sessionFile: "/orch-1.jsonl",
-        ts,
-      });
+      const r1 = reduce(
+        cp,
+        { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+        DEF,
+        {
+          role: "orchestrator",
+          sessionFile: "/orch-1.jsonl",
+          ts,
+        },
+      );
       if (r1.kind !== "accepted") throw new Error("unreachable");
       cp = r1.checkpoint;
       const r2 = reduceLifecycle(cp, "session_ended", DEF, {
@@ -408,11 +435,16 @@ describe("composition: multi-visit scenario (§7.4: visit counter accumulates)",
         session_file: "/orch-1.jsonl",
       },
     );
-    const a1 = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/orch-1.jsonl",
-      ts: TS,
-    });
+    const a1 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/orch-1.jsonl",
+        ts: TS,
+      },
+    );
     if (a1.kind !== "accepted") throw new Error("unreachable");
     cp = a1.checkpoint;
 
@@ -440,11 +472,16 @@ describe("composition: multi-visit scenario (§7.4: visit counter accumulates)",
     cp = a3.checkpoint;
 
     // Step 2: implementer hands off back to orchestrator.
-    const b1 = reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-      role: "implementer",
-      sessionFile: "/impl-1.jsonl",
-      ts: TS + 3,
-    });
+    const b1 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+      DEF,
+      {
+        role: "implementer",
+        sessionFile: "/impl-1.jsonl",
+        ts: TS + 3,
+      },
+    );
     if (b1.kind !== "accepted") throw new Error("unreachable");
     cp = b1.checkpoint;
     expect(cp.current_role).toBe("orchestrator");
@@ -474,11 +511,16 @@ describe("composition: multi-visit scenario (§7.4: visit counter accumulates)",
     cp = b3.checkpoint;
 
     // Step 3: orchestrator hands off to implementer AGAIN (visit 2).
-    const c1 = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/orch-2.jsonl",
-      ts: TS + 6,
-    });
+    const c1 = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/orch-2.jsonl",
+        ts: TS + 6,
+      },
+    );
     if (c1.kind !== "accepted") throw new Error("unreachable");
     cp = c1.checkpoint;
     // visit_count.implementer has accumulated to 2.

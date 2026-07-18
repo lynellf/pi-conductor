@@ -158,6 +158,7 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
           manifest_version: "1",
           current_role: "done",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: null,
           updated_at: 3,
         },
@@ -218,6 +219,7 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
           manifest_version: "1",
           current_role: "worker",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: {
             id: "session-1",
             role: "worker",
@@ -280,6 +282,7 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
           manifest_version: "1",
           current_role: "worker",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: {
             id: "session-1",
             role: "worker",
@@ -336,6 +339,7 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
           manifest_version: "1",
           current_role: "orchestrator",
           visit_count: {},
+          end_request: null,
           active_role_session: null,
           updated_at: 0,
         },

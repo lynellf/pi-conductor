@@ -42,6 +42,7 @@
 
 import { rollup } from "../cost/rollup.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import { availableTargets } from "./targets.js";
 import type {
   Checkpoint,
   HandoffContextRef,
@@ -93,6 +94,8 @@ export interface RunMemory {
   readonly current_role: Checkpoint["current_role"];
   readonly state: Checkpoint["current_role"];
   readonly last_message: LastMessage | null;
+  readonly end_request: { readonly role: string } | null;
+  readonly can_end: boolean;
   readonly visit_history: readonly VisitHistoryEntry[];
   readonly run_cost_to_date: number;
   readonly run_cost_cap: number | null;
@@ -134,6 +137,10 @@ export function buildRunMemory(
   // worker's verdict/status without reading transcripts. Null before
   // the first transition (the initial orchestrator session).
   const last_message = buildLastMessage(records, checkpoint.run_id);
+  const pendingEndRequest = checkpoint.end_request ?? null;
+  const end_request =
+    pendingEndRequest === null ? null : Object.freeze({ role: pendingEndRequest.role });
+  const can_end = availableTargets(checkpoint, def).end;
 
   // §8.4 per_role_cost: reduce the rollup's per-role aggregate into
   // the {tokens, cost} shape the spec pins (the rollup's per-role
@@ -160,6 +167,8 @@ export function buildRunMemory(
     current_role: checkpoint.current_role,
     state: checkpoint.current_role,
     last_message: Object.freeze(last_message) as LastMessage | null,
+    end_request,
+    can_end,
     visit_history: Object.freeze([...visit_history]),
     run_cost_to_date,
     run_cost_cap,

@@ -36,6 +36,7 @@ const DEF: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -49,6 +50,7 @@ function ck(
     manifest_version: "1",
     current_role,
     visit_count: Object.freeze({ ...visit_count }),
+    end_request: null,
     active_role_session: null,
     updated_at: 0,
   };
@@ -83,6 +85,29 @@ function ended(role: string, cost: number, visit_index = 1): SessionLifecycleEve
 // ─── §8.4 field presence ───────────────────────────────────────────────
 
 describe("buildRunMemory: §8.4 field presence", () => {
+  it("exposes legacy end authority with no pending request", () => {
+    const mem = buildRunMemory(ck("orchestrator"), [], DEF, { goal: "x", runCostCap: null });
+    expect(mem.end_request).toBeNull();
+    expect(mem.can_end).toBe(true);
+  });
+
+  it("exposes a gated pending request and current end authority", () => {
+    const gated: MachineDefinition = { ...DEF, end_request_roles: ["reviewer"] };
+    const cp: Checkpoint = {
+      ...ck("orchestrator"),
+      end_request: { role: "reviewer", session_file: "/reviewer.jsonl" },
+    };
+    const mem = buildRunMemory(cp, [], gated, { goal: "x", runCostCap: null });
+    expect(mem.end_request).toEqual({ role: "reviewer" });
+    expect(mem.can_end).toBe(true);
+  });
+
+  it("reports can_end false in gated mode without a pending request", () => {
+    const gated: MachineDefinition = { ...DEF, end_request_roles: ["reviewer"] };
+    const mem = buildRunMemory(ck("orchestrator"), [], gated, { goal: "x", runCostCap: null });
+    expect(mem.can_end).toBe(false);
+  });
+
   it("produces a RunMemory with every documented §8.4 field", () => {
     const cp = ck("orchestrator", { implementer: 1 });
     const records: PersistedRecord[] = [
@@ -380,6 +405,9 @@ function accepted(
     to: (opts.to ?? "orchestrator") as never,
     event: "handoff",
     target_role: (opts.to ?? "orchestrator") as never,
+    request_end: false,
+    end_authority: null,
+    end_requested_by: null,
     role: role as never,
     suggests_next: opts.suggestsNext ?? null,
     payload_summary: {

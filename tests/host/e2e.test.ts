@@ -51,6 +51,7 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
+    end_request_roles: null,
   }) as MachineDefinition;
 }
 
@@ -137,7 +138,7 @@ describe("stub provider — drives one createAgentSession turn (Task 16 acceptan
 // ─── (2) Full linear loop via the stub ─────────────────────────────────
 
 describe("stub provider — full orch → worker → orch → end via runLoop (Task 16 acceptance #2)", () => {
-  it("keeps an incomplete handoff in-session until the role corrects it", async () => {
+  it("lets the provider schema keep a structurally incomplete handoff in-session", async () => {
     const initialCheckpoint = createInitialCheckpoint(makeDef());
     const log = new InMemoryRecordLog();
     const host = new StubHost({
@@ -168,13 +169,9 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     const rejected = records.filter((record) => record.type === "handoff_validation_rejected");
 
     expect(result.exitReason).toBe("done");
-    expect(rejected).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ role: "orchestrator" }),
-        expect.objectContaining({ role: "worker" }),
-      ]),
-    );
-    expect(rejected).toHaveLength(2);
+    // Required TypeBox fields are enforced by Pi before execute(), so these
+    // structural errors remain in-session but never enter the conductor seam.
+    expect(rejected).toHaveLength(0);
     expect(records.filter((record) => record.type === "transition_accepted")).toHaveLength(3);
     expect(records.some((record) => record.type === "session_failed")).toBe(false);
   });

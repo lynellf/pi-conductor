@@ -24,6 +24,7 @@ const DEF: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 2, reviewer: 1 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -32,7 +33,12 @@ const ORCH_META = { role: "orchestrator", sessionFile: "/tmp/orch.jsonl", ts: TS
 function visit(ckp: Checkpoint, from: string, target: string): Checkpoint {
   const meta =
     from === "orchestrator" ? ORCH_META : { role: from, sessionFile: `/tmp/${from}.jsonl`, ts: TS };
-  const result = reduce(ckp, { type: "handoff", target_role: target, payload: {} }, DEF, meta);
+  const result = reduce(
+    ckp,
+    { type: "handoff", request_end: false, target_role: target, payload: {} },
+    DEF,
+    meta,
+  );
   if (result.kind !== "accepted") {
     throw new Error(
       `expected accepted handoff ${from}→${target} from visit_count=${JSON.stringify(ckp.visit_count)}, got ${result.kind}`,
@@ -44,7 +50,12 @@ function visit(ckp: Checkpoint, from: string, target: string): Checkpoint {
 function tryVisit(ckp: Checkpoint, from: string, target: string) {
   const meta =
     from === "orchestrator" ? ORCH_META : { role: from, sessionFile: `/tmp/${from}.jsonl`, ts: TS };
-  return reduce(ckp, { type: "handoff", target_role: target, payload: {} }, DEF, meta);
+  return reduce(
+    ckp,
+    { type: "handoff", request_end: false, target_role: target, payload: {} },
+    DEF,
+    meta,
+  );
 }
 
 // ─── Per-worker cap independence (§9.2) ────────────────────────────────
@@ -98,7 +109,7 @@ describe("visit-cap: when all workers are capped (§7.4)", () => {
     // end is the only legal move from here.
     const endResult = reduce(
       cp,
-      { type: "end", payload: { reason: "all caps exhausted" } },
+      { type: "end", authority: "role", payload: { reason: "all caps exhausted" } },
       DEF,
       ORCH_META,
     );
@@ -161,7 +172,7 @@ describe("visit-cap: full multi-cycle scenario", () => {
     expect(r2.reason).toBe("guard_failed");
 
     // ── Both capped → end → done ────────────────────────────────────────
-    const end = reduce(cp, { type: "end", payload: {} }, DEF, ORCH_META);
+    const end = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, ORCH_META);
     expect(end.kind).toBe("accepted");
     if (end.kind !== "accepted") throw new Error("unreachable");
     expect(end.checkpoint.current_role).toBe("done");
@@ -179,9 +190,15 @@ describe("visit-cap: guard reads def.max_visits (not hardcoded)", () => {
       orchestrator: "orchestrator",
       workers: Object.freeze(["alpha"]),
       max_visits: Object.freeze({ alpha: 5 }),
+      end_request_roles: null,
     }) as MachineDefinition;
     const cp = createInitialCheckpoint(tiny);
-    const r = reduce(cp, { type: "handoff", target_role: "alpha", payload: {} }, tiny, ORCH_META);
+    const r = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "alpha", payload: {} },
+      tiny,
+      ORCH_META,
+    );
     if (r.kind !== "accepted") throw new Error("unreachable");
     expect(r.record.guard).toBe("visit_count[alpha] < max_visits[alpha]");
   });

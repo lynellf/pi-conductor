@@ -21,6 +21,7 @@ const DEF: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -36,6 +37,7 @@ function ck(
     manifest_version: def.manifest_version,
     current_role,
     visit_count: Object.freeze({ ...visit_count }),
+    end_request: null,
     active_role_session: null,
     updated_at: 0,
   };
@@ -91,6 +93,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
     const cp = ck(DEF, "orchestrator");
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "implementer",
       payload: { reason: "begin" },
     };
@@ -104,6 +107,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
     const cp = ck(DEF, "orchestrator");
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "implementer",
       payload: {},
     };
@@ -123,11 +127,16 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
     let cp = ck(DEF, "orchestrator");
     for (let i = 0; i < 3; i++) {
       // orchestrator → implementer
-      const r1 = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-        role: "orchestrator",
-        sessionFile: "/tmp/orch.jsonl",
-        ts: TS,
-      });
+      const r1 = reduce(
+        cp,
+        { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+        DEF,
+        {
+          role: "orchestrator",
+          sessionFile: "/tmp/orch.jsonl",
+          ts: TS,
+        },
+      );
       if (r1.kind !== "accepted") throw new Error("unreachable");
       // implementer → orchestrator (simulate the worker's handoff)
       const r2 = reduce(
@@ -141,7 +150,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
                 ? { implementer: 2, reviewer: 0 }
                 : { implementer: 3, reviewer: 0 },
         },
-        { type: "handoff", target_role: "orchestrator", payload: {} },
+        { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
         DEF,
         { role: "implementer", sessionFile: "/tmp/impl.jsonl", ts: TS },
       );
@@ -156,6 +165,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
     const cp = ck(DEF, "orchestrator", { reviewer: 2 });
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "implementer",
       payload: {},
     };
@@ -170,6 +180,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
     const cp = ck(DEF, "orchestrator");
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "reviewer",
       payload: {},
     };
@@ -186,6 +197,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
     const cp = ck(DEF, "orchestrator");
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "implementer",
       payload: {},
     };
@@ -203,10 +215,15 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
   it("input checkpoint is not mutated (immutability)", () => {
     const cp = ck(DEF, "orchestrator");
     const snapshot = JSON.stringify(cp);
-    reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      ...META,
-      role: "orchestrator",
-    });
+    reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        ...META,
+        role: "orchestrator",
+      },
+    );
     expect(JSON.stringify(cp)).toBe(snapshot);
   });
 });
@@ -216,7 +233,7 @@ describe("reduce: orchestrator → worker handoff (accepted)", () => {
 describe("reduce: orchestrator → end (accepted)", () => {
   it("new checkpoint has current_role = 'done'", () => {
     const cp = ck(DEF, "orchestrator");
-    const event: MachineEvent = { type: "end", payload: { reason: "all done" } };
+    const event: MachineEvent = { type: "end", authority: "role", payload: { reason: "all done" } };
     const result = reduce(cp, event, DEF, { ...META, role: "orchestrator" });
     expect(result.kind).toBe("accepted");
     if (result.kind !== "accepted") throw new Error("unreachable");
@@ -225,7 +242,10 @@ describe("reduce: orchestrator → end (accepted)", () => {
 
   it("record.to = 'done' and record.event = 'end'", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, { ...META, role: "orchestrator" });
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
+      ...META,
+      role: "orchestrator",
+    });
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.record.from).toBe("orchestrator");
     expect(result.record.to).toBe("done");
@@ -235,7 +255,10 @@ describe("reduce: orchestrator → end (accepted)", () => {
 
   it("no visit_count effects (orchestrator → done is not a visit)", () => {
     const cp = ck(DEF, "orchestrator", { implementer: 2, reviewer: 1 });
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, { ...META, role: "orchestrator" });
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
+      ...META,
+      role: "orchestrator",
+    });
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.effect).toEqual([]);
   });
@@ -246,11 +269,16 @@ describe("reduce: orchestrator → end (accepted)", () => {
 describe("reduce: worker → orchestrator handoff (accepted)", () => {
   it("new checkpoint has current_role = orchestrator", () => {
     const cp = ck(DEF, "implementer");
-    const result = reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-      role: "implementer",
-      sessionFile: "/tmp/impl.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+      DEF,
+      {
+        role: "implementer",
+        sessionFile: "/tmp/impl.jsonl",
+        ts: TS,
+      },
+    );
     expect(result.kind).toBe("accepted");
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.state).toBe("orchestrator");
@@ -258,11 +286,16 @@ describe("reduce: worker → orchestrator handoff (accepted)", () => {
 
   it("does not increment any visit_count", () => {
     const cp = ck(DEF, "implementer", { implementer: 2 });
-    const result = reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-      role: "implementer",
-      sessionFile: "/tmp/impl.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+      DEF,
+      {
+        role: "implementer",
+        sessionFile: "/tmp/impl.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.effect).toEqual([]);
     expect(result.record.guard).toBeNull();
@@ -270,11 +303,16 @@ describe("reduce: worker → orchestrator handoff (accepted)", () => {
 
   it("record.from/to/event/target_role are correct", () => {
     const cp = ck(DEF, "reviewer");
-    const result = reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-      role: "reviewer",
-      sessionFile: "/tmp/rev.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+      DEF,
+      {
+        role: "reviewer",
+        sessionFile: "/tmp/rev.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.record.from).toBe("reviewer");
     expect(result.record.to).toBe("orchestrator");
@@ -292,7 +330,7 @@ describe("reduce: meta.role must equal checkpoint.current_role", () => {
     expect(() =>
       reduce(
         cp,
-        { type: "handoff", target_role: "orchestrator", payload: {} },
+        { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
         DEF,
         // meta.role is 'reviewer' but current_role is 'implementer' — mismatch.
         { role: "reviewer", sessionFile: "/tmp/rev.jsonl", ts: TS },
@@ -303,29 +341,39 @@ describe("reduce: meta.role must equal checkpoint.current_role", () => {
   it("throws when meta.role is the orchestrator while current_role is a worker", () => {
     const cp = ck(DEF, "implementer");
     expect(() =>
-      reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-        role: "orchestrator",
-        sessionFile: "/tmp/orch.jsonl",
-        ts: TS,
-      }),
+      reduce(
+        cp,
+        { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+        DEF,
+        {
+          role: "orchestrator",
+          sessionFile: "/tmp/orch.jsonl",
+          ts: TS,
+        },
+      ),
     ).toThrow(/implementer/);
   });
 
   it("throws when meta.role is a worker while current_role is the orchestrator", () => {
     const cp = ck(DEF, "orchestrator");
     expect(() =>
-      reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-        role: "implementer",
-        sessionFile: "/tmp/impl.jsonl",
-        ts: TS,
-      }),
+      reduce(
+        cp,
+        { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+        DEF,
+        {
+          role: "implementer",
+          sessionFile: "/tmp/impl.jsonl",
+          ts: TS,
+        },
+      ),
     ).toThrow(/orchestrator/);
   });
 
   it("throws when current_role is 'done' and meta.role is anything", () => {
     const cp = ck(DEF, "done");
     expect(() =>
-      reduce(cp, { type: "end", payload: {} }, DEF, {
+      reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
         role: "orchestrator",
         sessionFile: "/tmp/orch.jsonl",
         ts: TS,
@@ -341,6 +389,7 @@ describe("reduce: determinism modulo ts", () => {
     const cp = ck(DEF, "orchestrator");
     const event: MachineEvent = {
       type: "handoff",
+      request_end: false,
       target_role: "implementer",
       payload: {},
     };
@@ -369,11 +418,16 @@ describe("reduce: determinism modulo ts", () => {
 describe("reduce: result.checkpoint (post-transition snapshot, §11.1)", () => {
   it("on accepted handoff: checkpoint.visit_count reflects the increment", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.checkpoint.visit_count.implementer).toBe(1);
     expect(result.checkpoint.visit_count.reviewer).toBe(0); // unaffected
@@ -381,18 +435,23 @@ describe("reduce: result.checkpoint (post-transition snapshot, §11.1)", () => {
 
   it("on accepted handoff: checkpoint.current_role is the new role", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.checkpoint.current_role).toBe("implementer");
   });
 
   it("on accepted end: checkpoint.current_role is 'done'", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, {
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
       role: "orchestrator",
       sessionFile: "/tmp/orch.jsonl",
       ts: TS,
@@ -403,7 +462,7 @@ describe("reduce: result.checkpoint (post-transition snapshot, §11.1)", () => {
 
   it("on accepted end: checkpoint.visit_count is unchanged (orchestrator \u2192 done is not a visit)", () => {
     const cp = ck(DEF, "orchestrator", { implementer: 2, reviewer: 1 });
-    const result = reduce(cp, { type: "end", payload: {} }, DEF, {
+    const result = reduce(cp, { type: "end", authority: "role", payload: {} }, DEF, {
       role: "orchestrator",
       sessionFile: "/tmp/orch.jsonl",
       ts: TS,
@@ -415,11 +474,16 @@ describe("reduce: result.checkpoint (post-transition snapshot, §11.1)", () => {
 
   it("on accepted worker\u2192orchestrator: checkpoint.current_role is orchestrator and visit_count unchanged", () => {
     const cp = ck(DEF, "implementer", { implementer: 2 });
-    const result = reduce(cp, { type: "handoff", target_role: "orchestrator", payload: {} }, DEF, {
-      role: "implementer",
-      sessionFile: "/tmp/impl.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "orchestrator", payload: {} },
+      DEF,
+      {
+        role: "implementer",
+        sessionFile: "/tmp/impl.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.checkpoint.current_role).toBe("orchestrator");
     expect(result.checkpoint.visit_count.implementer).toBe(2); // unchanged
@@ -427,11 +491,16 @@ describe("reduce: result.checkpoint (post-transition snapshot, §11.1)", () => {
 
   it("post-transition checkpoint preserves run_id and manifest_version", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.checkpoint.run_id).toBe(cp.run_id);
     expect(result.checkpoint.manifest_version).toBe(cp.manifest_version);
@@ -439,11 +508,16 @@ describe("reduce: result.checkpoint (post-transition snapshot, §11.1)", () => {
 
   it("post-transition checkpoint is a new object reference (snapshot immutability, \u00a711.1)", () => {
     const cp = ck(DEF, "orchestrator");
-    const result = reduce(cp, { type: "handoff", target_role: "implementer", payload: {} }, DEF, {
-      role: "orchestrator",
-      sessionFile: "/tmp/orch.jsonl",
-      ts: TS,
-    });
+    const result = reduce(
+      cp,
+      { type: "handoff", request_end: false, target_role: "implementer", payload: {} },
+      DEF,
+      {
+        role: "orchestrator",
+        sessionFile: "/tmp/orch.jsonl",
+        ts: TS,
+      },
+    );
     if (result.kind !== "accepted") throw new Error("unreachable");
     expect(result.checkpoint).not.toBe(cp); // fresh object
   });

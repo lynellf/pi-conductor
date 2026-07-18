@@ -85,7 +85,12 @@ export function validateEmission(emissions: readonly EmissionCapture[]): Validat
     const args = capture.args as HandoffArgs;
     return {
       kind: "ok",
-      event: { type: "handoff", target_role: args.target_role, payload: args },
+      event: {
+        type: "handoff",
+        request_end: args.request_end ?? false,
+        target_role: args.target_role,
+        payload: args,
+      },
     };
   }
 
@@ -96,7 +101,7 @@ export function validateEmission(emissions: readonly EmissionCapture[]): Validat
     const args = capture.args as EndArgs;
     return {
       kind: "ok",
-      event: { type: "end", payload: args },
+      event: { type: "end", authority: "role", payload: args },
     };
   }
 

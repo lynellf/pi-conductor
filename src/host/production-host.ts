@@ -344,7 +344,10 @@ export class ProductionHost implements Host {
     //    construction (the state needs the `sessionId`).
     const seam = new SessionSeam();
     const rejector = createCaptureRejector();
-    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture);
+    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture, {
+      role,
+      def: this.loadedManifest.def,
+    });
     const end = createEndTool(seam, rejector.shouldRejectCapture);
     const askUser = createAskUserTool() as ToolDefinition;
 

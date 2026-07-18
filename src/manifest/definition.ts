@@ -67,5 +67,7 @@ export function toMachineDefinition(m: Manifest): MachineDefinition {
     orchestrator: orchestrator.name,
     workers: Object.freeze(workers),
     max_visits: Object.freeze(max_visits),
+    end_request_roles:
+      m.end_request_roles === undefined ? null : Object.freeze([...m.end_request_roles]),
   }) as MachineDefinition;
 }
