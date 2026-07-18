@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.11.0] - 2026-07-18
+
+### Enhancements
+
+- **Authorized end-request roles.** Manifests can opt into
+  `end_request_roles` so a configured worker must hand back a single-use
+  completion request before the orchestrator may normally end the run. Legacy
+  manifests remain unchanged, and run-cost-cap forced closure still bypasses
+  the optional approval gate while passing through the reducer.
+- **Reliable model-facing handoff contracts.** The provider-visible TypeBox
+  schema now exposes the required actionable envelope, legal status values,
+  routing constraints, and end-request rules. Invalid mechanical handoffs stay
+  correctable in the same role session with actionable recovery guidance.
+- **Live run operator controls.** The extension adds `/conduct:steer`,
+  `/conduct:followup`, and `/conduct:copy`; library consumers gain matching
+  `RunHandle.steer()`, `RunHandle.followUp()`, and `RunHandle.latestResponse()`
+  APIs. Guidance survives handoff boundaries without bypassing the FSM, and
+  copied responses exclude tool summaries.
+
+### Notes
+
+- The release adds the public `EndRequest`, `RunControlErrorCode`,
+  `RunResponse`, and `RunControlError` exports. Existing manifests and
+  `RunHandle` consumers remain compatible because all new configuration and
+  APIs are additive.
+
 ## [0.10.0] - 2026-07-16
 
 ### Enhancements
