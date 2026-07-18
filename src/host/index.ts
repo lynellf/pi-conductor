@@ -128,6 +128,8 @@ export {
   getDefaultOrchestratorPrompt,
   getDefaultWorkerPrompt,
 } from "./defaults.js";
+export type { RunControlErrorCode, RunResponse } from "./run-control.js";
+export { RunControlError } from "./run-control.js";
 export type {
   ActiveSessionStats,
   ConfigOverrideContainer,

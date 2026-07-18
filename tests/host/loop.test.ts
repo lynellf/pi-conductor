@@ -30,6 +30,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTerminalReason } from "../../src/host/host.js";
 import { runLoop } from "../../src/host/loop.js";
+import { RunControl } from "../../src/host/run-control.js";
 import {
   type Checkpoint,
   type CheckpointSnapshot,
@@ -87,7 +88,11 @@ class FakeSession {
   /** Subscribers for `subscribe()` — exercised in Task 17; here we just
    *  record them so we can assert the loop subscribes once. */
   subscribers: Array<(event: unknown) => void> = [];
+  sealSubscribers = new Set<() => void>();
+  steeringQueue: string[] = [];
   disposed = false;
+  afterPrompt: (() => Promise<void> | void) | null = null;
+  beforeSeal: (() => Promise<void> | void) | null = null;
 
   constructor(role: Role, sessionId: string, script: ScriptedEmission[]) {
     this.role = role;
@@ -106,6 +111,7 @@ class FakeSession {
       readCaptureBuffer: () => Object.freeze([...this.captureBuffer]),
       resetCaptureBuffer: () => {
         this.captureBuffer.length = 0;
+        this.sealed = false;
       },
       subscribe: (listener) => {
         this.subscribers.push(listener as (event: unknown) => void);
@@ -114,12 +120,28 @@ class FakeSession {
           if (i >= 0) this.subscribers.splice(i, 1);
         };
       },
+      steer: async (text) => {
+        this.steeringQueue.push(text);
+      },
+      clearQueue: () => {
+        const steering = this.steeringQueue;
+        this.steeringQueue = [];
+        return { steering, followUp: [] };
+      },
+      isSealed: () => this.sealed,
+      subscribeSealed: (listener) => {
+        this.sealSubscribers.add(listener);
+        return () => this.sealSubscribers.delete(listener);
+      },
       prompt: async (text) => {
         this.prompts.push(text);
         await Promise.resolve();
         if (this.aborted) return;
         const next = this.script.shift();
-        if (next === undefined || next.kind === "no_emission") return;
+        if (next === undefined || next.kind === "no_emission") {
+          await this.afterPrompt?.();
+          return;
+        }
         if (next.kind === "emit_handoff" || next.kind === "emit_illegal_handoff") {
           const reason = next.kind === "emit_handoff" ? next.reason : undefined;
           this.captureBuffer.push({
@@ -144,15 +166,17 @@ class FakeSession {
                 }),
             },
           });
-          this.sealed = true;
         } else {
           // emit_end
           this.captureBuffer.push({
             toolName: "end",
             args: { ...(next.reason !== undefined && { reason: next.reason }) },
           });
-          this.sealed = true;
         }
+        await this.beforeSeal?.();
+        this.sealed = true;
+        for (const listener of this.sealSubscribers) listener();
+        await this.afterPrompt?.();
       },
       dispose: async () => {
         this.disposed = true;
@@ -327,6 +351,152 @@ function makeRun(
 // ─── Happy path: orchestrator → worker → orchestrator → end ───────────
 
 describe("runLoop — happy path", () => {
+  it("appends pending operator guidance to the next role prompt exactly once", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    const orchestrator = new FakeSession("orchestrator", "sess-1", [
+      { kind: "emit_handoff", target_role: "worker" },
+    ]);
+    const worker = new FakeSession("worker", "sess-2", [
+      { kind: "emit_handoff", target_role: "orchestrator" },
+    ]);
+    const final = new FakeSession("orchestrator", "sess-3", [{ kind: "emit_end" }]);
+    host.enqueue(orchestrator);
+    host.enqueue(worker);
+    host.enqueue(final);
+    const control = new RunControl({
+      runId: initialCheckpoint.run_id,
+      abortSession: (session, reason) => host.abortSession(session, reason),
+    });
+    orchestrator.afterPrompt = async () => {
+      orchestrator.afterPrompt = null;
+      await control.followUp("check the worker edge case");
+    };
+
+    await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+      runControl: control,
+    });
+
+    expect(orchestrator.prompts[0]).not.toContain("operator_guidance");
+    expect(worker.prompts[0]).toContain("check the worker edge case");
+    expect(final.prompts[0]).not.toContain("check the worker edge case");
+  });
+
+  it("reclaims a steer racing a sealed handoff into the newly active role", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    const orchestrator = new FakeSession("orchestrator", "sess-1", [
+      { kind: "emit_handoff", target_role: "worker" },
+    ]);
+    const worker = new FakeSession("worker", "sess-2", [
+      { kind: "emit_handoff", target_role: "orchestrator" },
+    ]);
+    const final = new FakeSession("orchestrator", "sess-3", [{ kind: "emit_end" }]);
+    host.enqueue(orchestrator);
+    host.enqueue(worker);
+    host.enqueue(final);
+    const control = new RunControl({
+      runId: initialCheckpoint.run_id,
+      abortSession: (session, reason) => host.abortSession(session, reason),
+    });
+    orchestrator.beforeSeal = async () => {
+      orchestrator.beforeSeal = null;
+      await control.steer("apply this after handoff");
+    };
+
+    await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+      runControl: control,
+    });
+
+    expect(worker.prompts[0]).toContain("apply this after handoff");
+    expect(final.prompts[0]).not.toContain("apply this after handoff");
+  });
+
+  it("delivers guidance on the same-session no-emission recovery prompt", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    const orchestrator = new FakeSession("orchestrator", "sess-1", [
+      { kind: "no_emission" },
+      { kind: "emit_end" },
+    ]);
+    host.enqueue(orchestrator);
+    const control = new RunControl({
+      runId: initialCheckpoint.run_id,
+      abortSession: (session, reason) => host.abortSession(session, reason),
+    });
+    orchestrator.afterPrompt = async () => {
+      orchestrator.afterPrompt = null;
+      await control.followUp("recover with this detail");
+    };
+
+    const result = await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+      runControl: control,
+    });
+
+    expect(result.exitReason).toBe("done");
+    expect(orchestrator.prompts).toHaveLength(2);
+    expect(orchestrator.prompts[1]).toContain("recover with this detail");
+    expect(orchestrator.prompts[1]).toContain("did not call `handoff` or `end`");
+  });
+
+  it("defers an uncommitted end when guidance arrives before reduction", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    const orchestrator = new FakeSession("orchestrator", "sess-1", [
+      { kind: "emit_end", reason: "initial answer" },
+      { kind: "emit_end", reason: "answer after guidance" },
+    ]);
+    host.enqueue(orchestrator);
+    const control = new RunControl({
+      runId: initialCheckpoint.run_id,
+      abortSession: (session, reason) => host.abortSession(session, reason),
+    });
+    orchestrator.afterPrompt = async () => {
+      orchestrator.afterPrompt = null;
+      await control.followUp("include the missing caveat");
+    };
+
+    const result = await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+      runControl: control,
+    });
+
+    expect(result.exitReason).toBe("done");
+    expect(orchestrator.prompts).toHaveLength(2);
+    expect(orchestrator.prompts[1]).toContain("include the missing caveat");
+    const transitions = log
+      .records(initialCheckpoint.run_id)
+      .filter((record) => record.type === "transition_accepted");
+    expect(transitions).toHaveLength(1);
+    expect(transitions[0]).toMatchObject({
+      event: "end",
+      payload_summary: { reason: "answer after guidance" },
+    });
+  });
+
   it("carries an authorized worker end request into the next orchestrator end", async () => {
     const def: MachineDefinition = {
       manifest_version: "1",

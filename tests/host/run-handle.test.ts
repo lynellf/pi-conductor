@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type { MachineDefinition } from "../../src/core/types.js";
 import type { LoadedManifest } from "../../src/host/manifest.js";
+import type { RunControl, RunResponse } from "../../src/host/run-control.js";
 import { RunHandle } from "../../src/host/run-handle.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
 
@@ -19,6 +20,60 @@ function makeDef(): MachineDefinition {
     end_request_roles: null,
   };
 }
+
+function makeHandleWithControl(runControl: RunControl): RunHandle {
+  const def = makeDef();
+  const log = new InMemoryRecordLog();
+  return new RunHandle({
+    runId: "controlled-run",
+    def,
+    log,
+    loadedManifest: {
+      def,
+      manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+      warnings: [],
+      manifestDir: null,
+      manifestVersion: 1,
+    },
+    configOverrideContainer: { current: {} },
+    requestAbort: vi.fn().mockResolvedValue(undefined),
+    completionPromise: new Promise(() => undefined),
+    runControl,
+  });
+}
+
+describe("RunHandle operator controls", () => {
+  it("delegates steer and followUp to the run-owned control", async () => {
+    const steer = vi.fn().mockResolvedValue(undefined);
+    const followUp = vi.fn().mockResolvedValue(undefined);
+    const runControl = { steer, followUp, latestResponse: vi.fn().mockReturnValue(null) };
+    const handle = makeHandleWithControl(runControl as unknown as RunControl);
+
+    await handle.steer("redirect");
+    await handle.followUp("next turn");
+
+    expect(steer).toHaveBeenCalledWith("redirect");
+    expect(followUp).toHaveBeenCalledWith("next turn");
+  });
+
+  it("returns the control's latest completed response", () => {
+    const response: RunResponse = {
+      runId: "controlled-run",
+      role: "reviewer",
+      sessionId: "reviewer-1",
+      text: "ready to copy",
+      completedAt: 42,
+    };
+    const runControl = {
+      steer: vi.fn(),
+      followUp: vi.fn(),
+      latestResponse: vi.fn().mockReturnValue(response),
+    };
+    const handle = makeHandleWithControl(runControl as unknown as RunControl);
+
+    expect(handle.latestResponse()).toEqual(response);
+  });
+});
 
 describe("RunHandle.abort()", () => {
   it("is a no-op after the run has already reached a terminal state", async () => {

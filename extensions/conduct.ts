@@ -2,12 +2,15 @@
  * pi-conductor extension entrypoint — Phase 7B.
  *
  * Wraps the production host driver (`src/host/`) in a pi
- * extension that exposes four slash commands:
+ * extension that exposes seven slash commands:
  *
  *   - `/conduct <goal>`         — start a run.
  *   - `/conduct:resume <run_id>` — resume a run from its log.
  *   - `/conduct:list`           — list known runs in the log.
  *   - `/conduct:abort`          — abort the active run.
+ *   - `/conduct:steer`          — steer the addressable active role.
+ *   - `/conduct:followup`       — queue guidance for the next prompt boundary.
+ *   - `/conduct:copy`           — copy the latest completed role response.
  *
  * plus one CLI flag:
  *
@@ -65,6 +68,8 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { handleAbort } from "../src/extension/commands/abort.js";
+import { handleCopy } from "../src/extension/commands/copy.js";
+import { handleFollowUp } from "../src/extension/commands/followup.js";
 import { handleList } from "../src/extension/commands/list.js";
 import { handleResume } from "../src/extension/commands/resume.js";
 import {
@@ -72,6 +77,7 @@ import {
   type HandleDeps,
   handleStart,
 } from "../src/extension/commands/start.js";
+import { handleSteer } from "../src/extension/commands/steer.js";
 import { createConductMessageRenderers } from "../src/extension/conduct-message-renderer.js";
 import { getCurrentOrchestratorRole } from "../src/extension/current-orchestrator.js";
 import { createConductDisplaySink } from "../src/extension/display-sink-wiring.js";
@@ -89,7 +95,7 @@ const CONDUCT_MANIFEST_FLAG = "conduct-manifest";
  * Adapt the SDK's `(args, ctx)` handler shape to the
  * extension's `(args, ctx, deps)` shape. The deps carry
  * the flag reader — a `pi.getFlag` closure the factory
- * creates once and shares across all four handlers.
+ * creates once and shares across the manifest-backed handlers.
  */
 function withDeps(
   handler: (
@@ -122,7 +128,7 @@ export default function conductExtension(pi: ExtensionAPI): void {
     type: "string",
   });
 
-  // Single flag reader shared across all four handlers.
+  // Single flag reader shared across the manifest-backed handlers.
   // The closure reads the latest flag value at command
   // time, so a `--flag` set on the pi CLI line flows
   // into the handler invocation.
@@ -166,6 +172,21 @@ export default function conductExtension(pi: ExtensionAPI): void {
   pi.registerCommand("conduct:abort", {
     description: "Abort the active run (no-op if none).",
     handler: withDeps(handleAbort, getFlag, displaySink),
+  });
+
+  pi.registerCommand("conduct:steer", {
+    description: "Steer the currently active pi-conductor role session.",
+    handler: handleSteer,
+  });
+
+  pi.registerCommand("conduct:followup", {
+    description: "Queue guidance for the next pi-conductor prompt boundary.",
+    handler: handleFollowUp,
+  });
+
+  pi.registerCommand("conduct:copy", {
+    description: "Copy the latest completed pi-conductor response.",
+    handler: handleCopy,
   });
 
   /**
