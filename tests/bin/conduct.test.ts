@@ -21,7 +21,7 @@
  * with injectable deps (`startRun`, `console`, `exit`, `cwd`).
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -98,6 +98,41 @@ function makeWritableRecorder(): Writable & { chunks: string[] } {
   return writable;
 }
 
+type CliSignal = "SIGINT" | "SIGTERM";
+
+class FakeSignalSource {
+  private readonly listeners = new Map<CliSignal, Set<(signal: CliSignal) => void>>();
+
+  on(signal: CliSignal, listener: (signal: CliSignal) => void): void {
+    const listeners = this.listeners.get(signal) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(signal, listeners);
+  }
+
+  off(signal: CliSignal, listener: (signal: CliSignal) => void): void {
+    this.listeners.get(signal)?.delete(listener);
+  }
+
+  emit(signal: CliSignal): void {
+    for (const listener of this.listeners.get(signal) ?? []) listener(signal);
+  }
+
+  listenerCount(signal: CliSignal): number {
+    return this.listeners.get(signal)?.size ?? 0;
+  }
+}
+
+function makeDeferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 /** Make a fresh tmpdir with a fixture manifest at <tmp>/manifest.yaml. */
 function makeManifestDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "pi-conductor-cli-"));
@@ -128,7 +163,13 @@ function makeStartRunMock(opts: {
   failWith?: Error;
   runId?: string;
   finalRole?: string;
-  exitReason?: string;
+  exitReason?: "done" | "session_failed" | "aborted";
+  latestResponse?: {
+    role: string;
+    text: string;
+    completedAt: number;
+  } | null;
+  runStats?: Readonly<Record<string, unknown>>;
 }): (manifestPath: string, options: unknown) => Promise<RunHandle> {
   const failWith = opts.failWith;
   return async (_manifestPath, _options) => {
@@ -139,16 +180,15 @@ function makeStartRunMock(opts: {
       runId: opts.runId ?? "test-run-1",
       completion: async () => ({
         finalCheckpoint: { current_role: finalRole },
-        exitReason: exitReason as "done",
+        exitReason,
       }),
-      // runStats / runConfig / abort are unused by the CLI path.
-      runStats: () => ({
-        current_role: finalRole,
-        visits_remaining_by_role: {},
-        cost_spent_usd: 0,
-        budget_remaining_usd: null,
-        is_terminal: true,
-      }),
+      latestResponse: () => opts.latestResponse ?? null,
+      runStats: () =>
+        opts.runStats ?? {
+          state: finalRole,
+          exitReason,
+          recordsCount: 1,
+        },
       runConfig: () => {},
       abort: () => {},
       loadedManifest: {
@@ -207,6 +247,73 @@ describe("runCli argv parsing", () => {
     });
     // Whitespace-only goal should be treated as missing.
     expect(code).toBe(2);
+  });
+
+  it("accepts recognized options in any order before the manifest path", async () => {
+    const dir = makeManifestDir();
+    try {
+      const startRun = vi.fn(makeStartRunMock({}));
+      const code = await runCli(
+        [
+          "--json",
+          "--log-dir",
+          "records",
+          "--non-interactive",
+          "manifest.yaml",
+          "ship",
+          "a",
+          "fix",
+        ],
+        {
+          startRun,
+          modelRegistry: stubModelRegistry,
+          console: makeConsole(),
+          exit: makeExit().fn,
+          cwd: dir,
+          stdout: makeWritableRecorder(),
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(startRun).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a usage error when --log-dir has no value", async () => {
+    const exit = makeExit();
+    const c = makeConsole();
+    const code = await runCli(["--log-dir"], {
+      startRun: makeStartRunMock({}),
+      modelRegistry: stubModelRegistry,
+      console: c,
+      exit: exit.fn,
+      cwd: process.cwd(),
+    });
+
+    expect(code).toBe(2);
+    expect(exit.codes).toEqual([2]);
+    expect(c.stderrLines.join("\n")).toMatch(/--log-dir requires a path/);
+  });
+
+  it("keeps option-looking words after the manifest as legacy goal text", async () => {
+    const dir = makeManifestDir();
+    try {
+      const startRun = vi.fn(makeStartRunMock({}));
+      const code = await runCli(["manifest.yaml", "apply", "--json"], {
+        startRun,
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+      });
+
+      expect(code).toBe(0);
+      expect(startRun.mock.calls[0]?.[1]).toMatchObject({ goal: "apply --json" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -376,6 +483,275 @@ describe("runCli delegation to startRun", () => {
     }
   });
 
+  it("uses a noninteractive UI whose input fails without reading stdin", async () => {
+    const dir = makeManifestDir();
+    try {
+      let reads = 0;
+      const stdin = new Readable({
+        read() {
+          reads += 1;
+          this.push("should-not-be-read\n");
+          this.push(null);
+        },
+      });
+      const startRun = vi.fn(async (_path: string, opts: StartRunOptions) => {
+        const host = opts.hostFactory({
+          runId: "fake",
+          def: {} as HostFactoryContext["def"],
+          log: {} as HostFactoryContext["log"],
+          loadedManifest: {} as LoadedManifest,
+        });
+        const uiContext = (
+          host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
+        ).uiContext;
+        await uiContext?.input("Which color?");
+        return makeStartRunMock({})(_path, opts);
+      });
+      const c = makeConsole();
+
+      const code = await runCli(["--non-interactive", "manifest.yaml", "goal"], {
+        startRun: startRun as unknown as Parameters<typeof runCli>[1]["startRun"],
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+        stdin,
+      });
+
+      expect(code).toBe(1);
+      expect(reads).toBe(0);
+      expect(c.stderrLines.join("\n")).toMatch(/AskUserUnavailableError/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("creates --log-dir recursively and passes its absolute path as baseDir", async () => {
+    const dir = makeManifestDir();
+    const logDir = join(dir, "nested", "records");
+    try {
+      const startRun = vi.fn(makeStartRunMock({}));
+      const code = await runCli(["--log-dir", "nested/records", "manifest.yaml", "goal"], {
+        startRun,
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+      });
+
+      expect(code).toBe(0);
+      expect(existsSync(logDir)).toBe(true);
+      expect(startRun.mock.calls[0]?.[1]).toMatchObject({ baseDir: logDir });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails clearly before startRun when --log-dir cannot be created", async () => {
+    const dir = makeManifestDir();
+    const filePath = join(dir, "not-a-directory");
+    writeFileSync(filePath, "file", "utf8");
+    try {
+      const startRun = vi.fn(makeStartRunMock({}));
+      const c = makeConsole();
+      const code = await runCli(["--log-dir", "not-a-directory", "manifest.yaml", "goal"], {
+        startRun,
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+      });
+
+      expect(code).toBe(1);
+      expect(startRun).not.toHaveBeenCalled();
+      expect(c.stderrLines.join("\n")).toMatch(/Cannot create log directory/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes one versioned JSON result to stdout from the existing handle projections", async () => {
+    const dir = makeManifestDir();
+    try {
+      const stdout = makeWritableRecorder();
+      const c = makeConsole();
+      const runStats = {
+        runId: "run-json-1",
+        state: "done",
+        exitReason: "done",
+        recordsCount: 7,
+      };
+      const code = await runCli(["--json", "manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({
+          runId: "run-json-1",
+          latestResponse: {
+            role: "orchestrator",
+            text: "Completed.",
+            completedAt: 123,
+          },
+          runStats,
+        }),
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+        stdout,
+      });
+
+      expect(code).toBe(0);
+      expect(c.stdoutLines).toEqual([]);
+      const document = stdout.chunks.join("");
+      expect(document.trim().split("\n")).toHaveLength(1);
+      expect(JSON.parse(document)).toEqual({
+        schema_version: 1,
+        run_id: "run-json-1",
+        exit_reason: "done",
+        final_role: "done",
+        latest_response: {
+          role: "orchestrator",
+          text: "Completed.",
+          completed_at: 123,
+        },
+        run_stats: runStats,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resolve until the JSON stdout write completes", async () => {
+    const dir = makeManifestDir();
+    try {
+      const chunks: string[] = [];
+      const writeStarted = makeDeferred<void>();
+      let releaseWrite!: () => void;
+      const stdout = new Writable({
+        write(chunk, _encoding, callback) {
+          chunks.push(String(chunk));
+          releaseWrite = () => callback();
+          writeStarted.resolve();
+        },
+      });
+      const run = runCli(["--json", "manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({ runId: "run-json-flush" }),
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+        stdout,
+      });
+      const settled = vi.fn();
+      void run.then(settled);
+
+      await writeStarted.promise;
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+
+      releaseWrite();
+      expect(await run).toBe(0);
+      expect(JSON.parse(chunks.join(""))).toMatchObject({ run_id: "run-json-flush" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes a JSON result for session_failed without changing terminal exit semantics", async () => {
+    const dir = makeManifestDir();
+    try {
+      const stdout = makeWritableRecorder();
+      const code = await runCli(["--json", "manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({
+          runId: "run-json-failed",
+          finalRole: "worker",
+          exitReason: "session_failed",
+          latestResponse: null,
+        }),
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+        stdout,
+      });
+
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.chunks.join(""))).toMatchObject({
+        schema_version: 1,
+        run_id: "run-json-failed",
+        exit_reason: "session_failed",
+        final_role: "worker",
+        latest_response: null,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps interactive prompts on stderr when JSON mode owns stdout", async () => {
+    const dir = makeManifestDir();
+    try {
+      const stdin = Readable.from(["blue\n"]);
+      const stdout = makeWritableRecorder();
+      const stderr = makeWritableRecorder();
+      let answer: string | undefined;
+      const startRun = vi.fn(async (_path: string, opts: StartRunOptions) => {
+        const host = opts.hostFactory({
+          runId: "fake",
+          def: {} as HostFactoryContext["def"],
+          log: {} as HostFactoryContext["log"],
+          loadedManifest: {} as LoadedManifest,
+        });
+        const uiContext = (
+          host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
+        ).uiContext;
+        answer = await uiContext?.input("Which color?");
+        return makeStartRunMock({ runId: "run-json-prompt" })(_path, opts);
+      });
+
+      const code = await runCli(["--json", "manifest.yaml", "goal"], {
+        startRun: startRun as unknown as Parameters<typeof runCli>[1]["startRun"],
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+        stdin,
+        stdout,
+        stderr,
+      });
+
+      expect(code).toBe(0);
+      expect(answer).toBe("blue");
+      expect(stderr.chunks.join("")).toContain("Which color?:");
+      expect(JSON.parse(stdout.chunks.join(""))).toMatchObject({
+        schema_version: 1,
+        run_id: "run-json-prompt",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns nonzero with empty stdout when JSON-mode startup fails", async () => {
+    const dir = makeManifestDir();
+    try {
+      const stdout = makeWritableRecorder();
+      const c = makeConsole();
+      const code = await runCli(["--json", "manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({ failWith: new Error("startup failed") }),
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+        stdout,
+      });
+
+      expect(code).toBe(1);
+      expect(stdout.chunks).toEqual([]);
+      expect(c.stderrLines.join("\n")).toContain("startup failed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns exit 0 and prints run_id + terminal state on successful run", async () => {
     const dir = makeManifestDir();
     try {
@@ -494,6 +870,103 @@ describe("CLI preflight unregistered-provider warning (T2.12)", () => {
       });
       const stderr = c.stderrLines.join("\n");
       expect(stderr).not.toMatch(/unregistered provider/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── graceful process signals (issue #34) ─────────────────────────────
+
+describe("runCli process signals", () => {
+  it.each([
+    "SIGINT",
+    "SIGTERM",
+  ] as const)("requests one graceful abort for a first %s and removes listeners after completion", async (signal) => {
+    const dir = makeManifestDir();
+    try {
+      const completion = makeDeferred<{
+        finalCheckpoint: { current_role: string };
+        exitReason: "aborted";
+      }>();
+      const abort = vi.fn(async () => {});
+      const baseHandle = await makeStartRunMock({ runId: "run-signal" })("", {});
+      const handle = {
+        ...baseHandle,
+        completion: () => completion.promise,
+        abort,
+      } as unknown as RunHandle;
+      const startRun = vi.fn(async () => handle);
+      const signals = new FakeSignalSource();
+      const exit = makeExit();
+
+      const run = runCli(["manifest.yaml", "goal"], {
+        startRun,
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: exit.fn,
+        cwd: dir,
+        signals,
+      });
+      await vi.waitFor(() => expect(startRun).toHaveBeenCalledTimes(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      signals.emit(signal);
+      completion.resolve({
+        finalCheckpoint: { current_role: "orchestrator" },
+        exitReason: "aborted",
+      });
+
+      expect(await run).toBe(0);
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(abort).toHaveBeenCalledWith(expect.stringContaining(signal));
+      expect(exit.codes).toEqual([]);
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("terminates immediately on a second signal without requesting another abort", async () => {
+    const dir = makeManifestDir();
+    try {
+      const completion = makeDeferred<{
+        finalCheckpoint: { current_role: string };
+        exitReason: "aborted";
+      }>();
+      const abort = vi.fn(async () => {});
+      const baseHandle = await makeStartRunMock({ runId: "run-second-signal" })("", {});
+      const handle = {
+        ...baseHandle,
+        completion: () => completion.promise,
+        abort,
+      } as unknown as RunHandle;
+      const startRun = vi.fn(async () => handle);
+      const signals = new FakeSignalSource();
+      const exit = makeExit();
+
+      const run = runCli(["manifest.yaml", "goal"], {
+        startRun,
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: exit.fn,
+        cwd: dir,
+        signals,
+      });
+      await vi.waitFor(() => expect(startRun).toHaveBeenCalledTimes(1));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      signals.emit("SIGINT");
+      signals.emit("SIGTERM");
+      completion.resolve({
+        finalCheckpoint: { current_role: "orchestrator" },
+        exitReason: "aborted",
+      });
+
+      expect(await run).toBe(0);
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect(exit.codes).toEqual([143]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

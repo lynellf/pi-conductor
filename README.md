@@ -58,6 +58,28 @@ scripted runs:
 node dist/bin/conduct.js .pi/conductor.yaml "ship the changelog"
 ```
 
+The CLI also provides a machine-safe mode for benchmark adapters and other
+noninteractive callers:
+
+```bash
+conduct \
+  --non-interactive \
+  --log-dir /tmp/pi-conductor/run-123 \
+  --json \
+  .pi/conductor.yaml \
+  "Implement the requested repository change."
+```
+
+`--non-interactive` makes `ask_user` fail immediately instead of reading
+stdin. `--log-dir <path>` selects the persistent run-log directory and creates
+missing parents. `--json` reserves stdout for one versioned terminal JSON
+document; prompts, warnings, and diagnostics use stderr. Normal conductor
+terminal outcomes (`done`, `session_failed`, and `aborted`) retain exit code 0
+and are distinguished by `exit_reason`; setup and unexpected runtime errors
+remain nonzero. While a run is active, the first `SIGINT` or `SIGTERM` requests
+a graceful abort so terminal state can be persisted; a second signal exits
+immediately.
+
 The engine is the same in all three surfaces — extension, CLI, and library.
 
 ---
@@ -454,7 +476,7 @@ in `src/host/host.ts` (six methods: `spawnRole`, `captureUsage`,
 
 The CLI is a thin example of this: `src/bin/conduct.ts` calls `startRun` with a
 `hostFactory` that builds a `ProductionHost` from a fresh `ModelRegistry`. Read
-it for a self-contained 100-line integration example.
+it for a self-contained integration example.
 
 ---
 
