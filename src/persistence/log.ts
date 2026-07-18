@@ -266,7 +266,7 @@ export class InMemoryRecordLog implements RecordLog {
     for (let i = list.length - 1; i >= 0; i--) {
       const record = list[i];
       if (record && record.type === "checkpoint_snapshot") {
-        return record.checkpoint;
+        return normalizeCheckpoint(record.checkpoint);
       }
     }
     return null;
@@ -299,4 +299,12 @@ export class InMemoryRecordLog implements RecordLog {
     // No-op for in-memory. Phase 4 file-backed impl closes its FD here.
     this.byRun = new Map();
   }
+}
+
+/** Normalize checkpoint fields added after older snapshots were persisted. */
+export function normalizeCheckpoint(checkpoint: Checkpoint): Checkpoint {
+  return Object.freeze({
+    ...checkpoint,
+    end_request: checkpoint.end_request ?? null,
+  }) as Checkpoint;
 }

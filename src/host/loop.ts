@@ -88,6 +88,7 @@ import type { CheckpointSnapshot, PersistedRecord } from "../persistence/log.js"
 import { summarizePayload } from "../seam/payload-summary.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import { NoMoreModelsError } from "./errors.js";
+import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type {
   Host,
   RoleSession,
@@ -224,8 +225,9 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // On the first orchestrator-current moment, the loop synthesizes
     // a machine `end` event and feeds it to `reduce` (the only
     // legal mechanism — the host MUST NOT mutate the checkpoint to
-    // `done` directly, §11.7). The reducer doesn't know the event
-    // is synthesized; it sees a normal end from the orchestrator.
+    // `done` directly, §11.7). The explicit run_cost_cap authority
+    // lets the reducer bypass normal end-request gating without
+    // bypassing the reducer itself.
     if (pendingForcedEnd) {
       if (checkpoint.current_role !== def.orchestrator) {
         // Defensive: pendingForcedEnd should only be set on a
@@ -241,6 +243,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       }
       const synthesized: MachineEvent = {
         type: "end",
+        authority: "run_cost_cap",
         payload: { reason: "run_cost_cap_exceeded" },
       };
       const result = reduce(checkpoint, synthesized, def, {
@@ -452,7 +455,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               !recoveringFromNoEmission
             ) {
               recoveringFromNoEmission = true;
-              nextSeed = formatNoEmissionRecoveryMessage(role, def);
+              nextSeed = formatNoEmissionRecovery(role, def);
               continue;
             }
             const failureReason: string = hostReason ?? validated.reason;
@@ -516,6 +519,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
 
               const synthesized: MachineEvent = {
                 type: "end",
+                authority: "run_cost_cap",
                 payload: { reason: "run_cost_cap_exceeded" },
               };
               const result = reduce(checkpoint, synthesized, def, {
@@ -797,6 +801,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // §7.2) — the reducer accepts it and advances state.
       const synthesized: MachineEvent = {
         type: "handoff",
+        request_end: false,
         target_role: def.orchestrator,
         payload: { reason: "role_unavailable", role: role },
       };
@@ -819,7 +824,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // orchestrator. The orchestrator's system prompt would handle
       // this payload; the loop just formats the surface text.
       handoffContextRef = null;
-      seed = formatRoleUnavailableSeed(role);
+      seed = formatRoleUnavailableSeed(role, def.end_request_roles === null);
     } else {
       // advance: continue outer loop with the new seed.
       seed = roleOutcome.nextSeed;
@@ -866,25 +871,6 @@ function waitForRetry(delayMs: number): Promise<void> {
 }
 
 /**
- * Format a recovery prompt for a role turn that returned without a
- * captured `handoff` or `end`. This stays in the same live session so
- * the model can convert its just-produced natural-language conclusion
- * into the required conductor tool call. If this prompt also produces
- * no emission, the normal `session_failed(no_emission)` path fires.
- */
-function formatNoEmissionRecoveryMessage(role: Role, def: MachineDefinition): string {
-  const action =
-    role === def.orchestrator
-      ? "call exactly one conductor tool now: `handoff` to a legal next role, or `end` if the run is complete."
-      : `call exactly one conductor tool now: \`handoff\` to \`${def.orchestrator}\` with your verdict or status in \`reason\`.`;
-  return [
-    "Your previous response did not call `handoff` or `end`, so the conductor cannot advance.",
-    "Do not do more investigation or call any non-conductor tools.",
-    action,
-  ].join(" ");
-}
-
-/**
  * Format a `transition_rejected` result into a follow-up user message
  * that surfaces `legal_targets` to the model. The model sees this
  * message in its next turn (after the host queues it via
@@ -923,16 +909,22 @@ function formatRejectionMessage(result: {
  * synthesized; the seed is a surface for the model, not a
  * machine-readable contract.
  */
-function formatRoleUnavailableSeed(role: Role): string {
+function formatRoleUnavailableSeed(role: Role, canEnd: boolean): string {
+  const endOption = canEnd
+    ? "  - end the run, OR"
+    : "  - end is unavailable until an authorized worker requests completion;";
+  const finalInstruction = canEnd
+    ? "When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or end."
+    : "Emit exactly one actionable handoff (target_role, status, objective, summary, requested_action); do not call end without a pending authorized request.";
   return [
     `[role_unavailable: ${role}]`,
     `The role '${role}' exhausted its model fallback list (§8.2).`,
     `Per §9.4 v1 default, you have one chance to handle this:`,
-    `  - end the run, OR`,
+    endOption,
     `  - hand off to a different role (NOT '${role}'), OR`,
     `  - hand off to '${role}' (this will escalate per §9.4).`,
     "No readable source session exists for this synthesized handoff.",
-    "When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or end.",
+    finalInstruction,
   ].join("\n");
 }
 

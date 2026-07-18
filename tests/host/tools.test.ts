@@ -27,6 +27,7 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import type { MachineDefinition } from "../../src/core/types.js";
 import {
   createEndTool,
   createHandoffTool,
@@ -34,6 +35,14 @@ import {
 } from "../../src/host/index.js";
 import { SessionSeam } from "../../src/host/seam.js";
 import { InMemoryRecordLog, validateEmission } from "../../src/index.js";
+
+const GATED_DEF: MachineDefinition = {
+  manifest_version: "1",
+  orchestrator: "orchestrator",
+  workers: ["implementer", "reviewer"],
+  max_visits: { implementer: 2, reviewer: 2 },
+  end_request_roles: ["reviewer"],
+};
 
 // ─── Test helper: invoke a tool's execute without an ExtensionContext ──
 //
@@ -45,7 +54,11 @@ type ExecuteFn = (
   this: void,
   toolCallId: string,
   params: unknown,
-) => Promise<{ details: EmissionToolDetails; terminate?: boolean }>;
+) => Promise<{
+  content: Array<{ readonly type: string; readonly text: string }>;
+  details: EmissionToolDetails;
+  terminate?: boolean;
+}>;
 
 function invoke(tool: ToolDefinition, params: unknown) {
   const execute = tool.execute as unknown as ExecuteFn;
@@ -55,6 +68,18 @@ function invoke(tool: ToolDefinition, params: unknown) {
 // ─── Valid first call ─────────────────────────────────────────────────
 
 describe("emission tools — valid first call", () => {
+  it("describes the complete role-specific handoff contract", () => {
+    const tool = createHandoffTool(new SessionSeam(), undefined, {
+      role: "reviewer",
+      def: GATED_DEF,
+    });
+
+    expect(tool.description).toContain("Current role: reviewer");
+    expect(tool.description).toContain("target_role must be orchestrator");
+    expect(tool.description).toContain("status: ready | blocked | complete");
+    expect(tool.description).toContain("request_end: true");
+  });
+
   it("handoff writes one capture, seals, returns terminating ok", async () => {
     const seam = new SessionSeam();
     const tool = createHandoffTool(seam);
@@ -94,6 +119,7 @@ describe("emission tools — valid first call", () => {
       kind: "ok",
       event: {
         type: "handoff",
+        request_end: false,
         target_role: "implementer",
         payload: {
           target_role: "implementer",
@@ -125,6 +151,7 @@ describe("emission tools — valid first call", () => {
       kind: "ok",
       event: {
         type: "end",
+        authority: "role",
         payload: { reason: "all done" },
       },
     });
@@ -167,6 +194,77 @@ describe("emission tools — valid first call", () => {
     });
     expect(result.terminate).toBe(false);
     expect(seam.read()).toEqual([]);
+  });
+
+  it("rejects an invalid status in-session with enum and example guidance", async () => {
+    const seam = new SessionSeam();
+    const tool = createHandoffTool(seam, undefined, { role: "reviewer", def: GATED_DEF });
+    const result = await invoke(tool, { ...actionableHandoff("orchestrator"), status: "done" });
+
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "handoff_incomplete",
+      invalid_fields: ["status"],
+    });
+    expect(result.terminate).toBe(false);
+    expect(result.content[0]?.text).toContain("ready | blocked | complete");
+    expect(result.content[0]?.text).toContain("Valid example");
+    expect(seam.read()).toEqual([]);
+  });
+
+  it("rejects an unauthorized end request without capture or sealing", async () => {
+    const seam = new SessionSeam();
+    const tool = createHandoffTool(seam, undefined, {
+      role: "implementer",
+      def: GATED_DEF,
+    });
+    const result = await invoke(tool, {
+      ...actionableHandoff("orchestrator"),
+      status: "complete",
+      request_end: true,
+    });
+
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "handoff_incomplete",
+      invalid_fields: ["request_end"],
+    });
+    expect(result.terminate).toBe(false);
+    expect(seam.read()).toEqual([]);
+    expect(seam.isSealed).toBe(false);
+  });
+
+  it("fails closed when an end request has no role context", async () => {
+    const seam = new SessionSeam();
+    const tool = createHandoffTool(seam);
+    const result = await invoke(tool, {
+      ...actionableHandoff("custom-orchestrator"),
+      status: "complete",
+      request_end: true,
+    });
+
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "handoff_incomplete",
+      invalid_fields: ["request_end"],
+    });
+    expect(result.terminate).toBe(false);
+    expect(seam.read()).toEqual([]);
+  });
+
+  it("uses actual manifest role names in correction examples", async () => {
+    const def: MachineDefinition = {
+      ...GATED_DEF,
+      orchestrator: "lead",
+      workers: ["builder", "reviewer"],
+      max_visits: { builder: 2, reviewer: 2 },
+    };
+    const seam = new SessionSeam();
+    const tool = createHandoffTool(seam, undefined, { role: "builder", def });
+    const result = await invoke(tool, { ...actionableHandoff("lead"), status: "done" });
+
+    expect(result.content[0]?.text).toContain('"target_role":"lead"');
+    expect(result.content[0]?.text).not.toContain('"target_role":"orchestrator"');
   });
 });
 

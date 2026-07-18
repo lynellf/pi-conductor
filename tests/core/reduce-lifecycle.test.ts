@@ -35,6 +35,7 @@ const DEF: MachineDefinition = Object.freeze({
   orchestrator: "orchestrator",
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
+  end_request_roles: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -50,6 +51,7 @@ function ck(
     manifest_version: def.manifest_version,
     current_role,
     visit_count: Object.freeze({ ...visit_count }),
+    end_request: null,
     active_role_session,
     updated_at: 0,
   };

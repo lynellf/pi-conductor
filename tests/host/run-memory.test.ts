@@ -19,7 +19,9 @@
 
 import { describe, expect, it } from "vitest";
 import { runLoop } from "../../src/host/loop.js";
+import { formatRunMemorySeed } from "../../src/host/run-memory.js";
 import {
+  buildRunMemory,
   createInitialCheckpoint,
   InMemoryRecordLog,
   type MachineDefinition,
@@ -32,10 +34,37 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
+    end_request_roles: null,
   }) as MachineDefinition;
 }
 
 describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
+  it("surfaces gated end authority and never suggests an illegal end", () => {
+    const def: MachineDefinition = { ...makeDef(), end_request_roles: ["worker"] };
+    const checkpoint = createInitialCheckpoint(def);
+    const blockedSeed = formatRunMemorySeed(
+      buildRunMemory(checkpoint, [], def, { goal: "x", runCostCap: null }),
+    );
+    expect(blockedSeed).toContain("end_request: (none)");
+    expect(blockedSeed).toContain("can_end: false");
+    expect(blockedSeed).toContain("Do not call end");
+
+    const approvedSeed = formatRunMemorySeed(
+      buildRunMemory(
+        {
+          ...checkpoint,
+          end_request: { role: "worker", session_file: "/worker.jsonl" },
+        },
+        [],
+        def,
+        { goal: "x", runCostCap: null },
+      ),
+    );
+    expect(approvedSeed).toContain("end_request: role: worker");
+    expect(approvedSeed).toContain("can_end: true");
+    expect(approvedSeed).toContain("or call end if the goal is complete");
+  });
+
   it("passes a trusted predecessor context reference in both handoff directions", async () => {
     const initialCheckpoint = createInitialCheckpoint(makeDef());
     const log = new InMemoryRecordLog();

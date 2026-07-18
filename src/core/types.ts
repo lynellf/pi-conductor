@@ -46,6 +46,8 @@ export interface MachineDefinition {
   readonly workers: readonly Role[];
   /** Per-worker visit cap (finite), keyed by worker role. §7.4. */
   readonly max_visits: Readonly<Record<Role, number>>;
+  /** Authorized completion requesters; null preserves legacy ungated ending. */
+  readonly end_request_roles: readonly Role[] | null;
 }
 
 // ─── §5.1, §12: Machine events ──────────────────────────────────────────
@@ -58,8 +60,17 @@ export interface MachineDefinition {
  * machine's). Payload shape validation lives at the seam (host), not here.
  */
 export type MachineEvent =
-  | { readonly type: "handoff"; readonly target_role: Role; readonly payload: unknown }
-  | { readonly type: "end"; readonly payload: unknown };
+  | {
+      readonly type: "handoff";
+      readonly target_role: Role;
+      readonly request_end: boolean;
+      readonly payload: unknown;
+    }
+  | {
+      readonly type: "end";
+      readonly authority: "role" | "run_cost_cap";
+      readonly payload: unknown;
+    };
 
 // ─── §11.1: Checkpoint record ───────────────────────────────────────────
 
@@ -73,8 +84,15 @@ export interface Checkpoint {
   readonly manifest_version: string;
   readonly current_role: Role | "done";
   readonly visit_count: Readonly<Record<Role, number>>;
+  readonly end_request: EndRequest | null;
   readonly active_role_session: ActiveRoleSession | null;
   readonly updated_at: number;
+}
+
+/** Single-use worker authorization for the next orchestrator end decision. */
+export interface EndRequest {
+  readonly role: Role;
+  readonly session_file: string;
 }
 
 /** Live role session reference held on the checkpoint while a session runs. */
@@ -99,6 +117,8 @@ export type Effect = string;
 export type RejectReason =
   | "illegal_event"
   | "guard_failed"
+  | "end_request_unauthorized"
+  | "end_request_required"
   | "schema_invalid"
   | "extra_emission"
   | "no_emission";
@@ -133,6 +153,9 @@ export interface TransitionAccepted {
   readonly to: Role | "done";
   readonly event: "handoff" | "end";
   readonly target_role: Role | null;
+  readonly request_end: boolean;
+  readonly end_authority: "role" | "run_cost_cap" | null;
+  readonly end_requested_by: Role | null;
   readonly role: Role;
   readonly suggests_next: Role | null;
   readonly payload_summary: PayloadSummary;
@@ -162,6 +185,7 @@ export interface TransitionRejected {
   readonly state: Role | "done";
   readonly event: "handoff" | "end" | "<malformed>";
   readonly target_role: Role | null;
+  readonly request_end: boolean;
   readonly reason: RejectReason;
   readonly legal_targets: LegalTargets;
   readonly role: Role;

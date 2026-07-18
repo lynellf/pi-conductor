@@ -47,6 +47,7 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: [],
     max_visits: {},
+    end_request_roles: null,
   };
 }
 
@@ -64,6 +65,7 @@ function makeCheckpoint(opts: {
       manifest_version: "1",
       current_role: opts.currentRole,
       visit_count: opts.visitCount ?? {},
+      end_request: null,
       active_role_session: null,
       updated_at: opts.ts ?? Date.now(),
     },
@@ -133,6 +135,9 @@ function makeTransitionAccepted(opts: {
     to: opts.to as never,
     event: opts.event,
     target_role: opts.targetRole as never,
+    request_end: false,
+    end_authority: opts.event === "end" ? "role" : null,
+    end_requested_by: null,
     role: opts.role as never,
     suggests_next: null,
     payload_summary: { field_names: [] },
@@ -341,6 +346,7 @@ describe("runStats (§11.6) — transitionHistory covers every accepted/rejected
         state: "orchestrator",
         event: "handoff",
         target_role: "unknown",
+        request_end: false,
         reason: "illegal_event",
         legal_targets: { handoff: ["worker"], end: true },
         role: "orchestrator",
@@ -462,6 +468,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
           manifest_version: "1",
           current_role: "worker",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: {
             id: "session-1",
             role: "worker",
@@ -503,6 +510,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
           manifest_version: "1",
           current_role: "worker",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: {
             id: "session-1",
             role: "worker",
@@ -547,6 +555,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
           manifest_version: "1",
           current_role: "worker",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: {
             id: "session-1",
             role: "orchestrator",
@@ -583,6 +592,7 @@ describe("runStats (§11.8) — activeSession reflects the live same-role sessio
           manifest_version: "1",
           current_role: "worker",
           visit_count: { worker: 1 },
+          end_request: null,
           active_role_session: {
             id: "session-1",
             role: "worker",

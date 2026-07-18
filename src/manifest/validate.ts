@@ -32,6 +32,14 @@ export type ManifestErrorCode =
   | "uncapped-worker"
   /** `max_run_cost_usd` is on a worker; run-level cap lives only on orchestrator (§8). */
   | "max-run-cost-on-worker"
+  /** Configured end-request allowlist is empty. */
+  | "end-request-roles-empty"
+  /** Configured end-request allowlist repeats a role. */
+  | "end-request-role-duplicate"
+  /** Configured end-request allowlist names an undeclared role. */
+  | "end-request-role-undeclared"
+  /** The orchestrator finalizes; it cannot be configured as a requester. */
+  | "end-request-role-orchestrator"
   /** A `models:` entry is not in `provider:id` form (§8.1). */
   | "bare-model-alias"
   /** A `models:` entry has an invalid effort token (§8.1). */
@@ -121,6 +129,40 @@ export function validateManifest(m: Manifest): ManifestReport {
 
   // ─── Delegation lite §3: collect role and subagent names ───────────
   const roleNames = new Set(m.roles.map((r) => r.name));
+
+  if (m.end_request_roles !== undefined) {
+    if (m.end_request_roles.length === 0) {
+      errors.push({
+        code: "end-request-roles-empty",
+        message: "`end_request_roles` must contain at least one declared worker role",
+      });
+    }
+    const seen = new Set<Role>();
+    const orchestratorNames = new Set(orchestrators.map((role) => role.name));
+    for (const role of m.end_request_roles) {
+      if (seen.has(role)) {
+        errors.push({
+          code: "end-request-role-duplicate",
+          message: `role '${role}' appears more than once in \`end_request_roles\``,
+          role,
+        });
+      }
+      seen.add(role);
+      if (!roleNames.has(role)) {
+        errors.push({
+          code: "end-request-role-undeclared",
+          message: `\`end_request_roles\` names undeclared role '${role}'`,
+          role,
+        });
+      } else if (orchestratorNames.has(role)) {
+        errors.push({
+          code: "end-request-role-orchestrator",
+          message: `orchestrator '${role}' finalizes runs and cannot appear in \`end_request_roles\``,
+          role,
+        });
+      }
+    }
+  }
 
   // Delegation lite §3.5: subagent name uniqueness and FSM collision.
   const subagentNames = new Set<string>();

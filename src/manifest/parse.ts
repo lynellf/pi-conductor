@@ -75,9 +75,15 @@ export function parseManifestFromObject(raw: unknown): Manifest {
 
   const subagentsRaw = obj.subagents;
   const subagents = subagentsRaw !== undefined ? parseSubagentProfiles(subagentsRaw) : undefined;
+  const endRequestRolesRaw = obj.end_request_roles;
+  const end_request_roles =
+    endRequestRolesRaw !== undefined
+      ? toNonEmptyStringArray(endRequestRolesRaw, "end_request_roles")
+      : undefined;
 
   return Object.freeze({
     version,
+    ...(end_request_roles !== undefined && { end_request_roles }),
     roles: Object.freeze(roles),
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
   }) as Manifest;

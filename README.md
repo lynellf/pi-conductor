@@ -99,6 +99,7 @@ example:
 
 ```yaml
 version: 1
+end_request_roles: [reviewer]
 roles:
   - name: orchestrator
     is_orchestrator: true
@@ -130,8 +131,9 @@ Each role's system prompt is a plain-prose `.md` file at the declared
 `DefaultResourceLoader({ systemPromptOverride })` and feeds it to the role's
 session. See the shipped defaults at
 `tests/fixtures/default-conductor/.pi/roles/`. A role prompt tells the role
-which tools it has (`handoff`, and — for the orchestrator only — `end`), what
-its legal handoff targets are, and when to end.
+which tools it has, what its legal handoff target is, and whether it may request
+completion. The host force-injects both `handoff` and `end` into every role;
+workers return through `handoff`, while only the orchestrator can finalize a run.
 
 A minimal starter bundle is available programmatically:
 
@@ -170,6 +172,15 @@ confirmation dialog; confirming aborts the run just like `/conduct:abort`.
 | `tools`                | any role          | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. `delegate` is available only when it is listed here **and** the role declares `delegation`. See [Tools available to roles](#tools-available-to-roles) below for the full tool model and the `tools:`-omission footgun. |
 | `delegation`           | parent roles only | Enables bounded worktree subagents for this role. Requires `tools: [..., delegate]`; see [Worktree subagent delegation](#worktree-subagent-delegation) below. |
 
+The optional top-level `end_request_roles` list enables gated completion. It
+must contain one or more unique declared worker roles—never the orchestrator.
+When omitted, legacy behavior is preserved: the orchestrator may call `end`
+without a pending request. When configured, an authorized worker must first
+handoff to the orchestrator with `status: complete` and `request_end: true`.
+That approval is single-use: it is consumed by `end` and cleared if the
+orchestrator dispatches more work. Run-cost-cap forced closure remains legal
+without a request and still passes through the reducer.
+
 `version` is a human-bumped integer, **pinned at run-start and never mutated
 mid-run** (spec §10). `resumeRun` rejects a manifest whose version disagrees
 with the snapshot's pinned version.
@@ -194,13 +205,16 @@ disable them.
   `status` (`ready`, `blocked`, or `complete`), `objective`, `summary`, and
   `requested_action`, alongside `target_role: Role`. `reason` and
   `suggests_next: Role` remain optional (the latter is workers-only and
-  non-binding). An incomplete envelope returns an actionable error without
-  advancing, persisting an accepted transition, or sealing the role session, so
-  the role can correct it immediately.
+  non-binding). `request_end?: boolean` defaults to `false`; it is valid only
+  for a role named in `end_request_roles` handing back to the orchestrator with
+  `status: complete`. An incomplete or unauthorized envelope returns an
+  actionable error without advancing, persisting an accepted transition, or
+  sealing the role session, so the role can correct it immediately.
 - **`end`** — terminate this role's session and declare the run complete. Legal
-  only from the orchestrator (§7.2); a worker calling `end` produces a
-  `transition_rejected` record with `legal_targets` surfaced. Args: optional
-  `reason: string`.
+  only from the orchestrator (§7.2). With `end_request_roles` configured, a
+  normal `end` additionally requires a pending authorized request. A worker
+  calling `end` produces a `transition_rejected` record with `legal_targets`
+  surfaced. Args: optional `reason: string`.
 
 Both tools only **validate and record intent** into a per-session capture buffer
 and return a terminating message after a valid capture; they do **not** call

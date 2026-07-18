@@ -16,6 +16,7 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: [],
     max_visits: {},
+    end_request_roles: null,
   };
 }
 

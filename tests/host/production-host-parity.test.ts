@@ -59,6 +59,7 @@ function makeDef(): MachineDefinition {
     orchestrator: "orchestrator",
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
+    end_request_roles: null,
   }) as MachineDefinition;
 }
 
