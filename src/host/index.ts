@@ -113,7 +113,7 @@ export { StubHost } from "./stub-host.js";
 // swap to an async tail or external store transparently.
 
 export type { FileRecordLogOptions } from "./log-file.js";
-export { FileRecordLog } from "./log-file.js";
+export { FileRecordLog, RecordLogError } from "./log-file.js";
 
 // ─── RunHandle (Task 13.5, §11.9) ────────────────────────────────────
 // Runtime handle for a run. Returned by startRun / resumeRun;
