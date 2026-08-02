@@ -214,6 +214,7 @@ export {
   ModelNotFoundError,
   NoMoreModelsError,
   ProductionHost,
+  RecordLogError,
   RoleEscalationError,
   RunControlError,
   RunHandle,
