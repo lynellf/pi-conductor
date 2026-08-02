@@ -79,6 +79,61 @@ describe("extension shell — Task 7B.3: /conduct:list", () => {
     expect(noRuns).toBeDefined();
   });
 
+  it("skips a corrupted run while still rendering healthy runs (issue #37 Finding 1)", async () => {
+    // One corrupted run log must NOT take down the listing of every other
+    // run in the base dir. `FileRecordLog.records()` throws a typed
+    // `RecordLogError` on a malformed/unknown record; the list handler
+    // catches it per-run, surfaces a warning, and continues.
+    const piDir = join(cwd, ".pi");
+    await mkdir(piDir, { recursive: true });
+    await writeFile(
+      join(piDir, "conductor.yaml"),
+      "version: 1\nroles:\n  - name: orchestrator\n    is_orchestrator: true\n    system_prompt: .pi/roles/orchestrator.md\n    tools: [handoff, end]\n  - name: worker\n    max_visits: 3\n    system_prompt: .pi/roles/worker.md\n    tools: [handoff, end]\n",
+      "utf8",
+    );
+    const runsDir = join(cwd, ".pi-conductor", "runs");
+    await mkdir(runsDir, { recursive: true });
+    // Corrupted run: an unknown record `type` (schema drift) → RecordLogError.
+    await writeFile(join(runsDir, "corrupted.jsonl"), '{"type":"future_record"}\n', "utf8");
+    // Healthy run: a valid checkpoint_snapshot the handler can summarize.
+    await writeFile(
+      join(runsDir, "healthy.jsonl"),
+      `${JSON.stringify({
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          run_id: "healthy",
+          manifest_version: "1",
+          current_role: "orchestrator",
+          visit_count: {},
+          end_request: null,
+          active_role_session: null,
+          updated_at: 1,
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const ext = await loadExtension("<test>", cwd);
+    const list = ext.commands.get("conduct:list");
+    expect(list).toBeDefined();
+    await list?.handler(
+      "",
+      makeCtx({
+        cwd,
+        notify: (msg, type) => notifyCalls.push({ msg, type }),
+      }),
+    );
+
+    // The corrupted run surfaces a warning naming the run id.
+    expect(notifyCalls.some((call) => call.type === "warning" && /corrupted/i.test(call.msg))).toBe(
+      true,
+    );
+    // The healthy run still appears in the info summary.
+    expect(notifyCalls.some((call) => call.type === "info" && call.msg.includes("healthy"))).toBe(
+      true,
+    );
+  });
+
   it("appends a transition trace to each per-run line (AC4)", async () => {
     // Phase 8 / handoff-visibility: `/conduct:list`
     // renders the run's transition trace after the

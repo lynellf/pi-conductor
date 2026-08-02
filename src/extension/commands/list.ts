@@ -32,7 +32,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { FileRecordLog } from "../../host/index.js";
+import { FileRecordLog, RecordLogError } from "../../host/index.js";
 import { runStats } from "../../host/stats.js";
 import {
   type LoadedManifest,
@@ -133,18 +133,27 @@ export async function handleList(
   const log = new FileRecordLog({ baseDir });
   const lines: string[] = [];
   for (const runId of runIds.slice(0, MAX_RENDERED_RUNS)) {
-    const records: readonly PersistedRecord[] = log.records(runId);
-    const latestCheckpoint = log.latestCheckpoint(runId);
-    const exitReason = computeListedExitReason(records, latestCheckpoint);
-    const stats: RunStats = runStats(records, runId, loaded.def, exitReason);
-    const trace = formatTransitionTrace(stats.transitionHistory);
-    const activeSession = stats.activeSession;
-    const modelPart =
-      activeSession === undefined || activeSession === null
-        ? ""
-        : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
-    const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}${modelPart}`;
-    lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
+    // Issue #37 Finding 1: a single corrupted run log (torn mid-file write or
+    // schema drift) must NOT take down the listing of every other run in the
+    // base dir. `records()` / `latestCheckpoint()` throw a typed `RecordLogError`
+    // on corruption — catch it here, surface a per-run warning, and keep going.
+    try {
+      const records: readonly PersistedRecord[] = log.records(runId);
+      const latestCheckpoint = log.latestCheckpoint(runId);
+      const exitReason = computeListedExitReason(records, latestCheckpoint);
+      const stats: RunStats = runStats(records, runId, loaded.def, exitReason);
+      const trace = formatTransitionTrace(stats.transitionHistory);
+      const activeSession = stats.activeSession;
+      const modelPart =
+        activeSession === undefined || activeSession === null
+          ? ""
+          : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
+      const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}${modelPart}`;
+      lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
+    } catch (error) {
+      if (!(error instanceof RecordLogError)) throw error;
+      ctx.ui.notify(`Cannot read run ${runId}: ${error.message}`, "warning");
+    }
   }
   const overflow = runIds.length - lines.length;
   const summary = lines.join(" | ") + (overflow > 0 ? ` (+${overflow} more in ${baseDir})` : "");
