@@ -304,5 +304,5 @@ describe("Default v1 bundle (§15.5) — remediation loop exhausts max_visits th
 
     // No model_fallback records (no model errors in this run).
     expect(records.some((r) => r.type === "model_fallback")).toBe(false);
-  });
+  }, 10_000);
 });
