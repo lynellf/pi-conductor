@@ -41,7 +41,7 @@ import { getActiveRun, setActiveRun } from "../active-run.js";
 import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
 import { formatHandoffNotify } from "../handoff-view.js";
 import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "../manifest.js";
-import { startStatusPoller } from "../status.js";
+import { startStatusPoller, trackStatusPoller } from "../status.js";
 import { installConductEscapeAbortListener, notifyEscapeAbortResult } from "./abort-active-run.js";
 import { ensureRunBaseDir, type HandleDeps } from "./start.js";
 
@@ -157,6 +157,8 @@ export async function handleResume(
     },
   );
 
+  const releaseStatusPoller = trackStatusPoller(stopPoller);
+
   const stopEscapeListener = installConductEscapeAbortListener({
     ctx,
     handle,
@@ -177,6 +179,7 @@ export async function handleResume(
     ctx.ui.notify(`pi-conductor run_id=${handle.runId} failed: ${message}`, "error");
   } finally {
     stopEscapeListener();
+    releaseStatusPoller();
     stopPoller();
     if (getActiveRun() === handle) {
       setActiveRun(null);
