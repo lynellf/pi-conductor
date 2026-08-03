@@ -81,6 +81,7 @@ import { handleSteer } from "../src/extension/commands/steer.js";
 import { createConductMessageRenderers } from "../src/extension/conduct-message-renderer.js";
 import { getCurrentOrchestratorRole } from "../src/extension/current-orchestrator.js";
 import { createConductDisplaySink } from "../src/extension/display-sink-wiring.js";
+import { stopTrackedStatusPoller } from "../src/extension/status.js";
 import { subscribeToRecords } from "../src/host/index.js";
 
 /**
@@ -123,6 +124,14 @@ function withDeps(
  * fast enough that sync is clearer).
  */
 export default function conductExtension(pi: ExtensionAPI): void {
+  // pi tears down the old extension runtime before replacing a
+  // session. Detach the poller without flushing or clearing its
+  // captured UI callbacks; both are bound to the stale command
+  // context after that lifecycle boundary.
+  pi.on("session_shutdown", () => {
+    stopTrackedStatusPoller({ flush: false, clearStatus: false });
+  });
+
   pi.registerFlag(CONDUCT_MANIFEST_FLAG, {
     description: "Override the conductor manifest path (default: <cwd>/.pi/conductor.yaml)",
     type: "string",
