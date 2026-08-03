@@ -119,6 +119,45 @@ export interface StartStatusPollerOptions {
 /** Braille spinner frames. Cycles on the 250ms poll interval. */
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
+/** Options for stopping a status poller. */
+export interface StopStatusPollerOptions {
+  /** Emit transitions that appeared since the last interval tick. */
+  readonly flush?: boolean;
+  /** Clear the status line through the poller's captured UI callback. */
+  readonly clearStatus?: boolean;
+}
+
+/** A status poller disposer, optionally skipping stale-context UI work. */
+export type StatusPollerStop = (options?: StopStatusPollerOptions) => void;
+
+let trackedStatusPoller: StatusPollerStop | null = null;
+
+/**
+ * Track the process-wide poller so session replacement can detach it before
+ * pi invalidates the command context captured by its callbacks.
+ */
+export function trackStatusPoller(stop: StatusPollerStop): () => void {
+  if (trackedStatusPoller !== null) {
+    const previous = trackedStatusPoller;
+    trackedStatusPoller = null;
+    previous({ flush: false, clearStatus: false });
+  }
+  trackedStatusPoller = stop;
+  return () => {
+    if (trackedStatusPoller === stop) trackedStatusPoller = null;
+  };
+}
+
+/**
+ * Detach the tracked poller. Session lifecycle handlers must pass both flags
+ * as false because the captured command UI context may already be stale.
+ */
+export function stopTrackedStatusPoller(options?: StopStatusPollerOptions): void {
+  const stop = trackedStatusPoller;
+  trackedStatusPoller = null;
+  stop?.(options);
+}
+
 /**
  * Start a status poller for the given `RunHandle`. The
  * poller calls `setStatus(text)` on every tick until
@@ -157,7 +196,7 @@ export function startStatusPoller(
   handle: RunHandle,
   setStatus: (text: string | undefined) => void,
   options: StartStatusPollerOptions = {},
-): () => void {
+): StatusPollerStop {
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | null = null;
   // `-1` sentinel: the first tick establishes the
@@ -219,29 +258,17 @@ export function startStatusPoller(
   tick();
   timer = setInterval(tick, POLL_INTERVAL_MS);
 
-  const stop = (): void => {
+  const stop: StatusPollerStop = (stopOptions = {}): void => {
     if (stopped) return;
-    // Final diff (Phase 8). For fast runs the
-    // 250 ms interval may not fire between the
-    // last transition and `handle.completion()`
-    // resolving — the poller could go straight
-    // from the initial tick to the handler's
-    // `finally` block. Without this final pass,
-    // the user would not see the handoff
-    // notifications for the run.
-    //
-    // The handler calls `stop()` in `finally`
-    // (after `handle.completion()` resolves), so
-    // the log is fully populated by the time we
-    // read it here. We diff against the current
-    // tracker, emit any new entries, and update
-    // the tracker. The first-tick sentinel
-    // (`lastSeenLength === -1`) is preserved here
-    // so a stop before the initial tick doesn't
-    // emit historical transitions (defense in
-    // depth — the initial tick fires before this
-    // `stop()` could be reached, in practice).
-    if (onNewTransitions !== undefined && lastSeenLength !== -1) {
+    stopped = true;
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+
+    // Session replacement cleanup must not invoke either
+    // callback: both close over the old command context.
+    if (stopOptions.flush !== false && onNewTransitions !== undefined && lastSeenLength !== -1) {
       const finalStats = handle.runStats();
       const finalHistory = finalStats.transitionHistory;
       if (finalHistory.length > lastSeenLength) {
@@ -249,16 +276,11 @@ export function startStatusPoller(
         lastSeenLength = finalHistory.length;
       }
     }
-    stopped = true;
-    if (timer !== null) {
-      clearInterval(timer);
-      timer = null;
-    }
-    // Always clear the line on stop. The handler
-    // calls `stop()` in `finally`, so the line is
-    // guaranteed to clear on terminal OR handler
-    // failure regardless of which tick last ran.
-    setStatus(undefined);
+
+    // Always clear the line on stop unless this is
+    // session-replacement cleanup. The latter must not
+    // touch the captured UI context after pi invalidates it.
+    if (stopOptions.clearStatus !== false) setStatus(undefined);
   };
 
   return stop;
