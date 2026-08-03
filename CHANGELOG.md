@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.1] - 2026-08-03
+
+### Bug fixes
+
+- **Resilient run-log recovery.** Torn trailing records are tolerated after a
+  crash, malformed records produce typed diagnostics, and one corrupted run no
+  longer prevents healthy runs from appearing in `/conduct:list`.
+- **Safe status-poller teardown.** Status pollers detach from stale pi session
+  contexts when a session is replaced, avoiding callbacks into invalid UI state.
+
 ## [0.12.0] - 2026-07-18
 
 ### Enhancements
