@@ -84,6 +84,7 @@ export interface RecordedExtension {
     string,
     (message: unknown, options: unknown, theme: unknown) => unknown
   >;
+  readonly sessionShutdownHandlers: Array<() => void>;
 }
 
 /**
@@ -102,6 +103,7 @@ export async function loadExtension(
     commands: new Map(),
     flags: new Map(),
     messageRenderers: new Map(),
+    sessionShutdownHandlers: [],
   };
   const api = {
     registerCommand: (
@@ -138,7 +140,9 @@ export async function loadExtension(
     // registerCommand / registerFlag / registerMessageRenderer;
     // the other methods are here only to satisfy the typed
     // shape.
-    on: () => {},
+    on: (event: string, handler: () => void) => {
+      if (event === "session_shutdown") ext.sessionShutdownHandlers.push(handler);
+    },
     registerTool: () => {},
     registerShortcut: () => {},
     getFlag: () => undefined,
