@@ -136,6 +136,7 @@ export type {
   RunConfigOverride,
   RunExecutionStatus,
   RunStats,
+  SubagentLifecycleStats,
   TransitionRecord,
 } from "./run-handle.js";
 export { RunHandle } from "./run-handle.js";

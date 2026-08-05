@@ -319,6 +319,48 @@ describe("resume child reconciliation (§7)", () => {
       expect.objectContaining({ status: "cancelled", failure_reason: "recovered_child_lost" }),
     ]);
   });
+
+  it("does not let an orphan terminal suppress a later unmatched start", () => {
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "subagent_failed",
+      run_id: "run",
+      child_id: "child",
+      task_id: "task",
+      subagent: "implementer",
+      model: "stub:model",
+      status: "failed",
+      failure_reason: "orphan",
+      branch: "conductor/run/child",
+      worktree_path: "/tmp/worktree",
+      base_commit: "base",
+      head_commit: null,
+      session_file: "child.jsonl",
+      usage: null,
+      ts: 1,
+    });
+    log.append({
+      type: "subagent_started",
+      run_id: "run",
+      child_id: "child",
+      task_id: "task",
+      subagent: "implementer",
+      model: "stub:model",
+      session_file: "child.jsonl",
+      worktree_path: "/tmp/worktree",
+      branch: "conductor/run/child",
+      base_commit: "base",
+      ts: 2,
+    });
+
+    reconcileLostChildren("run", log);
+
+    const failures = log.records("run").filter((record) => record.type === "subagent_failed");
+    expect(failures).toHaveLength(2);
+    expect(failures[1]).toEqual(
+      expect.objectContaining({ status: "cancelled", failure_reason: "recovered_child_lost" }),
+    );
+  });
 });
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

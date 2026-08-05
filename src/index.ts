@@ -194,6 +194,7 @@ export type {
   SpawnRoleOptions,
   StartRunOptions,
   StubHostOptions,
+  SubagentLifecycleStats,
   TransitionRecord,
 } from "./host/index.js";
 export {
