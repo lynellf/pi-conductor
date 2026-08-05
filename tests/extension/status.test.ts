@@ -24,7 +24,7 @@ type RunStatsFixture = RunStats & {
 
 /** Build a `RunStats` literal with only the fields the
  *  formatter reads. Keeps the test focused — `RunStats`
- *  has ~10 fields, but `formatConductStatus` reads three. */
+ *  has ~10 fields, but `formatConductStatus` reads only the status fields. */
 function makeStats(overrides: Partial<RunStatsFixture> = {}): RunStatsFixture {
   const base: RunStatsFixture = {
     runId: "test-run",
@@ -67,6 +67,13 @@ function makeStats(overrides: Partial<RunStatsFixture> = {}): RunStatsFixture {
     },
     latestCheckpoint: null,
     recordsCount: 0,
+    subagents: {
+      active: 0,
+      completed: 0,
+      noChanges: 0,
+      failed: 0,
+      cancelled: 0,
+    },
   };
   return { ...base, ...overrides };
 }
@@ -181,6 +188,23 @@ describe("formatConductStatus", () => {
   it("keeps the legacy line unchanged when activeSession is explicitly null", () => {
     const line = formatConductStatus(makeStats({ activeSession: null }));
     expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000 · Esc abort");
+  });
+
+  it("renders the active child count immediately before handoffs", () => {
+    const line = formatConductStatus(
+      makeStats({
+        subagents: {
+          active: 2,
+          completed: 1,
+          noChanges: 1,
+          failed: 0,
+          cancelled: 0,
+        },
+      }),
+    );
+    expect(line).toBe(
+      "conduct: orchestrator · running · subagents=2 active · handoffs=0 · $0.000 · Esc abort",
+    );
   });
 
   it("keeps the legacy line unchanged when activeSession is omitted", () => {

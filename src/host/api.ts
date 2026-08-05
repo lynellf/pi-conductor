@@ -455,14 +455,25 @@ function reconcileCrash(
 
 /** Resume never relaunches a child; unmatched starts become one durable cancellation (§7). */
 export function reconcileLostChildren(runId: string, log: RecordLog): void {
-  const records = log.records(runId);
-  const terminalChildIds = new Set(
-    records
-      .filter((record) => record.type === "subagent_completed" || record.type === "subagent_failed")
-      .map((record) => record.child_id),
-  );
-  for (const record of records) {
-    if (record.type !== "subagent_started" || terminalChildIds.has(record.child_id)) continue;
+  const started = new Map<string, Extract<PersistedRecord, { type: "subagent_started" }>>();
+  const terminalChildIds = new Set<string>();
+
+  // Scan in append order. A terminal before its start is an orphan and must
+  // not suppress recovery of the later start; duplicate starts and terminals
+  // are both reduced to the first lifecycle for that child ID.
+  for (const record of log.records(runId)) {
+    if (record.type === "subagent_started") {
+      if (!started.has(record.child_id)) started.set(record.child_id, record);
+    } else if (
+      (record.type === "subagent_completed" || record.type === "subagent_failed") &&
+      started.has(record.child_id)
+    ) {
+      terminalChildIds.add(record.child_id);
+    }
+  }
+
+  for (const record of started.values()) {
+    if (terminalChildIds.has(record.child_id)) continue;
     log.append({
       type: "subagent_failed",
       run_id: runId,

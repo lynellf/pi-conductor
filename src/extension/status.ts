@@ -13,7 +13,7 @@
  * with other extensions (model status, etc.) and a long
  * string would crowd it. The format is:
  *
- *   `conduct: <state> · <exit_reason> · [model=<...> · effort=<...>] · handoffs=<N> · $<cost>`
+ *   `conduct: <state> · <exit_reason> · [model=<...> · effort=<...>] · [subagents=N active] · handoffs=<N> · $<cost>`
  *
  * Examples:
  *   `conduct: orchestrator · running · handoffs=0 · $0.000`
@@ -67,8 +67,10 @@ export function formatConductStatus(stats: RunStats): string {
     activeSession === undefined || activeSession === null
       ? ""
       : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
+  const activeSubagents =
+    stats.subagents.active > 0 ? ` · subagents=${stats.subagents.active} active` : "";
   const escapeHint = reason === "running" ? " · Esc abort" : "";
-  return `conduct: ${state} · ${reason}${modelPart} · handoffs=${handoffs} · $${cost}${escapeHint}`;
+  return `conduct: ${state} · ${reason}${modelPart}${activeSubagents} · handoffs=${handoffs} · $${cost}${escapeHint}`;
 }
 
 /**

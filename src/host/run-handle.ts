@@ -55,6 +55,7 @@ export type {
   ActiveSessionStats,
   RunExecutionStatus,
   RunStats,
+  SubagentLifecycleStats,
   TransitionRecord,
 } from "./stats.js";
 
