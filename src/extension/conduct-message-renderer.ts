@@ -74,6 +74,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Component, Container, Markdown, Text } from "@earendil-works/pi-tui";
 
+import type { ChildDisplayOrigin } from "../host/display-sink.js";
+
 /**
  * Kind discriminator the display sink stamps on every `CustomMessage`.
  * - `"text"` — LLM text (conduct.role.text)
@@ -101,9 +103,10 @@ export type ConductMessageKind = "text" | "tool";
  * `is_orchestrator` is a derived boolean the sink computes at
  * emission time against the active run's manifest. The renderer
  * never branches on the orchestrator *role name*; it just reads
- * this boolean for color. This keeps the renderer run-agnostic —
- * registering it at extension factory time and reusing it across
- * runs is safe.
+ * this boolean for color. `origin`, when present, identifies a
+ * delegated child and replaces the parent role in the structural
+ * label. This keeps the renderer run-agnostic — registering it at
+ * extension factory time and reusing it across runs is safe.
  *
  * `kind` is `"text"` or `"tool"` (Phase 7B.UX restored the `"tool"`
  * kind for tool-call and tool-result display events). The renderer
@@ -116,6 +119,7 @@ export interface ConductMessageDetails {
   readonly role: string;
   readonly kind: ConductMessageKind;
   readonly is_orchestrator: boolean;
+  readonly origin?: ChildDisplayOrigin;
 }
 
 /**
@@ -161,6 +165,15 @@ function pickLabelColor(is_orchestrator: boolean, orchestratorRole: string | nul
   return WORKER_LABEL_COLOR;
 }
 
+/** Format the structural label, retaining explicit identity for child activity. */
+function formatDisplayLabel(details: ConductMessageDetails | undefined): string {
+  const origin = details?.origin;
+  if (origin !== undefined) {
+    return `subagent: ${origin.subagent} · ${origin.task_id}`;
+  }
+  return details?.role ?? "(unknown)";
+}
+
 /**
  * Build the `Container` for one `CustomMessage`. Pure: takes the
  * theme (passed by the SDK), the message, and a getter for the
@@ -173,7 +186,8 @@ function pickLabelColor(is_orchestrator: boolean, orchestratorRole: string | nul
  *
  *   1. `Text` — the role label, **bolded** via `theme.bold` and
  *      colored by role family. The label text is `details.role`
- *      (e.g., "orchestrator", "worker").
+ *      (e.g., "orchestrator", "worker"), or the explicit child
+ *      identity when `details.origin` is present.
  *   2. `Markdown` — the body, using the SDK's `getMarkdownTheme()`
  *      with no `defaultTextStyle.color` override. Element-level
  *      theme functions style the respective blocks. The body is
@@ -196,7 +210,7 @@ function buildContainer(
     details === undefined
       ? UNKNOWN_LABEL_COLOR
       : pickLabelColor(details.is_orchestrator, getOrchestratorRole());
-  const labelText = theme.fg(labelColor, theme.bold(details?.role ?? "(unknown)"));
+  const labelText = theme.fg(labelColor, theme.bold(formatDisplayLabel(details)));
 
   const body = message.content;
   const bodyText =
@@ -242,7 +256,7 @@ function buildToolContainer(
   void options;
 
   const details = message.details;
-  const labelText = theme.fg(TOOL_LABEL_COLOR, details?.role ?? "(unknown)");
+  const labelText = theme.fg(TOOL_LABEL_COLOR, formatDisplayLabel(details));
 
   const body = message.content;
   const bodyText =

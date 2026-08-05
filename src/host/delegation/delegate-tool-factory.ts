@@ -17,6 +17,7 @@ import type {
 } from "../../persistence/log.js";
 import { delegateArgsSchema, reportResultArgsSchema } from "../../seam/schema.js";
 import { SessionState } from "../cost.js";
+import type { DisplaySink } from "../display-sink.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
 import { executeDelegate } from "./delegate-tool.js";
@@ -41,6 +42,8 @@ export interface DelegateToolFactoryOptions {
   readonly modelRegistry: ModelRegistry;
   /** Test hosts can supply their in-memory SDK model directly. */
   readonly resolveChildModel?: (model: string) => ReturnType<ModelRegistry["find"]>;
+  /** Host-configured sink for forwarding delegated child activity to the TUI. */
+  readonly displaySink?: DisplaySink;
   readonly sessionDir: string;
   readonly manager: DelegationManager;
 }
@@ -211,7 +214,17 @@ async function createChildSession(
     throw new Error("child SDK session has no persistent session file");
   }
   const state = new SessionState({ cap: config.profile.max_session_cost_usd, model: entry.model });
-  attachSessionEventHandler({ session, state, role: opts.parentRole });
+  attachSessionEventHandler({
+    session,
+    state,
+    role: opts.parentRole,
+    ...(opts.displaySink !== undefined && { onDisplay: opts.displaySink }),
+    origin: {
+      child_id: config.childId,
+      task_id: config.taskId,
+      subagent: config.profile.name,
+    },
+  });
   return { session, state, model: entry.model };
 }
 
