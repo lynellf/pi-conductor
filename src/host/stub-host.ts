@@ -245,7 +245,7 @@ export class StubHost implements Host {
         parentRole: role,
         primaryCheckout: this.cwd,
         runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
-        log: this.log,
+        persistRecord: (record) => this.persistRecord(record),
         agentDir: `${this.cwd}/.pi-conductor/agent`,
         systemPromptRoot: delegationPromptRoot(this.loadedManifestValue, this.cwd),
         modelRegistry: this.modelRegistry,
