@@ -10,7 +10,7 @@ import {
 import type { Static } from "typebox";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type {
-  RecordLog,
+  PersistedRecord,
   SubagentCompletedRecord,
   SubagentFailedRecord,
   SubagentStartedRecord,
@@ -33,7 +33,8 @@ export interface DelegateToolFactoryOptions {
   readonly parentRole: string;
   readonly primaryCheckout: string;
   readonly runStateDir: string;
-  readonly log: RecordLog;
+  /** Host-owned append-and-notify seam for child lifecycle records. */
+  readonly persistRecord: (record: PersistedRecord) => void;
   readonly agentDir: string;
   /** Resolution root for profile system_prompt paths. */
   readonly systemPromptRoot: string;
@@ -74,8 +75,8 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           spawnAndRunChild: buildSpawnCallback(opts),
           isAdmissionClosed: () => opts.manager.isClosed(),
           onChildStarted: () => {},
-          onChildCompleted: (child) => appendCompleted(opts.log, opts.runId, child),
-          onChildFailed: (child) => appendFailed(opts.log, opts.runId, child),
+          onChildCompleted: (child) => appendCompleted(opts.persistRecord, opts.runId, child),
+          onChildFailed: (child) => appendFailed(opts.persistRecord, opts.runId, child),
         });
         // executeDelegate only returns after whole-batch validation succeeded.
         remaining -= args.tasks.length;
@@ -152,7 +153,7 @@ function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       base_commit: config.baseCommit,
       ts: Date.now(),
     };
-    opts.log.append(started);
+    opts.persistRecord(started);
     opts.manager.register(config.childId, child.session);
 
     const terminal = waitForChildTerminal(child, config.childId, opts.manager);
@@ -318,7 +319,11 @@ function childTaskSeed(config: SpawnChildConfig): string {
   ].join("\n");
 }
 
-function appendCompleted(log: RecordLog, runId: string, child: PoolCompletedResult): void {
+function appendCompleted(
+  persistRecord: (record: PersistedRecord) => void,
+  runId: string,
+  child: PoolCompletedResult,
+): void {
   const record: SubagentCompletedRecord = {
     type: "subagent_completed",
     run_id: runId,
@@ -337,10 +342,14 @@ function appendCompleted(log: RecordLog, runId: string, child: PoolCompletedResu
     usage: child.usage,
     ts: Date.now(),
   };
-  log.append(record);
+  persistRecord(record);
 }
 
-function appendFailed(log: RecordLog, runId: string, child: PoolFailedResult): void {
+function appendFailed(
+  persistRecord: (record: PersistedRecord) => void,
+  runId: string,
+  child: PoolFailedResult,
+): void {
   if (!child.lifecycleStarted) return;
   const record: SubagentFailedRecord = {
     type: "subagent_failed",
@@ -359,7 +368,7 @@ function appendFailed(log: RecordLog, runId: string, child: PoolFailedResult): v
     usage: child.usage,
     ts: Date.now(),
   };
-  log.append(record);
+  persistRecord(record);
 }
 
 function failedTerminal(
