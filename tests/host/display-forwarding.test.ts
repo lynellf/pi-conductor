@@ -146,6 +146,67 @@ describe("attachSessionEventHandler — display sink", () => {
     });
   });
 
+  it("preserves delegated child identity on assistant and tool display events", () => {
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    const onDisplay = vi.fn();
+    const origin = { child_id: "child-1", task_id: "task-a", subagent: "implementer" };
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "orchestrator",
+      onDisplay,
+      origin,
+    });
+
+    session.emit({ type: "message_end", message: makeAssistantMessage() });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "child-call-ok",
+      toolName: "bash",
+      args: { command: "pnpm test" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "child-call-ok",
+      toolName: "bash",
+      result: { ok: true },
+      isError: false,
+    });
+    session.emit({
+      type: "tool_execution_start",
+      toolCallId: "child-call-failed",
+      toolName: "read",
+      args: { path: "missing.ts" },
+    });
+    session.emit({
+      type: "tool_execution_end",
+      toolCallId: "child-call-failed",
+      toolName: "read",
+      result: "not found",
+      isError: true,
+    });
+
+    expect(onDisplay).toHaveBeenNthCalledWith(1, {
+      role: "orchestrator",
+      kind: "text",
+      text: "Hello \n\n> planning the response\n\nworld",
+      origin,
+    });
+    expect(onDisplay).toHaveBeenNthCalledWith(2, {
+      role: "orchestrator",
+      kind: "tool_result",
+      text: "✓ bash: pnpm test",
+      origin,
+    });
+    expect(onDisplay).toHaveBeenNthCalledWith(3, {
+      role: "orchestrator",
+      kind: "tool_result",
+      text: "✗ read: missing.ts: not found",
+      origin,
+    });
+  });
+
   it("includes non-redacted thinking content in the text display event", () => {
     const session = makeSession();
     const state = new SessionState({ cap: null, model: null });

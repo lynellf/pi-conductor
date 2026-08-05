@@ -165,6 +165,7 @@ export { buildRunMemory } from "./core/run-memory.js";
 export type {
   ActiveSessionStats,
   applyRunConfigOverride,
+  ChildDisplayOrigin,
   CreateProductionHostInputs,
   DefaultBundle,
   DisplayEvent,

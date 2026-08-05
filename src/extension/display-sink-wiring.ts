@@ -5,7 +5,7 @@
  * into custom session messages through the SDK's `sendMessage`
  * action so the TUI can render them without mutating the session tree.
  *
- * The `details` payload shape — `{ role, kind, is_orchestrator }` —
+ * The `details` payload shape — `{ role, kind, is_orchestrator, origin? }` —
  * is the seam contract shared with the conductor-owned message
  * renderer in `conduct-message-renderer.ts`. `kind` is `"text"` for
  * LLM text events and `"tool"` for tool_call/tool_result display
@@ -13,7 +13,8 @@
  * or `✓`/`✗` indicators). `is_orchestrator` is a derived boolean the
  * sink computes at emission time against the active run's orchestrator
  * role (tracked in `current-orchestrator.ts`), and the renderer reads
- * it for label color.
+ * it for label color. Child events additionally carry typed identity
+ * in `origin`, so concurrent tasks are not identified by their parent role.
  *
  * ## Phase 7B.UX — tool observability
  *
@@ -74,6 +75,7 @@ export function createConductDisplaySink(sendMessage: ExtensionAPI["sendMessage"
         role: event.role,
         kind: "text",
         is_orchestrator: orchestratorRole !== null && event.role === orchestratorRole,
+        ...(event.origin !== undefined && { origin: event.origin }),
       };
       sendMessage({
         customType: "conduct.role.text",
@@ -94,6 +96,7 @@ export function createConductDisplaySink(sendMessage: ExtensionAPI["sendMessage"
         role: event.role,
         kind: "tool",
         is_orchestrator: orchestratorRole !== null && event.role === orchestratorRole,
+        ...(event.origin !== undefined && { origin: event.origin }),
       };
       sendMessage({
         customType: "conduct.role.tool",

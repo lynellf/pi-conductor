@@ -324,6 +324,7 @@ export class ProductionHost implements Host {
         agentDir: this.agentDir,
         systemPromptRoot: delegationPromptRoot(this.loadedManifest, this.cwd),
         modelRegistry: this.modelRegistry,
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
         sessionDir: this.sessionDir,
         manager: this.delegationManager,
       });
