@@ -1,4 +1,13 @@
-/** Delegate tool factory — delegation lite §4, §6, §7. */
+/**
+ * Delegate tool factory — delegation lite §4, §6, §7.
+ *
+ * This module intentionally keeps parent-tool construction, child-session setup,
+ * terminal detection, and lifecycle-record emission together: those callbacks
+ * share the same SDK session and cancellation/cleanup invariants. Splitting
+ * them would separate the coupled adapter lifecycle without reducing its
+ * responsibility, so this cohesive module is retained just above the ~400 LOC
+ * guideline (and below the 500 LOC exception ceiling).
+ */
 
 import type { AgentSession, ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
@@ -10,13 +19,14 @@ import {
 import type { Static } from "typebox";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type {
-  RecordLog,
+  PersistedRecord,
   SubagentCompletedRecord,
   SubagentFailedRecord,
   SubagentStartedRecord,
 } from "../../persistence/log.js";
 import { delegateArgsSchema, reportResultArgsSchema } from "../../seam/schema.js";
 import { SessionState } from "../cost.js";
+import type { DisplaySink } from "../display-sink.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
 import { executeDelegate } from "./delegate-tool.js";
@@ -33,13 +43,16 @@ export interface DelegateToolFactoryOptions {
   readonly parentRole: string;
   readonly primaryCheckout: string;
   readonly runStateDir: string;
-  readonly log: RecordLog;
+  /** Host-owned append-and-notify seam for child lifecycle records. */
+  readonly persistRecord: (record: PersistedRecord) => void;
   readonly agentDir: string;
   /** Resolution root for profile system_prompt paths. */
   readonly systemPromptRoot: string;
   readonly modelRegistry: ModelRegistry;
   /** Test hosts can supply their in-memory SDK model directly. */
   readonly resolveChildModel?: (model: string) => ReturnType<ModelRegistry["find"]>;
+  /** Host-configured sink for forwarding delegated child activity to the TUI. */
+  readonly displaySink?: DisplaySink;
   readonly sessionDir: string;
   readonly manager: DelegationManager;
 }
@@ -74,8 +87,8 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           spawnAndRunChild: buildSpawnCallback(opts),
           isAdmissionClosed: () => opts.manager.isClosed(),
           onChildStarted: () => {},
-          onChildCompleted: (child) => appendCompleted(opts.log, opts.runId, child),
-          onChildFailed: (child) => appendFailed(opts.log, opts.runId, child),
+          onChildCompleted: (child) => appendCompleted(opts.persistRecord, opts.runId, child),
+          onChildFailed: (child) => appendFailed(opts.persistRecord, opts.runId, child),
         });
         // executeDelegate only returns after whole-batch validation succeeded.
         remaining -= args.tasks.length;
@@ -152,7 +165,7 @@ function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       base_commit: config.baseCommit,
       ts: Date.now(),
     };
-    opts.log.append(started);
+    opts.persistRecord(started);
     opts.manager.register(config.childId, child.session);
 
     const terminal = waitForChildTerminal(child, config.childId, opts.manager);
@@ -210,7 +223,17 @@ async function createChildSession(
     throw new Error("child SDK session has no persistent session file");
   }
   const state = new SessionState({ cap: config.profile.max_session_cost_usd, model: entry.model });
-  attachSessionEventHandler({ session, state, role: opts.parentRole });
+  attachSessionEventHandler({
+    session,
+    state,
+    role: opts.parentRole,
+    ...(opts.displaySink !== undefined && { onDisplay: opts.displaySink }),
+    origin: {
+      child_id: config.childId,
+      task_id: config.taskId,
+      subagent: config.profile.name,
+    },
+  });
   return { session, state, model: entry.model };
 }
 
@@ -318,7 +341,11 @@ function childTaskSeed(config: SpawnChildConfig): string {
   ].join("\n");
 }
 
-function appendCompleted(log: RecordLog, runId: string, child: PoolCompletedResult): void {
+function appendCompleted(
+  persistRecord: (record: PersistedRecord) => void,
+  runId: string,
+  child: PoolCompletedResult,
+): void {
   const record: SubagentCompletedRecord = {
     type: "subagent_completed",
     run_id: runId,
@@ -337,10 +364,14 @@ function appendCompleted(log: RecordLog, runId: string, child: PoolCompletedResu
     usage: child.usage,
     ts: Date.now(),
   };
-  log.append(record);
+  persistRecord(record);
 }
 
-function appendFailed(log: RecordLog, runId: string, child: PoolFailedResult): void {
+function appendFailed(
+  persistRecord: (record: PersistedRecord) => void,
+  runId: string,
+  child: PoolFailedResult,
+): void {
   if (!child.lifecycleStarted) return;
   const record: SubagentFailedRecord = {
     type: "subagent_failed",
@@ -359,7 +390,7 @@ function appendFailed(log: RecordLog, runId: string, child: PoolFailedResult): v
     usage: child.usage,
     ts: Date.now(),
   };
-  log.append(record);
+  persistRecord(record);
 }
 
 function failedTerminal(

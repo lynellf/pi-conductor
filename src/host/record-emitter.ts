@@ -7,8 +7,9 @@
  *
  * ## Quick summary
  *
- * - **Scoping** (`docs/record-emitter-spec.md §4.1`): covers loop-time
- *   `host.persistRecord` only; direct `log.append` calls bypass.
+ * - **Scoping** (`docs/record-emitter-spec.md §4.1`): covers every
+ *   host-owned `persistRecord` call, including delegated child lifecycle
+ *   records; direct `log.append` calls bypass.
  * - **Process-global registry.** One `Set<Listener>` for the entire
  *   pi process. A consumer extension subscribes once.
  * - **Thread-safety.** Node.js is single-threaded; the `Set` is safe

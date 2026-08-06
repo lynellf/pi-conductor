@@ -20,6 +20,7 @@ import {
   determineChildStatus,
   verifyWorktree,
 } from "../../src/host/delegation/worktree.js";
+import { notifyListeners, subscribeToRecords } from "../../src/host/record-emitter.js";
 import { makeStubModel } from "../../src/host/stub-provider.js";
 import type { DelegationPolicy, SubagentProfile } from "../../src/manifest/types.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
@@ -318,6 +319,81 @@ describe("resume child reconciliation (§7)", () => {
     expect(failures).toEqual([
       expect.objectContaining({ status: "cancelled", failure_reason: "recovered_child_lost" }),
     ]);
+  });
+
+  it("notifies the host seam when resume terminalizes a lost child", () => {
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "subagent_started",
+      run_id: "run",
+      child_id: "child",
+      task_id: "task",
+      subagent: "implementer",
+      model: "stub:model",
+      session_file: "child.jsonl",
+      worktree_path: "/tmp/worktree",
+      branch: "conductor/run/child",
+      base_commit: "base",
+      ts: 1,
+    });
+    const seen: string[] = [];
+    const unsubscribe = subscribeToRecords((record) => {
+      if (record.type.startsWith("subagent_")) seen.push(record.type);
+    });
+    try {
+      const persistAndNotify = (record: Parameters<typeof notifyListeners>[0]): void => {
+        log.append(record);
+        notifyListeners(record);
+      };
+      reconcileLostChildren("run", log, persistAndNotify);
+      reconcileLostChildren("run", log, persistAndNotify);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(seen).toEqual(["subagent_failed"]);
+  });
+
+  it("does not let an orphan terminal suppress a later unmatched start", () => {
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "subagent_failed",
+      run_id: "run",
+      child_id: "child",
+      task_id: "task",
+      subagent: "implementer",
+      model: "stub:model",
+      status: "failed",
+      failure_reason: "orphan",
+      branch: "conductor/run/child",
+      worktree_path: "/tmp/worktree",
+      base_commit: "base",
+      head_commit: null,
+      session_file: "child.jsonl",
+      usage: null,
+      ts: 1,
+    });
+    log.append({
+      type: "subagent_started",
+      run_id: "run",
+      child_id: "child",
+      task_id: "task",
+      subagent: "implementer",
+      model: "stub:model",
+      session_file: "child.jsonl",
+      worktree_path: "/tmp/worktree",
+      branch: "conductor/run/child",
+      base_commit: "base",
+      ts: 2,
+    });
+
+    reconcileLostChildren("run", log);
+
+    const failures = log.records("run").filter((record) => record.type === "subagent_failed");
+    expect(failures).toHaveLength(2);
+    expect(failures[1]).toEqual(
+      expect.objectContaining({ status: "cancelled", failure_reason: "recovered_child_lost" }),
+    );
   });
 });
 

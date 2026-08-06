@@ -65,20 +65,24 @@ rejections are caught and suppressed (§4.4).
 
 ### §4.1 Scoping
 
-The emitter covers loop-time `host.persistRecord` calls only — both
+The emitter covers every host-owned `persistRecord` call — both
 `ProductionHost.persistRecord` and `StubHost.persistRecord` call
-`notifyListeners` after `log.append`.
+`notifyListeners` after `log.append`. This includes delegated child lifecycle
+records (`subagent_started` followed by exactly one terminal
+`subagent_completed` or `subagent_failed`).
 
 Direct `log.append` calls that bypass `persistRecord` are **outside**
 the emitter's scope:
 
 - The initial checkpoint snapshot in `startRun` (`src/host/api.ts`).
-- Crash reconciliation records (`session_failed("crashed")` and the
-  snapshot that follows).
-- The crash snapshot that follows reconciliation.
+- Crash reconciliation records for the interrupted parent session
+  (`session_failed("crashed")` and the snapshots that follow).
 
-The durable JSONL log is the system of record; the emitter is
-best-effort fan-out.
+Resume reconciliation of an unmatched delegated child start is the exception:
+its synthesized `subagent_failed(status: "cancelled")` is appended through the
+same host-owned append-and-notify seam as normal child terminals, so live
+consumers receive it exactly once. The durable JSONL log is the system of
+record; the emitter is best-effort fan-out.
 
 ### §4.2 FIFO delivery
 
@@ -155,7 +159,7 @@ The following are explicitly **not** part of this contract:
 
 ## §7 — Authoritative test cases
 
-The test file `tests/host/record-emitter.test.ts` exercises all nine
+The test file `tests/host/record-emitter.test.ts` exercises all ten
 cases defined by the contract. Each case maps to one or more §4
 clauses:
 
@@ -170,6 +174,7 @@ clauses:
 | 7 | Unsubscribe is idempotent | §4.6 |
 | 8 | No listeners registered is a no-op | §4.7 |
 | 9 | Consumer-side `run_id` filter is correct | §4.1 (scoping, consumer responsibility) |
+| 10 | Delegated child start and sole terminal are delivered once, after durable append, in order | §4.1 (host persist seam), §4.2 |
 
-These nine cases are the authoritative test surface. A tenth case would
-be a new enhancement and requires an update to this mapping.
+These ten cases are the authoritative test surface. New cases require an
+update to this mapping.

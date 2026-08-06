@@ -16,17 +16,25 @@
  *   7. Unsubscribe is idempotent (§4.6)
  *   8. No listeners registered is a no-op (§4.7)
  *   9. run_id filter on the consumer side is correct (§4.1)
+ *  10. delegated child lifecycle start/terminal delivery (§4.1)
  *
  * Tests use `subscribeToRecords` (from the public barrel), the
  * `StubHost` with `InMemoryRecordLog`, and both direct `persistRecord`
- * calls (unit-level) and `runLoop` (integration-level, case 1).
+ * calls (unit-level) and `runLoop` (integration-level, cases 1 and 10).
  *
  * Table-driven where the spec enumerates cases; one assertion per
  * behavior per AGENTS.md testing convention.
  */
 
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runLoop } from "../../src/host/loop.js";
+import { loadManifestFromString } from "../../src/host/manifest.js";
 import {
   type Checkpoint,
   createInitialCheckpoint,
@@ -64,6 +72,24 @@ function sessionStarted(
     parent_session: null,
     ts: Date.now(),
   } as unknown as PersistedRecord;
+}
+
+const execFileAsync = promisify(execFile);
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout;
+}
+
+async function createGitRepository(): Promise<string> {
+  const cwd = await mkdtemp(join(tmpdir(), "pi-conductor-record-emitter-"));
+  await git(cwd, "init");
+  await git(cwd, "config", "user.email", "test@example.com");
+  await git(cwd, "config", "user.name", "Test User");
+  await writeFile(join(cwd, "README.md"), "base\n");
+  await git(cwd, "add", "README.md");
+  await git(cwd, "commit", "-m", "base");
+  return cwd;
 }
 
 // ─── Cleanup: unsubscribe everything between tests ────────────────────
@@ -125,6 +151,119 @@ describe("Case 1 — listener fires on every persistRecord", () => {
     const orchStartIdx = types.indexOf("session_started");
     const orchAcceptIdx = types.indexOf("transition_accepted");
     expect(orchStartIdx).toBeLessThan(orchAcceptIdx);
+  });
+});
+
+// ─── Delegated child lifecycle records ───────────────────────────────
+
+describe("delegated child lifecycle records — record emitter §4.1", () => {
+  it.each([
+    ["completed child normalized to no_changes", "completed"],
+    ["failed child", "failed"],
+  ] as const)("delivers %s exactly once after durable append", async (_name, childStatus) => {
+    const cwd = await createGitRepository();
+    try {
+      await writeFile(join(cwd, "child.md"), "Complete the delegated task.\n");
+      await git(cwd, "add", "child.md");
+      await git(cwd, "commit", "-m", "child prompt");
+
+      const loaded = loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [delegate]
+    delegation:
+      allowed_subagents: [implementer]
+      max_children_per_session: 1
+      max_parallel: 1
+subagents:
+  - name: implementer
+    models:
+      - model: stub:model
+        effort: medium
+    max_session_cost_usd: 1
+    system_prompt: child.md
+`);
+      const checkpoint = createInitialCheckpoint(loaded.def);
+      const log = new InMemoryRecordLog();
+      const host = new StubHost({
+        runId: checkpoint.run_id,
+        log,
+        cwd,
+        loadedManifest: loaded,
+        steps: [
+          {
+            kind: "emit_tool_calls",
+            calls: [
+              {
+                name: "delegate",
+                arguments: {
+                  tasks: [
+                    {
+                      id: "child-task",
+                      subagent: "implementer",
+                      objective: "Do the delegated task.",
+                      expected_output: "Report the result.",
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            kind: "emit_tool_calls",
+            calls: [
+              {
+                name: "report_result",
+                arguments: {
+                  status: childStatus,
+                  summary: "child terminal",
+                },
+              },
+            ],
+          },
+          { kind: "emit_end", reason: "delegation complete" },
+        ],
+      });
+      const seen: PersistedRecord[] = [];
+      const durableAtNotify: boolean[] = [];
+      const unsubscribe = subscribeToRecords((record) => {
+        if (record.type.startsWith("subagent_")) {
+          seen.push(record);
+          durableAtNotify.push(log.records(checkpoint.run_id).includes(record));
+        }
+      });
+
+      try {
+        await runLoop({
+          def: loaded.def,
+          initialCheckpoint: checkpoint,
+          host,
+          initialGoal: "delegate the task",
+        });
+      } finally {
+        unsubscribe();
+      }
+
+      const durable = log
+        .records(checkpoint.run_id)
+        .filter((record) => record.type.startsWith("subagent_"));
+      expect(seen).toHaveLength(2);
+      expect(durableAtNotify).toEqual([true, true]);
+      expect(seen.map((record) => record.type)).toEqual([
+        "subagent_started",
+        childStatus === "completed" ? "subagent_completed" : "subagent_failed",
+      ]);
+      expect(seen[1]).toMatchObject(
+        childStatus === "completed"
+          ? { type: "subagent_completed", status: "no_changes" }
+          : { type: "subagent_failed", status: "failed" },
+      );
+      expect(seen).toEqual(durable);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

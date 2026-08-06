@@ -320,10 +320,11 @@ export class ProductionHost implements Host {
         parentRole: role,
         primaryCheckout: this.cwd,
         runStateDir,
-        log: this.log,
+        persistRecord: (record) => this.persistRecord(record),
         agentDir: this.agentDir,
         systemPromptRoot: delegationPromptRoot(this.loadedManifest, this.cwd),
         modelRegistry: this.modelRegistry,
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
         sessionDir: this.sessionDir,
         manager: this.delegationManager,
       });
@@ -464,9 +465,8 @@ export class ProductionHost implements Host {
   }
 
   persistRecord(record: PersistedRecord): void {
-    // Append-only: the host is the sole writer (the loop calls
-    // this exactly once per reduce / reduceLifecycle result,
-    // plus once per checkpoint snapshot).
+    // Append-only: the host is the sole writer (the loop and delegated
+    // child lifecycle callbacks use this seam for durable records).
     this.log.append(record);
     notifyListeners(record); // spec §4.1 — fan-out after durable append
   }

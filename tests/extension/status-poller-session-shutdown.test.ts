@@ -40,6 +40,13 @@ function makeStats(): RunStats {
     },
     latestCheckpoint: null,
     recordsCount: 0,
+    subagents: {
+      active: 0,
+      completed: 0,
+      noChanges: 0,
+      failed: 0,
+      cancelled: 0,
+    },
   };
 }
 

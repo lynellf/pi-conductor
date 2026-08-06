@@ -10,7 +10,7 @@ tags:
   - records
   - streaming
   - contracts
-updated_at: 2026-07-01
+updated_at: 2026-08-06
 ---
 # Summary
 
@@ -28,10 +28,17 @@ cross-cutting architectural facts.
   extensions (telemetry, analytics, TUI bridges). Missed records are
   recoverable by walking the log directory — the emitter makes no
   delivery guarantee.
-- **Scoping:** The emitter covers `host.persistRecord` calls only.
-  Direct `log.append` calls (initial checkpoint snapshot in `startRun`,
-  crash reconciliation records, recovery snapshots) bypass the emitter.
-  Documented in `docs/record-emitter-spec.md §4.1`.
+- **Scoping:** The emitter covers every host-owned `persistRecord`
+  call — both `ProductionHost.persistRecord` and `StubHost.persistRecord`
+  call `notifyListeners` after `log.append`. This now includes delegated
+  child lifecycle records (`subagent_started` + exactly one terminal) and
+  resume reconciliation of unmatched child starts (their synthesized
+  `subagent_failed(status: "cancelled")` is appended through the same
+  append-and-notify seam, so live consumers receive it exactly once).
+  Direct `log.append` calls still bypass the emitter: the initial
+  checkpoint snapshot in `startRun`, and crash reconciliation records for
+  the interrupted parent session (`session_failed("crashed")` + the
+  snapshots that follow). Documented in `docs/record-emitter-spec.md §4.1`.
 - **Process-global, not per-host:** One `Set<Listener>` for the entire
   pi process. A consumer extension subscribes once at load time and
   receives records from all hosts. Per-host isolation would be an
@@ -54,8 +61,8 @@ cross-cutting architectural facts.
 
 - `docs/record-emitter-spec.md` — full spec contract (§1–§7).
 - `src/host/record-emitter.ts` — implementation (~130 LOC including JSDoc).
-- `tests/host/record-emitter.test.ts` — 9 test cases pinning every
-  contract clause.
+- `tests/host/record-emitter.test.ts` — 10 test cases pinning every
+  contract clause (case 10: delegated child lifecycle delivery).
 - `docs/archive/issues-5-and-6/phase-1-record-emitter-spec.md` — task
   list and verification for the spec consolidation.
 
@@ -63,3 +70,5 @@ cross-cutting architectural facts.
 
 - `.okf/concepts/manifest-validation-boundary.md` — another example of
   a clearly bounded contract surface in this repo.
+- `.okf/concepts/delegated-child-observability.md` — the child lifecycle
+  subsystem that feeds records through this emitter.

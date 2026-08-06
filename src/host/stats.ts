@@ -59,6 +59,15 @@ export interface ActiveSessionStats {
   readonly effort: ModelEffort;
 }
 
+/** Counts for the host-owned child session lifecycle projection (§7). */
+export interface SubagentLifecycleStats {
+  readonly active: number;
+  readonly completed: number;
+  readonly noChanges: number;
+  readonly failed: number;
+  readonly cancelled: number;
+}
+
 /**
  * A single transition record as projected for the run stats.
  * Derived from `TransitionAccepted` / `TransitionRejected` records
@@ -92,6 +101,7 @@ export interface RunStats {
   readonly latestCheckpoint: Checkpoint | null;
   readonly recordsCount: number;
   readonly activeSession?: ActiveSessionStats | null;
+  readonly subagents: SubagentLifecycleStats;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -120,6 +130,7 @@ export function runStats(
   const transitionHistory = extractTransitionHistory(records, runId);
   const recordsCount = countRecordsForRun(records, runId);
   const activeSession = findActiveSession(records, runId, latestCheckpoint);
+  const subagents = projectSubagentLifecycle(records, runId);
 
   // §11.8: `state` is the current role from the latest checkpoint.
   // If no checkpoint exists yet (the run hasn't started), fall
@@ -137,10 +148,61 @@ export function runStats(
     latestCheckpoint,
     recordsCount,
     activeSession,
+    subagents,
   }) as RunStats;
 }
 
 // ─── Internals ─────────────────────────────────────────────────────────
+
+/**
+ * Project each unique started child to one active or terminal status.
+ * Terminals before a start are orphans, and later duplicate starts or
+ * terminals cannot alter the first lifecycle outcome (§7).
+ */
+function projectSubagentLifecycle(
+  records: readonly PersistedRecord[],
+  runId: string,
+): SubagentLifecycleStats {
+  const started = new Set<string>();
+  const terminal = new Set<string>();
+  let completed = 0;
+  let noChanges = 0;
+  let failed = 0;
+  let cancelled = 0;
+
+  for (const record of records) {
+    if (record.type === "subagent_started") {
+      if (record.run_id === runId) started.add(record.child_id);
+      continue;
+    }
+    if (
+      (record.type !== "subagent_completed" && record.type !== "subagent_failed") ||
+      record.run_id !== runId ||
+      !started.has(record.child_id) ||
+      terminal.has(record.child_id)
+    ) {
+      continue;
+    }
+
+    terminal.add(record.child_id);
+    if (record.type === "subagent_completed") {
+      if (record.status === "completed") completed += 1;
+      else noChanges += 1;
+    } else if (record.status === "failed") {
+      failed += 1;
+    } else {
+      cancelled += 1;
+    }
+  }
+
+  return Object.freeze({
+    active: started.size - terminal.size,
+    completed,
+    noChanges,
+    failed,
+    cancelled,
+  });
+}
 
 /**
  * Walk records in reverse to find the most recent
