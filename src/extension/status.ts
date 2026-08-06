@@ -13,13 +13,14 @@
  * with other extensions (model status, etc.) and a long
  * string would crowd it. The format is:
  *
- *   `conduct: <state> · <exit_reason> · [model=<...> · effort=<...>] · [subagents=N active] · handoffs=<N> · $<cost>`
+ *   `conduct: <state> · <exit_reason> · [model=<...> · effort=<...>] · [subagent outcome tokens] · handoffs=<N> · $<cost>`
  *
  * Examples:
  *   `conduct: orchestrator · running · handoffs=0 · $0.000`
  *   `conduct: worker · running · model=anthropic:claude-sonnet-4-5 · effort=high · handoffs=1 · $0.012`
- *   `conduct: done · done · handoffs=3 · $0.045`
- *   `conduct: worker · session_failed · handoffs=2 · $0.030`
+ *   `conduct: worker · running · subagents=2 active · subagents=1 failed · handoffs=1 · $0.012`
+ *   `conduct: done · done · subagents=1 completed · subagents=1 no-change · handoffs=3 · $0.045`
+ *   `conduct: worker · session_failed · subagents=1 cancelled · handoffs=2 · $0.030`
  *
  * `handoffs=<N>` counts only `event === "handoff"` entries
  * in `transitionHistory` (Q5 default: `end` is excluded; the
@@ -47,6 +48,18 @@ function formatEffortToken(effort: string): string {
   return effort;
 }
 
+function formatSubagentTokens(stats: RunStats): string {
+  const tokens = [
+    stats.subagents.active > 0 ? `subagents=${stats.subagents.active} active` : null,
+    stats.subagents.completed > 0 ? `subagents=${stats.subagents.completed} completed` : null,
+    stats.subagents.noChanges > 0 ? `subagents=${stats.subagents.noChanges} no-change` : null,
+    stats.subagents.failed > 0 ? `subagents=${stats.subagents.failed} failed` : null,
+    stats.subagents.cancelled > 0 ? `subagents=${stats.subagents.cancelled} cancelled` : null,
+  ].filter((token): token is string => token !== null);
+
+  return tokens.length > 0 ? ` · ${tokens.join(" · ")}` : "";
+}
+
 /** The status-line key used by `ctx.ui.setStatus`. The
  *  extension is the single owner of this key — no other
  *  extension in this package should `setStatus` under
@@ -67,10 +80,9 @@ export function formatConductStatus(stats: RunStats): string {
     activeSession === undefined || activeSession === null
       ? ""
       : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
-  const activeSubagents =
-    stats.subagents.active > 0 ? ` · subagents=${stats.subagents.active} active` : "";
+  const subagentTokens = formatSubagentTokens(stats);
   const escapeHint = reason === "running" ? " · Esc abort" : "";
-  return `conduct: ${state} · ${reason}${modelPart}${activeSubagents} · handoffs=${handoffs} · $${cost}${escapeHint}`;
+  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens} · handoffs=${handoffs} · $${cost}${escapeHint}`;
 }
 
 /**
