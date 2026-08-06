@@ -28,11 +28,14 @@ import {
   type CheckpointSnapshot,
   createInitialCheckpoint,
   FileRecordLog,
+  type HostFactoryContext,
   listRuns,
   type MachineDefinition,
+  type PersistedRecord,
   resumeRun,
   type SessionLifecycleEvent,
   startRun,
+  subscribeToRecords,
   type TransitionAccepted,
 } from "../../src/index.js";
 
@@ -377,6 +380,59 @@ describe("Task 13.5 — file-backed log + resume", () => {
     const recordsAfter = new FileRecordLog({ baseDir }).records(handle.runId);
     const failedAfter = recordsAfter.filter((r) => r.type === "session_failed");
     expect(failedAfter).toHaveLength(0);
+  });
+
+  it("resume emits recovered child cancellation once and does not duplicate it", async () => {
+    const checkpoint = {
+      ...createInitialCheckpoint(makeDef()),
+      current_role: "done" as const,
+    };
+    const log = new FileRecordLog({ baseDir });
+    log.append({ type: "checkpoint_snapshot", checkpoint });
+    log.append({
+      type: "subagent_started",
+      run_id: checkpoint.run_id,
+      child_id: "child-1",
+      task_id: "task-1",
+      subagent: "implementer",
+      model: "stub:model",
+      session_file: "child.jsonl",
+      worktree_path: "/tmp/child-worktree",
+      branch: "conductor/run/child-1",
+      base_commit: "base",
+      ts: 1,
+    });
+
+    const seen: PersistedRecord[] = [];
+    const unsubscribe = subscribeToRecords((record) => {
+      if (record.type === "subagent_failed") seen.push(record);
+    });
+    try {
+      const hostFactory = ({ runId, log: resumedLog, loadedManifest }: HostFactoryContext) =>
+        new StubHost({ runId, log: resumedLog, loadedManifest, steps: [] });
+      const first = await resumeRun(manifestPath, checkpoint.run_id, {
+        goal: "",
+        baseDir,
+        hostFactory,
+      });
+      await first.completion();
+      const second = await resumeRun(manifestPath, checkpoint.run_id, {
+        goal: "",
+        baseDir,
+        hostFactory,
+      });
+      await second.completion();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      type: "subagent_failed",
+      child_id: "child-1",
+      status: "cancelled",
+      failure_reason: "recovered_child_lost",
+    });
   });
 
   it("resume preserves a pending end request and lets the orchestrator consume it", async () => {
