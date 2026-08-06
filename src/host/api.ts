@@ -79,6 +79,7 @@ import type { Host } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
+import { notifyListeners } from "./record-emitter.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
 
@@ -371,7 +372,10 @@ function reconcileCrash(
   def: MachineDefinition,
   log: RecordLog,
 ): Checkpoint {
-  reconcileLostChildren(runId, log);
+  reconcileLostChildren(runId, log, (record) => {
+    log.append(record);
+    notifyListeners(record);
+  });
   const active = checkpoint.active_role_session;
   if (active === null) return checkpoint;
 
@@ -453,8 +457,17 @@ function reconcileCrash(
   return result.checkpoint;
 }
 
-/** Resume never relaunches a child; unmatched starts become one durable cancellation (§7). */
-export function reconcileLostChildren(runId: string, log: RecordLog): void {
+/**
+ * Resume never relaunches a child; unmatched starts become one durable
+ * cancellation (§7). The optional persistence seam lets the resume path emit
+ * the synthesized terminal through the same live record bridge as normal
+ * child terminals; direct callers retain the in-memory log-only behavior.
+ */
+export function reconcileLostChildren(
+  runId: string,
+  log: RecordLog,
+  persistRecord: (record: PersistedRecord) => void = (record) => log.append(record),
+): void {
   const started = new Map<string, Extract<PersistedRecord, { type: "subagent_started" }>>();
   const terminalChildIds = new Set<string>();
 
@@ -474,7 +487,7 @@ export function reconcileLostChildren(runId: string, log: RecordLog): void {
 
   for (const record of started.values()) {
     if (terminalChildIds.has(record.child_id)) continue;
-    log.append({
+    persistRecord({
       type: "subagent_failed",
       run_id: runId,
       child_id: record.child_id,
