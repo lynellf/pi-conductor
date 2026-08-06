@@ -75,12 +75,14 @@ Direct `log.append` calls that bypass `persistRecord` are **outside**
 the emitter's scope:
 
 - The initial checkpoint snapshot in `startRun` (`src/host/api.ts`).
-- Crash reconciliation records (`session_failed("crashed")` and the
-  snapshot that follows).
-- The crash snapshot that follows reconciliation.
+- Crash reconciliation records for the interrupted parent session
+  (`session_failed("crashed")` and the snapshots that follow).
 
-The durable JSONL log is the system of record; the emitter is
-best-effort fan-out.
+Resume reconciliation of an unmatched delegated child start is the exception:
+its synthesized `subagent_failed(status: "cancelled")` is appended through the
+same host-owned append-and-notify seam as normal child terminals, so live
+consumers receive it exactly once. The durable JSONL log is the system of
+record; the emitter is best-effort fan-out.
 
 ### §4.2 FIFO delivery
 
