@@ -1,4 +1,13 @@
-/** Delegate tool factory — delegation lite §4, §6, §7. */
+/**
+ * Delegate tool factory — delegation lite §4, §6, §7.
+ *
+ * This module intentionally keeps parent-tool construction, child-session setup,
+ * terminal detection, and lifecycle-record emission together: those callbacks
+ * share the same SDK session and cancellation/cleanup invariants. Splitting
+ * them would separate the coupled adapter lifecycle without reducing its
+ * responsibility, so this cohesive module is retained just above the ~400 LOC
+ * guideline (and below the 500 LOC exception ceiling).
+ */
 
 import type { AgentSession, ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
