@@ -190,20 +190,39 @@ describe("formatConductStatus", () => {
     expect(line).toBe("conduct: orchestrator · running · handoffs=0 · $0.000 · Esc abort");
   });
 
-  it("renders the active child count immediately before handoffs", () => {
+  it("renders active and terminal child outcomes distinctly", () => {
     const line = formatConductStatus(
       makeStats({
         subagents: {
           active: 2,
           completed: 1,
           noChanges: 1,
-          failed: 0,
-          cancelled: 0,
+          failed: 1,
+          cancelled: 1,
         },
       }),
     );
     expect(line).toBe(
-      "conduct: orchestrator · running · subagents=2 active · handoffs=0 · $0.000 · Esc abort",
+      "conduct: orchestrator · running · subagents=2 active · subagents=1 completed · subagents=1 no-change · subagents=1 failed · subagents=1 cancelled · handoffs=0 · $0.000 · Esc abort",
+    );
+  });
+
+  it("renders terminal child outcomes after the active count clears", () => {
+    const line = formatConductStatus(
+      makeStats({
+        state: "done",
+        exitReason: "done",
+        subagents: {
+          active: 0,
+          completed: 1,
+          noChanges: 1,
+          failed: 1,
+          cancelled: 1,
+        },
+      }),
+    );
+    expect(line).toBe(
+      "conduct: done · done · subagents=1 completed · subagents=1 no-change · subagents=1 failed · subagents=1 cancelled · handoffs=0 · $0.000",
     );
   });
 
