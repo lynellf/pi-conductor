@@ -210,8 +210,6 @@ describe("formatConductStatus", () => {
   it("renders terminal child outcomes after the active count clears", () => {
     const line = formatConductStatus(
       makeStats({
-        state: "done",
-        exitReason: "done",
         subagents: {
           active: 0,
           completed: 1,
@@ -222,7 +220,7 @@ describe("formatConductStatus", () => {
       }),
     );
     expect(line).toBe(
-      "conduct: done · done · subagents=1 completed · subagents=1 no-change · subagents=1 failed · subagents=1 cancelled · handoffs=0 · $0.000",
+      "conduct: orchestrator · running · subagents=1 completed · subagents=1 no-change · subagents=1 failed · subagents=1 cancelled · handoffs=0 · $0.000 · Esc abort",
     );
   });
 
