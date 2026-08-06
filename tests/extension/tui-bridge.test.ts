@@ -235,6 +235,38 @@ describe("extension shell — Phase 2 + 5 display sink wiring", () => {
     });
   });
 
+  it("preserves child identity in custom-message details for text and tool events", () => {
+    const sendMessage = vi.fn();
+    const sink = createConductDisplaySink(sendMessage);
+    const origin = { child_id: "child-1", task_id: "task-a", subagent: "implementer" };
+
+    sink({ role: "orchestrator", kind: "text", text: "child work", origin });
+    sink({ role: "orchestrator", kind: "tool_result", text: "✓ bash: pnpm test", origin });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, {
+      customType: "conduct.role.text",
+      content: "child work",
+      display: true,
+      details: {
+        role: "orchestrator",
+        kind: "text",
+        is_orchestrator: false,
+        origin,
+      },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, {
+      customType: "conduct.role.tool",
+      content: "✓ bash: pnpm test",
+      display: true,
+      details: {
+        role: "orchestrator",
+        kind: "tool",
+        is_orchestrator: false,
+        origin,
+      },
+    });
+  });
+
   it("emits ALL tool events through the sink (no tool suppression at this level)", () => {
     // Phase 7B.UX removed the Phase 5.5 suppression of tool events.
     // The sink emits every tool_call and tool_result as

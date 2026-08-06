@@ -46,11 +46,20 @@ export type { HunkLine, TouchedFile } from "../persistence/file-mutation.js";
  */
 export type DisplayEventKind = "text" | "text_stream" | "tool_call" | "tool_result";
 
+/** Identity attached to display events emitted by a delegated child session. */
+export interface ChildDisplayOrigin {
+  readonly child_id: string;
+  readonly task_id: string;
+  readonly subagent: string;
+}
+
 /** Single display event from a role session. */
 export interface DisplayEvent {
   readonly role: Role;
   readonly kind: DisplayEventKind;
   readonly text: string;
+  /** Explicit identity for delegated child activity; absent for parent roles. */
+  readonly origin?: ChildDisplayOrigin;
   /**
    * Files touched by a mutating tool invocation. Populated only on
    * successful `tool_result` events for `write` and `edit`

@@ -165,6 +165,7 @@ export { buildRunMemory } from "./core/run-memory.js";
 export type {
   ActiveSessionStats,
   applyRunConfigOverride,
+  ChildDisplayOrigin,
   CreateProductionHostInputs,
   DefaultBundle,
   DisplayEvent,
@@ -194,6 +195,7 @@ export type {
   SpawnRoleOptions,
   StartRunOptions,
   StubHostOptions,
+  SubagentLifecycleStats,
   TransitionRecord,
 } from "./host/index.js";
 export {

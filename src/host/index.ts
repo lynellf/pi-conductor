@@ -52,7 +52,12 @@ export { SessionSeam } from "./seam.js";
 // Display-only events from role sessions. The host emits them and the
 // extension maps them to custom messages for the TUI.
 
-export type { DisplayEvent, DisplayEventKind, DisplaySink } from "./display-sink.js";
+export type {
+  ChildDisplayOrigin,
+  DisplayEvent,
+  DisplayEventKind,
+  DisplaySink,
+} from "./display-sink.js";
 
 // ─── handoff / end emission tools (Task 14) ────────────────────────
 // defineTool() entries registered via customTools. The factory takes
@@ -136,6 +141,7 @@ export type {
   RunConfigOverride,
   RunExecutionStatus,
   RunStats,
+  SubagentLifecycleStats,
   TransitionRecord,
 } from "./run-handle.js";
 export { RunHandle } from "./run-handle.js";

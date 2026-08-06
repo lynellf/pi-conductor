@@ -79,6 +79,7 @@ import type { Host } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
+import { notifyListeners } from "./record-emitter.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
 
@@ -371,7 +372,10 @@ function reconcileCrash(
   def: MachineDefinition,
   log: RecordLog,
 ): Checkpoint {
-  reconcileLostChildren(runId, log);
+  reconcileLostChildren(runId, log, (record) => {
+    log.append(record);
+    notifyListeners(record);
+  });
   const active = checkpoint.active_role_session;
   if (active === null) return checkpoint;
 
@@ -453,17 +457,37 @@ function reconcileCrash(
   return result.checkpoint;
 }
 
-/** Resume never relaunches a child; unmatched starts become one durable cancellation (§7). */
-export function reconcileLostChildren(runId: string, log: RecordLog): void {
-  const records = log.records(runId);
-  const terminalChildIds = new Set(
-    records
-      .filter((record) => record.type === "subagent_completed" || record.type === "subagent_failed")
-      .map((record) => record.child_id),
-  );
-  for (const record of records) {
-    if (record.type !== "subagent_started" || terminalChildIds.has(record.child_id)) continue;
-    log.append({
+/**
+ * Resume never relaunches a child; unmatched starts become one durable
+ * cancellation (§7). The optional persistence seam lets the resume path emit
+ * the synthesized terminal through the same live record bridge as normal
+ * child terminals; direct callers retain the in-memory log-only behavior.
+ */
+export function reconcileLostChildren(
+  runId: string,
+  log: RecordLog,
+  persistRecord: (record: PersistedRecord) => void = (record) => log.append(record),
+): void {
+  const started = new Map<string, Extract<PersistedRecord, { type: "subagent_started" }>>();
+  const terminalChildIds = new Set<string>();
+
+  // Scan in append order. A terminal before its start is an orphan and must
+  // not suppress recovery of the later start; duplicate starts and terminals
+  // are both reduced to the first lifecycle for that child ID.
+  for (const record of log.records(runId)) {
+    if (record.type === "subagent_started") {
+      if (!started.has(record.child_id)) started.set(record.child_id, record);
+    } else if (
+      (record.type === "subagent_completed" || record.type === "subagent_failed") &&
+      started.has(record.child_id)
+    ) {
+      terminalChildIds.add(record.child_id);
+    }
+  }
+
+  for (const record of started.values()) {
+    if (terminalChildIds.has(record.child_id)) continue;
+    persistRecord({
       type: "subagent_failed",
       run_id: runId,
       child_id: record.child_id,

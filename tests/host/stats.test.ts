@@ -148,6 +148,109 @@ function makeTransitionAccepted(opts: {
   };
 }
 
+function makeSubagentStarted(opts: {
+  runId: string;
+  childId: string;
+  ts?: number;
+}): PersistedRecord {
+  return {
+    type: "subagent_started",
+    run_id: opts.runId,
+    child_id: opts.childId,
+    task_id: `task-${opts.childId}`,
+    subagent: "implementer",
+    model: "stub:model",
+    session_file: `${opts.childId}.jsonl`,
+    worktree_path: `/tmp/${opts.childId}`,
+    branch: `conductor/${opts.childId}`,
+    base_commit: "base",
+    ts: opts.ts ?? Date.now(),
+  };
+}
+
+function makeSubagentCompleted(opts: {
+  runId: string;
+  childId: string;
+  status?: "completed" | "no_changes";
+  ts?: number;
+}): PersistedRecord {
+  return {
+    type: "subagent_completed",
+    run_id: opts.runId,
+    child_id: opts.childId,
+    task_id: `task-${opts.childId}`,
+    subagent: "implementer",
+    model: "stub:model",
+    status: opts.status ?? "completed",
+    summary: "done",
+    branch: `conductor/${opts.childId}`,
+    worktree_path: `/tmp/${opts.childId}`,
+    base_commit: "base",
+    head_commit: "head",
+    session_file: `${opts.childId}.jsonl`,
+    usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
+    ts: opts.ts ?? Date.now(),
+  };
+}
+
+function makeSubagentFailed(opts: {
+  runId: string;
+  childId: string;
+  status?: "failed" | "cancelled";
+  ts?: number;
+}): PersistedRecord {
+  return {
+    type: "subagent_failed",
+    run_id: opts.runId,
+    child_id: opts.childId,
+    task_id: `task-${opts.childId}`,
+    subagent: "implementer",
+    model: "stub:model",
+    status: opts.status ?? "failed",
+    failure_reason: "failed",
+    branch: `conductor/${opts.childId}`,
+    worktree_path: `/tmp/${opts.childId}`,
+    base_commit: "base",
+    head_commit: null,
+    session_file: `${opts.childId}.jsonl`,
+    usage: null,
+    ts: opts.ts ?? Date.now(),
+  };
+}
+
+// ─── runStats: child lifecycle projection (§11.8) ──────────────────────
+
+describe("runStats (§11.8) — child lifecycle projection", () => {
+  it("counts unique started children by their first terminal status", () => {
+    const runId = "r1";
+    const records: PersistedRecord[] = [
+      makeCheckpoint({ runId, currentRole: "orchestrator" }),
+      makeSubagentFailed({ runId, childId: "orphan", status: "failed", ts: 1 }),
+      makeSubagentStarted({ runId, childId: "orphan", ts: 2 }),
+      makeSubagentStarted({ runId, childId: "active", ts: 3 }),
+      makeSubagentStarted({ runId, childId: "done", ts: 4 }),
+      makeSubagentStarted({ runId, childId: "no-changes", ts: 5 }),
+      makeSubagentStarted({ runId, childId: "failed", ts: 6 }),
+      makeSubagentStarted({ runId, childId: "cancelled", ts: 7 }),
+      makeSubagentCompleted({ runId, childId: "done", ts: 8 }),
+      makeSubagentCompleted({ runId, childId: "done", status: "no_changes", ts: 9 }),
+      makeSubagentCompleted({ runId, childId: "no-changes", status: "no_changes", ts: 10 }),
+      makeSubagentFailed({ runId, childId: "failed", ts: 11 }),
+      makeSubagentFailed({ runId, childId: "cancelled", status: "cancelled", ts: 12 }),
+      makeSubagentStarted({ runId, childId: "active", ts: 13 }),
+      makeSubagentStarted({ runId: "other-run-child", childId: "other", ts: 14 }),
+    ];
+    const stats = runStats(records, runId, makeDef(), "running");
+    expect(stats.subagents).toEqual({
+      active: 2,
+      completed: 1,
+      noChanges: 1,
+      failed: 1,
+      cancelled: 1,
+    });
+  });
+});
+
 // ─── runStats: cost reconciliation (§11.6) ─────────────────────────────
 
 describe("runStats (§11.6) — perRun.cost reconciles with terminal usage.cost", () => {

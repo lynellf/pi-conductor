@@ -58,6 +58,7 @@ import type {
 } from "../index.js";
 import { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
+import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
@@ -89,6 +90,8 @@ export interface StubHostOptions {
    * session itself runs in-memory. Default: `/tmp/stub-cwd`.
    */
   readonly cwd?: string;
+  /** Optional display sink used by delegated child sessions in tests. */
+  readonly displaySink?: DisplaySink;
 }
 
 /**
@@ -115,6 +118,7 @@ export class StubHost implements Host {
   private unavailableRole: Role | null = null;
   private readonly delegationManager = new DelegationManager();
   private readonly cwd: string;
+  private readonly displaySink: DisplaySink | undefined;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
@@ -134,6 +138,7 @@ export class StubHost implements Host {
     });
     this.sessionManager = SessionManager.inMemory();
     this.cwd = opts.cwd ?? "/tmp/stub-cwd";
+    this.displaySink = opts.displaySink;
   }
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
@@ -245,11 +250,12 @@ export class StubHost implements Host {
         parentRole: role,
         primaryCheckout: this.cwd,
         runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
-        log: this.log,
+        persistRecord: (record) => this.persistRecord(record),
         agentDir: `${this.cwd}/.pi-conductor/agent`,
         systemPromptRoot: delegationPromptRoot(this.loadedManifestValue, this.cwd),
         modelRegistry: this.modelRegistry,
         resolveChildModel: () => this.model,
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
         sessionDir: `${this.cwd}/.pi-conductor/runs/${this.runId}/sessions`,
         manager: this.delegationManager,
       });
@@ -294,6 +300,7 @@ export class StubHost implements Host {
       session,
       state,
       role,
+      ...(this.displaySink !== undefined && { onDisplay: this.displaySink }),
       fileMutation: {
         runId: this.runId,
         sessionId,

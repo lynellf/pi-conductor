@@ -162,6 +162,31 @@ describe("createConductMessageRenderers", () => {
     expect(bodyText).toBe("hello world");
   });
 
+  it("renders delegated child identity instead of the parent role label", () => {
+    const theme = makeStubTheme();
+    const renderers = createConductMessageRenderers(() => "orchestrator");
+    const renderer = textRenderer(renderers);
+    const component = renderer(
+      makeMessage({
+        customType: "conduct.role.text",
+        content: "child output",
+        details: {
+          role: "orchestrator",
+          kind: "text",
+          is_orchestrator: true,
+          origin: { child_id: "child-1", task_id: "task-a", subagent: "implementer" },
+        },
+      }),
+      OPTIONS,
+      theme,
+    );
+
+    const [label] = (component as Container).children;
+    const labelText = getInternalText(label as unknown as { text?: string });
+    expect(labelText).toContain("subagent: implementer · task-a");
+    expect(labelText).not.toContain("orchestrator");
+  });
+
   it("colors the orchestrator role label with mdHeading and bolds it", () => {
     const theme = makeStubTheme();
     const renderers = createConductMessageRenderers(() => "orchestrator");

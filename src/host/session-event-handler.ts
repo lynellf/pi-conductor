@@ -43,6 +43,7 @@ import type { Role } from "../core/types.js";
 import type { FileMutationRecord, HunkLine, TouchedFile } from "../persistence/file-mutation.js";
 import type { SessionState } from "./cost.js";
 import {
+  type ChildDisplayOrigin,
   type DisplaySink,
   extractAssistantText,
   extractFileHunks,
@@ -82,6 +83,8 @@ export function attachSessionEventHandler(args: {
   state: SessionState;
   role: Role;
   onDisplay?: DisplaySink;
+  /** Identity to preserve on display events from a delegated child. */
+  origin?: ChildDisplayOrigin;
   fileMutation?: FileMutationTelemetry;
 }): void {
   // Per-session buffer: toolCallId → { summary, args, writeHunks }.
@@ -113,6 +116,7 @@ export function attachSessionEventHandler(args: {
       args.state,
       args.role,
       args.onDisplay,
+      args.origin,
       args.fileMutation,
       event,
       pending,
@@ -181,6 +185,7 @@ function onSessionEvent(
   state: SessionState,
   role: Role,
   onDisplay: DisplaySink | undefined,
+  origin: ChildDisplayOrigin | undefined,
   fileMutation: FileMutationTelemetry | undefined,
   event: AgentSessionEvent,
   pending: Map<
@@ -229,7 +234,12 @@ function onSessionEvent(
 
     if (event.isError) {
       // Errors omit `files` entirely (Phase 1 contract).
-      onDisplay?.({ role, kind: "tool_result", text: line });
+      onDisplay?.({
+        role,
+        kind: "tool_result",
+        text: line,
+        ...(origin !== undefined && { origin }),
+      });
       return;
     }
 
@@ -248,6 +258,7 @@ function onSessionEvent(
         role,
         kind: "tool_result",
         text: line,
+        ...(origin !== undefined && { origin }),
         ...(files !== undefined && { files }),
       });
     };
@@ -316,7 +327,12 @@ function onSessionEvent(
   // per assistant turn with the full extracted text. No progressive
   // streaming, no `text_stream` chunks.
   if (text.length > 0) {
-    onDisplay?.({ role, kind: "text", text });
+    onDisplay?.({
+      role,
+      kind: "text",
+      text,
+      ...(origin !== undefined && { origin }),
+    });
   }
 
   if (message.usage) {
