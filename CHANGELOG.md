@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.13.0] - 2026-08-06
+
+### Enhancements
+
+- **Observable delegated subagents** (issue #40). Delegated child text and
+  tool activity now appears in the TUI with explicit subagent and task labels,
+  while the live status line reports active, completed, no-change, failed, and
+  cancelled child counts.
+- **Subagent lifecycle stats for library consumers.** `RunStats` now includes
+  a `subagents` lifecycle projection, with `SubagentLifecycleStats` and
+  `ChildDisplayOrigin` available from the public package exports.
+
+### Bug fixes
+
+- **Reliable live child lifecycle records.** Delegated child starts and their
+  single terminal outcomes now flow through the durable append-and-notify seam,
+  including cancellations synthesized during resume recovery. Live subscribers
+  and status surfaces no longer miss or retain stale child outcomes.
+
 ## [0.12.1] - 2026-08-03
 
 ### Bug fixes
