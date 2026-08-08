@@ -73,6 +73,7 @@ import type {
   CheckpointSnapshot,
   PersistedRecord,
   RecordLog,
+  RunContextRecord,
   RunSeededRecord,
 } from "../persistence/log.js";
 import type { Host } from "./host.js";
@@ -166,6 +167,11 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   };
   log.append(initialSnapshot);
 
+  // Normalize once at the shared start boundary. The extension and CLI
+  // already trim their accepted goal; doing it here also keeps direct SDK
+  // callers on the same original-prompt contract.
+  const goal = opts.goal.trim();
+
   // Persist the run_seeded record with the original goal (§8.4).
   // Written right after the initial snapshot so resumeRun can
   // reconstruct the goal from the log. The record is host-owned
@@ -173,13 +179,21 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   const seedRecord: RunSeededRecord = {
     type: "run_seeded",
     run_id: runId,
-    goal: opts.goal,
+    goal,
     ts: Date.now(),
   };
   log.append(seedRecord);
 
   const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
-  void opts.goal; // goal is unused by runLoop directly; Task 16.5 wires it into the orchestrator seed
+  // Additive analytics context. Route it through the shared Host seam so
+  // durable append and subscribeToRecords delivery stay in the same order.
+  const contextRecord: RunContextRecord = {
+    type: "run_context",
+    run_id: runId,
+    ts: Date.now(),
+    original_prompt: goal,
+  };
+  host.persistRecord(contextRecord);
 
   return await runWithCompletion({
     runId,
@@ -187,7 +201,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     log,
     host,
     initialCheckpoint,
-    goal: opts.goal,
+    goal,
     loadedManifest: loaded,
   });
 }
