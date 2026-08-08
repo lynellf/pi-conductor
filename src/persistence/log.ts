@@ -15,6 +15,8 @@
  *  - `run_seeded` (host-owned, non-machine-event record carrying the
  *    run's original goal at `startRun` time; used by `resumeRun` to
  *    restore the goal context).
+ *  - `run_context` (host-owned, additive analytics context carrying the
+ *    exact accepted original prompt; it never affects resume or FSM state).
  *  - Delegation lite §7: `subagent_started` / `subagent_completed` /
  *    `subagent_failed` (host-owned child session observability records).
  *  - Issue #22: `file_mutation` (successful `write` / `edit` telemetry).
@@ -63,6 +65,19 @@ export interface RunSeededRecord {
   readonly run_id: string;
   readonly goal: string;
   readonly ts: number;
+}
+
+/**
+ * Additive host-owned context for analytics consumers (issue #42).
+ * `original_prompt` is the accepted, trimmed goal only; no summaries or
+ * model-generated context are inferred here, and this record is not used by
+ * resume or the FSM.
+ */
+export interface RunContextRecord {
+  readonly type: "run_context";
+  readonly run_id: string;
+  readonly ts: number;
+  readonly original_prompt: string;
 }
 
 /** Host-owned observability record for a handoff rejected before reduction. */
@@ -162,6 +177,7 @@ export type PersistedRecord =
   | ModelRetry
   | CheckpointSnapshot
   | RunSeededRecord
+  | RunContextRecord
   | HandoffValidationRejectedRecord
   | SubagentStartedRecord
   | SubagentCompletedRecord
