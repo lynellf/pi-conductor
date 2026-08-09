@@ -70,6 +70,10 @@ export async function handleList(
   ctx: ExtensionCommandContext,
   deps: HandleDeps,
 ): Promise<void> {
+  const isContextCurrent = deps.isContextCurrent ?? (() => true);
+  const notify = (message: string, type: "info" | "warning" | "error"): void => {
+    if (isContextCurrent()) ctx.ui.notify(message, type);
+  };
   const flagValue = deps.getFlag("conduct-manifest");
   const manifestPath = resolveManifestPath(
     typeof flagValue === "string" ? flagValue : undefined,
@@ -87,7 +91,7 @@ export async function handleList(
       deps.homeDir !== undefined
         ? join(deps.homeDir, HOME_MANIFEST_PATH)
         : join(homedir(), HOME_MANIFEST_PATH);
-    ctx.ui.notify(
+    notify(
       `No conductor manifest found. Tried --conduct-manifest="${
         flagValue ?? ""
       }", <cwd>/${DEFAULT_MANIFEST_PATH}, and ${homePath}. Write a manifest, pass --conduct-manifest <path>, or set up ${homePath} for cross-project sharing.`,
@@ -104,14 +108,14 @@ export async function handleList(
     loaded = await loadManifest(manifestPath);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    ctx.ui.notify(`Cannot load manifest for list: ${message}`, "error");
+    notify(`Cannot load manifest for list: ${message}`, "error");
     return;
   }
 
   const baseDir = resolveRunBaseDir(ctx.cwd);
   const runIds = listRuns(baseDir);
   if (runIds.length === 0) {
-    ctx.ui.notify(`No runs found in ${baseDir}.`, "info");
+    notify(`No runs found in ${baseDir}.`, "info");
     return;
   }
 
@@ -152,10 +156,10 @@ export async function handleList(
       lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
     } catch (error) {
       if (!(error instanceof RecordLogError)) throw error;
-      ctx.ui.notify(`Cannot read run ${runId}: ${error.message}`, "warning");
+      notify(`Cannot read run ${runId}: ${error.message}`, "warning");
     }
   }
   const overflow = runIds.length - lines.length;
   const summary = lines.join(" | ") + (overflow > 0 ? ` (+${overflow} more in ${baseDir})` : "");
-  ctx.ui.notify(`Runs in ${baseDir}: ${summary}`, "info");
+  notify(`Runs in ${baseDir}: ${summary}`, "info");
 }
