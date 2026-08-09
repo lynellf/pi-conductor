@@ -197,6 +197,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "model_retry",
   "checkpoint_snapshot",
   "run_seeded",
+  "run_context",
   "handoff_validation_rejected",
   "subagent_started",
   "subagent_completed",

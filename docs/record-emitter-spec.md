@@ -26,6 +26,26 @@ with every other persisted record. The record includes `run_id`, `ts`, `role`,
 path, char-count additions/deletions, and optional structured hunks. Failed
 calls and calls without valid file metadata do not emit this record.
 
+### Run context telemetry (issue #42)
+
+Each newly created run appends exactly one `run_context` record through
+`Host.persistRecord`, immediately after the direct `run_seeded` append:
+
+```json
+{
+  "type": "run_context",
+  "run_id": "00000000-0000-4000-8000-000000000001",
+  "ts": 1786219200000,
+  "original_prompt": "Ship the report"
+}
+```
+
+`original_prompt` is the accepted, boundary-trimmed `/conduct`, CLI, or SDK
+goal. The record is additive analytics provenance: `run_seeded` remains the
+resume/recovery source of truth, and resume never emits another context record.
+No task summaries, routing summaries, raw model output, or hidden chain-of-thought
+may be inferred or included.
+
 ## §2 — Module-level design
 
 - **Process-global registry.** One `Set<Listener>` for the entire pi
@@ -74,7 +94,9 @@ records (`subagent_started` followed by exactly one terminal
 Direct `log.append` calls that bypass `persistRecord` are **outside**
 the emitter's scope:
 
-- The initial checkpoint snapshot in `startRun` (`src/host/api.ts`).
+- The initial checkpoint snapshot and `run_seeded` record in `startRun`
+  (`src/host/api.ts`). The additive `run_context` record is deliberately
+  persisted through `Host.persistRecord` so analytics subscribers receive it.
 - Crash reconciliation records for the interrupted parent session
   (`session_failed("crashed")` and the snapshots that follow).
 
@@ -154,7 +176,8 @@ The following are explicitly **not** part of this contract:
 - Authentication, authorization, or API key management.
 - Retry, backoff, batching, or rate-limiting.
 - Cross-process coordination or distributed locks.
-- New record types or changes to the orchestrator loop.
+- New telemetry record types unrelated to the documented `run_context`
+  and `file_mutation` producer contracts, or changes to the orchestrator loop.
 - Changes to the reducer, FSM, or checkpoint contract.
 
 ## §7 — Authoritative test cases

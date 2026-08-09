@@ -57,6 +57,7 @@ import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CONDUCT_STATUS_KEY } from "../../src/extension/status.js";
+import { FileRecordLog } from "../../src/host/log-file.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
 import { listRuns } from "../../src/index.js";
 import { loadExtension, makeCtx, type NotifyCall, type StatusUpdate } from "./conduct-harness.js";
@@ -192,8 +193,14 @@ roles:
     // /conduct:list can find it on a fresh
     // invocation.
     const { resolveRunBaseDir } = await import("../../src/extension/commands/start.js");
-    const ids = listRuns(resolveRunBaseDir(workdir));
+    const baseDir = resolveRunBaseDir(workdir);
+    const ids = listRuns(baseDir);
     expect(ids).toHaveLength(1);
+    const records = new FileRecordLog({ baseDir }).records(ids[0] ?? "");
+    expect(records.filter((record) => record.type === "run_context")).toHaveLength(1);
+    expect(records.find((record) => record.type === "run_context")).toMatchObject({
+      original_prompt: "do the thing",
+    });
   });
 
   it("emits a handoff notify per accepted transition (AC1, AC2, AC5)", async () => {

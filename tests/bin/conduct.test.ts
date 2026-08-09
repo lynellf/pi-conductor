@@ -404,7 +404,7 @@ describe("runCli delegation to startRun", () => {
           }) as unknown as RunHandle,
       );
       const c = makeConsole();
-      await runCli(["manifest.yaml", "ship a fix"], {
+      await runCli(["manifest.yaml", "  ship", "a", "fix  "], {
         startRun: startRun as unknown as Parameters<typeof runCli>[1]["startRun"],
         modelRegistry: stubModelRegistry,
         console: c,
