@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { clearTrackedRuns, setActiveRun } from "../../src/extension/active-run.js";
 import {
   startStatusPoller,
   stopTrackedStatusPoller,
@@ -54,6 +55,7 @@ describe("status poller session replacement cleanup", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => {
     stopTrackedStatusPoller({ flush: false, clearStatus: false });
+    clearTrackedRuns();
     vi.useRealTimers();
   });
 
@@ -73,6 +75,20 @@ describe("status poller session replacement cleanup", () => {
     vi.advanceTimersByTime(1000);
 
     expect(setStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts an active run without waiting on stale UI callbacks", async () => {
+    const abort = vi.fn().mockResolvedValue(undefined);
+    const handle = {
+      abort,
+      runStats: () => makeStats(),
+    } as unknown as RunHandle;
+    setActiveRun(handle);
+    const extension = await loadExtension("<test>", process.cwd());
+
+    await extension.sessionShutdownHandlers[0]?.();
+
+    expect(abort).toHaveBeenCalledWith("pi session replaced");
   });
 
   it("registers session shutdown cleanup on the extension factory", async () => {

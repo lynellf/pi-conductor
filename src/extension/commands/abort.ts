@@ -32,10 +32,10 @@ import type { HandleDeps } from "./start.js";
 export async function handleAbort(
   _args: string,
   ctx: ExtensionCommandContext,
-  _deps: HandleDeps,
+  deps: HandleDeps,
 ): Promise<void> {
   const result = await abortActiveRun({ reason: "user requested /conduct:abort" });
   // The helper never notifies directly; `/conduct:abort` keeps the existing
   // no-active / cleanup-race info text while reusing the same abort path.
-  notifyConductAbortResult(ctx, result);
+  if (deps.isContextCurrent?.() ?? true) notifyConductAbortResult(ctx, result);
 }
