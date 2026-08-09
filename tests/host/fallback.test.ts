@@ -184,6 +184,58 @@ describe("Model fallback (§8.2) — primary fails, fallback succeeds", () => {
   });
 });
 
+describe("Fallback startup failure (§8.2 / issue #44)", () => {
+  it("records a terminal session_failed when the fallback session cannot start", async () => {
+    const loaded = makeLoadedManifest({
+      workerModels: ["stub:primary", "stub:fallback"],
+    });
+    const { createInitialCheckpoint, InMemoryRecordLog } = await import("../../src/index.js");
+    const initialCheckpoint = createInitialCheckpoint(loaded.def);
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      loadedManifest: loaded,
+      steps: [
+        { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
+        { kind: "fail", errorMessage: "primary model errored" },
+      ],
+    });
+    const originalSpawn = host.spawnRole.bind(host);
+    let workerSpawnCount = 0;
+    host.spawnRole = async (role, options) => {
+      if (role === "worker") {
+        workerSpawnCount += 1;
+        if (workerSpawnCount === 2) {
+          throw new Error(
+            "This extension ctx is stale after session replacement or reload. fallback startup failed",
+          );
+        }
+      }
+      return originalSpawn(role, options);
+    };
+
+    const result = await runLoop({
+      def: loaded.def as MachineDefinition,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(result.finalCheckpoint.current_role).toBe("worker");
+    const records = log.records(initialCheckpoint.run_id);
+    const failures = records.filter(
+      (record): record is SessionLifecycleEvent =>
+        record.type === "session_failed" && record.role === "worker",
+    );
+    expect(failures).toHaveLength(2);
+    expect(failures[1]?.failure_reason).toContain("fallback_start_failed");
+    expect(failures[1]?.failure_reason).toContain("stale");
+    expect(records[records.length - 1]?.type).toBe("session_failed");
+  });
+});
+
 describe("Same-model retry (§8.2 / issue #16)", () => {
   it("retries a model before advancing to its fallback", async () => {
     const loaded = makeRetryLoadedManifest({ retries: 1, includeFallback: true });

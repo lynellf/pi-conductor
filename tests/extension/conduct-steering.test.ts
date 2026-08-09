@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearTrackedRuns, setActiveRun } from "../../src/extension/active-run.js";
 import { handleFollowUp } from "../../src/extension/commands/followup.js";
 import { handleSteer } from "../../src/extension/commands/steer.js";
@@ -19,12 +19,24 @@ function makeHandle(): RunHandle & {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("conduct steering commands", () => {
   let notifications: NotifyCall[];
 
   beforeEach(() => {
     clearTrackedRuns();
     notifications = [];
+  });
+
+  afterEach(() => {
+    clearTrackedRuns();
   });
 
   it("warns once with mode-specific usage when message text is missing", async () => {
@@ -71,6 +83,26 @@ describe("conduct steering commands", () => {
       { msg: "Accepted follow-up guidance for pi-conductor run_id=run-1.", type: "info" },
     ]);
     expect(notifications.some((item) => /worker|orchestrator|role/.test(item.msg))).toBe(false);
+  });
+
+  it("does not notify after the context is invalidated during steer or follow-up", async () => {
+    const steerCompletion = deferred<void>();
+    const followUpCompletion = deferred<void>();
+    const handle = makeHandle();
+    handle.steer.mockReturnValue(steerCompletion.promise);
+    handle.followUp.mockReturnValue(followUpCompletion.promise);
+    setActiveRun(handle);
+    let contextCurrent = true;
+    const ctx = makeCtx({ cwd: "/tmp", notify: (msg, type) => notifications.push({ msg, type }) });
+
+    const steerPromise = handleSteer("redirect", ctx, () => contextCurrent);
+    const followUpPromise = handleFollowUp("later", ctx, () => contextCurrent);
+    contextCurrent = false;
+    steerCompletion.resolve();
+    followUpCompletion.resolve();
+    await Promise.all([steerPromise, followUpPromise]);
+
+    expect(notifications).toHaveLength(0);
   });
 
   it("surfaces typed control failures as one error notification", async () => {

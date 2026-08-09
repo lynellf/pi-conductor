@@ -98,6 +98,12 @@ export interface ProductionHostOptions {
   readonly cwd: string;
   /** Optional extension UI handle threaded into role sessions. */
   readonly uiContext?: ExtensionUIContext;
+  /**
+   * Live guard for the captured UI context. When an extension session is
+   * replaced, role startup must skip binding the stale context (issue #44).
+   * Non-extension callers omit this and retain the normal binding behavior.
+   */
+  readonly isUiContextCurrent?: () => boolean;
   /** Optional display sink for streamed role output. */
   readonly displaySink?: DisplaySink;
   /** Host-owned `run_id`-keyed append-only log (Task 13.5). */
@@ -151,6 +157,8 @@ export class ProductionHost implements Host {
   readonly runId: string;
   /** See {@link ProductionHostOptions.uiContext}. */
   readonly uiContext: ExtensionUIContext | undefined;
+  /** See {@link ProductionHostOptions.isUiContextCurrent}. */
+  readonly isUiContextCurrent: (() => boolean) | undefined;
   /** See {@link ProductionHostOptions.displaySink}. */
   readonly displaySink: DisplaySink | undefined;
   /** See {@link ProductionHostOptions.sessionDir}. */
@@ -165,6 +173,7 @@ export class ProductionHost implements Host {
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
     this.uiContext = opts.uiContext;
+    this.isUiContextCurrent = opts.isUiContextCurrent;
     this.displaySink = opts.displaySink;
     this.sessionDir =
       opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
@@ -378,8 +387,24 @@ export class ProductionHost implements Host {
     }
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
-    if (this.uiContext !== undefined) {
-      await session.bindExtensions({ uiContext: this.uiContext });
+    try {
+      if (
+        this.uiContext !== undefined &&
+        (this.isUiContextCurrent === undefined || this.isUiContextCurrent())
+      ) {
+        await session.bindExtensions({ uiContext: this.uiContext });
+      }
+    } catch (error) {
+      // Binding can fail when the extension context was replaced or
+      // reloaded while a fallback session was starting (issue #44).
+      // The loop records the startup failure, but this partially-created
+      // SDK session still owns resources and must be released here.
+      try {
+        session.dispose();
+      } catch {
+        // Preserve the original startup error; disposal is best effort.
+      }
+      throw error;
     }
 
     // 8. Track per-session state (Task 17 / 7A.4). The host's

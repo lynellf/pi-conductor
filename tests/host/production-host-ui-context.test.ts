@@ -112,6 +112,28 @@ describe("ProductionHost — uiContext bridge", () => {
     expect(session.bindExtensions).toHaveBeenCalledWith({ uiContext });
   });
 
+  it("disposes a session when binding the extension context fails", async () => {
+    const session = makeSession();
+    const staleContextError = new Error("This extension ctx is stale after session replacement");
+    session.bindExtensions.mockRejectedValueOnce(staleContextError);
+    agentSessionMocks.createAgentSession.mockResolvedValue({
+      session,
+      extensionsResult: {},
+    } as never);
+
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistry(),
+      cwd,
+      uiContext: { notify: vi.fn() } as never,
+      log: new InMemoryRecordLog(),
+      loadedManifest: makeLoadedManifest(),
+      runId: "run-ui-context-2",
+    });
+
+    await expect(host.spawnRole("implementer")).rejects.toBe(staleContextError);
+    expect(session.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("does not bind extensions when uiContext is omitted", async () => {
     const session = makeSession();
     agentSessionMocks.createAgentSession.mockResolvedValue({
@@ -124,10 +146,34 @@ describe("ProductionHost — uiContext bridge", () => {
       cwd,
       log: new InMemoryRecordLog(),
       loadedManifest: makeLoadedManifest(),
-      runId: "run-ui-context-2",
+      runId: "run-ui-context-3",
     });
 
     await host.spawnRole("implementer");
+
+    expect(agentSessionMocks.createAgentSession).toHaveBeenCalledTimes(1);
+    expect(session.bindExtensions).not.toHaveBeenCalled();
+  });
+
+  it("skips stale uiContext binding when a fallback starts after session replacement", async () => {
+    const session = makeSession();
+    agentSessionMocks.createAgentSession.mockResolvedValue({
+      session,
+      extensionsResult: {},
+    } as never);
+    const uiContext = { notify: vi.fn() } as never;
+
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistry(),
+      cwd,
+      uiContext,
+      isUiContextCurrent: () => false,
+      log: new InMemoryRecordLog(),
+      loadedManifest: makeLoadedManifest(),
+      runId: "run-ui-context-4",
+    });
+
+    await host.spawnRole("implementer", { modelIndex: 1 });
 
     expect(agentSessionMocks.createAgentSession).toHaveBeenCalledTimes(1);
     expect(session.bindExtensions).not.toHaveBeenCalled();

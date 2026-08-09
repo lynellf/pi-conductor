@@ -67,6 +67,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+import { getActiveRun } from "../src/extension/active-run.js";
 import { handleAbort } from "../src/extension/commands/abort.js";
 import { handleCopy } from "../src/extension/commands/copy.js";
 import { handleFollowUp } from "../src/extension/commands/followup.js";
@@ -81,6 +82,10 @@ import { handleSteer } from "../src/extension/commands/steer.js";
 import { createConductMessageRenderers } from "../src/extension/conduct-message-renderer.js";
 import { getCurrentOrchestratorRole } from "../src/extension/current-orchestrator.js";
 import { createConductDisplaySink } from "../src/extension/display-sink-wiring.js";
+import {
+  createSessionContextGuard,
+  invalidateSessionContext,
+} from "../src/extension/session-context.js";
 import { stopTrackedStatusPoller } from "../src/extension/status.js";
 import { subscribeToRecords } from "../src/host/index.js";
 
@@ -106,11 +111,13 @@ function withDeps(
   ) => Promise<void>,
   getFlag: GetFlagValue,
   displaySink: HandleDeps["displaySink"],
+  isContextCurrent: NonNullable<HandleDeps["isContextCurrent"]>,
   homeDir?: string,
 ): (args: string, ctx: Parameters<typeof handleStart>[1]) => Promise<void> {
   return (args, ctx) =>
     handler(args, ctx, {
       getFlag,
+      isContextCurrent,
       ...(displaySink !== undefined && { displaySink }),
       ...(homeDir !== undefined && { homeDir }),
     });
@@ -124,12 +131,23 @@ function withDeps(
  * fast enough that sync is clearer).
  */
 export default function conductExtension(pi: ExtensionAPI): void {
+  const isCurrentSessionContext = createSessionContextGuard();
+
   // pi tears down the old extension runtime before replacing a
-  // session. Detach the poller without flushing or clearing its
-  // captured UI callbacks; both are bound to the stale command
-  // context after that lifecycle boundary.
+  // session. Invalidate command callbacks before detaching the poller
+  // so a still-awaiting run cannot touch stale UI, then abort that run
+  // without using the invalidated context. The abort promise is detached
+  // deliberately: shutdown must not turn a recoverable run failure into
+  // an unhandled rejection in the containing pi process.
   pi.on("session_shutdown", () => {
+    invalidateSessionContext();
     stopTrackedStatusPoller({ flush: false, clearStatus: false });
+    const activeRun = getActiveRun();
+    if (activeRun !== null) {
+      void activeRun.abort("pi session replaced").catch(() => {
+        // The session may already be terminal while shutdown races cleanup.
+      });
+    }
   });
 
   pi.registerFlag(CONDUCT_MANIFEST_FLAG, {
@@ -142,7 +160,9 @@ export default function conductExtension(pi: ExtensionAPI): void {
   // time, so a `--flag` set on the pi CLI line flows
   // into the handler invocation.
   const getFlag: GetFlagValue = (name) => pi.getFlag(name);
-  const displaySink = createConductDisplaySink((message) => pi.sendMessage(message));
+  const displaySink = createConductDisplaySink((message) => {
+    if (isCurrentSessionContext()) pi.sendMessage(message);
+  });
 
   // Conductor-owned message renderer for the
   // `conduct.role.text` `CustomMessage` `customType`. The
@@ -165,37 +185,37 @@ export default function conductExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("conduct", {
     description: "Start a pi-conductor run for <goal> using .pi/conductor.yaml.",
-    handler: withDeps(handleStart, getFlag, displaySink),
+    handler: withDeps(handleStart, getFlag, displaySink, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:resume", {
     description: "Resume a previously-started run by run_id.",
-    handler: withDeps(handleResume, getFlag, displaySink),
+    handler: withDeps(handleResume, getFlag, displaySink, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:list", {
     description: "List known runs in the conductor log.",
-    handler: withDeps(handleList, getFlag, displaySink),
+    handler: withDeps(handleList, getFlag, displaySink, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:abort", {
     description: "Abort the active run (no-op if none).",
-    handler: withDeps(handleAbort, getFlag, displaySink),
+    handler: withDeps(handleAbort, getFlag, displaySink, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:steer", {
     description: "Steer the currently active pi-conductor role session.",
-    handler: handleSteer,
+    handler: (args, ctx) => handleSteer(args, ctx, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:followup", {
     description: "Queue guidance for the next pi-conductor prompt boundary.",
-    handler: handleFollowUp,
+    handler: (args, ctx) => handleFollowUp(args, ctx, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:copy", {
     description: "Copy the latest completed pi-conductor response.",
-    handler: handleCopy,
+    handler: (args, ctx) => handleCopy(args, ctx, undefined, isCurrentSessionContext),
   });
 
   /**
@@ -214,6 +234,6 @@ export default function conductExtension(pi: ExtensionAPI): void {
    * `ctx.fork` — `pi.events` is a lightweight pub/sub bus.
    */
   subscribeToRecords((record) => {
-    pi.events.emit("conductor:record", record);
+    if (isCurrentSessionContext()) pi.events.emit("conductor:record", record);
   });
 }
