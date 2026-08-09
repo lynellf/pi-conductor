@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearTrackedRuns, setActiveRun } from "../../src/extension/active-run.js";
 import { handleCopy } from "../../src/extension/commands/copy.js";
 import type { RunHandle, RunResponse } from "../../src/host/index.js";
@@ -25,6 +25,10 @@ describe("/conduct:copy", () => {
   beforeEach(() => {
     clearTrackedRuns();
     notifications = [];
+  });
+
+  afterEach(() => {
+    clearTrackedRuns();
   });
 
   it("reports when no run has been tracked", async () => {
