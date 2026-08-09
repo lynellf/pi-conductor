@@ -221,6 +221,37 @@ describe("extension shell — Escape interrupt listener (Task 7B.2)", () => {
     expect(handle.abort).toHaveBeenCalledTimes(1);
   });
 
+  it("does not touch the context when Escape confirmation resolves after invalidation", async () => {
+    const confirmation = deferred<boolean>();
+    const handle = makeHandle("run-stale-context", "running");
+    const notifications: NotifyCall[] = [];
+    const ctx = makeCtx({
+      cwd,
+      confirm: () => confirmation.promise,
+      notify: (msg, type) => notifications.push({ msg, type }),
+    });
+    let contextCurrent = true;
+    setActiveRun(handle);
+
+    installConductEscapeAbortListener({
+      ctx,
+      handle,
+      abortReason: "user confirmed Escape interrupt",
+      onAbortResult: (result) => notifyEscapeAbortResult(ctx, result),
+      isContextCurrent: () => contextCurrent,
+    });
+
+    ctx.__testUi.triggerTerminalInput("\u001b");
+    contextCurrent = false;
+    confirmation.resolve(true);
+    await confirmation.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(handle.abort).not.toHaveBeenCalled();
+    expect(notifications).toHaveLength(0);
+  });
+
   it("silently no-ops when confirmation resolves after the active slot is cleared", async () => {
     const confirmation = deferred<boolean>();
     const handle = makeHandle("run-start", "running");

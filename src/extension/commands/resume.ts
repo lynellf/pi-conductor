@@ -170,6 +170,7 @@ export async function handleResume(
     onAbortResult: (result) => {
       notifyEscapeAbortResult(ctx, result);
     },
+    isContextCurrent,
   });
 
   try {
