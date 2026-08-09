@@ -116,13 +116,20 @@ describe("createProductionHost — Task 7A.5", () => {
     expect(host.uiContext).toBeUndefined();
   });
 
-  it("forwards an explicit `uiContext` override", () => {
+  it("forwards an explicit `uiContext` override and its live guard", () => {
     const uiContext = { notify: () => {}, setStatus: () => {} } as never;
+    const isUiContextCurrent = () => false;
     const host = createProductionHost({
-      extension: { modelRegistry: makeModelRegistry(), cwd: workdir, uiContext },
+      extension: {
+        modelRegistry: makeModelRegistry(),
+        cwd: workdir,
+        uiContext,
+        isUiContextCurrent,
+      },
       run: { log: makeLog(), loadedManifest: makeLoadedManifest(), runId: "test-run-1" },
     });
     expect(host.uiContext).toBe(uiContext);
+    expect(host.isUiContextCurrent).toBe(isUiContextCurrent);
   });
 
   it("forwards an explicit `sessionDir` override", () => {
