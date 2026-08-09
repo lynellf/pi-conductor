@@ -378,8 +378,21 @@ export class ProductionHost implements Host {
     }
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
-    if (this.uiContext !== undefined) {
-      await session.bindExtensions({ uiContext: this.uiContext });
+    try {
+      if (this.uiContext !== undefined) {
+        await session.bindExtensions({ uiContext: this.uiContext });
+      }
+    } catch (error) {
+      // Binding can fail when the extension context was replaced or
+      // reloaded while a fallback session was starting (issue #44).
+      // The loop records the startup failure, but this partially-created
+      // SDK session still owns resources and must be released here.
+      try {
+        session.dispose();
+      } catch {
+        // Preserve the original startup error; disposal is best effort.
+      }
+      throw error;
     }
 
     // 8. Track per-session state (Task 17 / 7A.4). The host's
