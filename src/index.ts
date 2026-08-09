@@ -127,7 +127,13 @@ export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";
 // path (§11.9) reconstructs from this single read.
 
 export type { FileMutationRecord, HunkLine, TouchedFile } from "./persistence/file-mutation.js";
-export type { CheckpointSnapshot, PersistedRecord, RecordLog } from "./persistence/log.js";
+export type {
+  CheckpointSnapshot,
+  PersistedRecord,
+  RecordLog,
+  RunContextRecord,
+  RunSeededRecord,
+} from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
 
 // ─── Run memory artifact (§8.4) ───────────────────────────────────────
