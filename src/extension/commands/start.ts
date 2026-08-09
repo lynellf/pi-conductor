@@ -188,6 +188,7 @@ export async function handleStart(
         modelRegistry,
         cwd,
         uiContext: ctx.ui,
+        isUiContextCurrent: isContextCurrent,
         ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
       },
       run: {

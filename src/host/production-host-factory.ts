@@ -50,6 +50,8 @@ export interface ExtensionContextInputs {
   readonly cwd: string;
   /** Extension UI handle threaded into spawned sessions for the TUI bridge. */
   readonly uiContext?: ExtensionUIContext;
+  /** Live guard that invalidates the UI handle after session replacement. */
+  readonly isUiContextCurrent?: () => boolean;
   /** Optional display sink for streamed role output. */
   readonly displaySink?: DisplaySink;
 }
@@ -114,6 +116,9 @@ export function createProductionHost(inputs: CreateProductionHostInputs): Produc
     modelRegistry: inputs.extension.modelRegistry,
     cwd: inputs.extension.cwd,
     ...(inputs.extension.uiContext !== undefined && { uiContext: inputs.extension.uiContext }),
+    ...(inputs.extension.isUiContextCurrent !== undefined && {
+      isUiContextCurrent: inputs.extension.isUiContextCurrent,
+    }),
     ...(inputs.extension.displaySink !== undefined && {
       displaySink: inputs.extension.displaySink,
     }),

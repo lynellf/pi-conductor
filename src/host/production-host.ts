@@ -98,6 +98,12 @@ export interface ProductionHostOptions {
   readonly cwd: string;
   /** Optional extension UI handle threaded into role sessions. */
   readonly uiContext?: ExtensionUIContext;
+  /**
+   * Live guard for the captured UI context. When an extension session is
+   * replaced, role startup must skip binding the stale context (issue #44).
+   * Non-extension callers omit this and retain the normal binding behavior.
+   */
+  readonly isUiContextCurrent?: () => boolean;
   /** Optional display sink for streamed role output. */
   readonly displaySink?: DisplaySink;
   /** Host-owned `run_id`-keyed append-only log (Task 13.5). */
@@ -151,6 +157,8 @@ export class ProductionHost implements Host {
   readonly runId: string;
   /** See {@link ProductionHostOptions.uiContext}. */
   readonly uiContext: ExtensionUIContext | undefined;
+  /** See {@link ProductionHostOptions.isUiContextCurrent}. */
+  readonly isUiContextCurrent: (() => boolean) | undefined;
   /** See {@link ProductionHostOptions.displaySink}. */
   readonly displaySink: DisplaySink | undefined;
   /** See {@link ProductionHostOptions.sessionDir}. */
@@ -165,6 +173,7 @@ export class ProductionHost implements Host {
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
     this.uiContext = opts.uiContext;
+    this.isUiContextCurrent = opts.isUiContextCurrent;
     this.displaySink = opts.displaySink;
     this.sessionDir =
       opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
@@ -379,7 +388,10 @@ export class ProductionHost implements Host {
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
     try {
-      if (this.uiContext !== undefined) {
+      if (
+        this.uiContext !== undefined &&
+        (this.isUiContextCurrent === undefined || this.isUiContextCurrent())
+      ) {
         await session.bindExtensions({ uiContext: this.uiContext });
       }
     } catch (error) {

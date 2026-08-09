@@ -154,4 +154,28 @@ describe("ProductionHost — uiContext bridge", () => {
     expect(agentSessionMocks.createAgentSession).toHaveBeenCalledTimes(1);
     expect(session.bindExtensions).not.toHaveBeenCalled();
   });
+
+  it("skips stale uiContext binding when a fallback starts after session replacement", async () => {
+    const session = makeSession();
+    agentSessionMocks.createAgentSession.mockResolvedValue({
+      session,
+      extensionsResult: {},
+    } as never);
+    const uiContext = { notify: vi.fn() } as never;
+
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistry(),
+      cwd,
+      uiContext,
+      isUiContextCurrent: () => false,
+      log: new InMemoryRecordLog(),
+      loadedManifest: makeLoadedManifest(),
+      runId: "run-ui-context-4",
+    });
+
+    await host.spawnRole("implementer", { modelIndex: 1 });
+
+    expect(agentSessionMocks.createAgentSession).toHaveBeenCalledTimes(1);
+    expect(session.bindExtensions).not.toHaveBeenCalled();
+  });
 });
