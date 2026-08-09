@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearTrackedRuns, setActiveRun } from "../../src/extension/active-run.js";
 import { handleFollowUp } from "../../src/extension/commands/followup.js";
 import { handleSteer } from "../../src/extension/commands/steer.js";
@@ -33,6 +33,10 @@ describe("conduct steering commands", () => {
   beforeEach(() => {
     clearTrackedRuns();
     notifications = [];
+  });
+
+  afterEach(() => {
+    clearTrackedRuns();
   });
 
   it("warns once with mode-specific usage when message text is missing", async () => {
