@@ -50,9 +50,13 @@ export async function handleResume(
   ctx: ExtensionCommandContext,
   deps: HandleDeps,
 ): Promise<void> {
+  const isContextCurrent = deps.isContextCurrent ?? (() => true);
+  const notify = (message: string, type: "info" | "warning" | "error"): void => {
+    if (isContextCurrent()) ctx.ui.notify(message, type);
+  };
   const runId = args.trim();
   if (runId.length === 0) {
-    ctx.ui.notify("Usage: /conduct:resume <run_id>", "warning");
+    notify("Usage: /conduct:resume <run_id>", "warning");
     return;
   }
 
@@ -72,7 +76,7 @@ export async function handleResume(
       deps.homeDir !== undefined
         ? join(deps.homeDir, HOME_MANIFEST_PATH)
         : join(homedir(), HOME_MANIFEST_PATH);
-    ctx.ui.notify(
+    notify(
       `No conductor manifest found. Tried --conduct-manifest="${
         flagValue ?? ""
       }", <cwd>/${DEFAULT_MANIFEST_PATH}, and ${homePath}. Write a manifest, pass --conduct-manifest <path>, or set up ${homePath} for cross-project sharing.`,
@@ -94,6 +98,7 @@ export async function handleResume(
         modelRegistry,
         cwd,
         uiContext: ctx.ui,
+        isUiContextCurrent: isContextCurrent,
         ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
       },
       run: {
@@ -114,7 +119,7 @@ export async function handleResume(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    ctx.ui.notify(`Cannot resume run ${runId}: ${message}`, "error");
+    notify(`Cannot resume run ${runId}: ${message}`, "error");
     return;
   }
 
@@ -127,7 +132,7 @@ export async function handleResume(
   );
   if (unregisteredWarnings.length > 0) {
     const entries = unregisteredWarnings.map((w) => w.message).join("; ");
-    ctx.ui.notify(
+    notify(
       `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
       "warning",
     );
@@ -146,12 +151,12 @@ export async function handleResume(
   const stopPoller = startStatusPoller(
     handle,
     (text) => {
-      ctx.ui.setStatus("conduct", text);
+      if (isContextCurrent()) ctx.ui.setStatus("conduct", text);
     },
     {
       onNewTransitions: (records) => {
         for (const record of records) {
-          ctx.ui.notify(formatHandoffNotify(record), "info");
+          notify(formatHandoffNotify(record), "info");
         }
       },
     },
@@ -166,19 +171,20 @@ export async function handleResume(
     onAbortResult: (result) => {
       notifyEscapeAbortResult(ctx, result);
     },
+    isContextCurrent,
   });
 
   try {
     const { finalCheckpoint, exitReason } = await handle.completion();
-    ctx.ui.notify(
+    notify(
       `pi-conductor run_id=${handle.runId} reached terminal state=${finalCheckpoint.current_role} reason=${exitReason}`,
       "info",
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    ctx.ui.notify(`pi-conductor run_id=${handle.runId} failed: ${message}`, "error");
+    notify(`pi-conductor run_id=${handle.runId} failed: ${message}`, "error");
   } finally {
-    stopEscapeListener();
+    if (isContextCurrent()) stopEscapeListener();
     releaseStatusPoller();
     stopPoller();
     if (getActiveRun() === handle) {

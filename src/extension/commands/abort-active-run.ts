@@ -151,6 +151,8 @@ export interface EscapeAbortListenerOptions {
   readonly handle: RunHandle;
   readonly abortReason: string;
   readonly onAbortResult: (result: AbortActiveRunResult) => void;
+  /** False after pi replaces this listener's command context. */
+  readonly isContextCurrent?: () => boolean;
 }
 
 /**
@@ -159,8 +161,9 @@ export interface EscapeAbortListenerOptions {
  */
 export function installConductEscapeAbortListener(options: EscapeAbortListenerOptions): () => void {
   let confirmOpen = false;
+  const isContextCurrent = options.isContextCurrent ?? (() => true);
   return options.ctx.ui.onTerminalInput((data) => {
-    if (!matchesKey(data, "escape") || confirmOpen) return undefined;
+    if (!isContextCurrent() || !matchesKey(data, "escape") || confirmOpen) return undefined;
     confirmOpen = true;
     void (async () => {
       try {
@@ -168,12 +171,12 @@ export function installConductEscapeAbortListener(options: EscapeAbortListenerOp
           "Abort pi-conductor run?",
           `run_id=${options.handle.runId}; the current role session will be stopped.`,
         );
-        if (!confirmed) return;
+        if (!confirmed || !isContextCurrent()) return;
         const result = await abortActiveRun({
           expectedHandle: options.handle,
           reason: options.abortReason,
         });
-        options.onAbortResult(result);
+        if (isContextCurrent()) options.onAbortResult(result);
       } finally {
         confirmOpen = false;
       }

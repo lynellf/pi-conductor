@@ -8,32 +8,39 @@ export async function handleCopy(
   _args: string,
   ctx: ExtensionCommandContext,
   copyText: CopyText = copyToClipboard,
+  isContextCurrent: () => boolean = () => true,
 ): Promise<void> {
   const handle = getActiveRun() ?? getMostRecentRun();
   if (handle === null) {
-    ctx.ui.notify("No recent pi-conductor run to copy from.", "info");
+    if (isContextCurrent()) ctx.ui.notify("No recent pi-conductor run to copy from.", "info");
     return;
   }
   const response = handle.latestResponse();
   if (response === null) {
-    ctx.ui.notify(
-      `No completed response is available for pi-conductor run_id=${handle.runId}.`,
-      "info",
-    );
+    if (isContextCurrent()) {
+      ctx.ui.notify(
+        `No completed response is available for pi-conductor run_id=${handle.runId}.`,
+        "info",
+      );
+    }
     return;
   }
 
   try {
     await copyText(response.text);
-    ctx.ui.notify(
-      `Copied latest ${response.role} response from pi-conductor run_id=${handle.runId}.`,
-      "info",
-    );
+    if (isContextCurrent()) {
+      ctx.ui.notify(
+        `Copied latest ${response.role} response from pi-conductor run_id=${handle.runId}.`,
+        "info",
+      );
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    ctx.ui.notify(
-      `Cannot copy latest response for pi-conductor run_id=${handle.runId}: ${message}`,
-      "error",
-    );
+    if (isContextCurrent()) {
+      ctx.ui.notify(
+        `Cannot copy latest response for pi-conductor run_id=${handle.runId}: ${message}`,
+        "error",
+      );
+    }
   }
 }
