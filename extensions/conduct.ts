@@ -205,17 +205,17 @@ export default function conductExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("conduct:steer", {
     description: "Steer the currently active pi-conductor role session.",
-    handler: handleSteer,
+    handler: (args, ctx) => handleSteer(args, ctx, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:followup", {
     description: "Queue guidance for the next pi-conductor prompt boundary.",
-    handler: handleFollowUp,
+    handler: (args, ctx) => handleFollowUp(args, ctx, isCurrentSessionContext),
   });
 
   pi.registerCommand("conduct:copy", {
     description: "Copy the latest completed pi-conductor response.",
-    handler: handleCopy,
+    handler: (args, ctx) => handleCopy(args, ctx, undefined, isCurrentSessionContext),
   });
 
   /**

@@ -273,6 +273,7 @@ export async function handleStart(
     onAbortResult: (result) => {
       notifyEscapeAbortResult(ctx, result);
     },
+    isContextCurrent,
   });
 
   try {

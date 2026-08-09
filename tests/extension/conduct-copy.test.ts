@@ -11,6 +11,14 @@ function makeHandle(runId: string, response: RunResponse | null): RunHandle {
   } as unknown as RunHandle;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 describe("/conduct:copy", () => {
   let notifications: NotifyCall[];
 
@@ -78,6 +86,35 @@ describe("/conduct:copy", () => {
     );
 
     expect(copyText).toHaveBeenCalledWith("terminal output");
+  });
+
+  it("does not notify after the context is invalidated during clipboard work", async () => {
+    const response: RunResponse = {
+      runId: "run-copy-stale",
+      role: "worker",
+      sessionId: "worker-1",
+      text: "copy me",
+      completedAt: 42,
+    };
+    setActiveRun(makeHandle("run-copy-stale", response));
+    const copyCompletion = deferred<void>();
+    const ctx = makeCtx({
+      cwd: "/tmp",
+      notify: (msg, type) => notifications.push({ msg, type }),
+    });
+    let contextCurrent = true;
+
+    const copyPromise = handleCopy(
+      "",
+      ctx,
+      () => copyCompletion.promise,
+      () => contextCurrent,
+    );
+    contextCurrent = false;
+    copyCompletion.resolve();
+    await copyPromise;
+
+    expect(notifications).toHaveLength(0);
   });
 
   it("reports missing response and clipboard failures without changing selection", async () => {
