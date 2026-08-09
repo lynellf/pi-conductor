@@ -220,6 +220,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // Distinct from the run-cap sentinel so log consumers can tell the
   // two synthesized-event paths apart.
   const SYNTHESIZED_UNAVAILABLE_SESSION_FILE = "<synthesized:handoff:role-unavailable>";
+  // A fallback spawn can fail before it has a real session identity. This
+  // marker keeps that terminal visible without pretending a live session
+  // started (issue #44).
+  const SYNTHESIZED_FALLBACK_FAILURE_SESSION_FILE = "<synthesized:session-failed:fallback-start>";
 
   while (checkpoint.current_role !== "done") {
     // ── §11.7 deferred forced end (Task 17) ──────────────────
@@ -333,10 +337,34 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           roleOutcome = { kind: "exhausted" };
           break;
         }
-        // RoleEscalationError and other errors propagate up to abort
-        // the run. The caller's `runLoop` does not catch typed
-        // errors — surface to the caller, which catches (test,
-        // RunHandle).
+        if (modelIndex > 0) {
+          // A fallback spawn has no active lifecycle session to terminate:
+          // the primary already emitted `session_failed`, and this spawn
+          // failed before `session_started` could be reduced. Persist an
+          // explicit terminal lifecycle record with a synthetic identity so
+          // run projections cannot remain `running` after a fallback startup
+          // error (issue #44). The next model is the attempted fallback.
+          const attemptedModel = host.getNextModel(role, modelIndex - 1);
+          const failureMessage = err instanceof Error ? err.message : String(err);
+          host.persistRecord({
+            type: "session_failed",
+            run_id: checkpoint.run_id,
+            role,
+            visit_index: visitIndex,
+            state: checkpoint.current_role,
+            model: attemptedModel,
+            session_file: SYNTHESIZED_FALLBACK_FAILURE_SESSION_FILE,
+            parent_session: parentSessionId,
+            usage: ZERO_USAGE,
+            failure_reason: `fallback_start_failed: ${failureMessage}`,
+            ts: Date.now(),
+          });
+          roleOutcome = { kind: "failed" };
+          break;
+        }
+        // RoleEscalationError and other errors from the initial spawn
+        // propagate up to abort the run. A fallback startup error is
+        // handled above so it cannot leave the run nonterminal.
         throw err;
       }
 
