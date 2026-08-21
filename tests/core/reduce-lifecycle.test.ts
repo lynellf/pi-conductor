@@ -403,12 +403,14 @@ describe("reduceLifecycle: session_failed — identity validation + failure_reas
       parent_session: "orch-1",
       usage: REAL_USAGE,
       failureReason: "model_error",
+      failureDetail: "Connection handling canceled",
       ts: TS,
     });
     expect(checkpoint.active_role_session).toBeNull();
     expect(record.type).toBe("session_failed");
     expect(record.usage).toEqual(REAL_USAGE);
     expect(record.failure_reason).toBe("model_error");
+    expect(record.failure_detail).toBe("Connection handling canceled");
   });
 
   it("throws when there is no active_role_session (session_failed)", () => {
