@@ -53,7 +53,7 @@ self-diagnosing. Authority: archived FSM spec §8.2, §9.4, §11.4, and §12.
       unchanged pi peer dependencies and is documented for the PR.
 - [x] Review the diff across correctness, architecture, security, performance,
       and readability.
-- [ ] Create a focused PR for #46.
+- [x] Create a focused PR for #46.
 
 ## Acceptance criteria
 
