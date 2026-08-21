@@ -264,6 +264,8 @@ export interface ReduceLifecycleMeta {
   readonly model?: string | null;
   readonly model_effort?: ModelEffort;
   readonly failureReason?: string;
+  /** Upstream detail for a terminal failure; the reason remains the stable discriminator. */
+  readonly failureDetail?: string;
   readonly ts: number;
   // Phase 3 extensions (see JSDoc above).
   readonly usage?: UsageRecord;
@@ -303,6 +305,8 @@ export interface SessionLifecycleEvent {
   readonly parent_session: string | null;
   readonly usage?: UsageRecord;
   readonly failure_reason?: string;
+  /** Optional provider/host diagnostic for a terminal failure (§11.4). */
+  readonly failure_detail?: string;
   readonly ts: number;
 }
 

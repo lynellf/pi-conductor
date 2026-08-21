@@ -361,6 +361,9 @@ export interface Host {
    */
   sessionTerminalReason(session: RoleSession): SessionTerminalReason;
 
+  /** Optional upstream diagnostic associated with a terminal failure. */
+  sessionFailureDetail?(session: RoleSession): string | null;
+
   /**
    * Get the next model in the role's `models[]` list (Task 18, §8.2).
    * Returns the `provider:id` string at `currentModelIndex + 1`, or

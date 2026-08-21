@@ -121,6 +121,7 @@ export class SessionState {
   private _usage: UsageRecord = ZERO_USAGE;
   private readonly _seenMessageIds: Set<string> = new Set();
   private _terminalReason: SessionTerminalReason = null;
+  private _failureDetail: string | null = null;
   private _aborted = false;
 
   /** Per-session cost cap (null = uncapped). The role's
@@ -185,14 +186,22 @@ export class SessionState {
    * `host.sessionTerminalReason`; if non-null, it overrides the
    * buffer-derived breach reason on the `session_failed` record.
    */
-  setTerminalReason(reason: SessionTerminalReason): void {
+  setTerminalReason(reason: SessionTerminalReason, failureDetail?: string): void {
     this._terminalReason = reason;
+    if (failureDetail !== undefined && failureDetail.length > 0) {
+      this._failureDetail = failureDetail;
+    }
   }
 
   /** The host-set terminal reason, or null if the session ended
    *  normally. Read by the loop after `prompt()` resolves. */
   get terminalReason(): SessionTerminalReason {
     return this._terminalReason;
+  }
+
+  /** Provider or host text captured with the terminal reason, if any. */
+  get failureDetail(): string | null {
+    return this._failureDetail;
   }
 
   /**

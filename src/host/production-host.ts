@@ -489,6 +489,10 @@ export class ProductionHost implements Host {
     return state?.terminalReason ?? null;
   }
 
+  sessionFailureDetail(session: RoleSession): string | null {
+    return this.sessionStates.get(session.sessionId)?.failureDetail ?? null;
+  }
+
   persistRecord(record: PersistedRecord): void {
     // Append-only: the host is the sole writer (the loop and delegated
     // child lifecycle callbacks use this seam for durable records).
