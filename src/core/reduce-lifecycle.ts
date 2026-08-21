@@ -178,6 +178,7 @@ function sessionTerminal(
   // §11.4: failure_reason only on session_failed. The host supplies it;
   // the reducer plumbs it. We do not default or synthesize.
   const failureReason = lifecycle === "session_failed" ? meta.failureReason : undefined;
+  const failureDetail = lifecycle === "session_failed" ? meta.failureDetail : undefined;
 
   const newCheckpoint: Checkpoint = Object.freeze({
     run_id: checkpoint.run_id,
@@ -205,6 +206,7 @@ function sessionTerminal(
     parent_session: meta.parent_session,
     usage: meta.usage,
     ...(failureReason !== undefined && { failure_reason: failureReason }),
+    ...(failureDetail !== undefined && { failure_detail: failureDetail }),
     ts: meta.ts,
   };
 
