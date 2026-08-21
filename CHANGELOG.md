@@ -1,14 +1,29 @@
 # Changelog
 
-## [Unreleased]
+## [0.14.0] - 2026-08-09
+
+### Enhancements
+
+- **Durable run-context telemetry** (issue #42). New runs now append a
+  `run_context` record carrying the accepted, trimmed original prompt through
+  the same durable append-and-notify seam as other host records. Library
+  consumers can use the newly exported `RunContextRecord` and
+  `RunSeededRecord` types.
 
 ### Bug fixes
 
-- **Topology-safe local-model recovery** (issue #46). An exhausted
-  orchestrator model list now ends as `session_failed` instead of attempting
-  an illegal self-handoff. Model-error lifecycle records also retain a bounded
-  upstream `failure_detail`, so local provider cancellations can be diagnosed
-  without changing the stable `failure_reason: "model_error"` discriminator.
+- **Reliable fallback startup termination** (issue #44). A fallback session
+  that fails during startup now records a terminal failure and stops the role
+  cleanly instead of leaving the run projected as active. Partially created
+  SDK sessions are disposed when extension binding fails.
+- **Safe pi session replacement** (issue #44). Extension shutdown now
+  invalidates callbacks tied to the replaced session, aborts the active run,
+  and prevents new role sessions from binding stale UI context.
+
+### Notes
+
+- The public API changes are additive. Consumers that exhaustively match on
+  `PersistedRecord.type` should add a `run_context` case.
 
 ## [0.13.0] - 2026-08-06
 
