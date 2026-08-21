@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.15.0] - 2026-08-21
+
+### Bug fixes
+
+- **Topology-safe local-model recovery** (issue #46). An exhausted
+  orchestrator model list now ends as `session_failed` instead of attempting
+  an illegal self-handoff. Model-error lifecycle records also retain a bounded
+  upstream `failure_detail`, so local provider cancellations can be diagnosed
+  without changing the stable `failure_reason: "model_error"` discriminator.
+
 ## [0.14.0] - 2026-08-09
 
 ### Enhancements
