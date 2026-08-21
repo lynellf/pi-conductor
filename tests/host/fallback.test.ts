@@ -34,15 +34,20 @@ import {
  */
 function makeLoadedManifest(opts: {
   workerModels: readonly string[];
+  orchestratorModels?: readonly string[];
   workerMaxVisits?: number;
 }): LoadedManifest {
   const workerMaxVisits = opts.workerMaxVisits ?? 3;
+  const orchestratorModels =
+    opts.orchestratorModels === undefined
+      ? ""
+      : `    models: [${opts.orchestratorModels.map((m) => `"${m}"`).join(", ")}]\n`;
   const yaml = `
 version: 1
 roles:
   - name: orchestrator
     is_orchestrator: true
-    system_prompt: .pi/roles/orchestrator.md
+${orchestratorModels}    system_prompt: .pi/roles/orchestrator.md
     tools: [handoff, end]
   - name: worker
     max_visits: ${workerMaxVisits}
@@ -529,8 +534,10 @@ describe("Model fallback (§9.4) — all models fail, hand to orchestrator once"
     expect(workerFailed).toHaveLength(2);
     expect(workerFailed[0]?.model).toBe("stub:primary");
     expect(workerFailed[0]?.failure_reason).toBe("model_error");
+    expect(workerFailed[0]?.failure_detail).toBe("primary model errored");
     expect(workerFailed[1]?.model).toBe("stub:fallback");
     expect(workerFailed[1]?.failure_reason).toBe("model_error");
+    expect(workerFailed[1]?.failure_detail).toBe("fallback model errored");
 
     // 3 transition_accepted:
     //   1. orch → worker (handoff)
@@ -567,6 +574,84 @@ describe("Model fallback (§9.4) — all models fail, hand to orchestrator once"
 
     // No transition_rejected.
     expect(records.some((r) => r.type === "transition_rejected")).toBe(false);
+  });
+});
+
+describe("Model-error diagnostics", () => {
+  it("bounds provider failure detail before appending it to the run log", async () => {
+    const loaded = makeLoadedManifest({ workerModels: ["stub:primary"] });
+    const { createInitialCheckpoint, InMemoryRecordLog } = await import("../../src/index.js");
+    const initialCheckpoint = createInitialCheckpoint(loaded.def);
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      loadedManifest: loaded,
+      steps: [
+        { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
+        { kind: "fail", errorMessage: "x".repeat(4097) },
+        { kind: "emit_end", reason: "worker unavailable" },
+      ],
+    });
+
+    await runLoop({
+      def: loaded.def as MachineDefinition,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    const failure = log
+      .records(initialCheckpoint.run_id)
+      .find(
+        (record): record is SessionLifecycleEvent =>
+          record.type === "session_failed" && record.role === "worker",
+      );
+    expect(failure?.failure_detail).toHaveLength(4096);
+  });
+});
+
+describe("Model fallback (§9.4) — orchestrator exhaustion", () => {
+  it("ends as session_failed instead of attempting an illegal self-handoff", async () => {
+    const loaded = makeLoadedManifest({
+      orchestratorModels: ["stub:primary", "stub:fallback"],
+      workerModels: ["stub:worker"],
+    });
+    const { createInitialCheckpoint, InMemoryRecordLog } = await import("../../src/index.js");
+    const initialCheckpoint = createInitialCheckpoint(loaded.def);
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      loadedManifest: loaded,
+      steps: [
+        { kind: "fail", errorMessage: "local server canceled the primary request" },
+        { kind: "fail", errorMessage: "local server canceled the fallback request" },
+      ],
+    });
+
+    const result = await runLoop({
+      def: loaded.def as MachineDefinition,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(result.finalCheckpoint.current_role).toBe("orchestrator");
+    const failures = log
+      .records(initialCheckpoint.run_id)
+      .filter((record): record is SessionLifecycleEvent => record.type === "session_failed");
+    expect(failures).toHaveLength(2);
+    expect(failures[1]).toMatchObject({
+      role: "orchestrator",
+      model: "stub:fallback",
+      failure_reason: "model_error",
+      failure_detail: "local server canceled the fallback request",
+    });
+    expect(
+      log.records(initialCheckpoint.run_id).some((record) => record.type === "transition_rejected"),
+    ).toBe(false);
   });
 });
 

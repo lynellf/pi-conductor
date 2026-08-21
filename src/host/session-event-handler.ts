@@ -52,6 +52,8 @@ import {
 import { loadWriteHunksForArgs } from "./hunk-diff.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
 
+const MAX_FAILURE_DETAIL_LENGTH = 4096;
+
 // ─── Public API ─────────────────────────────────────────────────────
 
 /**
@@ -318,7 +320,13 @@ function onSessionEvent(
   // underlying `pi-ai` stream's `error` into `message_end`
   // carrying the error message; we catch both here.
   if (message.stopReason === "error") {
-    state.setTerminalReason("model_error");
+    // Provider error text is untrusted and may include an arbitrarily large
+    // response body. Preserve enough to diagnose cancellation without making
+    // the append-only run log an unbounded sink.
+    state.setTerminalReason(
+      "model_error",
+      message.errorMessage?.slice(0, MAX_FAILURE_DETAIL_LENGTH),
+    );
     return;
   }
 

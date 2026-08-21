@@ -338,6 +338,10 @@ export class StubHost implements Host {
     return state?.terminalReason ?? null;
   }
 
+  sessionFailureDetail(session: RoleSession): string | null {
+    return this.sessionStates.get(session.sessionId)?.failureDetail ?? null;
+  }
+
   persistRecord(record: PersistedRecord): void {
     this.log.append(record);
     notifyListeners(record); // spec §4.1 — fan-out after durable append

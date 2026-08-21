@@ -498,6 +498,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               continue;
             }
             const failureReason: string = hostReason ?? validated.reason;
+            const failureDetail =
+              hostReason === "model_error" ? (host.sessionFailureDetail?.(session) ?? null) : null;
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
               sessionId,
@@ -507,6 +509,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               parent_session: sessionParentId,
               usage: capturedUsage,
               failureReason,
+              ...(failureDetail !== null && { failureDetail }),
               model: session.model,
               model_effort: session.effort,
             });
@@ -597,6 +600,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           const hostReasonOnOk = host.sessionTerminalReason(session);
           if (hostReasonOnOk !== null) {
             sessionHostReason = hostReasonOnOk;
+            const failureDetail =
+              hostReasonOnOk === "model_error"
+                ? (host.sessionFailureDetail?.(session) ?? null)
+                : null;
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
               sessionId,
@@ -606,6 +613,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               parent_session: sessionParentId,
               usage: capturedUsage,
               failureReason: hostReasonOnOk,
+              ...(failureDetail !== null && { failureDetail }),
               model: session.model,
               model_effort: session.effort,
             });
@@ -843,6 +851,13 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       return { finalCheckpoint: checkpoint, exitReason: "session_failed" };
     }
     if (roleOutcome.kind === "exhausted") {
+      // A worker can return control to the hub. The hub itself has no
+      // legal self-handoff, so its already-persisted session_failed is the
+      // terminal outcome (§7.2 / §9.4).
+      if (role === def.orchestrator) {
+        return { finalCheckpoint: checkpoint, exitReason: "session_failed" };
+      }
+
       // ── Task 18: synthesize handoff to orchestrator (§9.4) ────────
       // The role exhausted its model fallback list. Per §9.4 v1
       // default, hand to the orchestrator once with a "role
@@ -863,7 +878,16 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         ts: Date.now(),
       });
       if (result.kind !== "accepted") {
-        throw new Error("runLoop: synthesized role-unavailable handoff was rejected");
+        throw new Error(
+          [
+            "runLoop: synthesized role-unavailable handoff was rejected",
+            `reason=${result.reason}`,
+            `current_role=${checkpoint.current_role}`,
+            `target_role=${synthesized.target_role}`,
+            `legal_targets=${JSON.stringify(result.legal_targets)}`,
+            `visit_count=${JSON.stringify(checkpoint.visit_count)}`,
+          ].join("; "),
+        );
       }
       host.persistRecord({
         ...result.record,
