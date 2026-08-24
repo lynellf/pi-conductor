@@ -97,9 +97,7 @@ export async function collectDeclaredArtifacts(
     visitIndex: number;
     sessionId: string;
     workspaceRoot: string;
-    projection: ReturnType<typeof pathInProjection> extends { inside: true }
-      ? Projection
-      : never;
+    projection: ReturnType<typeof pathInProjection> extends { inside: true } ? Projection : never;
     artifactsConfig: ArtifactConfig | undefined;
     artifactsDir: string;
   },
@@ -284,8 +282,7 @@ export async function collectAutoPatch(options: {
   sessionId: string;
   kind: "declared" | "auto_patch";
 }): Promise<ArtifactCollectedRecord | null> {
-  const { workspacePath, artifactsDir, runId, role, visitIndex, sessionId, kind } =
-    options;
+  const { workspacePath, artifactsDir, runId, role, visitIndex, sessionId, kind } = options;
 
   const artifactStoreDir = join(artifactsDir, `${role}-v${visitIndex}`);
   const patchFileName = `patch-${role}-v${visitIndex}.patch`;

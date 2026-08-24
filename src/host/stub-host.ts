@@ -261,7 +261,42 @@ export class StubHost implements Host {
       });
     }
 
+    // ── Issue #48 T6: workspace parity for StubHost.
+    // For isolated roles, create a temp directory (copy backend equivalent)
+    // so loop tests can exercise workspace behavior without real Git.
+    // Shared roles (no `workspace` block) skip this — use cwd directly.
+    let isolatedWorkspacePath: string | undefined;
+    let confinedTools:
+      | ReturnType<typeof import("./workspace/confine-tools.js").buildConfinedTools>
+      | undefined;
+    const roleWorkspaceConfig = roleConfig?.workspace;
+    if (roleWorkspaceConfig !== undefined) {
+      // Create a temp directory as the workspace (copy backend parity).
+      const { mkdtemp } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const tempDir = await mkdtemp(join(this.cwd, ".pi-conductor-stub-workspace-"));
+      isolatedWorkspacePath = tempDir;
+
+      // Compute the guarantee (spec §6).
+      const { computeGuarantee, buildConfinedTools } = await import("./workspace/index.js");
+      const backend = roleWorkspaceConfig.backend ?? "worktree";
+      const source = roleWorkspaceConfig.source ?? "snapshot";
+      const guarantee = computeGuarantee({
+        backend,
+        tools: roleConfig?.tools,
+        workspaceConfig: roleWorkspaceConfig,
+        source,
+        pinDir: this.cwd,
+        pinSha8: "stub0000",
+      });
+
+      // Build confined tools from the guarantee's projection.
+      confinedTools = buildConfinedTools(guarantee.projection, roleConfig?.tools);
+    }
+
+    const spawnCwd = isolatedWorkspacePath ?? this.cwd;
     const createOpts: Parameters<typeof createAgentSession>[0] = {
+      cwd: spawnCwd,
       model: this.model,
       modelRegistry: this.modelRegistry,
       tools: [
@@ -275,6 +310,7 @@ export class StubHost implements Host {
         end,
         ...(handoffContext === null ? [] : [handoffContext]),
         ...(delegateTool === null ? [] : [delegateTool]),
+        ...(confinedTools !== undefined ? confinedTools.tools : []),
       ],
       sessionManager: this.sessionManager,
     };

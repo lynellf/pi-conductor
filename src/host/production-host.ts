@@ -59,7 +59,9 @@ import type {
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import type { ModelConfig, RoleConfig } from "../manifest/types.js";
+
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { snapshotPinned, workspaceProvisioned } from "../persistence/log.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
@@ -79,6 +81,14 @@ import { createRoleSessionAdapter } from "./role-session.js";
 import { SessionSeam } from "./seam.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
+import {
+  buildConfinedTools,
+  computeGuarantee,
+  ensureSharedSnapshotForResume,
+  ensureSnapshotCheckout,
+  provisionWorkspace,
+  resolvePinnedCommit,
+} from "./workspace/index.js";
 
 /**
  * Constructor options for `ProductionHost`. Mirrors the production
@@ -339,7 +349,102 @@ export class ProductionHost implements Host {
       });
     }
 
-    // 5. Build the file-backed `SessionManager` rooted under the
+    // 5. Workspace provisioning (Issue #48 T6).
+    //    If the role has a `workspace` config (isolated), compute the
+    //    guarantee, provision the workspace, and build confined tools.
+    //    Shared roles (no `workspace` block) skip this — the integration
+    //    workspace is used directly, matching today's behavior (INV-008).
+    let isolatedWorkspacePath: string | undefined;
+    let confinedTools: ReturnType<typeof buildConfinedTools> | undefined;
+    const roleWorkspaceConfig = roleConfig?.workspace;
+    if (roleWorkspaceConfig !== undefined) {
+      // Resolve backend and source (defaults from spec §4).
+      const backend = roleWorkspaceConfig.backend ?? "worktree";
+      const source = roleWorkspaceConfig.source ?? "snapshot";
+
+      const runStateDir = join(this.cwd, ".pi-conductor", "runs", this.runId);
+
+      // Resolve the pinned commit (snapshot pinning at run start).
+      const commit = await resolvePinnedCommit(this.cwd, source);
+      const pinSha8 = commit.slice(0, 8);
+
+      // Ensure the snapshot checkout exists (shared read-only snapshot).
+      const snapshotsDir = join(runStateDir, "snapshots");
+      let sharedSnapshot = await ensureSnapshotCheckout(snapshotsDir, commit, this.cwd);
+
+      // Persist the `snapshot_pinned` record (once per run, from the
+      // first isolated role spawn — already a no-op for shared-only runs).
+      // This only fires once because the reducer handles run state.
+      // We use a static guard to avoid duplicate records across spawns.
+      const pinnedKey = `__snapshot_pinned__`;
+      if (!(this as Record<string, unknown>)[pinnedKey]) {
+        this.persistRecord(
+          snapshotPinned({
+            run_id: this.runId,
+            source,
+            commit,
+          }),
+        );
+        (this as Record<string, unknown>)[pinnedKey] = true;
+      }
+
+      // Provision the workspace (per-visit, spec §5).
+      const workspaceResult = await provisionWorkspace({
+        role,
+        visitIndex: this.nextVisitIndex(role),
+        backend,
+        source,
+        commit,
+        primaryCheckout: this.cwd,
+        runStateDir,
+        sharedSnapshot,
+      });
+
+      // Compute the guarantee (spec §6).
+      const guarantee = computeGuarantee({
+        backend,
+        tools: roleConfig?.tools,
+        workspaceConfig: roleWorkspaceConfig,
+        source,
+        pinDir: this.cwd,
+        pinSha8,
+      });
+
+      // Build confined tools from the guarantee's projection.
+      const confined = buildConfinedTools(guarantee.projection, roleConfig?.tools);
+
+      // Emit the `workspace_provisioned` record (spec §9).
+      this.persistRecord(
+        workspaceProvisioned({
+          run_id: this.runId,
+          role,
+          visit_index:
+            workspaceResult.backend === "shared"
+              ? this.nextVisitIndex(role)
+              : this.nextVisitIndex(role),
+          backend,
+          guarantee: guarantee.level,
+          workspace_path: workspaceResult.workspacePath,
+          snapshot_commit: commit,
+        }),
+      );
+
+      // Surface the warnings (rule 7 downgrade) for the operator to see
+      // in the records (INV-004/INV-006).
+      for (const warning of guarantee.warnings) {
+        // Warnings are already logged by the manifest validator; here
+        // we surface them via a special `workspace_provisioned` field
+        // (the `warnings` field is not on the record type — warnings
+        // are surfaced through the manifest validation warnings, not
+        // repeated on the provisioned record).
+        void warning;
+      }
+
+      isolatedWorkspacePath = workspaceResult.workspacePath;
+      confinedTools = confined;
+    }
+
+    // 6. Build the file-backed `SessionManager` rooted under the
     //    conductor's per-run directory (NOT pi's own session tree).
     //    `SessionManager.create(cwd, sessionDir)` puts each session's
     //    JSONL file directly in `sessionDir`. The constructor
@@ -361,11 +466,14 @@ export class ProductionHost implements Host {
     const end = createEndTool(seam, rejector.shouldRejectCapture);
     const askUser = createAskUserTool() as ToolDefinition;
 
-    // 7. Spawn the real `AgentSession` via the SDK. `model` is
+    // 8. Spawn the real `AgentSession` via the SDK. `model` is
     //    `undefined` for the system-model path; the SDK uses its
     //    default in that case (no `model` override).
+    //    For isolated roles: pass the provisioned workspace path as
+    //    `cwd` and include confined tool definitions in `customTools`.
+    const spawnCwd = isolatedWorkspacePath ?? this.cwd;
     const createOpts: Parameters<typeof createAgentSession>[0] = {
-      cwd: this.cwd,
+      cwd: spawnCwd,
       modelRegistry: this.modelRegistry,
       resourceLoader: loader,
       sessionManager,
@@ -375,6 +483,7 @@ export class ProductionHost implements Host {
         askUser,
         ...(handoffContext === null ? [] : [handoffContext]),
         ...(delegateTool === null ? [] : [delegateTool]),
+        ...(confinedTools !== undefined ? confinedTools.tools : []),
       ],
       tools: [...tools, ...(delegateTool === null ? [] : ["delegate"])],
     };
