@@ -1,0 +1,34 @@
+{
+  "task_id": "issue-48-per-role-workspaces",
+  "created_at": "2026-08-24T18:53:00Z",
+  "controlling_spec": "docs/issue-48-per-role-workspaces/spec.md",
+  "status": "in_progress",
+  "candidate_complete": false,
+  "updated_at": "2026-08-24T18:53:00+00:00",
+  "active_slice": "S-003",
+  "slices": {
+    "S-003": {
+      "objective": "Implement T3: Workspace manager — snapshot pinning, per-visit provisioning, resume re-creation, guarantee computation",
+      "status": "ready_for_review",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": [
+        "spec.md §5 (workspace lifecycle)",
+        "spec.md §6 (tool policy and guarantee levels)",
+        "spec.md §4 (manifest contract)",
+        "spec.md §9 (observability)"
+      ],
+      "acceptance_checks": [
+        "S-003-A1: resolvePinnedCommit resolves HEAD and named refs, errors on non-Git",
+        "S-003-A2: ensureSnapshotCheckout creates shared read-only checkout idempotently",
+        "S-003-A3: provisionWorkspace handles shared, worktree, copy (Git + non-Git) backends",
+        "S-003-A4: resumeWorkspace re-creates deleted worktrees/copies",
+        "S-003-A5: INV-005: no auto-cleanup — workspaces/snapshots persist",
+        "S-003-A6: computeGuarantee computes correct levels (none/confined/sandbox)",
+        "S-003-A7: pathInProjection checks containment correctly",
+        "S-003-A8: pnpm typecheck, build, test, lint, format:check all pass"
+      ]
+    }
+  }
+}
