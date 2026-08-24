@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Enhancements
+
+- **Per-role isolated workspaces and artifact handoffs** (Issue #48). Any
+  role can opt into a `workspace` block (`worktree`, `copy`, or `container`
+  backend) with declared mounts and artifact policies. Conductor pins a
+  snapshot at run start, provisions isolated workspaces per role visit,
+  confines file tools to the role's projection, collects declared artifacts
+  (plus auto-patches for writable worktrees), and routes them into the
+  next role's workspace as explicit handoff deliverables. A computed
+  **guarantee** (`none`, `confined`, `sandbox`) replaces self-declared
+  isolation claims, and writable host bind mounts are downgraded to
+  `confined` with a manifest warning.
+
 ## [0.15.0] - 2026-08-21
 
 ### Bug fixes
@@ -53,7 +68,6 @@
   single terminal outcomes now flow through the durable append-and-notify seam,
   including cancellations synthesized during resume recovery. Live subscribers
   and status surfaces no longer miss or retain stale child outcomes.
-
 ## [0.12.1] - 2026-08-03
 
 ### Bug fixes

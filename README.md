@@ -424,6 +424,123 @@ children as cancelled (`recovered_child_lost`) rather than relaunching them.
 
 ---
 
+## Per-role isolated workspaces and artifact handoffs (Issue #48)
+
+Conductor can give each FSM role its own isolated workspace with a declared
+mount policy, instead of sharing the primary checkout. Roles that opt into
+`workspace` blocks start in a pinned snapshot of the integration repository;
+conductor confines file tools to the role's projection, collects declared
+artifacts, and routes them to the next role's workspace as explicit
+handoff deliverables.
+
+### Quick guide
+
+1. **Add a `workspace` block** to any role in the manifest. Absent =
+   shared mode (today's behavior, byte-identical).
+2. **Choose a backend:** `shared` (default), `worktree` (per-visit Git
+   worktree), `copy` (filesystem copy for non-Git roots), or `container`
+   (requires a Docker image and `pi` CLI — see below).
+3. **Declare mounts** (relative paths → inside the pinned snapshot;
+   absolute paths → host paths) with `writable: true | false`.
+4. **Declare artifacts** in handoffs: the host collects, validates, caps,
+   and routes them to the receiver's workspace.
+
+### Configuration reference
+
+```yaml
+roles:
+  - name: implementer
+    max_visits: 3
+    tools: [read, grep, edit, write, handoff, end]
+    workspace:
+      backend: worktree            # shared | worktree | copy | container
+      source: snapshot             # snapshot | ref:<git-ref-or-commit>
+      mounts:
+        - path: .campaign          # relative → inside the pinned snapshot
+          writable: false
+        - path: /data/out          # absolute → host path
+          writable: true
+      shell: none                  # none | container  (default none)
+      image: docker.io/lynellf/conductor-sandbox:latest  # required iff container
+      network: bridge              # bridge | none  (default bridge)
+    artifacts:
+      auto_patch: true             # default true for writable worktree
+      max_file_bytes: 1048576      # default 1 MiB per declared file artifact
+      max_files: 32                # default per handoff
+```
+
+### Guarantee matrix
+
+The host computes a **trust guarantee** per session — never self-declared —
+from `(backend, mounts, tools)`:
+
+| Role shape (isolated) | Guarantee |
+| --- | --- |
+| `shared` (no `workspace` block) | `none` (full checkout access) |
+| `worktree` / `copy` + read-only tools | `confined` (path confinement, no OS boundary) |
+| `worktree` / `copy` + writable tools | `confined` (path confinement, process-level only) |
+| `container` + no writable host mounts | `sandbox` (OS namespace boundary) |
+| `container` + writable absolute host mount | `confined` (capped, recorded as downgrade) |
+
+**Important:** `confined` is a **tool-surface** guarantee — no sanctioned tool
+of the role can read or write outside the projection — but the session shares
+the host process (same UID, environment). The README documents it alongside the
+existing child-boundary language ("path confinement, not an OS or credential
+sandbox"). Only `sandbox` (container) provides OS-level isolation.
+
+### Artifact pipeline
+
+1. **Declaration:** The model declares `artifacts: [{ path, description? }]` in
+   a `handoff` call (path is relative to the emitting role's workspace root).
+2. **Collection (host, at role terminal):** The host resolves each path, checks
+   containment in the emitting role's projection, enforces `max_file_bytes` /
+   `max_files`, copies accepted files to `<runStateDir>/artifacts/<runId>/<role>-v<n>/`,
+   and records `artifact_collected` (or `artifact_rejected` for violations).
+3. **Routing (host, on accepted transition):** Accepted artifacts are
+   materialized into the receiving role's workspace under
+   `artifacts/<emitting-role>-v<n>/` (read-only for read-only roles, writable
+   otherwise). A seed section lists artifact names and descriptions (never
+   inlined contents) so the recipient and orchestrator see the gap.
+4. **Shared-mode receivers:** Get absolute run-state paths in the seed instead
+   of materialized files (they can read the host filesystem).
+
+Auto-patches (`git diff` + `git add -N` for untracked, `--binary`) are
+generated automatically for writable `worktree` workspaces at every terminal
+(successful or failed). Patches are stored and recorded but routed only from
+accepted handoffs.
+
+### Container backend (spike-gated)
+
+The `container` backend requires: (a) `image` (non-empty string), (b) `pi`
+CLI installed in the project, (c) Docker available at runtime. Conductor
+spawns `docker run` with the workspace bind-mounted (read-only unless the
+role's workspace is writable), `agentDir` mounted for API keys, and a
+minimal environment (no host home, no Docker socket).
+
+The container backend earns a `sandbox` guarantee; it is **spike-gated** —
+a feasibility spike (Task T0) must verify parity against the installed SDK
+before implementation (Task T8). On spike failure, the feature ships
+`shared`/`worktree`/`copy` with `confined` labeling, and `sandbox` is
+documented unavailable.
+
+### Integration
+
+Patches are applied to the integration workspace **only** by a role with an
+explicit writable mount on it (e.g. an integrator role, or the orchestrator
+in shared mode) using its own tools, or by the operator via `git apply`. The
+conductor **never auto-applies** a patch or artifact to the integration
+workspace — same "explicit integration" rule as delegation-lite.
+
+### Retention
+
+Workspaces, snapshot checkouts, and branches are retained exactly like
+delegation worktrees: **no automatic cleanup, no automatic merge, no
+deletion**. The operator may run `git worktree remove <path>` manually when
+space is needed. The run state directory (`<integration>/.pi-conductor/runs/<runId>/`)
+holds `snapshots/`, `workspaces/`, `artifacts/`, and `sessions/`.
+
+---
+
 ## Advanced: library use
 
 The pure FSM core + SDK host driver are importable as a library. The public API:
