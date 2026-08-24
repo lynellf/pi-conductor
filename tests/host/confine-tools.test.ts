@@ -132,10 +132,12 @@ async function createDir(subpath: string): Promise<void> {
 async function getActiveTool(
   result: ReturnType<typeof buildConfinedTools>,
   toolName: string,
-): Promise<((...args: never[]) => Promise<AgentToolResult<unknown>> | undefined) | null> {
+): Promise<((...args: never[]) => Promise<AgentToolResult<unknown>>) | null> {
   const tool = result.tools.find((t) => t.name === toolName);
   if (tool === undefined) return null;
-  return tool.execute as never;
+  // Narrow: execute is async, always returns a Promise; cast to erase
+  // the SDK's generic TDetails/TState from the type.
+  return (tool.execute as ((...args: never[]) => Promise<AgentToolResult<unknown>>) | null);
 }
 
 describe("buildConfinedTools — path confinement", () => {
@@ -152,7 +154,10 @@ describe("buildConfinedTools — path confinement", () => {
     const result = buildConfinedTools(projection, ["read"]);
     const readTool = await getActiveTool(result, "read");
     if (readTool === null) throw new Error("read tool not found");
-    return readTool("tool-call-id", params as never, undefined, undefined, {} as never);
+    return (readTool as ((...args: unknown[]) => Promise<AgentToolResult<unknown>>))(
+      "tool-call-id",
+      params,
+    );
   }
 
   async function writeToolExecute(params: {
@@ -162,7 +167,10 @@ describe("buildConfinedTools — path confinement", () => {
     const result = buildConfinedTools(projection, ["write"]);
     const writeTool = await getActiveTool(result, "write");
     if (writeTool === null) throw new Error("write tool not found");
-    return writeTool("tool-call-id", params as never, undefined, undefined, {} as never);
+    return (writeTool as ((...args: unknown[]) => Promise<AgentToolResult<unknown>>))(
+      "tool-call-id",
+      params,
+    );
   }
 
   it("succeeds for a path inside the workspace root", async () => {
@@ -234,8 +242,8 @@ describe("buildConfinedTools — path confinement", () => {
 describe("buildConfinedTools — multi-root projections", () => {
   let mountDir: string;
   let projection: Projection;
-  let writeFile: ReturnType<typeof import("node:fs/promises").writeFile>;
-  let mkdir: ReturnType<typeof import("node:fs/promises").mkdir>;
+  let writeFile: typeof import("node:fs/promises").writeFile;
+  let mkdir: typeof import("node:fs/promises").mkdir;
 
   beforeEach(async () => {
     const fs = await import("node:fs/promises");
@@ -253,7 +261,7 @@ describe("buildConfinedTools — multi-root projections", () => {
     const result = buildConfinedTools(projection, ["read"]);
     const readTool = await getActiveTool(result, "read");
     if (readTool === null) throw new Error("read tool not found");
-    return readTool("tool-call-id", params as never, undefined, undefined, {} as never);
+    return (readTool as any)("tool-call-id", params, undefined, undefined, {} as never);
   }
 
   it("succeeds for a path inside a mount root (mount within workspace)", async () => {
@@ -286,12 +294,9 @@ describe("buildConfinedTools — multi-root projections", () => {
     // Use a path that has traversal (../) — this is caught by the hasTraversal
     // check before the projection containment check, which is correct behavior
     // (path traversal is a common exfiltration vector).
-    const res = await readTool(
+    const res = await (readTool as (...args: unknown[]) => Promise<AgentToolResult<unknown>>)(
       "tool-call-id",
-      { path: `../other-${Date.now().toString()}/other.txt` } as never,
-      undefined,
-      undefined,
-      {} as never,
+      { path: `../other-${Date.now().toString()}/other.txt` },
     );
 
     expect(res.content).toEqual([
