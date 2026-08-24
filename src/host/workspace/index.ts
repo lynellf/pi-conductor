@@ -1,12 +1,18 @@
 /**
- * Workspace modules — issue #48 T3.
+ * Workspace modules — issue #48 T3 + T4.
  *
  * Exports all workspace-related modules:
  * - `snapshot`: snapshot pinning + shared read-only checkout
  * - `manager`: per-visit workspace provisioning, retention, resume
  * - `mounts`: projection roots + guarantee computation
+ * - `confine-tools`: path-confined file tools for role sessions
  */
 
+export {
+  buildConfinedTools,
+  type ConfinedToolsResult,
+  ROLE_FILE_TOOL_NAMES,
+} from "./confine-tools.js";
 export {
   ensureSharedSnapshotForResume,
   listSnapshotShortCommits,
