@@ -28,7 +28,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 
-import { type Projection, type ProjectionMount, pathInProjection } from "./mounts.js";
+import type { Projection } from "./mounts.js";
 
 /**
  * File tool names that can be confined for a role session.
@@ -100,9 +100,9 @@ export function buildConfinedTools(
     roots.push(mount.path);
   }
 
+  const wsRoot = roots[0] ?? projection.workspaceRoot;
   const confinedToolDefs: ToolDefinition[] = [];
   const activeNames: string[] = [];
-  const wsRoot = roots[0]!; // roots always has at least the workspace root.
 
   for (const toolName of wanted) {
     switch (toolName) {
@@ -175,7 +175,7 @@ async function validatePathInProjection(
   }
 
   // Resolve the workspace root (first root) as the base for candidate path.
-  const workspaceRootReal = await realpath(roots[0]!);
+  const workspaceRootReal = await realpath(roots[0] ?? roots.at(-1) ?? "");
   const candidate = resolve(workspaceRootReal, requested);
 
   // Check if candidate is within the workspace root (primary root).

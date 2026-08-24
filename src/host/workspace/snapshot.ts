@@ -10,8 +10,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { mkdir, realpath, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -219,7 +219,7 @@ export async function removeSnapshotCheckout(
 ): Promise<void> {
   const sha8 = commit.slice(0, 8);
   const checkoutPath = join(snapshotsDir, sha8);
-  const branchName = `conductor/snap/${sha8}`;
+  const _branchName = `conductor/snap/${sha8}`;
 
   try {
     // Remove the worktree (this also removes the branch).

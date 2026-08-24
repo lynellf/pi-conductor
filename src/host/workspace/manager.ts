@@ -13,21 +13,17 @@
  */
 
 import { execFile } from "node:child_process";
-import { createWriteStream } from "node:fs";
 import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
-import { join, sep } from "node:path";
-import { pipeline } from "node:stream/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Role } from "../../core/types.js";
 
-import type { WorkspaceBackend, WorkspaceConfig, WorkspaceSource } from "../../manifest/types.js";
+import type { WorkspaceBackend, WorkspaceSource } from "../../manifest/types.js";
 import {
   ensureSnapshotCheckout,
   hasSnapshotCheckout,
-  removeSnapshotCheckout,
   resolvePinnedCommit,
   type SnapshotCheckout,
-  SnapshotError,
 } from "./snapshot.js";
 
 const execFileAsync = promisify(execFile);
@@ -108,7 +104,7 @@ export async function resolveSharedSnapshot(
 export async function ensureSharedSnapshotForResume(
   runStateDir: string,
   primaryCheckout: string,
-  source: WorkspaceSource,
+  _source: WorkspaceSource,
   commit: string,
 ): Promise<SnapshotCheckout> {
   const snapshotsDir = join(runStateDir, "snapshots");
@@ -181,7 +177,7 @@ export async function provisionWorkspace(options: {
 
   if (backend === "worktree") {
     // Worktree backend: create a Git worktree at the pinned commit.
-    const branchName = `conductor/${runStateDir.replace(/.*runs\//, "")}/${workspaceName}`;
+    const _branchName = `conductor/${runStateDir.replace(/.*runs\//, "")}/${workspaceName}`;
     // Shorten the branch name to avoid exceeding Git's limits.
     const safeRunId =
       runStateDir

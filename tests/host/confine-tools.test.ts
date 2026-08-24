@@ -11,7 +11,7 @@
 
 import { mkdtemp, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -212,7 +212,7 @@ describe("buildConfinedTools — path confinement", () => {
   it("rejects a path escaping via sibling worktree", async () => {
     // Create a sibling directory and try to escape the sandbox.
     const { mkdir, writeFile } = await import("node:fs/promises");
-    const sibling = join(tmpdir(), "pi-conductor-sibling-" + Date.now());
+    const sibling = join(tmpdir(), `pi-conductor-sibling-${Date.now()}`);
     await mkdir(sibling);
     await writeFile(join(sibling, "sibling.txt"), "sibling content");
 
@@ -275,7 +275,7 @@ describe("buildConfinedTools — multi-root projections", () => {
   });
 
   it("rejects a path outside all projection roots", async () => {
-    const otherDir = join(tmpdir(), "pi-conductor-other-" + Date.now());
+    const otherDir = join(tmpdir(), `pi-conductor-other-${Date.now()}`);
     await mkdir(otherDir);
     await writeFile(join(otherDir, "other.txt"), "other");
 

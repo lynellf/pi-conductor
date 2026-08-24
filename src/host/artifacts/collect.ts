@@ -22,13 +22,12 @@
  */
 
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-
+import type { ArtifactConfig } from "../../manifest/types.js";
 import type { ArtifactCollectedRecord, ArtifactRejectedRecord } from "../../persistence/log.js";
 import type { HandoffArgs } from "../../seam/schema.js";
-import type { ArtifactConfig } from "../../manifest/types.js";
-import { pathInProjection, type Projection } from "../workspace/mounts.js";
+import { type Projection, pathInProjection } from "../workspace/mounts.js";
 
 // ─── Defaults (per spec §4 validation rules) ────────────────────────────
 
@@ -158,7 +157,7 @@ export async function collectDeclaredArtifacts(
     let fileStat: { size: number };
     try {
       fileStat = await stat(resolvedPath);
-    } catch (err: unknown) {
+    } catch (_err: unknown) {
       // File doesn't exist — record as missing.
       rejected.push({
         type: "artifact_rejected",
@@ -209,7 +208,7 @@ export async function collectDeclaredArtifacts(
     const sha256 = createHash("sha256").update(fileBuffer).digest("hex");
 
     // Copy to store (atomic-ish: write to temp, then rename).
-    const tempPath = storedPath + `.tmp-${process.pid}-${Date.now()}`;
+    const tempPath = `${storedPath}.tmp-${process.pid}-${Date.now()}`;
     await mkdir(dirname(storedPath), { recursive: true });
     await writeFile(tempPath, fileBuffer);
     // Rename is atomic on POSIX; falls through on failure.

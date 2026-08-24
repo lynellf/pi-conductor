@@ -19,21 +19,13 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  ensureSharedSnapshotForResume,
   ensureSnapshotCheckout,
   hasSnapshotCheckout,
   listSnapshotShortCommits,
   listWorkspaceNames,
   provisionWorkspace,
-  removeSnapshotCheckout,
-  removeWorkspace,
   resolvePinnedCommit,
-  resolveSharedSnapshot,
   resumeWorkspace,
-  type SnapshotCheckout,
-  SnapshotError,
-  WorkspaceError,
-  type WorkspaceResult,
 } from "../../src/host/workspace/index.js";
 import {
   computeContainerGuarantee,
@@ -58,7 +50,9 @@ async function createGitRepo(dir: string): Promise<void> {
 async function commitFile(dir: string, name: string, content: string): Promise<string> {
   await writeFile(join(dir, name), content);
   await execFileAsync("git", ["add", name], { cwd: dir });
-  const { stdout } = await execFileAsync("git", ["commit", "-m", `add ${name}`], { cwd: dir });
+  const { stdout: _commitStdout } = await execFileAsync("git", ["commit", "-m", `add ${name}`], {
+    cwd: dir,
+  });
   // git commit outputs the commit message, not the hash.
   // Get the hash from git log.
   const { stdout: hash } = await execFileAsync("git", ["log", "-1", "--format=%H"], { cwd: dir });
@@ -96,7 +90,7 @@ describe("resolvePinnedCommit (T3 pinning)", () => {
     const repoDir = join(tmp, "repo");
     await mkdir(repoDir, { recursive: true });
     await createGitRepo(repoDir);
-    const commit2 = await commitFile(repoDir, "b.txt", "b");
+    const _commit2 = await commitFile(repoDir, "b.txt", "b");
     const commit3 = await commitFile(repoDir, "c.txt", "c");
 
     const commit = await resolvePinnedCommit(repoDir, "snapshot");
@@ -221,9 +215,9 @@ describe("hasSnapshotCheckout (T3 snapshot existence)", () => {
       cwd: primaryCheckout,
     });
     const checkout = await ensureSnapshotCheckout(snapshotsDir, commit.trim(), primaryCheckout);
-    const exists = await hasSnapshotCheckout(
+    const _exists = await hasSnapshotCheckout(
       snapshotsDir,
-      checkout.checkoutPath.split("/").pop()! === commit.slice(0, 8) ? commit.trim() : "",
+      (checkout.checkoutPath.split("/").pop() ?? "") === commit.slice(0, 8) ? commit.trim() : "",
     );
     // Actually use the full commit.
     const exists2 = await hasSnapshotCheckout(snapshotsDir, commit.trim());
@@ -241,13 +235,13 @@ describe("hasSnapshotCheckout (T3 snapshot existence)", () => {
 describe("provisionWorkspace (T3 per-visit provisioning)", () => {
   let tmp: string;
   let primaryCheckout: string;
-  let runStateDir: string;
+  let _runStateDir: string;
   let commit: string;
 
   beforeEach(async () => {
     tmp = await createTempDir();
     primaryCheckout = join(tmp, "primary");
-    runStateDir = join(tmp, "runs", "test-run");
+    _runStateDir = join(tmp, "runs", "test-run");
     await mkdir(primaryCheckout, { recursive: true });
     await createGitRepo(primaryCheckout);
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: primaryCheckout });
@@ -266,7 +260,7 @@ describe("provisionWorkspace (T3 per-visit provisioning)", () => {
       source: "snapshot",
       commit,
       primaryCheckout,
-      runStateDir,
+      runStateDir: _runStateDir,
     });
     expect(result.backend).toBe("shared");
     expect(result.workspacePath).toBe(primaryCheckout);
@@ -293,7 +287,7 @@ describe("provisionWorkspace (T3 per-visit provisioning)", () => {
   });
 
   it("worktree backend supports ref: source", async () => {
-    const { stdout: head } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    const { stdout: _head } = await execFileAsync("git", ["rev-parse", "HEAD"], {
       cwd: primaryCheckout,
     });
     await execFileAsync("git", ["branch", "feature"], { cwd: primaryCheckout });
@@ -380,13 +374,13 @@ describe("provisionWorkspace (T3 per-visit provisioning)", () => {
 describe("resumeWorkspace (T3 resume re-creation)", () => {
   let tmp: string;
   let primaryCheckout: string;
-  let runStateDir: string;
+  let _runStateDir: string;
   let commit: string;
 
   beforeEach(async () => {
     tmp = await createTempDir();
     primaryCheckout = join(tmp, "primary");
-    runStateDir = join(tmp, "runs", "run5");
+    _runStateDir = join(tmp, "runs", "run5");
     await mkdir(primaryCheckout, { recursive: true });
     await createGitRepo(primaryCheckout);
     const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: primaryCheckout });
@@ -474,15 +468,17 @@ describe("resumeWorkspace (T3 resume re-creation)", () => {
 describe("INV-005: no auto-cleanup", () => {
   let tmp: string;
   let primaryCheckout: string;
-  let runStateDir: string;
+  let _runStateDir: string;
 
   beforeEach(async () => {
     tmp = await createTempDir();
     primaryCheckout = join(tmp, "primary");
-    runStateDir = join(tmp, "runs", "run6");
+    _runStateDir = join(tmp, "runs", "run6");
     await mkdir(primaryCheckout, { recursive: true });
     await createGitRepo(primaryCheckout);
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: primaryCheckout });
+    const { stdout: _head } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+      cwd: primaryCheckout,
+    });
   });
 
   afterEach(async () => {

@@ -6,7 +6,7 @@
  * - `route.ts`: materialization + seed artifacts section + orchestrator re-routing
  */
 
-export { collectAutoPatch, collectDeclaredArtifacts, type CollectionResult } from "./collect.js";
+export { type CollectionResult, collectAutoPatch, collectDeclaredArtifacts } from "./collect.js";
 export {
   buildOrchestratorReroute,
   formatArtifactsSeedSection,
