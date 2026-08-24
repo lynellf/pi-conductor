@@ -137,7 +137,7 @@ async function getActiveTool(
   if (tool === undefined) return null;
   // Narrow: execute is async, always returns a Promise; cast to erase
   // the SDK's generic TDetails/TState from the type.
-  return (tool.execute as ((...args: never[]) => Promise<AgentToolResult<unknown>>) | null);
+  return tool.execute as ((...args: never[]) => Promise<AgentToolResult<unknown>>) | null;
 }
 
 describe("buildConfinedTools — path confinement", () => {
@@ -154,7 +154,7 @@ describe("buildConfinedTools — path confinement", () => {
     const result = buildConfinedTools(projection, ["read"]);
     const readTool = await getActiveTool(result, "read");
     if (readTool === null) throw new Error("read tool not found");
-    return (readTool as ((...args: unknown[]) => Promise<AgentToolResult<unknown>>))(
+    return (readTool as (...args: unknown[]) => Promise<AgentToolResult<unknown>>)(
       "tool-call-id",
       params,
     );
@@ -167,7 +167,7 @@ describe("buildConfinedTools — path confinement", () => {
     const result = buildConfinedTools(projection, ["write"]);
     const writeTool = await getActiveTool(result, "write");
     if (writeTool === null) throw new Error("write tool not found");
-    return (writeTool as ((...args: unknown[]) => Promise<AgentToolResult<unknown>>))(
+    return (writeTool as (...args: unknown[]) => Promise<AgentToolResult<unknown>>)(
       "tool-call-id",
       params,
     );

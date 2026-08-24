@@ -36,6 +36,7 @@ import {
   type WorkspaceResult,
 } from "../../src/host/workspace/index.js";
 import {
+  computeContainerGuarantee,
   computeGuarantee,
   type GuaranteeResult,
   pathInProjection,
@@ -653,5 +654,87 @@ describe("pathInProjection (T3 containment check)", () => {
     expect((result as { inside: false; reason: string }).reason).toContain(
       "outside all projection roots",
     );
+  });
+});
+
+// ─── Tests: computeContainerGuarantee (T6/T8) ───────────────────────────
+
+describe("computeContainerGuarantee (T6/T8 container-specific)", () => {
+  it("adds container-specific fields (network, shell, image)", () => {
+    const base = computeGuarantee({
+      backend: "container",
+      tools: ["read", "handoff", "end"],
+      source: "snapshot",
+      pinDir: "/test",
+      pinSha8: "abc12345",
+    });
+    const result = computeContainerGuarantee(base, {
+      image: "docker.io/example/sandbox:latest",
+      network: "none",
+      shell: "container",
+    });
+    expect(result.level).toBe("confined"); // network: none caps sandbox → confined
+    expect((result as { network: string }).network).toBe("none");
+    expect((result as { shell: string }).shell).toBe("container");
+    expect((result as { image?: string }).image).toBe("docker.io/example/sandbox:latest");
+  });
+
+  it("keeps sandbox when network: bridge (no network restriction)", () => {
+    const base = computeGuarantee({
+      backend: "container",
+      tools: ["read", "handoff", "end"],
+      source: "snapshot",
+      pinDir: "/test",
+      pinSha8: "abc12345",
+    });
+    const result = computeContainerGuarantee(base, {
+      image: "docker.io/example/sandbox:latest",
+      network: "bridge",
+    });
+    expect(result.level).toBe("sandbox");
+    expect((result as { network: string }).network).toBe("bridge");
+  });
+
+  it("defaults network to bridge when not specified", () => {
+    const base = computeGuarantee({
+      backend: "container",
+      tools: ["read", "handoff", "end"],
+      source: "snapshot",
+      pinDir: "/test",
+      pinSha8: "abc12345",
+    });
+    const result = computeContainerGuarantee(base, {});
+    expect(result.level).toBe("sandbox");
+    expect((result as { network: string }).network).toBe("bridge");
+  });
+
+  it("caps sandbox at confined when network: none (even without writable host mounts)", () => {
+    const base = computeGuarantee({
+      backend: "container",
+      tools: ["read", "handoff", "end"],
+      source: "snapshot",
+      pinDir: "/test",
+      pinSha8: "abc12345",
+    });
+    const result = computeContainerGuarantee(base, {
+      network: "none",
+    });
+    expect(result.level).toBe("confined"); // network: none → capped
+  });
+
+  it("preserves confined level (no downgrade from already-limited)", () => {
+    const base = computeGuarantee({
+      backend: "container",
+      tools: ["read", "edit", "handoff", "end"],
+      workspaceConfig: {
+        mounts: [{ path: "/data/output", writable: true }],
+      },
+      source: "snapshot",
+      pinDir: "/test",
+      pinSha8: "abc12345",
+    });
+    const result = computeContainerGuarantee(base, {});
+    // Already capped at confined by rule 7 — network: none doesn't downgrade further
+    expect(result.level).toBe("confined");
   });
 });
