@@ -1023,13 +1023,16 @@ function formatHandoffSeed(
   suggestsNext: Role | null,
   contextRef: HandoffContextRef,
 ): string {
-  // `context_ref` is a host-owned reserved field. Keep arbitrary role fields
-  // compatible, but do not echo a model-supplied value beside the trusted
-  // envelope where a recipient could mistake it for the source pointer.
+  // `context_ref` and `artifacts` are host-owned reserved fields. Keep
+  // arbitrary role fields compatible, but do not echo a model-supplied
+  // value beside the trusted envelope where a recipient could mistake it
+  // for the source pointer (§7.1: filtered out of the seed echo).
   const payloadForSeed =
     payload === undefined
       ? undefined
-      : Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "context_ref"));
+      : Object.fromEntries(
+          Object.entries(payload).filter(([key]) => key !== "context_ref" && key !== "artifacts"),
+        );
   const payloadStr =
     payloadForSeed === undefined ? "(no payload)" : JSON.stringify(payloadForSeed, null, 2);
   const suggestsLine =

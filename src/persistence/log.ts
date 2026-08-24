@@ -168,6 +168,81 @@ export interface SubagentFailedRecord {
   readonly ts: number;
 }
 
+// ─── Issue #48: workspace + artifact records ───────────────────────────
+
+/**
+ * Issue #48 §9: appended once at run start when any isolated role exists.
+ *
+ * Records the pinned commit that all projections derive from (§13 INV-002).
+ */
+export interface SnapshotPinnedRecord {
+  readonly type: "snapshot_pinned";
+  readonly run_id: string;
+  /** `"snapshot"` (default HEAD) or the resolved ref string. */
+  readonly source: string;
+  /** Resolved 40-char commit hash. */
+  readonly commit: string;
+  readonly ts: number;
+}
+
+/**
+ * Issue #48 §9: appended at each isolated role spawn.
+ *
+ * Records the role's workspace provisioning so the operator (and resumptions)
+ * can reconstruct what was created.
+ */
+export interface WorkspaceProvisionedRecord {
+  readonly type: "workspace_provisioned";
+  readonly run_id: string;
+  readonly role: string;
+  readonly visit_index: number;
+  readonly backend: string;
+  readonly guarantee: string;
+  /** Absolute path to the provisioned workspace on disk. */
+  readonly workspace_path: string;
+  readonly snapshot_commit: string;
+  readonly ts: number;
+}
+
+/**
+ * Issue #48 §9: appended per collected artifact (declared or auto_patch).
+ *
+ * Records the collection result including the SHA-256 hash of the stored file.
+ */
+export interface ArtifactCollectedRecord {
+  readonly type: "artifact_collected";
+  readonly run_id: string;
+  readonly role: string;
+  readonly visit_index: number;
+  readonly session_id: string;
+  /** Path within the emitting role's workspace (pre-realpath). */
+  readonly source_path: string;
+  /** Stored path under <runStateDir>/artifacts/<runId>/<role>-v<n>/.
+   */
+  readonly stored_path: string;
+  readonly kind: "declared" | "auto_patch";
+  readonly bytes: number;
+  readonly sha256: string;
+  readonly ts: number;
+}
+
+/**
+ * Issue #48 §9: appended per rejected artifact declaration.
+ *
+ * Records the rejection reason so the operator and the orchestrator can see
+ * what the emitting role attempted but could not deliver.
+ */
+export interface ArtifactRejectedRecord {
+  readonly type: "artifact_rejected";
+  readonly run_id: string;
+  readonly role: string;
+  readonly session_id: string;
+  /** The declared path that was rejected. */
+  readonly path: string;
+  readonly reason: "outside_projection" | "size_cap" | "count_cap" | "missing";
+  readonly ts: number;
+}
+
 /** Union of every record the host appends to its run_id-keyed log. */
 export type PersistedRecord =
   | TransitionAccepted
@@ -182,7 +257,11 @@ export type PersistedRecord =
   | SubagentStartedRecord
   | SubagentCompletedRecord
   | SubagentFailedRecord
-  | FileMutationRecord;
+  | FileMutationRecord
+  | SnapshotPinnedRecord
+  | WorkspaceProvisionedRecord
+  | ArtifactCollectedRecord
+  | ArtifactRejectedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
@@ -323,4 +402,67 @@ export function normalizeCheckpoint(checkpoint: Checkpoint): Checkpoint {
     ...checkpoint,
     end_request: checkpoint.end_request ?? null,
   }) as Checkpoint;
+}
+
+// ─── Issue #48: record factory helpers (for tests + host callers) ──────
+
+/**
+ * Issue #48 §9: factory for a `snapshot_pinned` record.
+ *
+ * Called once at run start when any isolated role exists (spec §5).
+ */
+export function snapshotPinned(
+  args: Omit<SnapshotPinnedRecord, "type" | "ts">,
+): SnapshotPinnedRecord {
+  return Object.freeze({
+    type: "snapshot_pinned",
+    ...args,
+    ts: Date.now(),
+  }) as SnapshotPinnedRecord;
+}
+
+/**
+ * Issue #48 §9: factory for a `workspace_provisioned` record.
+ *
+ * Called at each isolated role spawn (spec §5).
+ */
+export function workspaceProvisioned(
+  args: Omit<WorkspaceProvisionedRecord, "type" | "ts">,
+): WorkspaceProvisionedRecord {
+  return Object.freeze({
+    type: "workspace_provisioned",
+    ...args,
+    ts: Date.now(),
+  }) as WorkspaceProvisionedRecord;
+}
+
+/**
+ * Issue #48 §9: factory for an `artifact_collected` record.
+ *
+ * Called per collected artifact (declared or auto_patch) at role terminal
+ * (spec §7.2).
+ */
+export function artifactCollected(
+  args: Omit<ArtifactCollectedRecord, "type" | "ts">,
+): ArtifactCollectedRecord {
+  return Object.freeze({
+    type: "artifact_collected",
+    ...args,
+    ts: Date.now(),
+  }) as ArtifactCollectedRecord;
+}
+
+/**
+ * Issue #48 §9: factory for an `artifact_rejected` record.
+ *
+ * Called per rejected declaration (spec §7.2).
+ */
+export function artifactRejected(
+  args: Omit<ArtifactRejectedRecord, "type" | "ts">,
+): ArtifactRejectedRecord {
+  return Object.freeze({
+    type: "artifact_rejected",
+    ...args,
+    ts: Date.now(),
+  }) as ArtifactRejectedRecord;
 }

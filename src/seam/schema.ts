@@ -73,6 +73,32 @@ export const handoffArgsSchema = Type.Object(
     suggests_next: Type.Optional(
       Type.String({ description: "Optional advisory role suggestion; never controls routing." }),
     ),
+    // Issue #48 §7.1: reserved optional `artifacts` field on handoff.
+    // The model declares it; the host verifies + collects / routes.
+    // Filtered out of the seed echo so a recipient cannot mistake a
+    // stale model-echoed list for the host-collected truth.
+    artifacts: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            path: Type.String({
+              minLength: 1,
+              maxLength: 1024,
+              description:
+                "Relative path to the artifact within the emitting role's workspace root.",
+            }),
+            description: Type.Optional(
+              Type.String({
+                maxLength: 512,
+                description: "Human-readable description of the artifact (≤ 512 chars).",
+              }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        { maxItems: 64, description: "At most 64 declared file artifacts per handoff." },
+      ),
+    ),
   },
   { additionalProperties: true },
 );

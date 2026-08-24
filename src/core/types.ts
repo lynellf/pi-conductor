@@ -292,6 +292,19 @@ export interface UsageRecord {
   readonly cost: number;
 }
 
+/**
+ * Issue #48 §9: additive workspace descriptor on `session_started`.
+ *
+ * Present only when the role was spawned into an isolated workspace
+ * (backend ≠ shared). Absent for shared-mode roles.
+ */
+export interface SessionWorkspaceDescriptor {
+  readonly backend: string;
+  readonly guarantee: string;
+  /** Absolute path (worktree/copy) or image name (container). */
+  readonly path_or_image: string;
+}
+
 /** §11.4: lifecycle record for a single role-session invocation. */
 export interface SessionLifecycleEvent {
   readonly type: "session_started" | "session_ended" | "session_failed";
@@ -303,6 +316,8 @@ export interface SessionLifecycleEvent {
   readonly model_effort?: ModelEffort;
   readonly session_file: string;
   readonly parent_session: string | null;
+  /** Issue #48: optional workspace descriptor on `session_started`. */
+  readonly workspace?: SessionWorkspaceDescriptor;
   readonly usage?: UsageRecord;
   readonly failure_reason?: string;
   /** Optional provider/host diagnostic for a terminal failure (§11.4). */
