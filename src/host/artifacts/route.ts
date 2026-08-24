@@ -156,12 +156,12 @@ export function formatArtifactsSeedSection(options: {
     emittingVisitIndex,
     collected,
     rejected,
-    isReceiverIsolated,
-    receiverWorkspace,
+    isReceiverIsolated: _isReceiverIsolated,
+    receiverWorkspace: _receiverWorkspace,
   } = options;
 
   // Collect available artifact names from the source store.
-  const sourceDir = join(artifactsDir, `${emittingRole}-v${emittingVisitIndex}`);
+  const _sourceDir = join(artifactsDir, `${emittingRole}-v${emittingVisitIndex}`);
 
   // Build the available section.
   const availableEntries: string[] = [];

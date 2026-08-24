@@ -13,13 +13,7 @@
  */
 
 import { join } from "node:path";
-import type { Role } from "../../core/types.js";
-import type {
-  WorkspaceBackend,
-  WorkspaceConfig,
-  WorkspaceMount,
-  WorkspaceSource,
-} from "../../manifest/types.js";
+import type { WorkspaceBackend, WorkspaceConfig, WorkspaceSource } from "../../manifest/types.js";
 
 /**
  * Computed guarantee level for a role session (spec §6).
@@ -203,7 +197,7 @@ export function pathInProjection(
 function isInsideOrEqual(path: string, root: string): boolean {
   const normalizedPath = normalizePath(path);
   const normalizedRoot = normalizePath(root);
-  return normalizedPath === normalizedRoot || normalizedPath.startsWith(normalizedRoot + "/");
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
 /**

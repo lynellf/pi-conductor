@@ -84,7 +84,6 @@ import { createEndTool, createHandoffTool } from "./tools.js";
 import {
   buildConfinedTools,
   computeGuarantee,
-  ensureSharedSnapshotForResume,
   ensureSnapshotCheckout,
   provisionWorkspace,
   resolvePinnedCommit,
@@ -370,7 +369,7 @@ export class ProductionHost implements Host {
 
       // Ensure the snapshot checkout exists (shared read-only snapshot).
       const snapshotsDir = join(runStateDir, "snapshots");
-      let sharedSnapshot = await ensureSnapshotCheckout(snapshotsDir, commit, this.cwd);
+      const sharedSnapshot = await ensureSnapshotCheckout(snapshotsDir, commit, this.cwd);
 
       // Persist the `snapshot_pinned` record (once per run, from the
       // first isolated role spawn — already a no-op for shared-only runs).
