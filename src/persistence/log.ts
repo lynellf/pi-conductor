@@ -217,9 +217,10 @@ export interface ArtifactCollectedRecord {
   readonly session_id: string;
   /** Path within the emitting role's workspace (pre-realpath). */
   readonly source_path: string;
-  /** Stored path under <runStateDir>/artifacts/<runId>/<role>-v<n>/.
-   */
+  /** Stored path under <runStateDir>/artifacts/<runId>/<role>-v<n>/. */
   readonly stored_path: string;
+  /** Optional human-readable description from the handoff declaration. */
+  readonly description?: string;
   readonly kind: "declared" | "auto_patch";
   readonly bytes: number;
   readonly sha256: string;
