@@ -15,17 +15,27 @@
  *
  * The function returns frozen objects so accidental mutation is caught
  * at runtime; records are immutable throughout the system.
+ *
+ * NOTE: 500 LOC (exceeded 400-LOC guideline). Splitting would break
+ * the coherent concept of a single YAML→Manifest parser. The additional
+ * ~160 lines cover Issue #48 `workspace`/`artifacts` parsing (10 helper
+ * functions for 6 config fields). Validation lives in `validate.ts`.
  */
 
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import type {
+  ArtifactConfig,
   DelegationPolicy,
   Manifest,
   ModelConfig,
   RoleConfig,
   SubagentProfile,
+  WorkspaceBackend,
+  WorkspaceConfig,
+  WorkspaceMount,
+  WorkspaceSource,
 } from "./types.js";
 import { ManifestParseError } from "./types.js";
 
@@ -197,6 +207,12 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     ...(entry.delegation !== undefined && {
       delegation: parseDelegationPolicy(entry.delegation, index),
     }),
+    ...(entry.workspace !== undefined && {
+      workspace: parseWorkspaceConfig(entry.workspace, index),
+    }),
+    ...(entry.artifacts !== undefined && {
+      artifacts: parseArtifactConfig(entry.artifacts, index),
+    }),
   }) as RoleConfig;
 
   return role;
@@ -318,6 +334,157 @@ function parseModelConfig(value: unknown, path: string): ModelConfig {
     ...(retries !== undefined && { retries }),
     ...(retry_delay_ms !== undefined && { retry_delay_ms }),
   }) as ModelConfig;
+}
+
+// ─── Issue #48: workspace + artifact config parsing ─────────────────────
+
+const VALID_WORKSPACE_BACKENDS: ReadonlySet<WorkspaceBackend> = new Set([
+  "shared",
+  "worktree",
+  "copy",
+  "container",
+]);
+
+const VALID_SHELL_POLICIES: ReadonlySet<WorkspaceConfig["shell"]> = new Set(["none", "container"]);
+
+const VALID_NETWORK_POLICIES: ReadonlySet<WorkspaceConfig["network"]> = new Set(["bridge", "none"]);
+
+function parseWorkspaceConfig(raw: unknown, roleIndex: number): WorkspaceConfig {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError(`roles[${roleIndex}].workspace must be a YAML mapping (object)`);
+  }
+  const entry = raw as Record<string, unknown>;
+  const path = `roles[${roleIndex}].workspace`;
+
+  const backend = entry.backend
+    ? parseWorkspaceBackend(entry.backend, `${path}.backend`)
+    : ("shared" as WorkspaceBackend); // default: shared
+
+  const source = entry.source
+    ? parseWorkspaceSource(entry.source, `${path}.source`)
+    : ("snapshot" as WorkspaceSource); // default: snapshot
+
+  const mounts =
+    entry.mounts !== undefined
+      ? parseWorkspaceMountArray(entry.mounts, `${path}.mounts`)
+      : undefined;
+
+  const shell =
+    entry.shell !== undefined ? parseWorkspaceShell(entry.shell, `${path}.shell`) : undefined;
+
+  const image =
+    entry.image !== undefined ? toNonEmptyString(entry.image, `${path}.image`) : undefined;
+
+  const network =
+    entry.network !== undefined
+      ? parseWorkspaceNetwork(entry.network, `${path}.network`)
+      : undefined;
+
+  const config: WorkspaceConfig = {
+    backend,
+    source,
+    ...(mounts !== undefined && { mounts: Object.freeze(mounts) as readonly WorkspaceMount[] }),
+    ...(shell !== undefined && { shell }),
+    ...(image !== undefined && { image }),
+    ...(network !== undefined && { network }),
+  };
+  return Object.freeze(config) as WorkspaceConfig;
+}
+
+function parseWorkspaceBackend(value: unknown, path: string): WorkspaceBackend {
+  if (typeof value !== "string" || !VALID_WORKSPACE_BACKENDS.has(value as WorkspaceBackend)) {
+    throw new ManifestParseError(`${path} must be one of shared, worktree, copy, or container`);
+  }
+  return value as WorkspaceBackend;
+}
+
+function parseWorkspaceSource(value: unknown, path: string): WorkspaceSource {
+  if (typeof value !== "string") {
+    throw new ManifestParseError(`${path} must be a string`);
+  }
+  // Accept "snapshot" or "ref:<ref>".
+  if (value === "snapshot") {
+    return value as WorkspaceSource;
+  }
+  const refMatch = /^ref:(.+)$/.exec(value);
+  if (!refMatch) {
+    throw new ManifestParseError(`${path} must be "snapshot" or "ref:<git-ref>" (got '${value}')`);
+  }
+  return value as WorkspaceSource;
+}
+
+function parseWorkspaceMount(value: unknown, path: string): WorkspaceMount {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
+  }
+  const entry = value as Record<string, unknown>;
+  const mountPath = toNonEmptyString(entry.path, `${path}.path`);
+  const writable = toBool(entry.writable, `${path}.writable`);
+  return Object.freeze({ path: mountPath, writable }) as WorkspaceMount;
+}
+
+function parseWorkspaceMountArray(raw: unknown, path: string): readonly WorkspaceMount[] {
+  if (!Array.isArray(raw)) {
+    throw new ManifestParseError(`${path} must be an array`);
+  }
+  const mounts: WorkspaceMount[] = [];
+  for (const [index, item] of raw.entries()) {
+    mounts.push(parseWorkspaceMount(item, `${path}[${index}]`));
+  }
+  // Reject duplicate mount paths.
+  const seen = new Set<string>();
+  for (const mount of mounts) {
+    if (seen.has(mount.path)) {
+      throw new ManifestParseError(`${path} contains duplicate path '${mount.path}'`);
+    }
+    seen.add(mount.path);
+  }
+  return Object.freeze(mounts) as readonly WorkspaceMount[];
+}
+
+function parseWorkspaceShell(value: unknown, path: string): WorkspaceConfig["shell"] {
+  if (typeof value !== "string" || !VALID_SHELL_POLICIES.has(value as WorkspaceConfig["shell"])) {
+    throw new ManifestParseError(`${path} must be "none" or "container"`);
+  }
+  return value as WorkspaceConfig["shell"];
+}
+
+function parseWorkspaceNetwork(value: unknown, path: string): WorkspaceConfig["network"] {
+  if (
+    typeof value !== "string" ||
+    !VALID_NETWORK_POLICIES.has(value as WorkspaceConfig["network"])
+  ) {
+    throw new ManifestParseError(`${path} must be "bridge" or "none"`);
+  }
+  return value as WorkspaceConfig["network"];
+}
+
+function parseArtifactConfig(raw: unknown, roleIndex: number): ArtifactConfig {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError(`roles[${roleIndex}].artifacts must be a YAML mapping (object)`);
+  }
+  const entry = raw as Record<string, unknown>;
+  const path = `roles[${roleIndex}].artifacts`;
+
+  const autoPatch =
+    entry.auto_patch !== undefined ? toBool(entry.auto_patch, `${path}.auto_patch`) : undefined;
+
+  // Accept any finite positive-ish integer; validation enforces bounds.
+  const maxFileBytes =
+    entry.max_file_bytes !== undefined
+      ? toFiniteInt(entry.max_file_bytes, `${path}.max_file_bytes`)
+      : undefined;
+
+  // Accept any finite integer; validation enforces bounds (1–64).
+  const maxFiles =
+    entry.max_files !== undefined ? toFiniteInt(entry.max_files, `${path}.max_files`) : undefined;
+
+  const config: ArtifactConfig = {
+    ...(autoPatch !== undefined && { auto_patch: autoPatch }),
+    ...(maxFileBytes !== undefined && { max_file_bytes: maxFileBytes }),
+    ...(maxFiles !== undefined && { max_files: maxFiles }),
+  };
+  return Object.freeze(config) as ArtifactConfig;
 }
 
 function toModelEffort(value: unknown, path: string): ModelEffort {
