@@ -64,7 +64,7 @@ describe("handoffArgsSchema (TypeBox)", () => {
       Value.Check(handoffArgsSchema, {
         ...actionableHandoff("implementer"),
         summary: "implemented X",
-        artifacts: ["foo.ts", "bar.ts"],
+        artifacts: [{ path: "foo.ts" }, { path: "bar.ts" }],
       }),
     ).toBe(true);
   });
@@ -168,14 +168,21 @@ describe("validateEmission: ok path", () => {
     const captures: EmissionCapture[] = [
       {
         toolName: "handoff",
-        args: { ...actionableHandoff("reviewer"), summary: "implemented X", artifacts: ["a.ts"] },
+        args: {
+          ...actionableHandoff("reviewer"),
+          summary: "implemented X",
+          artifacts: [{ path: "a.ts" }],
+        },
       },
     ];
     const result = validateEmission(captures);
     expect(result.kind).toBe("ok");
     if (result.kind !== "ok") throw new Error("unreachable");
     if (result.event.type !== "handoff") throw new Error("unreachable");
-    expect(result.event.payload).toMatchObject({ summary: "implemented X", artifacts: ["a.ts"] });
+    expect(result.event.payload).toMatchObject({
+      summary: "implemented X",
+      artifacts: [{ path: "a.ts" }],
+    });
   });
 });
 
