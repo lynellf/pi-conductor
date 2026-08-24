@@ -102,6 +102,68 @@ export interface RoleConfig {
   readonly tools?: readonly string[];
   /** Delegation lite §3: delegation policy for parent roles. */
   readonly delegation?: DelegationPolicy;
+  /** Issue #48 §4: optional per-role workspace + artifact config (host-only). */
+  readonly workspace?: WorkspaceConfig;
+  /** Issue #48 §4: optional artifact-handoff configuration. */
+  readonly artifacts?: ArtifactConfig;
+}
+
+// ─── Issue #48: per-role workspace + artifact config ────────────────────
+
+/**
+ * Issue #48 §4: workspace backend policy for a role.
+ *
+ * - `shared` (default): the integration workspace (today's behavior).
+ * - `worktree`: per-visit Git worktree under run state dir.
+ * - `copy`: filesystem copy of the pinned snapshot (no Git metadata).
+ * - `container`: bind-mounts a worktree/copy into a Docker container.
+ */
+export type WorkspaceBackend = "shared" | "worktree" | "copy" | "container";
+
+/**
+ * Issue #48 §4: source resolution strategy for an isolated role.
+ *
+ * - `snapshot` (default): the integration workspace HEAD at run start.
+ * - `ref:<git-ref>`: resolve a named Git ref (requires Git repo).
+ */
+export type WorkspaceSource = "snapshot" | `ref:${string}`;
+
+/**
+ * Issue #48 §4: a mount entry in an isolated role's projection.
+ */
+export interface WorkspaceMount {
+  readonly path: string;
+  readonly writable: boolean;
+}
+
+/**
+ * Issue #48 §4: per-role workspace declaration in the manifest.
+ */
+export interface WorkspaceConfig {
+  /** Backend: shared | worktree | copy | container. */
+  readonly backend?: WorkspaceBackend;
+  /** Source: snapshot | ref:<git-ref>. */
+  readonly source?: WorkspaceSource;
+  /** Additional roots in the role's projection (default: none). */
+  readonly mounts?: readonly WorkspaceMount[];
+  /** Shell policy: none (default) | container. */
+  readonly shell?: "none" | "container";
+  /** Container image — required when backend: container. */
+  readonly image?: string;
+  /** Network policy: bridge (default) | none. */
+  readonly network?: "bridge" | "none";
+}
+
+/**
+ * Issue #48 §4: artifact-handoff configuration for a role.
+ */
+export interface ArtifactConfig {
+  /** Default: true for writable worktree workspaces; false for copy. */
+  readonly auto_patch?: boolean;
+  /** Default: 1 MiB (1048576 bytes) per declared file artifact. */
+  readonly max_file_bytes?: number;
+  /** Default per handoff: 32 declared files. */
+  readonly max_files?: number;
 }
 
 /**
