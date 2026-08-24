@@ -3,32 +3,85 @@
   "created_at": "2026-08-24T18:53:00Z",
   "controlling_spec": "docs/issue-48-per-role-workspaces/spec.md",
   "status": "in_progress",
-  "candidate_complete": false,
-  "updated_at": "2026-08-24T18:53:00+00:00",
-  "active_slice": "S-003",
+  "candidate_complete": true,
+  "updated_at": "2026-08-24T21:14:47Z",
+  "active_slice": "S-008",
   "slices": {
+    "S-001": {
+      "objective": "T1: Manifest parsing + validation for workspace/artifacts blocks",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §4 (manifest contract)", "spec.md §17 T1"],
+      "acceptance_checks": ["S-001-A1: parse/validate workspace/artifacts per §4 rules"]
+    },
+    "S-002": {
+      "objective": "T2: Seam artifacts schema + persistence records",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §7 (artifact channel)", "spec.md §9 (observability)", "spec.md §17 T2"],
+      "acceptance_checks": ["S-002-A1: handoffArgsSchema artifacts field", "S-002-A2: record variants"]
+    },
     "S-003": {
-      "objective": "Implement T3: Workspace manager — snapshot pinning, per-visit provisioning, resume re-creation, guarantee computation",
+      "objective": "T3: Workspace manager — snapshot pinning, per-visit provisioning, resume",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §5 (workspace lifecycle)", "spec.md §17 T3"],
+      "acceptance_checks": ["S-003-A1: resolvePinnedCommit", "S-003-A2: ensureSnapshotCheckout", "S-003-A3: provisionWorkspace", "S-003-A4: resumeWorkspace"]
+    },
+    "S-004": {
+      "objective": "T4: Spawn integration + tool confinement",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §6 (tool policy and guarantee levels)", "spec.md §17 T4"],
+      "acceptance_checks": ["S-004-A1: buildConfinedTools", "S-004-A2: production wiring", "S-004-A3: StubHost parity"]
+    },
+    "S-005": {
+      "objective": "T5: Artifact pipeline (collect + route)",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §7.2/7.3 (artifact channel)", "spec.md §17 T5"],
+      "acceptance_checks": ["S-005-A1: collectDeclaredArtifacts", "S-005-A2: collectAutoPatch", "S-005-A3: formatArtifactsSeedSection", "S-005-A4: buildOrchestratorReroute"]
+    },
+    "S-006": {
+      "objective": "T6: Guarantee computation + labeling",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §6 (guarantee levels)", "spec.md §17 T6"],
+      "acceptance_checks": ["S-006-A1: computeGuarantee", "S-006-A2: production wiring", "S-006-A3: StubHost parity"]
+    },
+    "S-007": {
+      "objective": "T7: E2E acceptance tests (AC-001…AC-007)",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": null,
+      "review_round": 0,
+      "source_refs": ["spec.md §14.7 (testing)", "spec.md §16 (success criteria)", "spec.md §17 T7"],
+      "acceptance_checks": ["S-007-A1: AC-001…AC-007 as automated E2E scenarios"]
+    },
+    "S-008": {
+      "objective": "T9: Documentation — README per-role workspaces section, AGENTS.md spec pointer fix, CHANGELOG entry",
       "status": "ready_for_review",
       "implementation_status": "complete",
       "review_status": null,
       "review_round": 0,
-      "source_refs": [
-        "spec.md §5 (workspace lifecycle)",
-        "spec.md §6 (tool policy and guarantee levels)",
-        "spec.md §4 (manifest contract)",
-        "spec.md §9 (observability)"
-      ],
-      "acceptance_checks": [
-        "S-003-A1: resolvePinnedCommit resolves HEAD and named refs, errors on non-Git",
-        "S-003-A2: ensureSnapshotCheckout creates shared read-only checkout idempotently",
-        "S-003-A3: provisionWorkspace handles shared, worktree, copy (Git + non-Git) backends",
-        "S-003-A4: resumeWorkspace re-creates deleted worktrees/copies",
-        "S-003-A5: INV-005: no auto-cleanup — workspaces/snapshots persist",
-        "S-003-A6: computeGuarantee computes correct levels (none/confined/sandbox)",
-        "S-003-A7: pathInProjection checks containment correctly",
-        "S-003-A8: pnpm typecheck, build, test, lint, format:check all pass"
-      ]
+      "source_refs": ["spec.md §17 T9 (documentation)"],
+      "acceptance_checks": ["S-008-A1: README per-role workspaces section with config, guarantee matrix, artifact pipeline, integration walkthrough", "S-008-A2: AGENTS.md archived spec pointer", "S-008-A3: CHANGELOG entry"]
     }
-  }
+  },
+  "known_remaining": [
+    "T0 (container feasibility spike — research only, no code)",
+    "T8 (container backend — spike-gated, deferred pending T0 and user decision Q1)"
+  ]
 }
