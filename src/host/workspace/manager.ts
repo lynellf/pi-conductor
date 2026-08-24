@@ -152,16 +152,7 @@ export async function provisionWorkspace(options: {
   /** Shared snapshot (for read-only isolated roles, reuse the same checkout). */
   sharedSnapshot?: SnapshotCheckout;
 }): Promise<WorkspaceResult> {
-  const {
-    role,
-    visitIndex,
-    backend,
-    source,
-    commit,
-    primaryCheckout,
-    runStateDir,
-    sharedSnapshot,
-  } = options;
+  const { role, visitIndex, backend, commit, primaryCheckout, runStateDir } = options;
 
   if (backend === "shared") {
     // Shared role: uses the integration workspace directly.

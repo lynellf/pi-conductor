@@ -261,7 +261,16 @@ describe("buildConfinedTools — multi-root projections", () => {
     const result = buildConfinedTools(projection, ["read"]);
     const readTool = await getActiveTool(result, "read");
     if (readTool === null) throw new Error("read tool not found");
-    return (readTool as any)("tool-call-id", params, undefined, undefined, {} as never);
+    // The SDK passes (callId, details, state, _context, _callbacks).
+    // Cast to erase the SDK's generic detail/state types.
+    const execute = readTool as (
+      callId: string,
+      details: unknown,
+      _state: unknown,
+      _ctx: unknown,
+      _cb: unknown,
+    ) => Promise<AgentToolResult<unknown>>;
+    return execute("tool-call-id", params, undefined, undefined, undefined);
   }
 
   it("succeeds for a path inside a mount root (mount within workspace)", async () => {
