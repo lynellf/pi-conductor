@@ -83,7 +83,7 @@ export function computeGuarantee(args: {
   pinDir: string;
   pinSha8: string;
 }): GuaranteeResult {
-  const { backend, tools, workspaceConfig, source, pinDir, pinSha8 } = args;
+  const { backend, workspaceConfig, pinDir, pinSha8 } = args;
 
   // `shared` backend → guarantee is `none`.
   if (backend === "shared") {

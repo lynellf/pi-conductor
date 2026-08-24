@@ -20,11 +20,11 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
+import type { LoadedManifest } from "../../src/host/manifest.js";
 import { loadManifestFromString } from "../../src/host/manifest.js";
 import { StubHost } from "../../src/host/stub-host.js";
-import { makeStubModel, type StubStep } from "../../src/host/stub-provider.js";
+import type { StubStep } from "../../src/host/stub-provider.js";
 import {
   computeGuarantee,
   type GuaranteeResult,
@@ -33,6 +33,12 @@ import {
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
 
 // ─── Constants / YAML fixtures ────────────────────────────────────────
+
+/** Role definition from a parsed manifest (used for type-safe casting). */
+interface RoleDef {
+  name: string;
+  workspace?: Record<string, unknown>;
+}
 
 /** Minimal manifest YAML with a workspace block on `implementer`. */
 const YAML_ISOLATED_IMPLEMENTER = `
@@ -162,16 +168,20 @@ describe("AC-001: isolated workspace + mount policy definition", () => {
     );
 
     // Access the loaded manifest through the host.
-    const loaded = (host as any).loadedManifestValue;
+    // StubHost.loadedManifestValue is private; cast via unknown.
+    const hostCast = host as unknown as { loadedManifestValue: LoadedManifest };
+    const loaded = hostCast.loadedManifestValue;
     expect(loaded).toBeDefined();
 
     const roleConfig = loaded.def.workers?.find((w: string) => w === "implementer");
     expect(roleConfig).toBe("implementer");
 
     // Check that the manifest carries the workspace block.
-    const roleYaml = (loaded as any).manifest?.roles?.find((r: any) => r.name === "implementer");
+    const roleYaml = (loaded.manifest?.roles as Array<RoleDef>)?.find(
+      (r) => r.name === "implementer",
+    );
     expect(roleYaml).toBeDefined();
-    expect(roleYaml.workspace).toEqual(
+    expect(roleYaml?.workspace).toEqual(
       expect.objectContaining({ backend: "worktree", source: "snapshot" }),
     );
   });
@@ -188,11 +198,13 @@ describe("AC-001: isolated workspace + mount policy definition", () => {
       makeSteps("worker"),
     );
 
-    const loaded = (host as any).loadedManifestValue;
-    const roleYaml = (loaded as any).manifest?.roles?.find((r: any) => r.name === "worker");
+    // StubHost.loadedManifestValue is private; cast via unknown.
+    const hostCast = host as unknown as { loadedManifestValue: LoadedManifest };
+    const loaded = hostCast.loadedManifestValue;
+    const roleYaml2 = (loaded.manifest?.roles as Array<RoleDef>)?.find((r) => r.name === "worker");
     // No workspace block → no workspace property.
-    expect(roleYaml).toBeDefined();
-    expect(roleYaml.workspace).toBeUndefined();
+    expect(roleYaml2).toBeDefined();
+    expect(roleYaml2?.workspace).toBeUndefined();
   });
 });
 
@@ -315,7 +327,7 @@ describe("AC-006: trust boundary explicit (guarantee labels)", () => {
         backend: "worktree",
         source: "snapshot",
         mounts: [{ path: ".campaign", writable: false }],
-      } as any,
+      },
       source: "snapshot",
       pinDir: cwd,
       pinSha8: "stub0000",
@@ -327,7 +339,7 @@ describe("AC-006: trust boundary explicit (guarantee labels)", () => {
       backend: "shared",
       tools: ["read", "grep", "write"],
 
-      source: "undefined" as any,
+      source: "undefined" as never,
       pinDir: cwd,
       pinSha8: "stub0000",
     });
@@ -346,7 +358,7 @@ describe("AC-006: trust boundary explicit (guarantee labels)", () => {
         backend: "container",
         source: "snapshot",
         mounts: [{ path: "/data/out", writable: true }],
-      } as any,
+      },
       source: "snapshot",
       pinDir: cwd,
       pinSha8: "stub0000",
@@ -397,9 +409,11 @@ describe("AC-007: shared-mode backward compatibility (INV-008)", () => {
     expect(session.sessionId).toBeDefined();
 
     // Verify the manifest loaded correctly: no workspace block = shared.
-    const loaded = (host as any).loadedManifestValue;
-    const roleYaml = (loaded as any).manifest?.roles?.find((r: any) => r.name === "worker");
-    expect(roleYaml).toBeDefined();
-    expect(roleYaml.workspace).toBeUndefined();
+    // StubHost.loadedManifestValue is private; cast via unknown.
+    const hostCast = host as unknown as { loadedManifestValue: LoadedManifest };
+    const loaded = hostCast.loadedManifestValue;
+    const roleYaml3 = (loaded.manifest?.roles as Array<RoleDef>)?.find((r) => r.name === "worker");
+    expect(roleYaml3).toBeDefined();
+    expect(roleYaml3?.workspace).toBeUndefined();
   });
 });
