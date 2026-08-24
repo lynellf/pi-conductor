@@ -650,6 +650,8 @@ describe("pathInProjection (T3 containment check)", () => {
   it("returns inside=false for a path outside all roots", () => {
     const result = pathInProjection("/other/secret/.ssh/id_rsa", projection);
     expect(result.inside).toBe(false);
-    expect((result as { inside: false }).reason).toContain("outside all projection roots");
+    expect((result as { inside: false; reason: string }).reason).toContain(
+      "outside all projection roots",
+    );
   });
 });
