@@ -132,6 +132,41 @@ describe("reduceLifecycle: session_started for the orchestrator", () => {
     expect(record.failure_reason).toBeUndefined();
   });
 
+  it("preserves a host workspace descriptor only on session_started", () => {
+    const workspace = Object.freeze({
+      backend: "worktree",
+      guarantee: "confined" as const,
+      path_or_image: "/workspaces/implementer-v1",
+    });
+    const started = reduceLifecycle(ck(DEF, "orchestrator"), "session_started", DEF, {
+      role: "orchestrator",
+      sessionId: "orch-1",
+      sessionFile: "/sessions/orch-1.jsonl",
+      model: null,
+      visit_index: 1,
+      parent_session: null,
+      workspace,
+      ts: TS,
+    });
+
+    expect(started.record.workspace).toBe(workspace);
+    expect(started.checkpoint).not.toHaveProperty("workspace");
+
+    const ended = reduceLifecycle(started.checkpoint, "session_ended", DEF, {
+      role: "orchestrator",
+      sessionId: "orch-1",
+      sessionFile: "/sessions/orch-1.jsonl",
+      model: null,
+      visit_index: 1,
+      parent_session: null,
+      workspace,
+      usage: ZERO_USAGE,
+      ts: TS + 1,
+    });
+
+    expect(ended.record.workspace).toBeUndefined();
+  });
+
   it("current_role and visit_count are unchanged on session_started (§11.4)", () => {
     const cp = ck(DEF, "orchestrator", { implementer: 1 });
     const { checkpoint } = reduceLifecycle(cp, "session_started", DEF, {

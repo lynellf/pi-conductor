@@ -44,7 +44,11 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { buildRunMemory } from "../core/run-memory.js";
-import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
+import {
+  DEFAULT_MODEL_EFFORT,
+  type ModelEffort,
+  type SessionWorkspaceDescriptor,
+} from "../core/types.js";
 import type {
   Checkpoint,
   Host,
@@ -179,6 +183,12 @@ export class StubHost implements Host {
     // lifecycle record will carry; the SDK model is always the
     // stub (we don't have a real provider for the test path).
     const roleConfig = this.lookupRoleConfig(role);
+    const roleWorkspaceConfig = roleConfig?.workspace;
+    const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
+    if (workspaceBackend === "container") {
+      const { assertSupportedWorkspaceBackend } = await import("./workspace/index.js");
+      assertSupportedWorkspaceBackend(workspaceBackend);
+    }
     const modelIndex = opts.modelIndex ?? 0;
     let logicalModel: string | null = null;
     let effort: ModelEffort = DEFAULT_MODEL_EFFORT;
@@ -261,7 +271,44 @@ export class StubHost implements Host {
       });
     }
 
+    // ── Issue #48 T6: workspace parity for StubHost.
+    // For isolated roles, create a temp directory (copy backend equivalent)
+    // so loop tests can exercise workspace behavior without real Git.
+    // Shared roles (no `workspace` block) skip this — use cwd directly.
+    let isolatedWorkspacePath: string | undefined;
+    let confinedTools:
+      | ReturnType<typeof import("./workspace/confine-tools.js").buildConfinedTools>
+      | undefined;
+    let workspace: SessionWorkspaceDescriptor | undefined;
+    if (roleWorkspaceConfig !== undefined && workspaceBackend !== "shared") {
+      // Create a temp directory as the workspace (copy backend parity).
+      const { mkdtemp } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const tempDir = await mkdtemp(join(this.cwd, ".pi-conductor-stub-workspace-"));
+      isolatedWorkspacePath = tempDir;
+
+      // Compute the guarantee from paths this test host actually provisioned.
+      const { computeGuarantee, buildConfinedTools } = await import("./workspace/index.js");
+      const backend = workspaceBackend;
+      const guarantee = computeGuarantee({
+        backend,
+        workspaceConfig: roleWorkspaceConfig,
+        workspacePath: tempDir,
+        snapshotPath: tempDir,
+      });
+
+      // Build confined tools from the guarantee's projection.
+      confinedTools = buildConfinedTools(guarantee.projection, roleConfig?.tools);
+      workspace = Object.freeze({
+        backend,
+        guarantee: guarantee.level,
+        path_or_image: tempDir,
+      }) as SessionWorkspaceDescriptor;
+    }
+
+    const spawnCwd = isolatedWorkspacePath ?? this.cwd;
     const createOpts: Parameters<typeof createAgentSession>[0] = {
+      cwd: spawnCwd,
       model: this.model,
       modelRegistry: this.modelRegistry,
       tools: [
@@ -275,6 +322,7 @@ export class StubHost implements Host {
         end,
         ...(handoffContext === null ? [] : [handoffContext]),
         ...(delegateTool === null ? [] : [delegateTool]),
+        ...(confinedTools !== undefined ? confinedTools.tools : []),
       ],
       sessionManager: this.sessionManager,
     };
@@ -319,6 +367,7 @@ export class StubHost implements Host {
       effort,
       retries,
       retryDelayMs,
+      ...(workspace !== undefined && { workspace }),
       onDispose: () => {
         this.sessionStates.delete(sessionId);
         this.agentsBySessionId.delete(sessionId);

@@ -11,7 +11,7 @@
 > they apply on top of this file.
 >
 > After that, read the rest of this file, then the spec
-> (`docs/orchestrator-fsm-spec.md`) before making changes. When a task matches a
+> (`docs/archive/orchestrator-fsm-spec.md`) before making changes. When a task matches a
 > skill's phase (define → plan → build → verify → review → ship), load that
 > skill and follow its steps in order, including its verification step — skills
 > are workflows, not suggestions.
@@ -24,7 +24,7 @@
 
 Guidance for any agent (human or LLM) working in this repo. Read this first; it
 restates only what the spec/plan assume as standing context. Source of truth for
-behavior is `docs/orchestrator-fsm-spec.md`.
+behavior is `docs/archive/orchestrator-fsm-spec.md`.
 
 ## What this is
 
@@ -184,7 +184,7 @@ tests/
 biome.json               # linter + formatter (replaces ESLint + Prettier)
 lefthook.yml             # git hooks: pre-push runs lint + typecheck + tests
 docs/
-  orchestrator-fsm-spec.md            # the spec (authority)
+  archive/orchestrator-fsm-spec.md    # the spec (authority)
 pnpm-workspace.yaml     # pnpm config + supply-chain hardening (camelCase keys)
 ```
 

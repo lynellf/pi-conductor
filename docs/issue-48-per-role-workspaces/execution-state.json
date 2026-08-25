@@ -1,0 +1,227 @@
+{
+  "task_id": "issue-48-per-role-workspaces",
+  "created_at": "2026-08-24T18:53:00Z",
+  "controlling_spec": "docs/issue-48-per-role-workspaces/remediation-spec.md",
+  "historical_source_refs_note": "References to spec.md below are historical review context; remediation-spec.md supersedes it for T3–T9.",
+  "status": "ready_for_review",
+  "updated_at": "2026-08-25T21:59:46Z",
+  "last_verification": {
+    "time": "2026-08-25T21:59:46Z",
+    "tests": "1192 passed (89 files)",
+    "lint": "clean (201 files)",
+    "format": "clean (201 files)",
+    "typecheck": "clean",
+    "build": "clean",
+    "audit": "14 advisories (7 high / 6 moderate / 1 low), including 7 high; pre-existing transitive dependencies and no package or lockfile changes in this branch",
+    "working_tree": "pending commit"
+  },
+  "candidate_complete": false,
+  "active_slice": "final quality gate (audit exception requires reviewer acknowledgement)",
+  "slices": {
+    "S-001": {
+      "objective": "T1: Manifest parsing + validation for workspace/artifacts blocks",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": "passed",
+      "review_round": 1,
+      "source_refs": ["spec.md §4 (manifest contract)", "spec.md §17 T1"],
+      "acceptance_checks": ["S-001-A1: parse/validate workspace/artifacts per §4 rules"],
+      "findings": []
+    },
+    "S-002": {
+      "objective": "T2: Seam artifacts schema + persistence records",
+      "status": "accepted",
+      "implementation_status": "complete",
+      "review_status": "passed",
+      "review_round": 1,
+      "source_refs": [
+        "spec.md §7 (artifact channel)",
+        "spec.md §9 (observability)",
+        "spec.md §17 T2"
+      ],
+      "acceptance_checks": [
+        "S-002-A1: handoffArgsSchema artifacts field",
+        "S-002-A2: record variants"
+      ],
+      "findings": []
+    },
+    "S-003": {
+      "objective": "T3: Workspace manager — snapshot pinning, per-visit provisioning, resume",
+      "status": "accepted",
+      "implementation_status": "changes-requested",
+      "review_status": "changes-requested",
+      "review_round": 1,
+      "source_refs": ["spec.md §5 (workspace lifecycle)", "spec.md §17 T3"],
+      "acceptance_checks": [
+        "S-003-A1: resolvePinnedCommit",
+        "S-003-A2: ensureSnapshotCheckout",
+        "S-003-A3: provisionWorkspace",
+        "S-003-A4: resumeWorkspace"
+      ],
+      "findings": [
+        {
+          "id": "F-003",
+          "severity": "blocking",
+          "criterion": "S-003-A3",
+          "summary": "backend: container silently falls through to in-process worktree provisioning in provisionWorkspace (manager.ts:345) with no typed error; combined with computeGuarantee it yields a sandbox-labeled in-process session (see F-001/F-006).",
+          "spec_refs": [
+            "spec §8.3 (spike gate)",
+            "spec §13 INV-006",
+            "AGENTS.md no-silent-fallbacks"
+          ]
+        },
+        {
+          "id": "F-004",
+          "severity": "blocking",
+          "criterion": "S-003-A4",
+          "summary": "Pinning re-resolves the live source on every isolated spawn (production-host.ts:367); resume never re-uses the stored snapshot_pinned commit. Spec §5: 'resume re-uses the stored commit (never re-resolves a moved ref)'; INV-002 requires one immutable run-start pin. A moved ref/HEAD mid-run makes ensureSnapshotCheckout DELETE and recreate the shared pinned checkout, so later visits use a different commit than the record claims.",
+          "spec_refs": ["spec §5", "spec §13 INV-002", "spec §9"]
+        }
+      ]
+    },
+    "S-004": {
+      "objective": "T4: Spawn integration + tool confinement",
+      "status": "accepted",
+      "implementation_status": "changes-requested",
+      "review_status": "changes-requested",
+      "review_round": 1,
+      "source_refs": ["spec.md §6 (tool policy and guarantee levels)", "spec.md §17 T4"],
+      "acceptance_checks": [
+        "S-004-A1: buildConfinedTools",
+        "S-004-A2: production wiring",
+        "S-004-A3: StubHost parity"
+      ],
+      "findings": [
+        {
+          "id": "F-001",
+          "severity": "blocking",
+          "criterion": "S-004-A2",
+          "summary": "Confined file tools are rooted at the integration workspace, not the role workspace. computeGuarantee sets projection.workspaceRoot = pinDir (this.cwd) as an un-filled 'placeholder'; resolveMountPath resolves relative mounts to <primary>/<sha8>/<rel> (a path that does not exist — real layout is runStateDir/snapshots/<sha8>). Runtime proof: computeGuarantee for a provisioned role returns workspaceRoot = primary checkout. Result: an isolated role's read/grep/find/ls/edit/write all resolve against and stay inside the INTEGRATION checkout — read-only roles can see the whole primary checkout (AC-002 inverted) and writable workers can write directly into the integration worktree (AC-003 inverted; violates §7.3.5 explicit-integration rule and INV-005's spirit). The provisioned worktree is merely the session cwd.",
+          "spec_refs": ["spec §6", "spec §7.3.5", "spec §13 INV-005", "AC-002", "AC-003"]
+        },
+        {
+          "id": "F-006",
+          "severity": "blocking",
+          "criterion": "S-004-A2",
+          "summary": "Delegation children of an ISOLATED parent still derive from the primary checkout (delegation/* untouched): child clean-check + base-commit use the primary repo, so the child sees at least the full primary checkout — wider than the isolated parent's projection. Spec §11 requires the child's primary-checkout base to become the parent's workspace root (INV-007, no privilege escalation via delegation).",
+          "spec_refs": ["spec §11", "spec §13 INV-007"]
+        },
+        {
+          "id": "F-005-NB1",
+          "severity": "non-blocking",
+          "criterion": "S-004-A3",
+          "summary": "StubHost 'parity' only mkdtemps a dir under cwd and passes workspaceRoot = this.cwd; because the stub workspace is inside cwd, the same wrong-root shape as F-001 is unobservable in the stub. session_started.workspace descriptor (core/types.ts) is never populated at runtime; no-op 'void warning' loop and redundant ternary in the workspace_provisioned record.",
+          "spec_refs": ["spec §9 (session_started.workspace)", "spec §17 T4 StubHost parity"]
+        }
+      ]
+    },
+    "S-005": {
+      "objective": "T5: Artifact pipeline (collect + route)",
+      "status": "accepted",
+      "implementation_status": "changes-requested",
+      "review_status": "changes-requested",
+      "review_round": 1,
+      "source_refs": ["spec.md §7.2/7.3 (artifact channel)", "spec.md §17 T5"],
+      "acceptance_checks": [
+        "S-005-A1: collectDeclaredArtifacts",
+        "S-005-A2: collectAutoPatch",
+        "S-005-A3: formatArtifactsSeedSection",
+        "S-005-A4: buildOrchestratorReroute"
+      ],
+      "findings": [
+        {
+          "id": "F-002",
+          "severity": "blocking",
+          "criterion": "S-005-A1..A4",
+          "summary": "The entire artifact pipeline is dead code: src/host/artifacts/{collect,route,index}.ts is imported by NO host module (loop.ts/production-host.ts/stub-host.ts), NOT exported from src/index.ts, and referenced by ZERO tests. At runtime: no declared-artifact collection, no auto-patch generation, no artifact_collected/artifact_rejected records, no seed artifacts section — none of §7.2/§7.3 executes. Additional latent bug: collect.ts containment check string-compares the RAW declared (relative) path against absolute projection roots, so every legitimate relative declaration would be rejected 'outside_projection' even if wired. README + CHANGELOG describe the pipeline as functional. T5's task definition required src/host/{production-host,loop}.ts wiring + tests — both absent.",
+          "spec_refs": ["spec §7", "spec §9", "AC-003", "AC-004", "spec §17 T5"]
+        }
+      ]
+    },
+    "S-006": {
+      "objective": "T6: Guarantee computation + labeling",
+      "status": "accepted",
+      "implementation_status": "changes-requested",
+      "review_status": "changes-requested",
+      "review_round": 1,
+      "source_refs": ["spec.md §6 (guarantee levels)", "spec.md §17 T6"],
+      "acceptance_checks": [
+        "S-006-A1: computeGuarantee",
+        "S-006-A2: production wiring",
+        "S-006-A3: StubHost parity"
+      ],
+      "findings": [
+        {
+          "id": "F-006",
+          "severity": "blocking",
+          "criterion": "S-006-A1",
+          "summary": "computeGuarantee labels backend: container as 'sandbox' (no writable host mount) while the host runs the role in-process (F-001) — no OS boundary exists in this build (src/host/rpc absent; T8 deferred). Runtime proof: provisionWorkspace(backend:'container') => backend 'worktree' in-process; computeGuarantee(backend:'container') => 'sandbox' with tools incl. bash + shell:container (validator-valid manifest). A session with full host bash is recorded guarantee 'sandbox' — direct INV-006 / AC-006 violation (a stronger guarantee is claimed than exists). Spec's own fallback (§8.3/§19 Q1=no): ship shared/worktree/copy with sandbox documented unavailable — the validator/host must then reject or typed-error a container manifest, never silently downgrade.",
+          "spec_refs": ["spec §6", "spec §8.3", "spec §13 INV-006", "AC-006", "spec §19 Q1"]
+        }
+      ]
+    },
+    "S-007": {
+      "objective": "T7: E2E acceptance tests (AC-001…AC-007)",
+      "status": "accepted",
+      "implementation_status": "changes-requested",
+      "review_status": "changes-requested",
+      "review_round": 1,
+      "source_refs": [
+        "spec.md §14.7 (testing)",
+        "spec.md §16 (success criteria)",
+        "spec.md §17 T7"
+      ],
+      "acceptance_checks": ["S-007-A1: AC-001…AC-007 as automated E2E scenarios"],
+      "findings": [
+        {
+          "id": "F-005",
+          "severity": "blocking",
+          "criterion": "S-007-A1",
+          "summary": "E2E 'acceptance' scenarios assert only spawn success. AC-002/AC-003: no canary files, no file-operation attempts (spec §14.6/§17 T7 explicitly require canary-based AC-002/003). AC-005: two role sessions spawned sequentially; spec requires two CONCURRENT read-only DELEGATION children on one shared snapshot. AC-004: no artifact routing (pipeline dead — F-002). AC-006: unit-level computeGuarantee calls only. Consequence: all 1043 tests pass while F-001..F-004 behaviors are broken — the suite cannot observe the wiring defects because no test exercises an isolated role's file tools or artifacts through the real production path.",
+          "spec_refs": [
+            "spec §14.6",
+            "spec §17 T7",
+            "AC-002",
+            "AC-003",
+            "AC-004",
+            "AC-005",
+            "AC-006"
+          ]
+        }
+      ]
+    },
+    "S-008": {
+      "objective": "T9: Documentation — README per-role workspaces section, AGENTS.md spec pointer fix, CHANGELOG entry",
+      "status": "ready_for_review",
+      "implementation_status": "changes-requested",
+      "review_status": "changes-requested",
+      "review_round": 1,
+      "source_refs": ["spec.md §17 T9 (documentation)"],
+      "acceptance_checks": [
+        "S-008-A1: README per-role workspaces section with config, guarantee matrix, artifact pipeline, integration walkthrough",
+        "S-008-A2: AGENTS.md archived spec pointer",
+        "S-008-A3: CHANGELOG entry"
+      ],
+      "findings": [
+        {
+          "id": "F-007",
+          "severity": "blocking",
+          "criterion": "S-008-A1/A3",
+          "summary": "Docs describe unshipped behavior. README quick-guide presents `container` as an option and the guarantee matrix asserts container→sandbox for a backend that never containerizes in this build (F-006); the artifact pipeline section and the CHANGELOG entry ('collects declared artifacts (plus auto-patches for writable worktrees), and routes them into the next role's workspace') claim functionality that is dead code (F-002). T9 acceptance 'a reader can configure an isolated campaign from the README alone' is not met: following it yields inverted file-tool rooting (F-001) and a no-op artifact channel. The section structure/wording is otherwise solid and must be retained/adjusted in remediation.",
+          "spec_refs": ["spec §17 T9", "spec §16 AC-006", "spec §13 INV-006"]
+        },
+        {
+          "id": "F-008",
+          "severity": "non-blocking",
+          "criterion": "S-008-A2",
+          "summary": "Historical reviewer finding F-008 (corrected in this remediation): README and AGENTS.md repo-layout authorities used the obsolete non-archived FSM-spec path.",
+          "spec_refs": ["spec §17 T9"]
+        }
+      ]
+    }
+  },
+  "known_remaining": [
+    "T0 (container feasibility spike — research only, no code)",
+    "T8 (container backend — spike-gated, deferred pending T0 and user decision Q1)"
+  ]
+}

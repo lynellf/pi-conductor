@@ -70,6 +70,7 @@ import type {
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import type {
+  ArtifactDeliveryRecord,
   CheckpointSnapshot,
   PersistedRecord,
   RecordLog,
@@ -77,12 +78,13 @@ import type {
   RunSeededRecord,
 } from "../persistence/log.js";
 import type { Host } from "./host.js";
-import { FileRecordLog } from "./log-file.js";
+import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
+import { assertSupportedWorkspaceBackend } from "./workspace/index.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -143,6 +145,14 @@ export interface HostFactoryContext {
 
 // ─── startRun ──────────────────────────────────────────────────────────
 
+/** Reject unsupported role backends before creating any run state. */
+function assertManifestWorkspaceBackendsSupported(loaded: LoadedManifest): void {
+  for (const role of loaded.manifest.roles) {
+    const backend = role.workspace?.backend;
+    if (backend !== undefined) assertSupportedWorkspaceBackend(backend);
+  }
+}
+
 /**
  * Start a new run. Loads the manifest, mints a `run_id`, opens the
  * file-backed log, persists the initial checkpoint snapshot, and
@@ -153,57 +163,65 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     manifestPath,
     opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
   );
+  assertManifestWorkspaceBackendsSupported(loaded);
   const baseDir = await resolveBaseDir(opts.baseDir);
   const log = new FileRecordLog({ baseDir });
   const def = loaded.def;
   const initialCheckpoint = createInitialCheckpoint(def);
   const runId = initialCheckpoint.run_id;
+  const lease = await log.acquireRunLease(runId);
 
-  // Persist the initial checkpoint snapshot (§11.1: each transition
-  // produces a new full snapshot).
-  const initialSnapshot: CheckpointSnapshot = {
-    type: "checkpoint_snapshot",
-    checkpoint: initialCheckpoint,
-  };
-  log.append(initialSnapshot);
+  try {
+    // Persist the initial checkpoint snapshot (§11.1: each transition
+    // produces a new full snapshot).
+    const initialSnapshot: CheckpointSnapshot = {
+      type: "checkpoint_snapshot",
+      checkpoint: initialCheckpoint,
+    };
+    log.append(initialSnapshot);
 
-  // Normalize once at the shared start boundary. The extension and CLI
-  // already trim their accepted goal; doing it here also keeps direct SDK
-  // callers on the same original-prompt contract.
-  const goal = opts.goal.trim();
+    // Normalize once at the shared start boundary. The extension and CLI
+    // already trim their accepted goal; doing it here also keeps direct SDK
+    // callers on the same original-prompt contract.
+    const goal = opts.goal.trim();
 
-  // Persist the run_seeded record with the original goal (§8.4).
-  // Written right after the initial snapshot so resumeRun can
-  // reconstruct the goal from the log. The record is host-owned
-  // and non-machine-event — the reducer never inspects it.
-  const seedRecord: RunSeededRecord = {
-    type: "run_seeded",
-    run_id: runId,
-    goal,
-    ts: Date.now(),
-  };
-  log.append(seedRecord);
+    // Persist the run_seeded record with the original goal (§8.4).
+    // Written right after the initial snapshot so resumeRun can
+    // reconstruct the goal from the log. The record is host-owned
+    // and non-machine-event — the reducer never inspects it.
+    const seedRecord: RunSeededRecord = {
+      type: "run_seeded",
+      run_id: runId,
+      goal,
+      ts: Date.now(),
+    };
+    log.append(seedRecord);
 
-  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
-  // Additive analytics context. Route it through the shared Host seam so
-  // durable append and subscribeToRecords delivery stay in the same order.
-  const contextRecord: RunContextRecord = {
-    type: "run_context",
-    run_id: runId,
-    ts: Date.now(),
-    original_prompt: goal,
-  };
-  host.persistRecord(contextRecord);
+    const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+    // Additive analytics context. Route it through the shared Host seam so
+    // durable append and subscribeToRecords delivery stay in the same order.
+    const contextRecord: RunContextRecord = {
+      type: "run_context",
+      run_id: runId,
+      ts: Date.now(),
+      original_prompt: goal,
+    };
+    host.persistRecord(contextRecord);
 
-  return await runWithCompletion({
-    runId,
-    def,
-    log,
-    host,
-    initialCheckpoint,
-    goal,
-    loadedManifest: loaded,
-  });
+    return await runWithCompletion({
+      runId,
+      def,
+      log,
+      host,
+      initialCheckpoint,
+      goal,
+      loadedManifest: loaded,
+      lease,
+    });
+  } catch (error) {
+    await lease.release();
+    throw error;
+  }
 }
 
 // ─── resumeRun ─────────────────────────────────────────────────────────
@@ -221,51 +239,69 @@ export async function resumeRun(
   runId: string,
   opts: ResumeRunOptions,
 ): Promise<RunHandle> {
-  const baseDir = await resolveBaseDir(opts.baseDir);
-  const log = new FileRecordLog({ baseDir });
-
-  const checkpoint = log.latestCheckpoint(runId);
-  if (checkpoint === null) {
-    throw new Error(`resumeRun: no checkpoint_snapshot found for run_id '${runId}' in ${baseDir}`);
-  }
-
-  // Re-load the manifest from disk and verify the version pin.
-  // The snapshot's manifest_version is the canonical link to the
-  // manifest that was active when the run started; a mismatch
-  // means the manifest was edited mid-run, which §10 forbids.
-  // The optional modelRegistry also runs the advisory provider-registration
-  // check on resume — same registry → same warnings, no double-fire concern.
+  // Load and preflight before opening the record log. A container role is
+  // unsupported for the whole manifest, including one that would run later.
   const loaded = await loadManifest(
     manifestPath,
     opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
   );
-  if (loaded.def.manifest_version !== checkpoint.manifest_version) {
-    throw new Error(
-      `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${loaded.def.manifest_version}' (§10)`,
+  assertManifestWorkspaceBackendsSupported(loaded);
+
+  const baseDir = await resolveBaseDir(opts.baseDir);
+  const log = new FileRecordLog({ baseDir });
+  // Claim before reading a snapshot or reconciling lifecycle records: two
+  // resumed hosts must never inspect, pin, or spawn the same live run.
+  const lease = await log.acquireRunLease(runId);
+
+  try {
+    const checkpoint = log.latestCheckpoint(runId);
+    if (checkpoint === null) {
+      throw new Error(
+        `resumeRun: no checkpoint_snapshot found for run_id '${runId}' in ${baseDir}`,
+      );
+    }
+
+    // The snapshot's manifest_version is the canonical link to the
+    // manifest that was active when the run started; a mismatch
+    // means the manifest was edited mid-run, which §10 forbids.
+    if (loaded.def.manifest_version !== checkpoint.manifest_version) {
+      throw new Error(
+        `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${loaded.def.manifest_version}' (§10)`,
+      );
+    }
+    const def = loaded.def;
+
+    // Crash reconciliation (§11.1).
+    const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
+    const initialArtifactDelivery = latestArtifactDelivery(
+      log.records(runId),
+      runId,
+      reconciledCheckpoint,
     );
+
+    const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+
+    // Restore the original goal from the run log (if available).
+    // Falls back to opts.goal (which may be "") for runs that
+    // pre-date this feature.
+    const seedGoal = log.latestRunSeed(runId);
+    const goal = seedGoal !== null ? seedGoal : opts.goal;
+
+    return await runWithCompletion({
+      runId,
+      def,
+      log,
+      host,
+      initialCheckpoint: reconciledCheckpoint,
+      goal,
+      loadedManifest: loaded,
+      lease,
+      initialArtifactDelivery,
+    });
+  } catch (error) {
+    await lease.release();
+    throw error;
   }
-  const def = loaded.def;
-
-  // Crash reconciliation (§11.1).
-  const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
-
-  const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
-
-  // Restore the original goal from the run log (if available).
-  // Falls back to opts.goal (which may be "") for runs that
-  // pre-date this feature.
-  const seedGoal = log.latestRunSeed(runId);
-  const goal = seedGoal !== null ? seedGoal : opts.goal;
-
-  return await runWithCompletion({
-    runId,
-    def,
-    log,
-    host,
-    initialCheckpoint: reconciledCheckpoint,
-    goal,
-    loadedManifest: loaded,
-  });
 }
 
 // ─── listRuns ──────────────────────────────────────────────────────────
@@ -286,10 +322,14 @@ interface RunWithCompletionArgs {
   readonly initialCheckpoint: Checkpoint;
   readonly goal: string;
   readonly loadedManifest: LoadedManifest;
+  /** Last accepted artifact delivery that still targets this resumed checkpoint. */
+  readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
+  /** Live ownership held from API entry through the final loop outcome. */
+  readonly lease: RunExecutionLease;
 }
 
 async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle> {
-  const { runId, def, log, host, initialCheckpoint, goal, loadedManifest } = args;
+  const { runId, def, log, host, initialCheckpoint, goal, loadedManifest, lease } = args;
   // Task 19: shared mutable container for the live `configOverride`.
   // The loop's `getRunCostCap` closure (below) reads from this
   // container; `RunHandle.runConfig` writes to it. Both must see
@@ -329,9 +369,16 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     host,
     initialGoal: goal,
     initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
+    initialArtifactDelivery: args.initialArtifactDelivery ?? null,
     getRunCostCap,
     runControl,
-  }).finally(() => runControl.close());
+  }).finally(async () => {
+    try {
+      runControl.close();
+    } finally {
+      await lease.release();
+    }
+  });
   return new RunHandle({
     runId,
     def,
@@ -352,6 +399,21 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
  * `context_ref`, so derive it from the durable role/session fields; the
  * synthesized sentinel remains explicitly unreadable.
  */
+function latestArtifactDelivery(
+  records: readonly PersistedRecord[],
+  runId: string,
+  checkpoint: Checkpoint,
+): ArtifactDeliveryRecord | null {
+  if (checkpoint.current_role === "done") return null;
+
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record?.type !== "artifact_delivery" || record.run_id !== runId) continue;
+    return record.receiver_role === checkpoint.current_role ? record : null;
+  }
+  return null;
+}
+
 function latestHandoffContextRef(
   records: readonly PersistedRecord[],
   runId: string,

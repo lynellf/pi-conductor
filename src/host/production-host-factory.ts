@@ -78,11 +78,10 @@ export interface RunContextInputs {
    */
   readonly sessionDir?: string;
   /**
-   * Optional override for the SDK's agent directory. When omitted,
-   * the host derives `<cwd>/.pi-conductor/agent`. The extension
-   * is expected to share its own `~/.pi/agent` by passing the
-   * path here so spawned role sessions see the user's pi
-   * configuration (auth, models).
+   * Optional override for the SDK's agent directory. When omitted, the
+   * host keeps shared SDK sessions under its conductor-private agent
+   * directory; isolated RPC children inherit Pi's configured agent
+   * directory (`PI_CODING_AGENT_DIR` or `~/.pi/agent`).
    */
   readonly agentDir?: string;
 }

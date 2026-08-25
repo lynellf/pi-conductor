@@ -65,10 +65,29 @@ export type ManifestWarningCode =
   /** A role's `models[].entry` provider is not registered in the runtime `ModelRegistry` (host-side advisory check). */
   | "unregistered-provider"
   /** Delegation lite §3: role has `delegation` but not `delegate` in tools. */
-  | "delegation-missing-delegate-tool";
+  | "delegation-missing-delegate-tool"
+  // ─── Issue #48 warnings ────────────────────────────────────────────────
+  /** Issue #48 §4 rule 7: role with writable absolute (host) mount gets guarantee capped at `confined`. */
+  | "isolated-role-writable-host-mount";
+
+// ─── Issue #48: validation error codes ──────────────────────────────────
+
+export type Issue48ErrorCode =
+  /** Issue #48 §4 rule 2: `backend: container` requires non-empty `image`. */
+  | "container-backend-missing-image"
+  /** Issue #48 §4 rule 3: isolated role (backend ≠ shared) with bash/run in tools, backend is worktree/copy. */
+  | "isolated-role-shell-on-non-container"
+  /** Issue #48 §4 rule 4: `shell: container` with backend ≠ container. */
+  | "container-shell-on-non-container-backend"
+  /** Issue #48 §4 rule 5: `backend: copy` with `auto_patch: true`. */
+  | "copy-backend-auto-patch"
+  /** Issue #48 §4 rule 5: `source: ref:<ref>` but integration workspace is not a Git repo. */
+  | "ref-source-non-git"
+  /** Issue #48 §4 rule 8: artifact config values out of range. */
+  | "invalid-artifact-config";
 
 export interface ManifestError {
-  readonly code: ManifestErrorCode;
+  readonly code: ManifestErrorCode | Issue48ErrorCode;
   readonly message: string;
   readonly role?: Role;
 }
@@ -316,6 +335,97 @@ export function validateManifest(m: Manifest): ManifestReport {
           message: `role '${role.name}' has a \`delegation\` block but does not include 'delegate' in \`tools:\`; the tool will not be available`,
           role: role.name,
         });
+      }
+    }
+
+    // ─── Issue #48: workspace + artifact validation (§4) ────────────────
+    const ws = role.workspace;
+    const at = role.artifacts;
+    const roleName = role.name;
+
+    // Rule 8: artifact config values out of range — always check (even if no workspace block).
+    if (at !== undefined) {
+      if (at.max_file_bytes !== undefined && at.max_file_bytes < 1) {
+        errors.push({
+          code: "invalid-artifact-config",
+          message: `role '${roleName}' has \`artifacts.max_file_bytes\` < 1`,
+          role: roleName,
+        });
+      }
+      if (at.max_files !== undefined && (at.max_files < 1 || at.max_files > 64)) {
+        errors.push({
+          code: "invalid-artifact-config",
+          message: `role '${roleName}' has \`artifacts.max_files\` out of range (must be 1–64)`,
+          role: roleName,
+        });
+      }
+    }
+
+    // Rule 1–7: only when a workspace block is present.
+    if (ws !== undefined) {
+      const backend = ws.backend ?? "shared";
+      const shell = ws.shell ?? "none";
+
+      // Rule 2: `backend: container` requires non-empty `image`.
+      if (backend === "container" && (!ws.image || ws.image.length === 0)) {
+        errors.push({
+          code: "container-backend-missing-image",
+          message: `role '${roleName}' has \`workspace.backend: container\` but is missing required \`workspace.image\``,
+          role: roleName,
+        });
+      }
+
+      // Rule 3: isolated role (backend ≠ shared) with bash/run in tools, backend is worktree/copy.
+      if (backend !== "shared" && backend !== "container") {
+        const roleTools = role.tools ?? [];
+        if (
+          (roleTools.includes("bash") || roleTools.includes("run")) &&
+          (backend === "worktree" || backend === "copy")
+        ) {
+          errors.push({
+            code: "isolated-role-shell-on-non-container",
+            message: `role '${roleName}' is isolated (backend: ${backend}) and declares a process-execution tool (bash/run); use backend: container with shell: container, or drop the shell tool`,
+            role: roleName,
+          });
+        }
+      }
+
+      // Rule 4: `shell: container` with backend ≠ container.
+      if (shell === "container" && backend !== "container") {
+        errors.push({
+          code: "container-shell-on-non-container-backend",
+          message: `role '${roleName}' has \`workspace.shell: container\` but \`workspace.backend\` is '${backend}' (must be 'container')`,
+          role: roleName,
+        });
+      }
+
+      // Rule 5: `backend: copy` with `artifacts.auto_patch: true`.
+      if (backend === "copy" && at?.auto_patch === true) {
+        errors.push({
+          code: "copy-backend-auto-patch",
+          message: `role '${roleName}' has \`workspace.backend: copy\` (no Git metadata) with \`artifacts.auto_patch: true\`; auto-patch requires a worktree backend`,
+          role: roleName,
+        });
+      }
+
+      // Rule 5: `source: ref:<ref>` but non-Git integration workspace.
+      // This is a runtime check — the integration workspace must be a Git
+      // repo. We cannot check at parse/validation time (manifest loaded
+      // independently of the integration workspace). Skip here; the host
+      // checks at run start and reports a typed error.
+
+      // Rule 6: mount paths non-empty, no duplicates — handled in parser.
+
+      // Rule 7: writable absolute (host) mount → guarantee capped at `confined`.
+      if (ws.mounts) {
+        const hasWritableHostMount = ws.mounts.some((m) => m.writable && /^\//.test(m.path));
+        if (hasWritableHostMount && backend !== "shared") {
+          warnings.push({
+            code: "isolated-role-writable-host-mount",
+            message: `role '${roleName}' has a writable absolute (host) mount; its computed guarantee is capped at 'confined' (never 'sandbox') — a writable host bind mount is a real attack surface`,
+            role: roleName,
+          });
+        }
       }
     }
   }

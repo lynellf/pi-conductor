@@ -40,6 +40,34 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import type { FileMutationRecord } from "./file-mutation.js";
+import { materializePersistedRecord } from "./record-materialization.js";
+import type {
+  ArtifactCollectedRecord,
+  ArtifactDeliveryRecord,
+  ArtifactRejectedRecord,
+  SnapshotPinnedRecord,
+  WorkspaceProvisionedRecord,
+} from "./workspace-artifact-records.js";
+
+export {
+  assertPersistedRecordGuarantees,
+  assertWorkspaceGuarantee,
+  WorkspaceGuaranteeError,
+} from "./record-materialization.js";
+export type {
+  ArtifactCollectedRecord,
+  ArtifactDeliveryRecord,
+  ArtifactRejectedRecord,
+  SnapshotPinnedRecord,
+  WorkspaceProvisionedRecord,
+} from "./workspace-artifact-records.js";
+export {
+  artifactCollected,
+  artifactDelivery,
+  artifactRejected,
+  snapshotPinned,
+  workspaceProvisioned,
+} from "./workspace-artifact-records.js";
 
 /**
  * §11.1: a checkpoint snapshot is a full Checkpoint, snapshotted after
@@ -182,7 +210,12 @@ export type PersistedRecord =
   | SubagentStartedRecord
   | SubagentCompletedRecord
   | SubagentFailedRecord
-  | FileMutationRecord;
+  | FileMutationRecord
+  | SnapshotPinnedRecord
+  | WorkspaceProvisionedRecord
+  | ArtifactCollectedRecord
+  | ArtifactRejectedRecord
+  | ArtifactDeliveryRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
@@ -256,12 +289,15 @@ export interface RecordLog {
  * and just want the last one).
  */
 export class InMemoryRecordLog implements RecordLog {
-  // Maps run_id -> records (in append order). Immutable from the
-  // outside: the outer Map is replaced on each append so a snapshot
-  // view returned by `records()` cannot change under the caller.
-  private byRun: Map<string, PersistedRecord[]> = new Map();
+  // Maps run_id -> canonical JSON records (in append order). Keeping JSON
+  // instead of caller-owned objects ensures post-append mutation cannot alter
+  // the retained record or bypass its validated representation.
+  private byRun: Map<string, string[]> = new Map();
 
   append(record: PersistedRecord): void {
+    const materialized = materializePersistedRecord(record);
+    const snapshot = materialized.record;
+
     // RunSeededRecord carries its own `run_id` directly.
     // CheckpointSnapshot does not carry its own `run_id` field — the
     // wrapped Checkpoint is the source of truth for which run the
@@ -269,15 +305,15 @@ export class InMemoryRecordLog implements RecordLog {
     // directly. Routing both through one branch keeps the persistence
     // contract uniform: a snapshot is appended under its checkpoint's
     // run_id.
-    const runId = record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
+    const runId =
+      snapshot.type === "checkpoint_snapshot" ? snapshot.checkpoint.run_id : snapshot.run_id;
     const list = this.byRun.get(runId);
-    const next = list === undefined ? [record] : [...list, record];
+    const next = list === undefined ? [materialized.json] : [...list, materialized.json];
     this.byRun.set(runId, next);
   }
 
   latestCheckpoint(runId: string): Checkpoint | null {
-    const list = this.byRun.get(runId);
-    if (list === undefined) return null;
+    const list = this.records(runId);
     // Walk in reverse: most recent snapshot first.
     for (let i = list.length - 1; i >= 0; i--) {
       const record = list[i];
@@ -289,8 +325,7 @@ export class InMemoryRecordLog implements RecordLog {
   }
 
   latestRunSeed(runId: string): string | null {
-    const list = this.byRun.get(runId);
-    if (list === undefined) return null;
+    const list = this.records(runId);
     // Walk in reverse: most recent seed first.
     for (let i = list.length - 1; i >= 0; i--) {
       const record = list[i];
@@ -304,7 +339,7 @@ export class InMemoryRecordLog implements RecordLog {
   records(runId: string): readonly PersistedRecord[] {
     const list = this.byRun.get(runId);
     if (list === undefined) return Object.freeze([]);
-    return Object.freeze([...list]);
+    return Object.freeze(list.map((json) => JSON.parse(json) as PersistedRecord));
   }
 
   listRunIds(): readonly string[] {
