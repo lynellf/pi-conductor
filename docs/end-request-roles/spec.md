@@ -89,7 +89,7 @@ the model must actually send them:
 ```ts
 {
   target_role: string;
-  status: "ready" | "blocked" | "complete";
+  status: "ready" | "in_progress" | "blocked" | "complete";
   objective: string;          // non-empty
   summary: string;            // non-empty
   requested_action: string;   // non-empty
@@ -103,8 +103,9 @@ the model must actually send them:
 Rules:
 
 1. `target_role`, `status`, `objective`, `summary`, and `requested_action` are
-   structurally required in the schema. The three status values are literal
-   schema values, not a hidden post-schema enum.
+   structurally required in the schema. The four status values are literal
+   schema values, not a hidden post-schema enum. `in_progress` is a resumable
+   checkpoint, not a successful or blocked terminal outcome.
 2. The schema descriptions explain each field. `request_end` explicitly says it
    is valid only for configured end-request roles handing back to the
    orchestrator with `status: complete`.

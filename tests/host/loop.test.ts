@@ -59,7 +59,7 @@ type ScriptedEmission =
       target_role: string;
       reason?: string;
       suggests_next?: string;
-      status?: "ready" | "blocked" | "complete";
+      status?: "ready" | "in_progress" | "blocked" | "complete";
       request_end?: boolean;
     }
   | { kind: "emit_end"; reason?: string }
@@ -666,7 +666,8 @@ describe("runLoop — contract breach (§11.3)", () => {
     expect(result.finalCheckpoint.current_role).toBe("done");
     expect(sess.prompts).toHaveLength(2);
     expect(sess.prompts[1]).toContain("did not call `handoff` or `end`");
-    expect(sess.prompts[1]).toContain("status: ready | blocked | complete");
+    expect(sess.prompts[1]).toContain("status: ready | in_progress | blocked | complete");
+    expect(sess.prompts[1]).toContain("If the work is unfinished, use status: in_progress");
     expect(sess.prompts[1]).toContain("objective, summary, requested_action");
 
     const records = log.records(initialCheckpoint.run_id);

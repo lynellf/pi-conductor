@@ -76,7 +76,7 @@ describe("emission tools — valid first call", () => {
 
     expect(tool.description).toContain("Current role: reviewer");
     expect(tool.description).toContain("target_role must be orchestrator");
-    expect(tool.description).toContain("status: ready | blocked | complete");
+    expect(tool.description).toContain("status: ready | in_progress | blocked | complete");
     expect(tool.description).toContain("request_end: true");
   });
 
@@ -132,6 +132,23 @@ describe("emission tools — valid first call", () => {
         },
       },
     });
+  });
+
+  it("accepts an in-progress checkpoint handoff without treating it as completion", async () => {
+    const seam = new SessionSeam();
+    const tool = createHandoffTool(seam, undefined, { role: "implementer", def: GATED_DEF });
+
+    const result = await invoke(tool, {
+      target_role: "orchestrator",
+      status: "in_progress",
+      objective: "Resume the selected implementation.",
+      summary: "Tests are registered; compiler edits and verification remain.",
+      requested_action: "Re-dispatch this worker with the supplied checkpoint.",
+    });
+
+    expect(result.details).toEqual({ ok: true, target_role: "orchestrator" });
+    expect(seam.read()[0]?.args).toMatchObject({ status: "in_progress" });
+    expect(validateEmission(seam.read()).kind).toBe("ok");
   });
 
   it("end writes one capture, seals, returns terminating ok (no target_role)", async () => {
@@ -207,7 +224,7 @@ describe("emission tools — valid first call", () => {
       invalid_fields: ["status"],
     });
     expect(result.terminate).toBe(false);
-    expect(result.content[0]?.text).toContain("ready | blocked | complete");
+    expect(result.content[0]?.text).toContain("ready | in_progress | blocked | complete");
     expect(result.content[0]?.text).toContain("Valid example");
     expect(seam.read()).toEqual([]);
   });
