@@ -1,5 +1,5 @@
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { ModelEffort, Role } from "../core/types.js";
+import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
 import type { RoleSession } from "./host.js";
 import type { SessionSeam } from "./seam.js";
 
@@ -20,15 +20,22 @@ export function createRoleSessionAdapter(opts: {
   readonly effort: ModelEffort;
   readonly retries: number;
   readonly retryDelayMs: number;
+  /** Host-owned workspace metadata for an isolated worktree/copy session. */
+  readonly workspace?: SessionWorkspaceDescriptor;
   readonly onDispose: () => Promise<void> | void;
 }): RoleSessionAdapter {
   const { session, seam } = opts;
+  const workspace =
+    opts.workspace === undefined
+      ? undefined
+      : (Object.freeze(opts.workspace) as SessionWorkspaceDescriptor);
   return {
     role: opts.role,
     sessionId: opts.sessionId,
     sessionFile: opts.sessionFile,
     model: opts.model,
     effort: opts.effort,
+    ...(workspace !== undefined ? { workspace } : {}),
     retries: opts.retries,
     retryDelayMs: opts.retryDelayMs,
     readCaptureBuffer: () => seam.read(),

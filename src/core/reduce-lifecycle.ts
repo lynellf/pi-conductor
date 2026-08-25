@@ -129,6 +129,7 @@ function sessionStarted(
     ...(meta.model_effort !== undefined ? { model_effort: meta.model_effort } : {}),
     session_file: meta.sessionFile,
     parent_session: meta.parent_session,
+    ...(meta.workspace !== undefined ? { workspace: meta.workspace } : {}),
     // intentionally NO usage / failure_reason on session_started (§11.4)
     ts: meta.ts,
   };

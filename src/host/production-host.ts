@@ -17,16 +17,9 @@
  * `StubHost` (every method now implemented; the event-handler
  * logic is shared via `session-event-handler.ts`).
  *
- * **Module size.** This file is ~455 LOC, over the AGENTS.md
- * ~400-LOC soft ceiling. The size is justified by the
- * comprehensive JSDoc on every `Host` method (each method has a
- * spec-section pointer + 5–15 lines of intent documentation, per
- * the repo's code conventions) and the fact that splitting the
- * class would break the single `class ProductionHost implements
- * Host` declaration the loop imports. The class stays under the
- * 500-LOC hard cap that AGENTS.md allows for "coherent concept"
- * files. The pure resolution pieces were already extracted to
- * `production-host-resolve.ts` (Tasks 7A.2, 7A.3).
+ * Isolated RPC spawning and shared SDK spawning live in dedicated helpers.
+ * The remaining class stays below the 500-LOC exception ceiling because it
+ * owns the Host's policy plus its shared per-session state and lifecycle API.
  *
  * **Host-agnosticism:** this module imports from
  * `@earendil-works/pi-coding-agent` (it's in `src/host/` — the
@@ -35,18 +28,16 @@
  * untouched and remains host-agnostic.
  */
 
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { Model } from "@earendil-works/pi-ai";
 import {
-  type AgentSession,
-  createAgentSession,
-  DefaultResourceLoader,
+  type ExtensionContext,
   type ExtensionUIContext,
+  getAgentDir,
   type ModelRegistry,
-  SessionManager,
-  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
@@ -58,27 +49,49 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
-import type { ModelConfig, RoleConfig } from "../manifest/types.js";
-import type { PersistedRecord, RecordLog } from "../persistence/log.js";
-import { createAskUserTool } from "./ask-user-tool.js";
-import { SessionState } from "./cost.js";
+import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
+
+import {
+  type ArtifactCollectedRecord,
+  type ArtifactRejectedRecord,
+  type PersistedRecord,
+  type RecordLog,
+  type SnapshotPinnedRecord,
+  snapshotPinned,
+} from "../persistence/log.js";
+import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
+import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
+import type { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
-import { createHandoffContextTool } from "./handoff-context-tool.js";
-import type { Host, RoleSession, SessionTerminalReason, SpawnRoleOptions } from "./host.js";
+import type {
+  ArtifactRouteSource,
+  Host,
+  RoleSession,
+  SessionTerminalReason,
+  SpawnRoleOptions,
+} from "./host.js";
+import { spawnIsolatedRoleSession } from "./isolated-role-spawn.js";
 import type { LoadedManifest } from "./manifest.js";
-import {
-  buildToolsAllowlist,
-  loadSystemPrompt,
-  resolveModel,
-  selectModelEntry,
-} from "./production-host-resolve.js";
+import { loadSystemPrompt, resolveModel, selectModelEntry } from "./production-host-resolve.js";
 import { notifyListeners } from "./record-emitter.js";
-import { createRoleSessionAdapter } from "./role-session.js";
-import { SessionSeam } from "./seam.js";
-import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
-import { createEndTool, createHandoffTool } from "./tools.js";
+import {
+  DelegateBridgeConfigError,
+  type DelegateBridgeHandler,
+  type DelegateBridgeResult,
+} from "./rpc/delegate-bridge.js";
+import type { NodeRoleSession } from "./rpc/node-role-session.js";
+import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
+import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
+import type { SessionEventSource } from "./session-event-handler.js";
+import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
+import {
+  assertPersistedSnapshotPinResolves,
+  assertSupportedWorkspaceBackend,
+  readPersistedSnapshotPin,
+  resolvePinnedCommit,
+} from "./workspace/index.js";
 
 /**
  * Constructor options for `ProductionHost`. Mirrors the production
@@ -124,12 +137,13 @@ export interface ProductionHostOptions {
   /**
    * Optional: directory for the SDK's `DefaultResourceLoader` agent
    * config (auth.json, models.json, extensions, etc.). Default:
-   * `<cwd>/.pi-conductor/agent`. The extension is expected to
-   * share its own `~/.pi/agent` by passing the path here, so
-   * spawned role sessions see the user's pi configuration. The
-   * default keeps the conductor's role sessions isolated from pi.
+   * `<cwd>/.pi-conductor/agent`. An explicit value also configures an
+   * isolated RPC child; otherwise isolated children use Pi's configured
+   * agent directory so roles without `models:` retain Pi defaults.
    */
   readonly agentDir?: string;
+  /** Test seam for the otherwise direct isolated Node RPC role-session constructor. */
+  readonly nodeRoleSessionFactory?: (options: NodeRoleSessionOptions) => Promise<NodeRoleSession>;
 }
 
 /**
@@ -165,10 +179,15 @@ export class ProductionHost implements Host {
   readonly sessionDir: string;
   /** See {@link ProductionHostOptions.agentDir}. */
   readonly agentDir: string;
+  /** Pi configuration inherited by isolated RPC children. */
+  readonly isolatedAgentDir: string;
+  private readonly nodeRoleSessionFactory: (
+    options: NodeRoleSessionOptions,
+  ) => Promise<NodeRoleSession>;
 
   constructor(opts: ProductionHostOptions) {
     this.modelRegistry = opts.modelRegistry;
-    this.cwd = opts.cwd;
+    this.cwd = resolve(opts.cwd);
     this.log = opts.log;
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
@@ -176,8 +195,15 @@ export class ProductionHost implements Host {
     this.isUiContextCurrent = opts.isUiContextCurrent;
     this.displaySink = opts.displaySink;
     this.sessionDir =
-      opts.sessionDir ?? join(opts.cwd, ".pi-conductor", "runs", opts.runId, "sessions");
-    this.agentDir = opts.agentDir ?? join(opts.cwd, ".pi-conductor", "agent");
+      opts.sessionDir === undefined
+        ? join(this.cwd, ".pi-conductor", "runs", opts.runId, "sessions")
+        : resolve(opts.sessionDir);
+    this.agentDir =
+      opts.agentDir === undefined
+        ? join(this.cwd, ".pi-conductor", "agent")
+        : resolve(opts.agentDir);
+    this.isolatedAgentDir = opts.agentDir === undefined ? resolve(getAgentDir()) : this.agentDir;
+    this.nodeRoleSessionFactory = opts.nodeRoleSessionFactory ?? createNodeRoleSession;
     // The SessionManager writes JSONL files directly into `sessionDir`
     // without creating parent directories. Ensure the dir exists so
     // the first `SessionManager.create(cwd, this.sessionDir)` call
@@ -192,7 +218,8 @@ export class ProductionHost implements Host {
   // cap/usage/terminal-reason state and clean up on dispose.
   // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
   private readonly sessionStates: Map<string, SessionState> = new Map();
-  private readonly agentsBySessionId: Map<string, AgentSession> = new Map();
+  private readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
+  private snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   /**
    * Tracks the most-recent role that exhausted its model fallback
@@ -233,6 +260,11 @@ export class ProductionHost implements Host {
     }
 
     const roleConfig = this.lookupRoleConfig(role);
+    const roleWorkspaceConfig = roleConfig?.workspace;
+    const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
+    if (workspaceBackend === "container") {
+      assertSupportedWorkspaceBackend(workspaceBackend);
+    }
     const modelIndex = opts.modelIndex ?? 0;
 
     // ── Task 18: resolve the model from the role's models[] list.
@@ -283,182 +315,147 @@ export class ProductionHost implements Host {
       this.loadedManifest.manifestVersion,
     );
 
-    // 3. Build the `DefaultResourceLoader` with the role's prompt
-    //    wired via `systemPromptOverride`. The override is a closure
-    //    over `rolePrompt` so a single loader instance re-evaluates
-    //    the same string each time the SDK calls
-    //    `loader.getSystemPrompt()`. `await loader.reload()` is
-    //    required by the SDK before the session uses the loader.
-    const loader = new DefaultResourceLoader({
-      cwd: this.cwd,
-      agentDir: this.agentDir,
-      systemPromptOverride: () => rolePrompt ?? undefined,
-    });
-    await loader.reload();
-
-    // 4. Build the tools allowlist. The `tools` option on
-    //    `createAgentSession` is the SDK's allowlist — forgetting
-    //    to name `handoff` / `end` here silently disables them
-    //    even when they're in `customTools` (sdk-surface.md §1).
-    //    `buildToolsAllowlist` dedups so a role that already names
-    //    them in `role.tools` still gets them exactly once.
-    const roleTools = roleConfig?.tools;
-    const handoffContext =
-      opts.handoffContextRef === undefined
-        ? null
-        : createHandoffContextTool(opts.handoffContextRef);
-    const tools = buildToolsAllowlist(roleTools, handoffContext !== null);
-
-    // ── Delegation lite §4: build delegate tool if the role is delegating.
-    // A role receives `delegate` only when it declares BOTH `tools: [delegate]`
-    // AND a `delegation` block (§3 rule 1). The manifest validator surfaces a
-    // warning when the block exists without the tool entry.
-    let delegateTool: ReturnType<
-      typeof import("./delegation/delegate-tool-factory.js").createDelegateTool
-    > | null = null;
-    if (roleConfig?.delegation !== undefined && roleConfig.tools?.includes("delegate")) {
-      const manifest = this.loadedManifest.manifest;
-      const remaining = roleConfig.delegation.max_children_per_session;
-      const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
-      const runStateDir = join(this.cwd, ".pi-conductor", "runs", this.runId);
-      delegateTool = createDelegateTool({
-        role: roleConfig,
-        subagents: manifest.subagents ?? [],
-        remainingChildren: remaining,
+    if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
+      if (roleWorkspaceConfig === undefined) {
+        throw new Error("isolated role requires a workspace configuration");
+      }
+      if (opts.visitIndex === undefined) {
+        throw new Error("isolated role spawning requires the loop-owned visitIndex");
+      }
+      const snapshotPin = await this.getOrCreateSnapshotPin(
+        roleWorkspaceConfig.source ?? "snapshot",
+      );
+      return spawnIsolatedRoleSession({
+        role,
+        roleConfig,
+        workspaceConfig: roleWorkspaceConfig,
+        backend: workspaceBackend,
+        snapshotCommit: snapshotPin.commit,
+        model: logical,
+        effort,
+        retries,
+        retryDelayMs,
+        systemPrompt: rolePrompt,
+        cwd: this.cwd,
         runId: this.runId,
-        parentRole: role,
-        primaryCheckout: this.cwd,
-        runStateDir,
-        persistRecord: (record) => this.persistRecord(record),
-        agentDir: this.agentDir,
-        systemPromptRoot: delegationPromptRoot(this.loadedManifest, this.cwd),
-        modelRegistry: this.modelRegistry,
-        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
         sessionDir: this.sessionDir,
-        manager: this.delegationManager,
+        agentDir: this.isolatedAgentDir,
+        nodeRoleSessionFactory: this.nodeRoleSessionFactory,
+        ...(hasDelegateConfiguration(roleConfig)
+          ? {
+              createDelegateBridgeHandler: (primaryCheckout: string) =>
+                this.createDelegateBridgeHandler(role, roleConfig, primaryCheckout),
+            }
+          : {}),
+        visitIndex: opts.visitIndex,
+        persistRecord: (record) => this.persistRecord(record),
+        sessionStates: this.sessionStates,
+        agentsBySessionId: this.agentsBySessionId,
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
       });
     }
 
-    // 5. Build the file-backed `SessionManager` rooted under the
-    //    conductor's per-run directory (NOT pi's own session tree).
-    //    `SessionManager.create(cwd, sessionDir)` puts each session's
-    //    JSONL file directly in `sessionDir`. The constructor
-    //    `mkdirSync`'d `sessionDir` already, so this never ENOENTs.
-    const sessionManager = SessionManager.create(this.cwd, this.sessionDir);
+    const delegateTool = hasDelegateConfiguration(roleConfig)
+      ? await this.createDelegateTool(role, roleConfig, this.cwd)
+      : null;
 
-    // 6. Build the per-session seam + the handoff/end tools. The
-    //    seam's capture buffer is the loop's read surface (§12.1);
-    //    the tools write to it on call. `ask_user` is the
-    //    non-terminating UI tool and does not touch the seam. The
-    //    `rejector` predicate is bound to the `SessionState` after
-    //    construction (the state needs the `sessionId`).
-    const seam = new SessionSeam();
-    const rejector = createCaptureRejector();
-    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture, {
+    return spawnSharedSdkRoleSession({
       role,
-      def: this.loadedManifest.def,
-    });
-    const end = createEndTool(seam, rejector.shouldRejectCapture);
-    const askUser = createAskUserTool() as ToolDefinition;
-
-    // 7. Spawn the real `AgentSession` via the SDK. `model` is
-    //    `undefined` for the system-model path; the SDK uses its
-    //    default in that case (no `model` override).
-    const createOpts: Parameters<typeof createAgentSession>[0] = {
-      cwd: this.cwd,
-      modelRegistry: this.modelRegistry,
-      resourceLoader: loader,
-      sessionManager,
-      customTools: [
-        handoff,
-        end,
-        askUser,
-        ...(handoffContext === null ? [] : [handoffContext]),
-        ...(delegateTool === null ? [] : [delegateTool]),
-      ],
-      tools: [...tools, ...(delegateTool === null ? [] : ["delegate"])],
-    };
-    if (model !== undefined) {
-      // The SDK's `model` is `Model<any>`; `resolveModel` returns
-      // `Model<never>` (any-Api escape, see the function's
-      // comment). Cast at the boundary; the SDK handles any-Api
-      // models via its discriminated `api` field.
-      (createOpts as { model?: Model<never> }).model = model;
-    }
-    (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
-    const { session } = await createAgentSession(createOpts);
-    try {
-      if (
-        this.uiContext !== undefined &&
-        (this.isUiContextCurrent === undefined || this.isUiContextCurrent())
-      ) {
-        await session.bindExtensions({ uiContext: this.uiContext });
-      }
-    } catch (error) {
-      // Binding can fail when the extension context was replaced or
-      // reloaded while a fallback session was starting (issue #44).
-      // The loop records the startup failure, but this partially-created
-      // SDK session still owns resources and must be released here.
-      try {
-        session.dispose();
-      } catch {
-        // Preserve the original startup error; disposal is best effort.
-      }
-      throw error;
-    }
-
-    // 8. Track per-session state (Task 17 / 7A.4). The host's
-    //    `captureUsage` and `sessionTerminalReason` read from
-    //    this; `dispose` cleans up the maps.
-    const sessionId = session.sessionId;
-    const sessionFile = session.sessionFile ?? `${this.sessionDir}/${sessionId}.jsonl`;
-    const cap = roleConfig?.max_session_cost_usd ?? null;
-    const state = new SessionState({ cap, model: logical });
-    this.sessionStates.set(sessionId, state);
-    this.agentsBySessionId.set(sessionId, session);
-    rejector.bindState(state);
-
-    // 9. Subscribe the session to the shared event handler
-    //    (Task 17 + 18). The handler accumulates usage, detects
-    //    model errors, and enforces the per-session cost cap.
-    attachSessionEventHandler({
-      session,
-      state,
-      role,
-      fileMutation: {
-        runId: this.runId,
-        sessionId,
-        sessionFile,
-        persist: (record) => this.persistRecord(record),
-      },
-      ...(this.displaySink !== undefined && { onDisplay: this.displaySink }),
-    });
-
-    // 10. Wrap the SDK session in the loop's `RoleSession` seam.
-    //     The wrapper explicitly forwards the SDK methods the loop
-    //     uses (`subscribe`, `steer`, `clearQueue`, `prompt`, `dispose`) — the SDK's
-    //     `AgentSession` has these on the prototype, so a spread
-    //     would miss them. Two SDK fields are also exposed as
-    //     seal state comes from the per-session seam. Two SDK fields remain
-    //     available for test introspection: `systemPrompt` (a getter) and
-    //     `getActiveToolNames` (a method). These are NOT part of
-    //     the `RoleSession` interface — the loop doesn't read them
-    //     — but the wiring tests do (via a typed cast).
-    return createRoleSessionAdapter({
-      role,
-      session,
-      seam,
-      sessionId,
-      sessionFile,
-      model: logical,
+      roleConfig,
+      model,
+      logicalModel: logical,
       effort,
       retries,
       retryDelayMs,
-      onDispose: () => {
-        this.sessionStates.delete(sessionId);
-        this.agentsBySessionId.delete(sessionId);
-      },
+      systemPrompt: rolePrompt,
+      modelRegistry: this.modelRegistry,
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      sessionDir: this.sessionDir,
+      runId: this.runId,
+      machineDefinition: this.loadedManifest.def,
+      ...(opts.handoffContextRef !== undefined && { handoffContextRef: opts.handoffContextRef }),
+      delegateTool,
+      ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
+      ...(this.isUiContextCurrent !== undefined && {
+        isUiContextCurrent: this.isUiContextCurrent,
+      }),
+      ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+      persistRecord: (record) => this.persistRecord(record),
+      sessionStates: this.sessionStates,
+      agentsBySessionId: this.agentsBySessionId,
     });
+  }
+
+  /** Build the existing delegation operation with the caller's constrained Git base. */
+  private async createDelegateTool(
+    role: Role,
+    roleConfig: RoleConfig | undefined,
+    primaryCheckout: string,
+  ): Promise<
+    ReturnType<typeof import("./delegation/delegate-tool-factory.js").createDelegateTool>
+  > {
+    if (!hasDelegateConfiguration(roleConfig)) {
+      throw new DelegateBridgeConfigError(`role '${String(role)}' is not authorized to delegate`);
+    }
+    const manifest = this.loadedManifest.manifest;
+    const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
+    return createDelegateTool({
+      role: roleConfig,
+      subagents: manifest.subagents ?? [],
+      remainingChildren: roleConfig.delegation.max_children_per_session,
+      runId: this.runId,
+      parentRole: role,
+      primaryCheckout,
+      runStateDir: join(this.cwd, ".pi-conductor", "runs", this.runId),
+      persistRecord: (record) => this.persistRecord(record),
+      agentDir: this.agentDir,
+      systemPromptRoot: delegationPromptRoot(this.loadedManifest, this.cwd),
+      modelRegistry: this.modelRegistry,
+      ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+      sessionDir: this.sessionDir,
+      manager: this.delegationManager,
+    });
+  }
+
+  /** Adapt the existing delegate tool to the isolated role's RPC bridge. */
+  private async createDelegateBridgeHandler(
+    role: Role,
+    roleConfig: RoleConfig | undefined,
+    primaryCheckout: string,
+  ): Promise<DelegateBridgeHandler> {
+    const delegateTool = await this.createDelegateTool(role, roleConfig, primaryCheckout);
+    return async (args) =>
+      adaptDelegateToolResult(
+        await delegateTool.execute(
+          "isolated-delegate-bridge",
+          args,
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        ),
+      );
+  }
+
+  /** Get or create this host's run-scoped immutable isolated-workspace pin. */
+  private getOrCreateSnapshotPin(source: WorkspaceSource): Promise<SnapshotPinnedRecord> {
+    if (this.snapshotPin !== null) return this.snapshotPin;
+
+    // Register the promise before its callback resolves a moving source, so
+    // concurrent isolated spawns share one read/validate-or-persist operation.
+    this.snapshotPin = Promise.resolve().then(async () => {
+      const persistedPin = readPersistedSnapshotPin(this.log.records(this.runId), this.runId);
+      if (persistedPin !== null) {
+        await assertPersistedSnapshotPinResolves(this.cwd, persistedPin);
+        return persistedPin;
+      }
+
+      const commit = await resolvePinnedCommit(this.cwd, source);
+      const pinned = snapshotPinned({ run_id: this.runId, source, commit });
+      this.persistRecord(pinned);
+      return pinned;
+    });
+    return this.snapshotPin;
   }
 
   /**
@@ -579,6 +576,121 @@ export class ProductionHost implements Host {
     // (Task 15.5) flipping `SessionSeam.isSealed`. This method
     // is reserved for external consumers.
   }
+
+  /** Route declared handoff artifacts before the receiver's first prompt (Issue #48 R4.a). */
+  async routeAcceptedHandoffArtifacts(
+    source: ArtifactRouteSource,
+    receiver: RoleSession,
+  ): Promise<string | null> {
+    const records = this.log.records(this.runId);
+    const collected = records.filter(
+      (record): record is ArtifactCollectedRecord =>
+        record.type === "artifact_collected" &&
+        record.kind === "declared" &&
+        record.role === source.role &&
+        record.visit_index === source.visitIndex &&
+        record.session_id === source.sessionId,
+    );
+    const rejected = records.filter(
+      (record): record is ArtifactRejectedRecord =>
+        record.type === "artifact_rejected" &&
+        record.role === source.role &&
+        record.session_id === source.sessionId,
+    );
+    const routed = await materializeArtifacts({
+      artifactsDir: join(this.cwd, ".pi-conductor", "runs", this.runId, "artifacts", this.runId),
+      emittingRole: source.role,
+      emittingVisitIndex: source.visitIndex,
+      receiverWorkspace: receiver.workspace?.path_or_image ?? this.cwd,
+      isReceiverIsolated: receiver.workspace !== undefined,
+      collected,
+    });
+    return formatArtifactsSeedSection({
+      emittingRole: source.role,
+      emittingVisitIndex: source.visitIndex,
+      routed,
+      rejected,
+    });
+  }
+
+  /** Collect isolated-session artifacts before the loop can spawn a successor (§7.2). */
+  async collectTerminalArtifacts(
+    session: RoleSession,
+    args: {
+      readonly role: Role;
+      readonly visitIndex: number;
+      readonly terminal: "session_ended" | "session_failed";
+      readonly handoff?: import("../seam/schema.js").HandoffArgs;
+    },
+  ): Promise<void> {
+    const context = session.artifactCollection;
+    if (context === undefined) return;
+    if (session.role !== args.role) {
+      throw new Error(
+        `artifact collection session role '${String(session.role)}' does not match loop role '${String(args.role)}'`,
+      );
+    }
+    const priorPatchCount = this.log
+      .records(this.runId)
+      .filter(
+        (record) =>
+          record.type === "artifact_collected" &&
+          record.kind === "auto_patch" &&
+          record.role === args.role &&
+          record.visit_index === args.visitIndex,
+      ).length;
+    const patchFileName =
+      priorPatchCount === 0
+        ? undefined
+        : `patch-${args.role}-v${args.visitIndex}-${priorPatchCount}-${createHash("sha256")
+            .update(session.sessionId)
+            .digest("hex")
+            .slice(0, 12)}.patch`;
+    await collectTerminalArtifactsFromWorkspace({
+      context,
+      artifactsDir: join(this.cwd, ".pi-conductor", "runs", this.runId, "artifacts", this.runId),
+      runId: this.runId,
+      role: args.role,
+      visitIndex: args.visitIndex,
+      sessionId: session.sessionId,
+      ...(args.handoff !== undefined && { handoff: args.handoff }),
+      ...(patchFileName !== undefined && { patchFileName }),
+      persistRecord: (record) => this.persistRecord(record),
+    });
+  }
+}
+
+function adaptDelegateToolResult(result: {
+  readonly content: readonly { readonly type: string }[];
+  readonly details: unknown;
+  readonly terminate?: boolean;
+}): DelegateBridgeResult {
+  const content = result.content.map((block) => {
+    if (block.type !== "text" || !("text" in block) || typeof block.text !== "string") {
+      throw new DelegateBridgeConfigError("existing delegate operation returned a non-text result");
+    }
+    return { type: "text" as const, text: block.text };
+  });
+  if (!isRecord(result.details)) {
+    throw new DelegateBridgeConfigError("existing delegate operation returned non-object details");
+  }
+  const isError = "isError" in result && result.isError === true;
+  return {
+    content,
+    details: result.details,
+    ...(typeof result.terminate === "boolean" ? { terminate: result.terminate } : {}),
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasDelegateConfiguration(
+  roleConfig: RoleConfig | undefined,
+): roleConfig is RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> } {
+  return roleConfig?.delegation !== undefined && roleConfig.tools?.includes("delegate") === true;
 }
 
 function delegationPromptRoot(loaded: LoadedManifest, cwd: string): string {

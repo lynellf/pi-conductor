@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+### Enhancements
+
+- **Per-role isolated workspaces and artifact handoffs** (Issue #48).
+  `shared`, `worktree`, and `copy` modes are available. Isolated-role file
+  tools are rooted in the provisioned role workspace and have the `confined`
+  guarantee; shared roles have `none`. `container` is unavailable and is
+  rejected with a typed `WorkspaceError` before host construction or run
+  persistence. On accepted isolated-role handoffs, the host collects declared
+  workspace-relative artifacts, persists collection or rejection records,
+  materializes collected artifacts for isolated receivers, and provides shared
+  receivers host-store paths in a host-generated seed inventory. Worktree
+  auto-patches are retained when `artifacts.auto_patch` is enabled (the
+  worktree default) but never routed. Conductor never automatically applies an
+  artifact or patch to the integration checkout.
+
 ## [0.15.0] - 2026-08-21
 
 ### Bug fixes
@@ -53,7 +70,6 @@
   single terminal outcomes now flow through the durable append-and-notify seam,
   including cancellations synthesized during resume recovery. Live subscribers
   and status surfaces no longer miss or retain stale child outcomes.
-
 ## [0.12.1] - 2026-08-03
 
 ### Bug fixes

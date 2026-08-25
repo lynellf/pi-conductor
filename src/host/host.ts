@@ -53,10 +53,13 @@ import type {
   MachineDefinition,
   ModelEffort,
   Role,
+  SessionWorkspaceDescriptor,
   UsageRecord,
 } from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { HandoffArgs } from "../seam/schema.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
+import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
 
 // ─── RoleSession ───────────────────────────────────────────────────────
 
@@ -100,6 +103,10 @@ export interface RoleSession {
   readonly model: string | null;
   /** The effort / thinking level this session ran with (§8.1, §11.4). */
   readonly effort: ModelEffort;
+  /** Immutable host-owned workspace metadata for isolated worktree/copy sessions only. */
+  readonly workspace?: SessionWorkspaceDescriptor;
+  /** Actual isolated artifact roots captured during workspace provisioning. */
+  readonly artifactCollection?: ArtifactCollectionContext;
   /** Additional fresh-session attempts allowed for this model entry (§8.2). */
   readonly retries?: number;
   /** Delay before each same-model retry, in milliseconds (§8.2). */
@@ -174,6 +181,14 @@ export interface RoleSession {
  * (sdk-surface.md §1: forgetting to name them in `tools` silently
  * disables them even though they're in `customTools`).
  */
+/** Durable source identity for host-owned accepted-handoff artifact routing. */
+export interface ArtifactRouteSource {
+  readonly role: Role;
+  readonly visitIndex: number;
+  readonly sessionId: string;
+  readonly receiverRole: Role;
+}
+
 export interface SpawnRoleOptions {
   /** Resolved model for this role invocation (Host resolves from
    *  `role.models` via `modelRegistry.find` or the system default, §8.1). */
@@ -189,6 +204,12 @@ export interface SpawnRoleOptions {
   readonly sessionManager?: SessionManager;
   /** Working directory for the session (default: `process.cwd()`). */
   readonly cwd?: string;
+  /**
+   * Loop-owned, 1-based role visit index (§11.4). Isolated workspace
+   * provisioning must use this value so every model retry/fallback within
+   * one invocation stays in the same workspace. Shared sessions ignore it.
+   */
+  readonly visitIndex?: number;
   /**
    * 0-based index into the role's `models[]` list (Task 18, §8.2).
    * `0` = primary model; `1` = first fallback, etc. The Host resolves
@@ -320,6 +341,31 @@ export interface Host {
    * they only write the `extra_emission` marker.
    */
   sealSession(session: RoleSession): void;
+
+  /**
+   * Collect terminal artifacts from a provisioned isolated workspace before
+   * the loop can spawn a successor (Issue #48 §7.2). Shared/test hosts omit
+   * this additive hook and retain their existing behavior.
+   */
+  collectTerminalArtifacts?(
+    session: RoleSession,
+    args: {
+      readonly role: Role;
+      readonly visitIndex: number;
+      readonly terminal: "session_ended" | "session_failed";
+      readonly handoff?: HandoffArgs;
+    },
+  ): Promise<void>;
+
+  /**
+   * Route host-collected declared artifacts after an accepted handoff and
+   * before the receiver is prompted (Issue #48 R4.a). Shared/test hosts may
+   * omit the hook and retain ordinary seed behavior.
+   */
+  routeAcceptedHandoffArtifacts?(
+    source: ArtifactRouteSource,
+    receiver: RoleSession,
+  ): Promise<string | null>;
 
   /**
    * Get the 1-based visit_index for the next visit to `role` (§11.4).

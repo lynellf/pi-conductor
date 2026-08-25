@@ -23,9 +23,9 @@
 
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { AuthStorage, getAgentDir, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -103,17 +103,35 @@ describe("createProductionHost — Task 7A.5", () => {
     expect(host.loadedManifest).toBe(loadedManifest);
   });
 
-  it("defaults `sessionDir` and `agentDir` to the conductor-isolated paths", () => {
+  it("defaults `sessionDir` and the shared SDK `agentDir` to conductor-isolated paths", () => {
     const host = createProductionHost({
       extension: { modelRegistry: makeModelRegistry(), cwd: workdir },
       run: { log: makeLog(), loadedManifest: makeLoadedManifest(), runId: "test-run-1" },
     });
-    // Same defaults as `ProductionHostOptions.sessionDir` /
-    // `agentDir` when omitted. The factory's job is to pass
-    // through; the production host's job is to derive.
+    // Shared SDK state stays conductor-owned while isolated children inherit
+    // the configured Pi agent directory.
     expect(host.sessionDir).toBe(join(workdir, ".pi-conductor", "runs", "test-run-1", "sessions"));
     expect(host.agentDir).toBe(join(workdir, ".pi-conductor", "agent"));
+    expect(host.isolatedAgentDir).toBe(resolve(getAgentDir()));
     expect(host.uiContext).toBeUndefined();
+  });
+
+  it("derives Pi's configured agent directory for the extension/CLI production factory", () => {
+    const configuredAgentDir = join(workdir, "configured-pi-agent");
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = configuredAgentDir;
+    try {
+      const host = createProductionHost({
+        extension: { modelRegistry: makeModelRegistry(), cwd: workdir },
+        run: { log: makeLog(), loadedManifest: makeLoadedManifest(), runId: "test-run-1" },
+      });
+
+      expect(host.agentDir).toBe(join(workdir, ".pi-conductor", "agent"));
+      expect(host.isolatedAgentDir).toBe(configuredAgentDir);
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
   });
 
   it("forwards an explicit `uiContext` override and its live guard", () => {
@@ -158,6 +176,7 @@ describe("createProductionHost — Task 7A.5", () => {
       },
     });
     expect(host.agentDir).toBe(explicitDir);
+    expect(host.isolatedAgentDir).toBe(explicitDir);
   });
 });
 
