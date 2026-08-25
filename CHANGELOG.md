@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Bug fixes
+
+- **Resumable no-emission recovery.** Workers interrupted before a conductor
+  emission can now return an explicit `in_progress` checkpoint instead of
+  misreporting incomplete work as ready or blocked. The recovery prompt requires
+  completed work, remaining work, and a resume action.
+
 ## [0.15.0] - 2026-08-21
 
 ### Bug fixes

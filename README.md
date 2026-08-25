@@ -231,11 +231,13 @@ disable them.
   role. Workers may only hand off to the orchestrator; the orchestrator may hand
   off to any declared worker (subject to visit caps, §7.3). Every
   model-emitted handoff must include a non-empty actionable envelope:
-  `status` (`ready`, `blocked`, or `complete`), `objective`, `summary`, and
-  `requested_action`, alongside `target_role: Role`. `reason` and
-  `suggests_next: Role` remain optional (the latter is workers-only and
-  non-binding). `request_end?: boolean` defaults to `false`; it is valid only
-  for a role named in `end_request_roles` handing back to the orchestrator with
+  `status` (`ready`, `in_progress`, `blocked`, or `complete`), `objective`,
+  `summary`, and `requested_action`, alongside `target_role: Role`.
+  `in_progress` is a truthful checkpoint: the role's work is unfinished and
+  the recipient must resume it from the supplied completed/remaining-work
+  summary. `reason` and `suggests_next: Role` remain optional (the latter is
+  workers-only and non-binding). `request_end?: boolean` defaults to `false`;
+  it is valid only for a role named in `end_request_roles` handing back to the orchestrator with
   `status: complete`. An incomplete or unauthorized envelope returns an
   actionable error without advancing, persisting an accepted transition, or
   sealing the role session, so the role can correct it immediately.

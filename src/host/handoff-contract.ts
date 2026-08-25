@@ -33,7 +33,7 @@ export function validateRoleHandoff(
 /** Model-facing role-specific handoff tool description. */
 export function formatHandoffDescription(context: HandoffContractContext | undefined): string {
   const required =
-    "Required fields: target_role, status: ready | blocked | complete, objective, summary, requested_action.";
+    "Required fields: target_role, status: ready | in_progress | blocked | complete, objective, summary, requested_action.";
   if (context === undefined) {
     return `Terminate this role session by routing control. ${required} Workers route only to the orchestrator; the orchestrator routes to a declared worker. request_end defaults to false and is valid only for an authorized end-request role returning complete work to the orchestrator.`;
   }
@@ -72,7 +72,7 @@ export function formatHandoffCorrection(
       : "";
   return [
     `Incomplete handoff: ${fields.join(", ")}.`,
-    "Legal status values: ready | blocked | complete.",
+    "Legal status values: ready | in_progress | blocked | complete.",
     context === undefined ? "Use a legal routing target." : formatHandoffDescription(context),
     `Valid example: {"target_role":"${target}","status":"complete","objective":"State the objective","summary":"Summarize the work","requested_action":"State the next action"${requestEnd}}.`,
     "Correct the call now in this same session.",
@@ -88,7 +88,9 @@ export function formatNoEmissionRecovery(role: Role, def: MachineDefinition): st
       : "Call exactly one conductor tool now: handoff using the contract below. Do not call end; workers return control to the orchestrator.";
   return [
     "Your previous response did not call `handoff` or `end`, so the conductor cannot advance.",
-    "Do not do more investigation or call any non-conductor tools.",
+    "Do not call any non-conductor tools in this recovery turn.",
+    "If the work is unfinished, use status: in_progress and make a truthful checkpoint handoff: state completed work, remaining work, and how the orchestrator should resume it.",
+    "Do not call work ready, complete, or blocked solely because this recovery turn interrupted it.",
     action,
     formatHandoffDescription(context),
   ].join(" ");

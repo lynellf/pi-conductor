@@ -41,12 +41,19 @@ describe("handoffArgsSchema (TypeBox)", () => {
     expect(Value.Check(handoffArgsSchema, actionableHandoff("implementer"))).toBe(true);
   });
 
-  it("exposes status as the three literal values", () => {
+  it("exposes status as four literal values, including the resumable checkpoint", () => {
     expect(handoffArgsSchema.properties.status.anyOf).toEqual([
       { const: "ready", type: "string" },
+      { const: "in_progress", type: "string" },
       { const: "blocked", type: "string" },
       { const: "complete", type: "string" },
     ]);
+    expect(
+      Value.Check(handoffArgsSchema, {
+        ...actionableHandoff("orchestrator"),
+        status: "in_progress",
+      }),
+    ).toBe(true);
   });
 
   it("accepts a handoff with optional reason and suggests_next", () => {

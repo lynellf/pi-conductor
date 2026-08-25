@@ -36,11 +36,11 @@ import { type Static, Type } from "typebox";
 // ─── Core FSM tools (§5.1) ────────────────────────────────────────────
 
 /** Reserved handoff status values for a recipient-facing work contract. */
-export const HANDOFF_STATUSES = ["ready", "blocked", "complete"] as const;
+export const HANDOFF_STATUSES = ["ready", "in_progress", "blocked", "complete"] as const;
 
 const handoffStatusSchema = Type.Union(
   HANDOFF_STATUSES.map((status) => Type.Literal(status)),
-  { description: "Handoff state: ready, blocked, or complete." },
+  { description: "Handoff state: ready, in_progress, blocked, or complete." },
 );
 
 /**
