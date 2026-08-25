@@ -153,7 +153,21 @@ describe("ProductionHost.spawnRole — Issue #48 R3 isolated RPC selection", () 
     await mkdir(configuredAgentDir, { recursive: true });
     await writeFile(
       join(configuredAgentDir, "settings.json"),
-      JSON.stringify({ defaultProvider: "openai", defaultModel: "gpt-5.5" }),
+      JSON.stringify({ defaultProvider: "test-provider", defaultModel: "test-model" }),
+      "utf8",
+    );
+    await writeFile(
+      join(configuredAgentDir, "models.json"),
+      JSON.stringify({
+        providers: {
+          "test-provider": {
+            baseUrl: "http://127.0.0.1:1/v1",
+            api: "openai-completions",
+            apiKey: "test-key",
+            models: [{ id: "test-model" }],
+          },
+        },
+      }),
       "utf8",
     );
     process.env.PI_CODING_AGENT_DIR = configuredAgentDir;
@@ -204,7 +218,9 @@ roles:
       expect(host.agentDir).toBe(join(workdir, ".pi-conductor", "agent"));
       expect(host.isolatedAgentDir).toBe(configuredAgentDir);
       expect(childAgentDir).toBe(configuredAgentDir);
-      expect(stateData).toMatchObject({ model: { provider: "openai", id: "gpt-5.5" } });
+      expect(stateData).toMatchObject({
+        model: { provider: "test-provider", id: "test-model" },
+      });
       expect(host.isolatedAgentDir).not.toBe(join(workdir, ".pi-conductor", "agent"));
     } finally {
       await session?.dispose();
