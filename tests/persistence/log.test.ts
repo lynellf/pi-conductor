@@ -13,7 +13,11 @@
 
 import { describe, expect, it } from "vitest";
 import type { Checkpoint, SessionLifecycleEvent } from "../../src/core/types.js";
-import { InMemoryRecordLog } from "../../src/persistence/log.js";
+import {
+  InMemoryRecordLog,
+  WorkspaceGuaranteeError,
+  workspaceProvisioned,
+} from "../../src/persistence/log.js";
 
 const TS = 1_700_000_000_000;
 
@@ -51,6 +55,68 @@ function ended(role: string, cost: number): SessionLifecycleEvent {
   };
 }
 
+interface SandboxBearingRecordCase {
+  readonly name: string;
+  readonly record: Record<string, unknown>;
+}
+
+function sandboxBearingRecords(runId: string): readonly SandboxBearingRecordCase[] {
+  return [
+    {
+      name: "run_seeded workspace",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        workspace: { guarantee: "sandbox" },
+        ts: TS,
+      },
+    },
+    {
+      name: "checkpoint_snapshot workspace",
+      record: {
+        type: "checkpoint_snapshot",
+        checkpoint: { ...ck("orchestrator"), run_id: runId, workspace: { guarantee: "sandbox" } },
+      },
+    },
+    {
+      name: "run_seeded nested array",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        artifact_metadata: [{ workspace: { guarantee: "sandbox" } }],
+        ts: TS,
+      },
+    },
+  ];
+}
+
+function serializationSandboxClaims(runId: string): readonly SandboxBearingRecordCase[] {
+  return [
+    {
+      name: "boxed guarantee",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        metadata: { guarantee: new String("sandbox") },
+        ts: TS,
+      },
+    },
+    {
+      name: "toJSON guarantee",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        metadata: { guarantee: { toJSON: () => "sandbox" } },
+        ts: TS,
+      },
+    },
+  ];
+}
+
 describe("InMemoryRecordLog", () => {
   it("starts empty for a fresh run", () => {
     const log = new InMemoryRecordLog();
@@ -67,8 +133,8 @@ describe("InMemoryRecordLog", () => {
     log.append(e2);
     const records = log.records("run-1");
     expect(records).toHaveLength(2);
-    expect(records[0]).toBe(e1);
-    expect(records[1]).toBe(e2);
+    expect(records[0]).toEqual(e1);
+    expect(records[1]).toEqual(e2);
   });
 
   it("records() returns a frozen view (caller cannot mutate the log)", () => {
@@ -153,6 +219,131 @@ describe("InMemoryRecordLog", () => {
     log.close();
     expect(log.records("run-1")).toEqual([]);
     expect(log.listRunIds()).toEqual([]);
+  });
+
+  it("rejects an untrusted sandbox guarantee before workspace record construction", () => {
+    const untrustedArgs = {
+      run_id: "run-untrusted",
+      role: "isolated",
+      visit_index: 1,
+      backend: "worktree",
+      guarantee: "sandbox",
+      workspace_path: "/tmp/isolated",
+      snapshot_commit: "0".repeat(40),
+    };
+
+    expect(() => workspaceProvisioned(untrustedArgs as never)).toThrow(WorkspaceGuaranteeError);
+  });
+
+  it("rejects an untrusted sandbox workspace record before appending it", () => {
+    const log = new InMemoryRecordLog();
+    const untrustedRecord = {
+      type: "workspace_provisioned",
+      run_id: "run-untrusted",
+      role: "isolated",
+      visit_index: 1,
+      backend: "worktree",
+      guarantee: "sandbox",
+      workspace_path: "/tmp/isolated",
+      snapshot_commit: "0".repeat(40),
+      ts: TS,
+    };
+
+    expect(() => log.append(untrustedRecord as never)).toThrow(WorkspaceGuaranteeError);
+    expect(log.records("run-untrusted")).toEqual([]);
+  });
+
+  it.each([
+    "session_started",
+    "session_ended",
+    "session_failed",
+  ] as const)("rejects an untrusted sandbox workspace on %s before retaining it", (type) => {
+    const log = new InMemoryRecordLog();
+    const untrustedRecord = {
+      type,
+      run_id: "run-untrusted",
+      role: "isolated",
+      visit_index: 1,
+      state: "isolated",
+      model: "anthropic:claude-sonnet-4-5",
+      session_file: "/tmp/isolated.jsonl",
+      parent_session: null,
+      workspace: {
+        backend: "worktree",
+        guarantee: "sandbox",
+        path_or_image: "/tmp/isolated",
+      },
+      ts: TS,
+    };
+
+    expect(() => log.append(untrustedRecord as never)).toThrow(WorkspaceGuaranteeError);
+    expect(log.records("run-untrusted")).toEqual([]);
+  });
+
+  it.each([
+    "none",
+    "confined",
+  ] as const)("retains a lifecycle workspace with the available %s guarantee", (guarantee) => {
+    const log = new InMemoryRecordLog();
+    const record: SessionLifecycleEvent = {
+      type: "session_started",
+      run_id: "run-1",
+      role: "isolated",
+      visit_index: 1,
+      state: "isolated",
+      model: "anthropic:claude-sonnet-4-5",
+      session_file: "/tmp/isolated.jsonl",
+      parent_session: null,
+      workspace: {
+        backend: "worktree",
+        guarantee,
+        path_or_image: "/tmp/isolated",
+      },
+      ts: TS,
+    };
+
+    log.append(record);
+
+    expect(log.records("run-1")).toEqual([record]);
+  });
+
+  for (const { name, record } of sandboxBearingRecords("run-untrusted")) {
+    it(`rejects an untrusted ${name} sandbox claim before retaining it`, () => {
+      const log = new InMemoryRecordLog();
+
+      expect(() => log.append(record as never)).toThrow(WorkspaceGuaranteeError);
+      expect(log.records("run-untrusted")).toEqual([]);
+    });
+  }
+
+  for (const { name, record } of serializationSandboxClaims("run-untrusted")) {
+    it(`rejects an untrusted ${name} sandbox claim before retaining its JSON snapshot`, () => {
+      const log = new InMemoryRecordLog();
+
+      expect(() => log.append(record as never)).toThrow(WorkspaceGuaranteeError);
+      expect(log.records("run-untrusted")).toEqual([]);
+    });
+  }
+
+  it("does not retain a sandbox claim introduced by post-append mutation", () => {
+    const log = new InMemoryRecordLog();
+    const record = {
+      type: "run_seeded" as const,
+      run_id: "run-1",
+      goal: "original goal",
+      metadata: { guarantee: "confined" },
+      ts: TS,
+    };
+
+    log.append(record);
+    record.metadata.guarantee = "sandbox";
+
+    expect(log.records("run-1")).toEqual([
+      {
+        ...record,
+        metadata: { guarantee: "confined" },
+      },
+    ]);
   });
 
   // ─── latestRunSeed ────────────────────────────────────────────

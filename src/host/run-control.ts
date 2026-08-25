@@ -138,7 +138,7 @@ export class RunControl {
   releaseActiveSession(session?: RoleSession): void {
     const active = this.active;
     if (active === null || (session !== undefined && active.session !== session)) return;
-    this.reclaimUnconsumedSteering(active);
+    this.reclaimUnconsumedSteering(active, !active.addressable);
     active.unsubscribeEvents();
     active.unsubscribeSealed();
     this.active = null;
@@ -189,25 +189,44 @@ export class RunControl {
   private handleSeal(active: ActiveSession): void {
     if (this.active !== active && this.active !== null) return;
     active.addressable = false;
-    this.reclaimUnconsumedSteering(active);
+    this.reclaimUnconsumedSteering(active, false);
   }
 
-  private reclaimUnconsumedSteering(active: ActiveSession): void {
+  /** Reclaim observed native steering, retaining unresolved dispatches until the terminal boundary. */
+  private reclaimUnconsumedSteering(active: ActiveSession, terminal: boolean): void {
     if (active.dispatched.size === 0) return;
     const remaining = active.session.clearQueue?.().steering ?? [];
     const counts = new Map<string, number>();
     for (const value of remaining) counts.set(value, (counts.get(value) ?? 0) + 1);
 
-    for (const dispatched of active.dispatched.values()) {
+    for (const [id, dispatched] of active.dispatched) {
       const count = counts.get(dispatched.sdkText) ?? 0;
       if (count === 0) continue;
       this.pending.push(dispatched.guidance);
+      active.dispatched.delete(id);
       counts.set(dispatched.sdkText, count - 1);
     }
-    active.dispatched.clear();
+    if (!terminal) return;
+    for (const [id, dispatched] of active.dispatched) {
+      this.pending.push(dispatched.guidance);
+      active.dispatched.delete(id);
+    }
   }
 
   private captureResponse(session: RoleSession, event: AgentSessionEvent): void {
+    const active = this.active;
+    if (active?.session === session) {
+      if (event.type === "queue_update" && !active.addressable) {
+        this.reclaimUnconsumedSteering(active, false);
+      }
+      if (
+        event.type === "tool_execution_end" &&
+        !active.addressable &&
+        (event.toolName === "handoff" || event.toolName === "end")
+      ) {
+        this.reclaimUnconsumedSteering(active, true);
+      }
+    }
     if (event.type !== "message_end") return;
     const message = event.message as AssistantMessage;
     if (message.role !== "assistant" || message.stopReason === "error") return;

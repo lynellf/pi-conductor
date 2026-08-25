@@ -38,7 +38,7 @@
  */
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
 import type { FileMutationRecord, HunkLine, TouchedFile } from "../persistence/file-mutation.js";
 import type { SessionState } from "./cost.js";
@@ -80,8 +80,14 @@ const MAX_FAILURE_DETAIL_LENGTH = 4096;
  * calls with structured file metadata append a durable record through the
  * host-owned callback (issue #22).
  */
+/** Narrow event and abort surface shared by SDK and isolated RPC role sessions. */
+export interface SessionEventSource {
+  subscribe(listener: (event: AgentSessionEvent) => void): () => void;
+  abort(): Promise<void>;
+}
+
 export function attachSessionEventHandler(args: {
-  session: AgentSession;
+  session: SessionEventSource;
   state: SessionState;
   role: Role;
   onDisplay?: DisplaySink;
@@ -183,7 +189,7 @@ export function createCaptureRejector(): CaptureRejector {
  * for `edit` (synchronous) and `write` (synchronous via pre-read).
  */
 function onSessionEvent(
-  session: AgentSession,
+  session: SessionEventSource,
   state: SessionState,
   role: Role,
   onDisplay: DisplaySink | undefined,

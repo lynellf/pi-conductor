@@ -4,16 +4,18 @@
 
 ### Enhancements
 
-- **Per-role isolated workspaces and artifact handoffs** (Issue #48). Any
-  role can opt into a `workspace` block (`worktree`, `copy`, or `container`
-  backend) with declared mounts and artifact policies. Conductor pins a
-  snapshot at run start, provisions isolated workspaces per role visit,
-  confines file tools to the role's projection, collects declared artifacts
-  (plus auto-patches for writable worktrees), and routes them into the
-  next role's workspace as explicit handoff deliverables. A computed
-  **guarantee** (`none`, `confined`, `sandbox`) replaces self-declared
-  isolation claims, and writable host bind mounts are downgraded to
-  `confined` with a manifest warning.
+- **Per-role isolated workspaces and artifact handoffs** (Issue #48).
+  `shared`, `worktree`, and `copy` modes are available. Isolated-role file
+  tools are rooted in the provisioned role workspace and have the `confined`
+  guarantee; shared roles have `none`. `container` is unavailable and is
+  rejected with a typed `WorkspaceError` before host construction or run
+  persistence. On accepted isolated-role handoffs, the host collects declared
+  workspace-relative artifacts, persists collection or rejection records,
+  materializes collected artifacts for isolated receivers, and provides shared
+  receivers host-store paths in a host-generated seed inventory. Worktree
+  auto-patches are retained when `artifacts.auto_patch` is enabled (the
+  worktree default) but never routed. Conductor never automatically applies an
+  artifact or patch to the integration checkout.
 
 ## [0.15.0] - 2026-08-21
 

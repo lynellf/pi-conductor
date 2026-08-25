@@ -39,11 +39,24 @@
  * `mkdirSync({ recursive: true })`).
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+} from "node:fs";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 
 import type { Checkpoint } from "../core/types.js";
 import { normalizeCheckpoint, type PersistedRecord, type RecordLog } from "../persistence/log.js";
+import {
+  assertPersistedRecordGuarantees,
+  materializePersistedRecord,
+} from "../persistence/record-materialization.js";
 
 export interface FileRecordLogOptions {
   /** Directory holding the run_id-keyed JSONL files. Created on construction. */
@@ -72,18 +85,86 @@ export class RecordLogError extends Error {
   }
 }
 
+/** Typed rejection for a second live execution of the same persisted run. */
+export class RunInProgressError extends Error {
+  readonly code = "run-in-progress";
+  readonly runId: string;
+
+  constructor(runId: string, options?: { cause?: unknown }) {
+    super(`run '${runId}' already has an active execution lease`, options);
+    this.name = "RunInProgressError";
+    this.runId = runId;
+  }
+}
+
+/** Typed failure when no crash-recoverable run lease can be bound. */
+export class RunLeaseUnavailableError extends Error {
+  readonly code = "run-lease-unavailable";
+  readonly runId: string;
+
+  constructor(runId: string, options?: { cause?: unknown }) {
+    super(`run '${runId}' execution lease could not bind a loopback TCP candidate`, options);
+    this.name = "RunLeaseUnavailableError";
+    this.runId = runId;
+  }
+}
+
+/** Exclusive live-execution lease for a single run. */
+export interface RunExecutionLease {
+  /** Release the lease once the bound orchestration loop terminates. */
+  release(): Promise<void>;
+}
+
 export class FileRecordLog implements RecordLog {
   private readonly baseDir: string;
 
   constructor(opts: FileRecordLogOptions) {
-    this.baseDir = opts.baseDir;
-    mkdirSync(this.baseDir, { recursive: true });
+    mkdirSync(opts.baseDir, { recursive: true });
+    // Canonicalize equivalent relative/symlinked paths before deriving the
+    // deterministic loopback candidate sequence below.
+    this.baseDir = realpathSync(opts.baseDir);
   }
 
   append(record: PersistedRecord): void {
-    const runId = runIdOf(record);
-    const line = `${JSON.stringify(record)}\n`;
-    appendFileSync(this.filePath(runId), line, "utf8");
+    const materialized = materializePersistedRecord(record);
+    const runId = runIdOf(materialized.record);
+    appendFileSync(this.filePath(runId), `${materialized.json}\n`, "utf8");
+  }
+
+  /**
+   * Atomically claim this run's live execution before reading or appending its log.
+   *
+   * A deterministic bounded sequence of loopback TCP candidates lets every
+   * supported Node platform use kernel-owned ports that disappear with an
+   * exited (including SIGKILLed) process. This coordinates only this host and
+   * loopback network namespace; it is not a distributed lock.
+   */
+  async acquireRunLease(runId: string): Promise<RunExecutionLease> {
+    const digest = this.leaseDigest(runId);
+    const identity = `${LEASE_IDENTITY_PREFIX}${digest.toString("hex")}`;
+    let lastCause: unknown;
+
+    for (const port of leaseCandidates(digest)) {
+      const clients = new Set<Socket>();
+      const server = createLeaseServer(identity, clients);
+      try {
+        await listen(server, port);
+        return createLease(server, clients);
+      } catch (cause) {
+        lastCause = cause;
+        if (!hasErrorCode(cause, "EADDRINUSE")) {
+          throw new RunLeaseUnavailableError(runId, { cause });
+        }
+        if (await candidateHasIdentity(port, identity)) {
+          throw new RunInProgressError(runId, { cause });
+        }
+      }
+    }
+
+    throw new RunLeaseUnavailableError(
+      runId,
+      lastCause === undefined ? undefined : { cause: lastCause },
+    );
   }
 
   latestCheckpoint(runId: string): Checkpoint | null {
@@ -172,6 +253,131 @@ export class FileRecordLog implements RecordLog {
   private filePath(runId: string): string {
     return join(this.baseDir, `${runId}.jsonl`);
   }
+
+  private leaseDigest(runId: string): Buffer {
+    return createHash("sha256").update(this.baseDir).update("\0").update(runId).digest();
+  }
+}
+
+const LEASE_HOST = "127.0.0.1";
+const LEASE_PORT_START = 49_152;
+const LEASE_PORT_COUNT = 8_192;
+const LEASE_CANDIDATE_LIMIT = 64;
+const LEASE_PROBE_TIMEOUT_MS = 100;
+const LEASE_IDENTITY_PREFIX = "pi-conductor-run-lease-v1:";
+
+function leaseCandidates(digest: Buffer): readonly number[] {
+  const offset = digest.readUInt32BE(0) % LEASE_PORT_COUNT;
+  // An odd stride visits each member of this power-of-two port range once
+  // before repeating, while keeping the bounded sequence deterministic.
+  const stride = (digest.readUInt32BE(4) % LEASE_PORT_COUNT) | 1;
+  return Array.from(
+    { length: LEASE_CANDIDATE_LIMIT },
+    (_, index) => LEASE_PORT_START + ((offset + index * stride) % LEASE_PORT_COUNT),
+  );
+}
+
+function createLeaseServer(identity: string, clients: Set<Socket>): Server {
+  return createServer((client) => {
+    clients.add(client);
+    client.once("close", () => clients.delete(client));
+    // A probe only needs the deterministic identity. Ending immediately
+    // prevents a well-behaved client from retaining the server connection;
+    // release() force-destroys tracked sockets for a client that does not close.
+    client.end(`${identity}\n`);
+  });
+}
+
+function createLease(server: Server, clients: Set<Socket>): RunExecutionLease {
+  let released = false;
+  let releaseAttempt: Promise<void> | null = null;
+
+  return {
+    release: () => {
+      if (released) return Promise.resolve();
+      if (releaseAttempt !== null) return releaseAttempt;
+      releaseAttempt = closeLease(server, clients).then(
+        () => {
+          released = true;
+        },
+        (cause: unknown) => {
+          releaseAttempt = null;
+          throw cause;
+        },
+      );
+      return releaseAttempt;
+    },
+  };
+}
+
+function closeLease(server: Server, clients: ReadonlySet<Socket>): Promise<void> {
+  for (const client of clients) client.destroy();
+  return close(server);
+}
+
+function candidateHasIdentity(port: number, identity: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const client = createConnection({ host: LEASE_HOST, port });
+    let response = "";
+    let settled = false;
+    const timeout = setTimeout(() => finish(false), LEASE_PROBE_TIMEOUT_MS);
+    const finish = (matches: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      client.destroy();
+      resolve(matches);
+    };
+    client.on("data", (chunk: Buffer) => {
+      response += chunk.toString("utf8");
+      if (response.length > identity.length + 1) {
+        finish(false);
+        return;
+      }
+      const newline = response.indexOf("\n");
+      if (newline !== -1) finish(response.slice(0, newline) === identity);
+    });
+    client.once("end", () => finish(response === identity));
+    client.once("error", () => finish(false));
+    client.once("timeout", () => finish(false));
+  });
+}
+
+function hasErrorCode(cause: unknown, code: string): boolean {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as { readonly code?: unknown }).code === code
+  );
+}
+
+function listen(server: Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (cause: Error) => {
+      server.off("listening", onListening);
+      reject(cause);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen({ host: LEASE_HOST, port });
+  });
+}
+
+function close(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((cause) => {
+      if (cause === undefined) {
+        resolve();
+        return;
+      }
+      reject(cause);
+    });
+  });
 }
 
 /** Extract the run_id from a record. CheckpointSnapshot carries it on the wrapped Checkpoint. */
@@ -203,6 +409,11 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "subagent_completed",
   "subagent_failed",
   "file_mutation",
+  "snapshot_pinned",
+  "workspace_provisioned",
+  "artifact_collected",
+  "artifact_rejected",
+  "artifact_delivery",
 ]);
 
 /** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */
@@ -228,5 +439,7 @@ function parsePersistedRecord(value: unknown, runId: string, line: number): Pers
       },
     );
   }
-  return value as PersistedRecord;
+  const record = value as PersistedRecord;
+  assertPersistedRecordGuarantees(record);
+  return record;
 }

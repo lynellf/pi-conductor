@@ -6,10 +6,9 @@
  * `customTools` with path-confined variants (reject absolute/`..` paths;
  * `realpath` containment check on the nearest existing ancestor).
  *
- * The key difference from the child factory:
- *   - Children are confined to a *single* worktree.
- *   - Roles are confined to a *multi-root projection* (workspace root +
- *     additional mounts), as specified in the manifest's `workspace.mounts`.
+ * The key difference from the child factory is that a role has one default
+ * root (its workspace). Declared additional roots are exposed only through
+ * the explicit virtual `mounts/<index>/...` namespace.
  *
  * See `tests/host/confine-tools.test.ts` for the full test suite.
  */
@@ -55,17 +54,16 @@ export interface ConfinedToolsResult {
 /**
  * Build a set of path-confined file tools for a role session.
  *
- * Takes the role's declared tools, the role's projection (workspace root
- * + mounts), and returns a set of confined `ToolDefinition` entries that
- * enforce path containment against all projection roots.
+ * Takes the role's declared tools and projection, and returns confined
+ * `ToolDefinition` entries. Workspace-relative paths retain the SDK's
+ * normal behavior. A declared mount is addressable only as
+ * `mounts/<declared-mount-index>/...`; a validated virtual path is translated
+ * to that mount's physical root just before calling the SDK definition.
  *
- * The confinement checks:
- *   1. Reject absolute paths (starting with `/` or `X:\`).
- *   2. Reject paths containing `..` segments.
- *   3. Resolve the path within the nearest existing ancestor (via `realpath`)
- *      and check containment in the projection.
- *   4. If the resolved path escapes all projection roots, the tool returns
- *      an error result without writing to the capture buffer.
+ * The confinement checks reject absolute, home-relative, and traversal paths,
+ * resolve the nearest existing ancestor via `realpath`, and check containment
+ * against the selected root. `edit` and `write` reject read-only mounts before
+ * calling the SDK tool.
  *
  * Only the tools declared by the role in the manifest are exposed —
  * other file tools (edit/write) are simply not included.
@@ -94,13 +92,7 @@ export function buildConfinedTools(
     return { tools: [], activeNames: [], isReadOnly: true };
   }
 
-  // Build projection roots array for containment checks.
-  const roots: string[] = [projection.workspaceRoot];
-  for (const mount of projection.mounts) {
-    roots.push(mount.path);
-  }
-
-  const wsRoot = roots[0] ?? projection.workspaceRoot;
+  const workspaceRoot = projection.workspaceRoot;
   const confinedToolDefs: ToolDefinition[] = [];
   const activeNames: string[] = [];
 
@@ -108,37 +100,61 @@ export function buildConfinedTools(
     switch (toolName) {
       case "read":
         confinedToolDefs.push(
-          confinePathTool(createReadToolDefinition(wsRoot), roots) as ToolDefinition,
+          confinePathTool(
+            createReadToolDefinition(workspaceRoot),
+            projection,
+            false,
+          ) as ToolDefinition,
         );
         activeNames.push("read");
         break;
       case "grep":
         confinedToolDefs.push(
-          confinePathTool(createGrepToolDefinition(wsRoot), roots) as ToolDefinition,
+          confinePathTool(
+            createGrepToolDefinition(workspaceRoot),
+            projection,
+            false,
+          ) as ToolDefinition,
         );
         activeNames.push("grep");
         break;
       case "find":
         confinedToolDefs.push(
-          confinePathTool(createFindToolDefinition(wsRoot), roots) as ToolDefinition,
+          confinePathTool(
+            createFindToolDefinition(workspaceRoot),
+            projection,
+            false,
+          ) as ToolDefinition,
         );
         activeNames.push("find");
         break;
       case "ls":
         confinedToolDefs.push(
-          confinePathTool(createLsToolDefinition(wsRoot), roots) as ToolDefinition,
+          confinePathTool(
+            createLsToolDefinition(workspaceRoot),
+            projection,
+            false,
+          ) as ToolDefinition,
         );
         activeNames.push("ls");
         break;
       case "edit":
         confinedToolDefs.push(
-          confinePathTool(createEditToolDefinition(wsRoot), roots) as ToolDefinition,
+          confinePathTool(
+            createEditToolDefinition(workspaceRoot),
+            projection,
+            true,
+          ) as ToolDefinition,
         );
         activeNames.push("edit");
         break;
       case "write":
         confinedToolDefs.push(
-          confinePathTool(createWriteToolDefinition(wsRoot), roots) as ToolDefinition,
+          confinePathTool(
+            createWriteToolDefinition(workspaceRoot),
+            projection,
+            true,
+          ) as ToolDefinition,
         );
         activeNames.push("write");
         break;
@@ -155,48 +171,80 @@ export function buildConfinedTools(
 // ─── Confinement enforcement (generalized from run-tool.ts) ──────────────
 
 function isAbsolutePath(value: string): boolean {
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+  return value.startsWith("/") || value.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(value);
 }
 
 function hasTraversal(value: string): boolean {
   return value.split(/[\\/]/).includes("..");
 }
 
-async function validatePathInProjection(
-  path: unknown,
-  roots: readonly string[],
-): Promise<string | null> {
+type RoutedPath =
+  | { readonly kind: "error"; readonly message: string }
+  | {
+      readonly kind: "routed";
+      readonly sdkPath: string;
+      readonly writable: boolean;
+      readonly virtualMount: boolean;
+    };
+
+async function routePathInProjection(path: unknown, projection: Projection): Promise<RoutedPath> {
   if (path !== undefined && typeof path !== "string") {
-    return "path must be a string inside the projection";
+    return { kind: "error", message: "path must be a string inside the projection" };
   }
   const requested = path ?? ".";
   if (isAbsolutePath(requested) || requested.startsWith("~") || hasTraversal(requested)) {
-    return "path must be relative and inside the projection";
+    return { kind: "error", message: "path must be relative and inside the projection" };
   }
 
-  // Resolve the workspace root (first root) as the base for candidate path.
-  const workspaceRootReal = await realpath(roots[0] ?? roots.at(-1) ?? "");
-  const candidate = resolve(workspaceRootReal, requested);
-
-  // Check if candidate is within the workspace root (primary root).
-  if (isWithinRoot(candidate, workspaceRootReal)) {
-    // Now verify the nearest existing ancestor via realpath.
-    return validateNearestExistingAncestor(candidate, workspaceRootReal);
-  }
-
-  // Check against mount roots (skip the workspace root, already checked).
-  for (const mountRoot of roots.slice(1)) {
-    try {
-      const mountRootReal = await realpath(mountRoot);
-      if (isWithinRoot(candidate, mountRootReal)) {
-        return validateNearestExistingAncestor(candidate, mountRootReal);
-      }
-    } catch {
-      // Mount root doesn't exist yet — skip it; containment will fail later.
+  const mountIndex = virtualMountIndex(requested);
+  if (mountIndex === null) {
+    const workspaceRootReal = await realpath(projection.workspaceRoot);
+    const candidate = resolve(workspaceRootReal, requested);
+    if (!isWithinRoot(candidate, workspaceRootReal)) {
+      return { kind: "error", message: "path resolves outside the workspace" };
     }
+    const failure = await validateNearestExistingAncestor(candidate, workspaceRootReal);
+    return failure === null
+      ? { kind: "routed", sdkPath: requested, writable: true, virtualMount: false }
+      : { kind: "error", message: failure };
   }
 
-  return "path resolves outside the projection roots";
+  const mount = projection.mounts[mountIndex];
+  if (mount === undefined) {
+    return { kind: "error", message: "declared mount index is not available" };
+  }
+
+  let mountRootReal: string;
+  try {
+    mountRootReal = await realpath(mount.path);
+  } catch (cause) {
+    if (isNotFound(cause)) {
+      return { kind: "error", message: "declared mount is unavailable" };
+    }
+    throw cause;
+  }
+  const relativeMountPath = requested.split(/[\\/]/).slice(2);
+  const candidate = resolve(mountRootReal, ...relativeMountPath);
+  if (!isWithinRoot(candidate, mountRootReal)) {
+    return { kind: "error", message: "path resolves outside the declared mount" };
+  }
+  const failure = await validateNearestExistingAncestor(candidate, mountRootReal);
+  return failure === null
+    ? { kind: "routed", sdkPath: candidate, writable: mount.writable, virtualMount: true }
+    : { kind: "error", message: failure };
+}
+
+function virtualMountIndex(requested: string): number | null {
+  const segments = requested.split(/[\\/]/);
+  if (
+    segments[0] !== "mounts" ||
+    segments[1] === undefined ||
+    !/^(0|[1-9]\d*)$/.test(segments[1])
+  ) {
+    return null;
+  }
+  const index = Number(segments[1]);
+  return Number.isSafeInteger(index) ? index : null;
 }
 
 async function validateNearestExistingAncestor(
@@ -226,15 +274,26 @@ function isNotFound(cause: unknown): boolean {
 
 function confinePathTool<TParams extends TSchema, TDetails, TState>(
   tool: ToolDefinition<TParams, TDetails, TState>,
-  projection: readonly string[],
+  projection: Projection,
+  writes: boolean,
 ): ToolDefinition<TParams, TDetails, TState> {
   return {
     ...tool,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const pathArg = (params as Static<TParams> & { path?: string }).path;
-      const failure = await validatePathInProjection(pathArg, projection);
-      if (failure !== null) return fileToolError<TDetails>(failure);
-      return tool.execute(toolCallId, params, signal, onUpdate, ctx);
+      const pathArg = (params as Static<TParams> & { path?: unknown }).path;
+      const routed = await routePathInProjection(pathArg, projection);
+      if (routed.kind === "error") return fileToolError<TDetails>(routed.message);
+      if (writes && !routed.writable) {
+        return fileToolError<TDetails>("path is inside a read-only mount");
+      }
+      if (!routed.virtualMount) {
+        return tool.execute(toolCallId, params, signal, onUpdate, ctx);
+      }
+      const routedParams = {
+        ...(params as Static<TParams> & object),
+        path: routed.sdkPath,
+      } as unknown as Static<TParams>;
+      return tool.execute(toolCallId, routedParams, signal, onUpdate, ctx);
     },
   };
 }

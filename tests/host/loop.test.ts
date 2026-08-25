@@ -756,6 +756,31 @@ describe("runLoop — contract breach (§11.3)", () => {
   });
 });
 
+// ─── Prompt errors remain host-visible ─────────────────────────────────
+
+describe("runLoop — shared-session prompt errors", () => {
+  it("rethrows a shared-session prompt error without recording a lifecycle terminal", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const sharedSession = new FakeSession("orchestrator", "shared-sess-1", []);
+    const promptFailure = new Error("shared prompt failed");
+    const createSharedRoleSession = sharedSession.toRoleSession.bind(sharedSession);
+    sharedSession.toRoleSession = () => ({
+      ...createSharedRoleSession(),
+      prompt: async () => {
+        throw promptFailure;
+      },
+    });
+    host.enqueue(sharedSession);
+
+    await expect(makeRun(initialCheckpoint, host)).rejects.toBe(promptFailure);
+    expect(
+      log.records(initialCheckpoint.run_id).some((record) => record.type === "session_failed"),
+    ).toBe(false);
+  });
+});
+
 // ─── Reducer rejection: retry in-session, surface legal_targets ────────
 
 describe("runLoop — reducer rejection (§11.3 retry path)", () => {

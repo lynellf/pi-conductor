@@ -1,258 +1,355 @@
 /**
- * Artifact routing — spec §7.3.
+ * Accepted-handoff artifact routing — Issue #48 R4.a.
  *
- * On an accepted handoff transition, the host materializes the emitting
- * role's accepted artifacts into the **receiving role's** workspace under
- * `artifacts/<emitting-role>-v<visitIndex>/` (read-only for read-only
- * roles, writable otherwise).
- *
- * `formatArtifactsSeedSection` builds the host-generated artifacts
- * section that runs alongside the `context_ref` block in the seed:
- * the stored artifact names + descriptions, and for each rejected/failed
- * collection, an explicit "not available" note.
- *
- * For **shared-mode receivers** (no projection), the host provides
- * absolute run-state paths in the seed instead of materializing files
- * (they can read the host filesystem; materializing into the integration
- * workspace would be a host write the feature never makes).
- *
- * @module host/artifacts/route
- * @see spec §7.3 (routing and materialization)
+ * The host alone copies already-collected declared artifacts. An isolated
+ * receiver gets workspace-relative copies beneath `artifacts/<role>-v<visit>/`;
+ * a shared receiver gets the absolute host-store paths in its seed. Auto-patches
+ * are deliberately excluded from both paths.
  */
 
-import { copyFile, mkdir, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { constants } from "node:fs";
+import { copyFile, lstat, mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import type { ArtifactCollectedRecord, ArtifactRejectedRecord } from "../../persistence/log.js";
 
-// ─── Materialization ────────────────────────────────────────────────────
-
-/**
- * Materialize collected artifacts into the receiving role's workspace.
- *
- * For isolated roles: copies artifact files into
- * `<receiverWorkspace>/artifacts/<emittingRole>-v<visitIndex>/`.
- * For shared-mode receivers: returns absolute run-state paths instead
- * (they have filesystem access to the integration workspace).
- *
- * @param options - materialization parameters.
- * @param options.artifactsDir - the base artifacts directory
- *   (`<runStateDir>/artifacts/<runId>/`).
- * @param options.emittingRole - the role that emitted the handoff.
- * @param options.emittingVisitIndex - the emitting role's visit index.
- * @param options.receiverWorkspace - the receiving role's workspace root
- *   (for isolated roles) or the integration workspace (for shared).
- * @param options.isReceiverIsolated - whether the receiver has a projection.
- * @param options.collected - the collected artifact records.
- * @returns the materialized artifact descriptors (paths the receiver sees).
- */
-export async function materializeArtifacts(options: {
-  artifactsDir: string;
-  emittingRole: string;
-  emittingVisitIndex: number;
-  receiverWorkspace: string;
-  isReceiverIsolated: boolean;
-  collected: ArtifactCollectedRecord[];
-}): Promise<Array<{ name: string; description?: string; localPath: string }>> {
-  const {
-    artifactsDir,
-    emittingRole,
-    emittingVisitIndex,
-    receiverWorkspace,
-    isReceiverIsolated,
-    collected,
-  } = options;
-
-  if (collected.length === 0) {
-    return [];
-  }
-
-  const sourceDir = join(artifactsDir, `${emittingRole}-v${emittingVisitIndex}`);
-
-  // List stored files in the source directory.
-  let storedFiles: string[];
-  try {
-    storedFiles = (await readdir(sourceDir)).filter((f) => !f.endsWith(".tmp-*"));
-  } catch {
-    // Source directory doesn't exist — skip.
-    return [];
-  }
-
-  const materialized: Array<{ name: string; description?: string; localPath: string }> = [];
-
-  for (const file of storedFiles) {
-    const sourcePath = join(sourceDir, file);
-
-    if (isReceiverIsolated) {
-      // For isolated roles: copy into the receiver's workspace.
-      const receiverArtifactDir = join(
-        receiverWorkspace,
-        "artifacts",
-        `${emittingRole}-v${emittingVisitIndex}`,
-      );
-      await mkdir(dirname(receiverArtifactDir), { recursive: true });
-      await copyFile(sourcePath, join(receiverArtifactDir, file));
-
-      const collectedRecord = collected.find((r) => r.stored_path === sourcePath);
-      const entry: { name: string; localPath: string } = {
-        name: file,
-        localPath: join(receiverArtifactDir, file),
-      };
-      if (collectedRecord?.description) {
-        (entry as { description?: string }).description = collectedRecord.description;
-      }
-      materialized.push(entry);
-    } else {
-      // Shared-mode receiver: provide absolute run-state path.
-      const collectedRec = collected.find((r) => r.stored_path === sourcePath);
-      const entry2: { name: string; localPath: string } = {
-        name: file,
-        localPath: sourcePath,
-      };
-      if (collectedRec?.description) {
-        (entry2 as { description?: string }).description = collectedRec.description;
-      }
-      materialized.push(entry2);
-    }
-  }
-
-  return materialized;
+/** A host-routed artifact with its receiver-visible seed path. */
+export interface RoutedArtifact {
+  readonly name: string;
+  readonly description?: string;
+  /** Absolute local path: receiver workspace for isolated roles, store for shared roles. */
+  readonly localPath: string;
+  /** Path that the receiver can pass to its tools. */
+  readonly seedPath: string;
 }
 
-// ─── Seed section ───────────────────────────────────────────────────────
+type ArtifactRoutingErrorCode =
+  | "stored_artifact_missing"
+  | "stored_artifact_escape"
+  | "receiver_workspace_escape"
+  | "destination_conflict"
+  | "copy_failed";
+
+/** Typed failure when a collected artifact cannot be safely routed. */
+export class ArtifactRoutingError extends Error {
+  readonly code: ArtifactRoutingErrorCode;
+
+  constructor(code: ArtifactRoutingErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ArtifactRoutingError";
+    this.code = code;
+  }
+}
 
 /**
- * Build the host-generated artifacts section for the seed.
+ * Materialize host-collected declared artifacts for one accepted handoff.
  *
- * Parallel to the `context_ref` block: lists the stored artifact names
- * + descriptions, and for each rejected/failed collection, an explicit
- * "not available" note so the recipient (and the orchestrator) can see
- * the gap and route accordingly.
- *
- * @param options - seed section parameters.
- * @param options.artifactsDir - the base artifacts directory.
- * @param options.emittingRole - the role that emitted the handoff.
- * @param options.emittingVisitIndex - the emitting role's visit index.
- * @param options.collected - collected artifact records.
- * @param options.rejected - rejected artifact records.
- * @param options.isReceiverIsolated - whether the receiver has a projection.
- * @param options.receiverWorkspace - the receiving role's workspace root.
- * @returns the artifacts section string for the seed, or null if empty.
- *
- * @see spec §7.3 (routing and materialization)
+ * The supplied records, rather than a directory scan, are the authority. This
+ * preserves nested paths and prevents an auto-patch or unrelated store file
+ * from becoming receiver input.
  */
+export async function materializeArtifacts(options: {
+  readonly artifactsDir: string;
+  readonly emittingRole: string;
+  readonly emittingVisitIndex: number;
+  readonly receiverWorkspace: string;
+  readonly isReceiverIsolated: boolean;
+  readonly collected: readonly ArtifactCollectedRecord[];
+}): Promise<readonly RoutedArtifact[]> {
+  const declared = options.collected.filter((record) => record.kind === "declared");
+  if (declared.length === 0) return [];
+
+  const sourceDirectory = resolve(
+    options.artifactsDir,
+    `${options.emittingRole}-v${options.emittingVisitIndex}`,
+  );
+  const sourceDirectoryReal = await resolveDirectory(sourceDirectory, "stored artifact directory");
+  const receiverRoot = options.isReceiverIsolated
+    ? await resolveDirectory(options.receiverWorkspace, "receiver workspace")
+    : null;
+  const routed: RoutedArtifact[] = [];
+  const receiverPaths: string[] = [];
+
+  try {
+    for (const record of declared) {
+      const sourcePath = await resolveStoredArtifact(record.stored_path, sourceDirectoryReal);
+      if (receiverRoot === null) {
+        routed.push({
+          name: record.source_path,
+          ...(record.description !== undefined && { description: record.description }),
+          localPath: sourcePath,
+          seedPath: sourcePath,
+        });
+        continue;
+      }
+
+      const storedRelativePath = relative(sourceDirectoryReal, sourcePath);
+      const receiverPath = resolve(
+        receiverRoot,
+        "artifacts",
+        `${options.emittingRole}-v${options.emittingVisitIndex}`,
+        storedRelativePath,
+      );
+      await ensureReceiverDirectory(dirname(receiverPath), receiverRoot);
+      const created = await copyStoredArtifact(sourcePath, receiverPath, receiverRoot);
+      if (created) receiverPaths.push(receiverPath);
+      const seedPath = relative(receiverRoot, receiverPath);
+      if (!isStrictlyWithin(receiverPath, receiverRoot) || isOutsideRelativePath(seedPath)) {
+        throw new ArtifactRoutingError(
+          "receiver_workspace_escape",
+          `artifact destination escapes receiver workspace: ${receiverPath}`,
+        );
+      }
+      routed.push({
+        name: record.source_path,
+        ...(record.description !== undefined && { description: record.description }),
+        localPath: receiverPath,
+        seedPath,
+      });
+    }
+  } catch (error) {
+    try {
+      await Promise.all(receiverPaths.map(async (path) => rm(path, { force: true })));
+    } catch (cleanupError) {
+      throw new ArtifactRoutingError(
+        "copy_failed",
+        "could not remove a partially materialized artifact",
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+
+  return Object.freeze(routed);
+}
+
+/** Build the host-generated artifact section appended to the receiver seed. */
 export function formatArtifactsSeedSection(options: {
-  artifactsDir: string;
-  emittingRole: string;
-  emittingVisitIndex: number;
-  collected: ArtifactCollectedRecord[];
-  rejected: ArtifactRejectedRecord[];
-  isReceiverIsolated: boolean;
-  receiverWorkspace: string;
+  readonly emittingRole: string;
+  readonly emittingVisitIndex: number;
+  readonly routed: readonly RoutedArtifact[];
+  readonly rejected: readonly ArtifactRejectedRecord[];
 }): string | null {
-  const {
-    artifactsDir,
-    emittingRole,
-    emittingVisitIndex,
-    collected,
-    rejected,
-    isReceiverIsolated: _isReceiverIsolated,
-    receiverWorkspace: _receiverWorkspace,
-  } = options;
+  if (options.routed.length === 0 && options.rejected.length === 0) return null;
 
-  // Collect available artifact names from the source store.
-  const _sourceDir = join(artifactsDir, `${emittingRole}-v${emittingVisitIndex}`);
-
-  // Build the available section.
-  const availableEntries: string[] = [];
-  for (const rec of collected) {
-    // Only include non-patch files in the available list.
-    if (rec.kind === "auto_patch") continue;
-    availableEntries.push(
-      `  - ${rec.source_path}${rec.description ? ` (${rec.description})` : ""}`,
-    );
+  const lines = [`## Artifacts from ${options.emittingRole}-v${options.emittingVisitIndex}`];
+  if (options.routed.length > 0) {
+    lines.push("", "Available:");
+    for (const artifact of options.routed) {
+      lines.push(
+        `  - ${artifact.name}${artifact.description === undefined ? "" : ` (${artifact.description})`}`,
+        `    Path: ${artifact.seedPath}`,
+      );
+    }
   }
-
-  // Build the unavailable section (rejected/failed).
-  const unavailableEntries: string[] = [];
-  for (const rec of rejected) {
-    unavailableEntries.push(`  - ${rec.path}: ${rec.reason}`);
+  if (options.rejected.length > 0) {
+    lines.push("", "Not available:");
+    for (const artifact of options.rejected) {
+      lines.push(`  - ${artifact.path}: ${artifact.reason}`);
+    }
   }
-
-  if (availableEntries.length === 0 && unavailableEntries.length === 0) {
-    return null;
-  }
-
-  // Build the section string.
-  const lines: string[] = [];
-  lines.push(`## Artifacts from ${emittingRole}-v${emittingVisitIndex}`);
-
-  if (availableEntries.length > 0) {
-    lines.push("\nAvailable:");
-    lines.push(...availableEntries);
-  }
-
-  if (unavailableEntries.length > 0) {
-    lines.push("\nNot available:");
-    lines.push(...unavailableEntries);
-  }
-
   return lines.join("\n");
 }
 
-// ─── Orchestrator re-routing ────────────────────────────────────────────
+/** Build a host-owned unavailable section without exposing a failed artifact path. */
+export function formatArtifactsUnavailableSeedSection(options: {
+  readonly emittingRole: string;
+  readonly emittingVisitIndex: number;
+  readonly phase: "collection" | "delivery";
+  readonly failureReason: string;
+}): string {
+  return [
+    `## Artifacts from ${options.emittingRole}-v${options.emittingVisitIndex}`,
+    "",
+    "Not available:",
+    `  - Host artifact ${options.phase} failed: ${options.failureReason}`,
+    "    No files from this handoff were delivered.",
+  ].join("\n");
+}
 
-/**
- * Build the artifacts descriptor for orchestrator re-routing.
- *
- * When an orchestrator (even with a projected/no-repo workspace) needs
- * to route prior artifacts between workers, it declares them in its own
- * handoff `artifacts` (paths within its workspace). The same
- * collect→materialize pipeline applies, so the orchestrator needs no
- * repository mount to move deliverables between workers (AC-004).
- *
- * @param options - re-routing parameters.
- * @param options.artifactsDir - the base artifacts directory.
- * @param options.receiverWorkspace - the orchestrator's workspace root.
- * @param routes - array of {emittingRole, emittingVisitIndex, targetRole}
- *   pairs describing which artifacts to route to which target.
- * @returns array of {artifactPath, targetRole} descriptors for the
- *   orchestrator's handoff declaration.
- *
- * @see spec §7.3.4 (orchestrator re-routing, REQ-004)
- */
-export async function buildOrchestratorReroute(
-  options: {
-    artifactsDir: string;
-    receiverWorkspace: string;
-  },
-  routes: Array<{ emittingRole: string; emittingVisitIndex: number }>,
-): Promise<Array<{ name: string; localPath: string }>> {
-  const { artifactsDir, receiverWorkspace } = options;
-  const all: Array<{ name: string; localPath: string }> = [];
+async function resolveStoredArtifact(
+  storedPath: string,
+  sourceDirectoryReal: string,
+): Promise<string> {
+  const candidate = resolve(storedPath);
+  if (!isStrictlyWithin(candidate, sourceDirectoryReal)) {
+    throw new ArtifactRoutingError(
+      "stored_artifact_escape",
+      `stored artifact escapes its visit directory: ${storedPath}`,
+    );
+  }
+  try {
+    const file = await lstat(candidate);
+    if (!file.isFile() || file.isSymbolicLink()) {
+      throw new ArtifactRoutingError(
+        "stored_artifact_missing",
+        `stored artifact is not a regular file: ${storedPath}`,
+      );
+    }
+    const resolved = await realpath(candidate);
+    if (!isStrictlyWithin(resolved, sourceDirectoryReal)) {
+      throw new ArtifactRoutingError(
+        "stored_artifact_escape",
+        `stored artifact resolves outside its visit directory: ${storedPath}`,
+      );
+    }
+    return resolved;
+  } catch (error) {
+    if (error instanceof ArtifactRoutingError) throw error;
+    throw new ArtifactRoutingError(
+      "stored_artifact_missing",
+      `stored artifact is unavailable: ${storedPath}`,
+      {
+        cause: error,
+      },
+    );
+  }
+}
 
-  for (const route of routes) {
-    const sourceDir = join(artifactsDir, `${route.emittingRole}-v${route.emittingVisitIndex}`);
+async function resolveDirectory(path: string, label: string): Promise<string> {
+  try {
+    const entry = await lstat(path);
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new ArtifactRoutingError(
+        "receiver_workspace_escape",
+        `${label} must be a non-symbolic-link directory: ${path}`,
+      );
+    }
+    return await realpath(path);
+  } catch (error) {
+    if (error instanceof ArtifactRoutingError) throw error;
+    throw new ArtifactRoutingError("stored_artifact_missing", `${label} is unavailable: ${path}`, {
+      cause: error,
+    });
+  }
+}
 
+async function ensureReceiverDirectory(directory: string, receiverRoot: string): Promise<void> {
+  if (!isWithin(directory, receiverRoot)) {
+    throw new ArtifactRoutingError(
+      "receiver_workspace_escape",
+      `artifact directory escapes receiver workspace: ${directory}`,
+    );
+  }
+  const segments = relative(receiverRoot, directory).split(sep);
+  let current = receiverRoot;
+  for (const segment of segments) {
+    if (segment.length === 0 || segment === ".") continue;
+    current = join(current, segment);
     try {
-      const files = await readdir(sourceDir);
-      for (const file of files) {
-        if (file.endsWith(".tmp-*")) continue;
-        const destDir = join(
-          receiverWorkspace,
-          "artifacts",
-          `${route.emittingRole}-v${route.emittingVisitIndex}`,
+      await mkdir(current);
+    } catch (error) {
+      if (!isAlreadyExists(error)) {
+        throw new ArtifactRoutingError(
+          "copy_failed",
+          `could not create artifact directory: ${current}`,
+          {
+            cause: error,
+          },
         );
-        await mkdir(dirname(destDir), { recursive: true });
-        const sourcePath = join(sourceDir, file);
-        const destPath = join(destDir, file);
-        await copyFile(sourcePath, destPath);
-        all.push({ name: file, localPath: destPath });
       }
-    } catch {
-      // Source directory doesn't exist — skip this route.
+    }
+    try {
+      const entry = await lstat(current);
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        throw new ArtifactRoutingError(
+          "receiver_workspace_escape",
+          `artifact directory must not be a symbolic link: ${current}`,
+        );
+      }
+      const resolved = await realpath(current);
+      if (!isWithin(resolved, receiverRoot)) {
+        throw new ArtifactRoutingError(
+          "receiver_workspace_escape",
+          `artifact directory resolves outside receiver workspace: ${current}`,
+        );
+      }
+    } catch (error) {
+      if (error instanceof ArtifactRoutingError) throw error;
+      throw new ArtifactRoutingError(
+        "copy_failed",
+        `could not inspect artifact directory: ${current}`,
+        {
+          cause: error,
+        },
+      );
     }
   }
+}
 
-  return all;
+async function copyStoredArtifact(
+  sourcePath: string,
+  receiverPath: string,
+  receiverRoot: string,
+): Promise<boolean> {
+  try {
+    await copyFile(sourcePath, receiverPath, constants.COPYFILE_EXCL);
+    return true;
+  } catch (error) {
+    if (isAlreadyExists(error)) {
+      if (await isIdenticalReceiverArtifact(sourcePath, receiverPath, receiverRoot)) return false;
+      throw new ArtifactRoutingError(
+        "destination_conflict",
+        `receiver artifact destination already exists: ${receiverPath}`,
+      );
+    }
+    throw new ArtifactRoutingError("copy_failed", `could not route artifact to: ${receiverPath}`, {
+      cause: error,
+    });
+  }
+}
+
+/** Accept only the exact regular-file copy left by a pre-prompt interrupted route. */
+async function isIdenticalReceiverArtifact(
+  sourcePath: string,
+  receiverPath: string,
+  receiverRoot: string,
+): Promise<boolean> {
+  try {
+    const destination = await lstat(receiverPath);
+    if (!destination.isFile() || destination.isSymbolicLink()) {
+      throw new ArtifactRoutingError(
+        "receiver_workspace_escape",
+        `receiver artifact destination is not a regular file: ${receiverPath}`,
+      );
+    }
+    const destinationReal = await realpath(receiverPath);
+    if (!isStrictlyWithin(destinationReal, receiverRoot)) {
+      throw new ArtifactRoutingError(
+        "receiver_workspace_escape",
+        `receiver artifact destination escapes its workspace: ${receiverPath}`,
+      );
+    }
+    const [sourceBytes, destinationBytes] = await Promise.all([
+      readFile(sourcePath),
+      readFile(destinationReal),
+    ]);
+    return sourceBytes.equals(destinationBytes);
+  } catch (error) {
+    if (error instanceof ArtifactRoutingError) throw error;
+    throw new ArtifactRoutingError(
+      "copy_failed",
+      `could not inspect receiver artifact destination: ${receiverPath}`,
+      { cause: error },
+    );
+  }
+}
+
+function isWithin(candidate: string, root: string): boolean {
+  const relativePath = relative(root, candidate);
+  return !isOutsideRelativePath(relativePath);
+}
+
+function isStrictlyWithin(candidate: string, root: string): boolean {
+  return candidate !== root && isWithin(candidate, root);
+}
+
+function isOutsideRelativePath(path: string): boolean {
+  return (
+    path === ".." || path.startsWith(`..${sep}`) || path.startsWith("/") || path.startsWith("\\")
+  );
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST";
 }

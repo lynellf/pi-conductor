@@ -184,7 +184,7 @@ tests/
 biome.json               # linter + formatter (replaces ESLint + Prettier)
 lefthook.yml             # git hooks: pre-push runs lint + typecheck + tests
 docs/
-  orchestrator-fsm-spec.md            # the spec (authority)
+  archive/orchestrator-fsm-spec.md    # the spec (authority)
 pnpm-workspace.yaml     # pnpm config + supply-chain hardening (camelCase keys)
 ```
 
