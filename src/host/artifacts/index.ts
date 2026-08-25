@@ -8,7 +8,8 @@
 
 export { type CollectionResult, collectAutoPatch, collectDeclaredArtifacts } from "./collect.js";
 export {
-  buildOrchestratorReroute,
+  ArtifactRoutingError,
   formatArtifactsSeedSection,
   materializeArtifacts,
+  type RoutedArtifact,
 } from "./route.js";

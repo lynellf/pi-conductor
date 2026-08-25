@@ -117,8 +117,13 @@ export { StubHost } from "./stub-host.js";
 // uses sync writes; production's persistent log (Phase 5) can
 // swap to an async tail or external store transparently.
 
-export type { FileRecordLogOptions } from "./log-file.js";
-export { FileRecordLog, RecordLogError } from "./log-file.js";
+export type { FileRecordLogOptions, RunExecutionLease } from "./log-file.js";
+export {
+  FileRecordLog,
+  RecordLogError,
+  RunInProgressError,
+  RunLeaseUnavailableError,
+} from "./log-file.js";
 
 // ─── RunHandle (Task 13.5, §11.9) ────────────────────────────────────
 // Runtime handle for a run. Returned by startRun / resumeRun;

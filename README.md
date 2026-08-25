@@ -90,21 +90,23 @@ The engine is the same in all three surfaces — extension, CLI, and library.
   `src/persistence`) — the deterministic FSM reducer + manifest static checks +
   TypeBox emission schemas + cost roll-up. **Zero pi imports.** Enforced by a
   grep-guard test that scans source as text.
-- **SDK host driver** (`src/host`) — owns the orchestration loop, spawns role
-  sessions via `createAgentSession`, persists records, enforces caps. **The only
-  place that imports `@earendil-works/pi-coding-agent`.**
+- **SDK host driver** (`src/host`) — owns the orchestration loop, persists
+  records, and enforces caps. Shared roles use the in-process SDK
+  `createAgentSession` path; isolated `worktree` and `copy` roles use a
+  host-owned package-local `pi --mode rpc` Node process whose current working
+  directory is the provisioned role workspace.
 
 The extension layer (`extensions/conduct.ts` + `src/extension/`) is the UX shell
-that wraps the engine. It does not become the engine: worker role sessions are
-still spawned by the production `Host` via the standalone `createAgentSession`,
-not via `ctx.newSession()` / `ctx.fork()`. A grep guard on `extensions/**/*.ts`
+that wraps the engine. It does not become the engine: the production `Host`
+launches every worker role through the shared SDK or isolated RPC path, never
+via `ctx.newSession()` / `ctx.fork()`. A grep guard on `extensions/**/*.ts`
 rejects those two calls — the §9.5 boundary holds. While a conduct run is
 active in the TUI, press `Esc` and confirm to abort it; the standalone `conduct`
 CLI does not add that Escape interrupt.
 
 For the full architecture rationale, see
-[`docs/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md) (the
-authority).
+[`docs/archive/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md)
+(the authority).
 
 ---
 
@@ -253,32 +255,38 @@ failure and returns a non-terminating correction prompt. After a role's first
 valid `handoff`/`end` capture, the session is **sealed**: every other tool
 short-circuits, so work-after-handoff cannot mutate the workspace.
 
-**2. Built-in + custom tools — pass-through to pi's tool registry.**
+**2. Shared SDK pass-through and isolated machine tools.**
 
-Every other name in `tools:` is resolved by pi's SDK, not pi-conductor.
-pi-conductor does not construct or restrict these — it passes the declared names
-straight through to `createAgentSession({ tools: [...] })`.
+For shared roles only, Pi-registry names selected by `tools:` are passed to
+`createAgentSession({ tools: [...] })`; pi-conductor separately registers its
+conductor-owned tools.
 
-pi's built-in tool set (the authoritative reference is **pi's own
-documentation** — see the links below; pi-conductor does not redefine it) is, as
-of pi 0.79.x:
+Isolated `worktree` and `copy` roles instead run a package-local `pi --mode rpc`
+process with pi's built-in tools disabled. A host-loaded static machine-tools
+extension provides `handoff` and `end`, plus only declared, path-confined file
+tools; it also provides the host-mediated `delegate` bridge when authorized.
+Other declared names do not receive the shared SDK pass-through registry.
+
+For shared SDK roles, pi's built-in tool set (the authoritative reference is
+**pi's own documentation** — see the links below; pi-conductor does not
+redefine it) is, as of pi 0.79.x:
 
 - **On by default (4):** `read`, `write`, `edit`, `bash`.
 - **Additional built-in read-only tools, opt-in via `tools:` (3):** `grep`,
   `find`, `ls`.
 
-Extension-registered or custom tool names the host pi session makes available
-may also be named in `tools:`.
+Extension-registered or custom tool names the shared host pi session makes
+available may also be named in `tools:`.
 
-> **Note the interaction with the `tools:`-allowlist footgun below:** because
-> pi-conductor treats `tools:` as an explicit allowlist (not an extension of
-> pi's defaults), a role that wants the standard file/shell access must **name**
-> `read`/`write`/`edit`/`bash` explicitly — they are not inherited just because
-> pi enables them by default in a plain `pi` session. `grep`/`find`/`ls`
-> likewise must be named to be available.
+> **Note the interaction with the shared-SDK `tools:`-allowlist footgun
+> below:** because pi-conductor treats `tools:` as an explicit allowlist (not
+> an extension of pi's defaults), a shared role that wants standard file/shell
+> access must **name** `read`/`write`/`edit`/`bash` explicitly — they are not
+> inherited just because pi enables them by default in a plain `pi` session.
+> `grep`/`find`/`ls` likewise must be named to be available.
 
 **Reference — pi's tool documentation (the authority on the built-in set;
-pi-conductor is a pass-through consumer):**
+pi-conductor is a shared-SDK pass-through consumer):**
 
 - [pi Quickstart — tools](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md)
   (the "By default, pi gives the model four tools" statement + the opt-in
@@ -292,13 +300,13 @@ pi-conductor is a pass-through consumer):**
 The same files ship inside the installed `@earendil-works/pi` package at
 `packages/coding-agent/docs/quickstart.md` and `packages/coding-agent/docs/sdk.md`.
 
-**Footgun — `tools:` is an explicit allowlist, not a default-extension.** A role
-receives **exactly** the names it declares plus `handoff`+`end` — not pi's
-four-tool default (`read`/`write`/`edit`/`bash`) on top. **Omitting `tools:`
-entirely gives the role only `handoff`+`end`** — no file or shell access, and no
-§13 warning fires (the §13 check only triggers when `tools:` is present but
-missing `handoff`/`end`). Such a role can emit machine events but cannot do
-work. Declare every tool a role actually needs.
+**Footgun — shared-SDK `tools:` is an explicit allowlist, not a
+default-extension.** It selects the shared role's non-machine Pi tool names;
+it does not add pi's four-tool default (`read`/`write`/`edit`/`bash`). A shared
+role that omits `tools:` has no file or shell access, and no §13 warning fires
+(the §13 check only triggers when `tools:` is present but missing
+`handoff`/`end`). `handoff` and `end` remain conductor machine tools. Declare
+every tool a role actually needs.
 
 ---
 
@@ -424,26 +432,12 @@ children as cancelled (`recovered_child_lost`) rather than relaunching them.
 
 ---
 
-## Per-role isolated workspaces and artifact handoffs (Issue #48)
+## Per-role isolated workspaces (Issue #48)
 
-Conductor can give each FSM role its own isolated workspace with a declared
-mount policy, instead of sharing the primary checkout. Roles that opt into
-`workspace` blocks start in a pinned snapshot of the integration repository;
-conductor confines file tools to the role's projection, collects declared
-artifacts, and routes them to the next role's workspace as explicit
-handoff deliverables.
-
-### Quick guide
-
-1. **Add a `workspace` block** to any role in the manifest. Absent =
-   shared mode (today's behavior, byte-identical).
-2. **Choose a backend:** `shared` (default), `worktree` (per-visit Git
-   worktree), `copy` (filesystem copy for non-Git roots), or `container`
-   (requires a Docker image and `pi` CLI — see below).
-3. **Declare mounts** (relative paths → inside the pinned snapshot;
-   absolute paths → host paths) with `writable: true | false`.
-4. **Declare artifacts** in handoffs: the host collects, validates, caps,
-   and routes them to the receiver's workspace.
+Conductor supports three workspace modes: `shared` (the default), `worktree`,
+and `copy`. A role with an isolated workspace has file tools rooted in its
+provisioned role workspace; it can reach other paths only through declared
+mounts.
 
 ### Configuration reference
 
@@ -453,91 +447,59 @@ roles:
     max_visits: 3
     tools: [read, grep, edit, write, handoff, end]
     workspace:
-      backend: worktree            # shared | worktree | copy | container
-      source: snapshot             # snapshot | ref:<git-ref-or-commit>
+      backend: worktree            # worktree | copy; omit the block for shared
       mounts:
-        - path: .campaign          # relative → inside the pinned snapshot
+        - path: .campaign          # relative to the role's snapshot checkout
           writable: false
-        - path: /data/out          # absolute → host path
+        - path: /data/out          # absolute host path
           writable: true
-      shell: none                  # none | container  (default none)
-      image: docker.io/lynellf/conductor-sandbox:latest  # required iff container
-      network: bridge              # bridge | none  (default bridge)
     artifacts:
-      auto_patch: true             # default true for writable worktree
-      max_file_bytes: 1048576      # default 1 MiB per declared file artifact
-      max_files: 32                # default per handoff
+      auto_patch: true             # default true for worktree; false for copy
+      max_file_bytes: 1048576      # default 1 MiB per declared file
+      max_files: 32                # default declared files per handoff
 ```
 
-### Guarantee matrix
+`shared` roles use the integration checkout. `worktree` creates a per-role
+Git worktree, while `copy` creates an isolated filesystem copy.
 
-The host computes a **trust guarantee** per session — never self-declared —
-from `(backend, mounts, tools)`:
+### Guarantees and unavailable backend
 
-| Role shape (isolated) | Guarantee |
+| Mode | Guarantee |
 | --- | --- |
-| `shared` (no `workspace` block) | `none` (full checkout access) |
-| `worktree` / `copy` + read-only tools | `confined` (path confinement, no OS boundary) |
-| `worktree` / `copy` + writable tools | `confined` (path confinement, process-level only) |
-| `container` + no writable host mounts | `sandbox` (OS namespace boundary) |
-| `container` + writable absolute host mount | `confined` (capped, recorded as downgrade) |
+| `shared` | `none` (full integration-checkout access) |
+| `worktree` / `copy` | `confined` (role workspace plus declared mounts) |
 
-**Important:** `confined` is a **tool-surface** guarantee — no sanctioned tool
-of the role can read or write outside the projection — but the session shares
-the host process (same UID, environment). The README documents it alongside the
-existing child-boundary language ("path confinement, not an OS or credential
-sandbox"). Only `sandbox` (container) provides OS-level isolation.
+`confined` is a process and tool-surface boundary, not OS, credential, or
+network isolation. No available backend provides an OS-isolation guarantee.
 
-### Artifact pipeline
+`container` is unavailable. A manifest that selects `backend: container` is
+rejected with a typed `WorkspaceError` before host construction or run
+persistence; it does not fall back to another backend.
 
-1. **Declaration:** The model declares `artifacts: [{ path, description? }]` in
-   a `handoff` call (path is relative to the emitting role's workspace root).
-2. **Collection (host, at role terminal):** The host resolves each path, checks
-   containment in the emitting role's projection, enforces `max_file_bytes` /
-   `max_files`, copies accepted files to `<runStateDir>/artifacts/<runId>/<role>-v<n>/`,
-   and records `artifact_collected` (or `artifact_rejected` for violations).
-3. **Routing (host, on accepted transition):** Accepted artifacts are
-   materialized into the receiving role's workspace under
-   `artifacts/<emitting-role>-v<n>/` (read-only for read-only roles, writable
-   otherwise). A seed section lists artifact names and descriptions (never
-   inlined contents) so the recipient and orchestrator see the gap.
-4. **Shared-mode receivers:** Get absolute run-state paths in the seed instead
-   of materialized files (they can read the host filesystem).
+### Artifact lifecycle
 
-Auto-patches (`git diff` + `git add -N` for untracked, `--binary`) are
-generated automatically for writable `worktree` workspaces at every terminal
-(successful or failed). Patches are stored and recorded but routed only from
-accepted handoffs.
+On an accepted handoff from an isolated role, the host collects declared,
+workspace-relative files from the emitting provisioned workspace. It enforces
+projection containment and the `max_file_bytes` and `max_files` caps, then
+persists `artifact_collected` or `artifact_rejected` records. Artifacts remain
+host-owned in the run artifact store.
 
-### Container backend (spike-gated)
+The host routes only collected declared artifacts. It materializes them beneath
+`artifacts/<emitting-role>-v<visit>/` in an isolated receiver; a shared receiver
+gets host-store paths in a host-generated seed inventory instead. That inventory
+is generated only by the host and reports unavailable declared artifacts from
+rejection records; its available entries are only host-collected artifacts.
 
-The `container` backend requires: (a) `image` (non-empty string), (b) `pi`
-CLI installed in the project, (c) Docker available at runtime. Conductor
-spawns `docker run` with the workspace bind-mounted (read-only unless the
-role's workspace is writable), `agentDir` mounted for API keys, and a
-minimal environment (no host home, no Docker socket).
-
-The container backend earns a `sandbox` guarantee; it is **spike-gated** —
-a feasibility spike (Task T0) must verify parity against the installed SDK
-before implementation (Task T8). On spike failure, the feature ships
-`shared`/`worktree`/`copy` with `confined` labeling, and `sandbox` is
-documented unavailable.
-
-### Integration
-
-Patches are applied to the integration workspace **only** by a role with an
-explicit writable mount on it (e.g. an integrator role, or the orchestrator
-in shared mode) using its own tools, or by the operator via `git apply`. The
-conductor **never auto-applies** a patch or artifact to the integration
-workspace — same "explicit integration" rule as delegation-lite.
+Worktree roles retain host-generated auto-patches only when
+`artifacts.auto_patch` is enabled (the worktree default), but auto-patches are
+never routed to a receiver. The host never automatically applies an artifact or
+patch to the integration checkout.
 
 ### Retention
 
-Workspaces, snapshot checkouts, and branches are retained exactly like
-delegation worktrees: **no automatic cleanup, no automatic merge, no
-deletion**. The operator may run `git worktree remove <path>` manually when
-space is needed. The run state directory (`<integration>/.pi-conductor/runs/<runId>/`)
-holds `snapshots/`, `workspaces/`, `artifacts/`, and `sessions/`.
+Workspaces, snapshot checkouts, and artifacts are retained for inspection:
+there is no automatic cleanup, merge, or deletion. The operator may remove a
+worktree manually when space is needed.
 
 ---
 
@@ -738,8 +700,8 @@ the rationale.
 
 Full status is tracked in the authoritative specs:
 
-- [`docs/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md) — the
-  FSM engine.
+- [`docs/archive/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md)
+  — the FSM engine.
 - [`src/host/record-emitter.ts`](src/host/record-emitter.ts) — the
   typed in-process emitter (`subscribeToRecords`) and its consumer
   contract.
@@ -787,7 +749,7 @@ checkpoint + event + def (pinned manifest snapshot)
   work-after-handoff cannot mutate the workspace.
 
 The full authority is
-[`docs/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md).
+[`docs/archive/orchestrator-fsm-spec.md`](docs/archive/orchestrator-fsm-spec.md).
 
 ---
 
@@ -835,10 +797,11 @@ sequentially; any failure blocks the push. CI runs the same three directly.
 - **Module size ~400 LOC ceiling.** Split by responsibility before a file gets
   large. Readability over cleverness.
 - **No silent fallbacks.** Ambiguity → throw a typed error or surface a warning.
-- **No `ctx.newSession()` / `ctx.fork` in `extensions/`.** Role sessions are
-  spawned via the standalone `createAgentSession` only.
-  `tests/extension/no-role-spawn-via-session-tree.test.ts` greps for these
-  calls.
+- **No `ctx.newSession()` / `ctx.fork` in `extensions/`.** Shared roles use
+  standalone `createAgentSession`; isolated `worktree` and `copy` roles use
+  host-owned package-local `pi --mode rpc` processes. Neither path uses the
+  extension session tree. `tests/extension/no-role-spawn-via-session-tree.test.ts`
+  greps for these calls.
 
 ### Phases gate each other
 
@@ -882,7 +845,7 @@ tests/
   grep-guard.test.ts     asserts src/core + src/manifest (+seam/cost) have zero pi imports
   package-metadata.test.ts asserts pi extension manifest + peer-dependency posture
 docs/
-  orchestrator-fsm-spec.md            the spec (authority)
+  archive/orchestrator-fsm-spec.md    the spec (authority)
 biome.json            # linter + formatter (replaces ESLint + Prettier)
 lefthook.yml          # git hooks: pre-push runs lint + typecheck + tests
 pnpm-workspace.yaml   # pnpm config + supply-chain hardening (camelCase keys)

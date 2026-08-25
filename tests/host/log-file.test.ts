@@ -15,14 +15,15 @@
  *    mirroring `ManifestParseError`.
  */
 
-import { appendFileSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Checkpoint } from "../../src/core/types.js";
+import type { Checkpoint, SessionLifecycleEvent } from "../../src/core/types.js";
 import { type FileMutationRecord, FileRecordLog, RecordLogError } from "../../src/index.js";
+import { WorkspaceGuaranteeError } from "../../src/persistence/log.js";
 
 let baseDir: string | undefined;
 
@@ -44,6 +45,68 @@ function checkpoint(runId: string): Checkpoint {
     active_role_session: null,
     updated_at: 1,
   };
+}
+
+interface SandboxBearingRecordCase {
+  readonly name: string;
+  readonly record: Record<string, unknown>;
+}
+
+function sandboxBearingRecords(runId: string): readonly SandboxBearingRecordCase[] {
+  return [
+    {
+      name: "run_seeded workspace",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        workspace: { guarantee: "sandbox" },
+        ts: 1,
+      },
+    },
+    {
+      name: "checkpoint_snapshot workspace",
+      record: {
+        type: "checkpoint_snapshot",
+        checkpoint: { ...checkpoint(runId), workspace: { guarantee: "sandbox" } },
+      },
+    },
+    {
+      name: "run_seeded nested array",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        artifact_metadata: [{ workspace: { guarantee: "sandbox" } }],
+        ts: 1,
+      },
+    },
+  ];
+}
+
+function serializationSandboxClaims(runId: string): readonly SandboxBearingRecordCase[] {
+  return [
+    {
+      name: "boxed guarantee",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        metadata: { guarantee: new String("sandbox") },
+        ts: 1,
+      },
+    },
+    {
+      name: "toJSON guarantee",
+      record: {
+        type: "run_seeded",
+        run_id: runId,
+        goal: "original goal",
+        metadata: { guarantee: { toJSON: () => "sandbox" } },
+        ts: 1,
+      },
+    },
+  ];
 }
 
 describe("FileRecordLog", () => {
@@ -88,6 +151,166 @@ describe("FileRecordLog", () => {
 
     expect(log.records("run-22")).toEqual([record]);
   });
+
+  it("rejects an untrusted sandbox workspace record before it reaches JSONL storage", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const log = new FileRecordLog({ baseDir });
+    const untrustedRecord = {
+      type: "workspace_provisioned",
+      run_id: "run-untrusted",
+      role: "isolated",
+      visit_index: 1,
+      backend: "worktree",
+      guarantee: "sandbox",
+      workspace_path: "/tmp/isolated",
+      snapshot_commit: "0".repeat(40),
+      ts: 1,
+    };
+
+    expect(() => log.append(untrustedRecord as never)).toThrow(WorkspaceGuaranteeError);
+    expect(existsSync(join(baseDir, "run-untrusted.jsonl"))).toBe(false);
+  });
+
+  it("rejects an untrusted sandbox lifecycle workspace before it reaches JSONL storage", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const log = new FileRecordLog({ baseDir });
+    const untrustedRecord = {
+      type: "session_started",
+      run_id: "run-untrusted",
+      role: "isolated",
+      visit_index: 1,
+      state: "isolated",
+      model: "anthropic:claude-sonnet-4-5",
+      session_file: "/tmp/isolated.jsonl",
+      parent_session: null,
+      workspace: {
+        backend: "worktree",
+        guarantee: "sandbox",
+        path_or_image: "/tmp/isolated",
+      },
+      ts: 1,
+    };
+
+    expect(() => log.append(untrustedRecord as never)).toThrow(WorkspaceGuaranteeError);
+    expect(existsSync(join(baseDir, "run-untrusted.jsonl"))).toBe(false);
+  });
+
+  it.each([
+    "session_ended",
+    "session_failed",
+  ] as const)("rejects workspace metadata on %s before it reaches JSONL storage", async (type) => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const log = new FileRecordLog({ baseDir });
+    const terminalRecord = {
+      type,
+      run_id: "run-terminal-workspace",
+      role: "isolated",
+      visit_index: 1,
+      state: "isolated",
+      model: "anthropic:claude-sonnet-4-5",
+      session_file: "/tmp/isolated.jsonl",
+      parent_session: null,
+      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
+      workspace: {
+        backend: "worktree",
+        guarantee: "confined",
+        path_or_image: "/tmp/isolated",
+      },
+      ts: 1,
+    };
+
+    expect(() => log.append(terminalRecord as never)).toThrow(
+      "workspace metadata is only allowed on session_started",
+    );
+    expect(existsSync(join(baseDir, "run-terminal-workspace.jsonl"))).toBe(false);
+  });
+
+  it.each([
+    "none",
+    "confined",
+  ] as const)("writes and reads a lifecycle workspace with the available %s guarantee", async (guarantee) => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const log = new FileRecordLog({ baseDir });
+    const record: SessionLifecycleEvent = {
+      type: "session_started",
+      run_id: "run-available",
+      role: "isolated",
+      visit_index: 1,
+      state: "isolated",
+      model: "anthropic:claude-sonnet-4-5",
+      session_file: "/tmp/isolated.jsonl",
+      parent_session: null,
+      workspace: {
+        backend: "worktree",
+        guarantee,
+        path_or_image: "/tmp/isolated",
+      },
+      ts: 1,
+    };
+
+    log.append(record);
+
+    expect(log.records("run-available")).toEqual([record]);
+  });
+
+  it("rejects an injected sandbox lifecycle workspace while reading JSONL", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const runId = "run-untrusted";
+    writeFileSync(
+      join(baseDir, `${runId}.jsonl`),
+      `${JSON.stringify({
+        type: "session_started",
+        run_id: runId,
+        role: "isolated",
+        visit_index: 1,
+        state: "isolated",
+        model: "anthropic:claude-sonnet-4-5",
+        session_file: "/tmp/isolated.jsonl",
+        parent_session: null,
+        workspace: {
+          backend: "worktree",
+          guarantee: "sandbox",
+          path_or_image: "/tmp/isolated",
+        },
+        ts: 1,
+      })}\n`,
+      "utf8",
+    );
+    const log = new FileRecordLog({ baseDir });
+
+    expect(() => log.records(runId)).toThrow(WorkspaceGuaranteeError);
+  });
+
+  for (const { name, record } of sandboxBearingRecords("run-untrusted")) {
+    it(`rejects an untrusted ${name} sandbox claim before it reaches JSONL storage`, async () => {
+      baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+      const log = new FileRecordLog({ baseDir });
+
+      expect(() => log.append(record as never)).toThrow(WorkspaceGuaranteeError);
+      expect(existsSync(join(baseDir, "run-untrusted.jsonl"))).toBe(false);
+    });
+  }
+
+  for (const { name, record } of serializationSandboxClaims("run-untrusted")) {
+    it(`rejects an untrusted ${name} sandbox claim before it reaches JSONL storage`, async () => {
+      baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+      const log = new FileRecordLog({ baseDir });
+
+      expect(() => log.append(record as never)).toThrow(WorkspaceGuaranteeError);
+      expect(existsSync(join(baseDir, "run-untrusted.jsonl"))).toBe(false);
+    });
+  }
+
+  for (const { name, record } of sandboxBearingRecords("run-untrusted")) {
+    it(`rejects an injected ${name} sandbox claim while reading JSONL`, async () => {
+      baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+      const runId = "run-untrusted";
+      writeFileSync(join(baseDir, `${runId}.jsonl`), `${JSON.stringify(record)}\n`, "utf8");
+      const log = new FileRecordLog({ baseDir });
+
+      expect(() => log.records(runId)).toThrow(WorkspaceGuaranteeError);
+    });
+  }
 });
 
 describe("FileRecordLog (issue #37 — torn-log recovery + typed boundary)", () => {

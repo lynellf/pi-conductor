@@ -1,42 +1,27 @@
 /**
- * Projection roots + guarantee computation — spec §4, §6.
+ * Projection roots + guarantee computation — Issue #48 R1.
  *
- * Computes the per-session guarantee level from (backend, mounts, tools):
- * - `shared` backend → `none`
- * - isolated (worktree/copy/container) with no writable host mounts →
- *   `confined` (in-process) or `sandbox` (container)
- * - isolated with writable absolute (host) mount → capped at `confined`
- *   with a manifest warning (INV-004, rule 7)
- *
- * Also resolves the projection (roots a role may access) from the
- * manifest's `workspace.mounts` + pinned snapshot.
+ * Computes the per-session guarantee from the provisioned workspace and
+ * actual shared snapshot checkout. The strongest available guarantee is
+ * `confined`; container execution is rejected before this code is reached.
  */
 
 import { join } from "node:path";
-import type { WorkspaceBackend, WorkspaceConfig, WorkspaceSource } from "../../manifest/types.js";
+import type { WorkspaceBackend, WorkspaceConfig } from "../../manifest/types.js";
+import { assertSupportedWorkspaceBackend } from "./manager.js";
 
-/**
- * Computed guarantee level for a role session (spec §6).
- *
- * Computed, never self-declared (INV-004). No record, seed, or UI text
- * may claim a guarantee stronger than this computed level (INV-006).
- */
-export type GuaranteeLevel = "none" | "confined" | "sandbox";
+/** Computed guarantee level for a role session. */
+export type GuaranteeLevel = "none" | "confined";
 
-/**
- * Projection roots a role may access. For `shared` roles: just the
- * integration workspace. For isolated roles: workspace root + mounts.
- */
+/** Projection roots a role may access. */
 export interface Projection {
-  /** The role's workspace root (integration workspace for `shared`, worktree/copy path for isolated). */
+  /** The role's workspace root (integration workspace for `shared`). */
   readonly workspaceRoot: string;
   /** Additional mount roots (empty for `shared`). */
   readonly mounts: readonly ProjectionMount[];
 }
 
-/**
- * A mount in a role's projection (resolved from the manifest).
- */
+/** A mount in a role's projection. */
 export interface ProjectionMount {
   /** The resolved absolute path. */
   readonly path: string;
@@ -44,126 +29,74 @@ export interface ProjectionMount {
   readonly writable: boolean;
 }
 
-/**
- * Result of guarantee computation — the level plus any warnings.
- */
+/** Result of guarantee computation — the level plus any warnings. */
 export interface GuaranteeResult {
   /** The computed guarantee level. */
   readonly level: GuaranteeLevel;
-  /** Manifest warnings, if any (rule 7 downgrade warning). */
+  /** Manifest warnings, if any. */
   readonly warnings: string[];
   /** The computed projection for this role. */
   readonly projection: Projection;
 }
 
-// ─── Guarantee computation ──────────────────────────────────────────────
-
 /**
- * Compute the guarantee level for a role given its workspace config,
- * tools, and the resolved pinned commit.
+ * Compute the guarantee and projection from provisioned paths.
  *
- * Rule from spec §6:
- * - `shared` (no `workspace` block) → `none`
- * - read-only isolated (only read/grep/find/ls) → `confined` (in-process) / `sandbox` (container)
- * - writable isolated (edit/write declared) → `confined` (in-process) / `sandbox` (container)
- * - Any writable absolute (host) mount → capped at `confined` + warning
- *
- * @param backend - the workspace backend
- * @param tools - the role's declared tools
- * @param workspaceConfig - the role's `workspace` block (if any)
- * @param source - the source resolution (`snapshot` or `ref:<ref>`)
- * @param pinDir - the resolved pinned commit (for mount resolution)
- * @param pinSha8 - 8-char short commit hash (for mount resolution)
+ * `workspacePath` and `snapshotPath` are host-created paths, never derived
+ * from the integration checkout or a commit hash in this function.
  */
 export function computeGuarantee(args: {
   backend: WorkspaceBackend;
-  tools: readonly string[] | undefined;
   workspaceConfig?: WorkspaceConfig;
-  source: WorkspaceSource;
-  pinDir: string;
-  pinSha8: string;
+  workspacePath: string;
+  snapshotPath: string;
 }): GuaranteeResult {
-  const { backend, workspaceConfig, pinDir, pinSha8 } = args;
+  const { backend, workspaceConfig, workspacePath, snapshotPath } = args;
 
-  // `shared` backend → guarantee is `none`.
+  assertSupportedWorkspaceBackend(backend);
+
   if (backend === "shared") {
     return {
       level: "none",
       warnings: [],
-      projection: { workspaceRoot: pinDir, mounts: [] },
+      projection: { workspaceRoot: workspacePath, mounts: [] },
     };
   }
 
-  const mounts = workspaceConfig?.mounts ?? [];
   const projectionMounts: ProjectionMount[] = [];
-
-  // Add the pinned snapshot as the first mount (read-only).
-  const snapshotMount: ProjectionMount = {
-    path: join(pinDir, pinSha8),
-    writable: false,
-  };
-  projectionMounts.push(snapshotMount);
-
-  // Add declared mounts to the projection.
-  for (const mount of mounts) {
-    const resolvedPath = resolveMountPath(mount.path, pinDir, pinSha8);
+  for (const mount of workspaceConfig?.mounts ?? []) {
     projectionMounts.push({
-      path: resolvedPath,
+      path: resolveMountPath(mount.path, snapshotPath),
       writable: mount.writable,
     });
   }
 
-  const projection: Projection = {
-    workspaceRoot: pinDir, // placeholder — the actual workspace path is set by the manager
-    mounts: projectionMounts,
+  const hasWritableHostMount = projectionMounts.some(
+    (mount) => mount.writable && isAbsolutePath(mount.path),
+  );
+  const warnings = hasWritableHostMount
+    ? ["role has writable absolute (host) mount; guarantee remains 'confined' (INV-004, rule 7)"]
+    : [];
+
+  return {
+    level: "confined",
+    warnings,
+    projection: {
+      workspaceRoot: workspacePath,
+      mounts: projectionMounts,
+    },
   };
-
-  // Check for rule 7: writable absolute (host) mount → cap at `confined`.
-  const hasWritableHostMount = projectionMounts.some((m) => m.writable && isAbsolutePath(m.path));
-
-  // Determine the base guarantee from backend.
-  let level: GuaranteeLevel;
-  if (backend === "container") {
-    // Container can earn `sandbox` IF no writable host mounts.
-    level = hasWritableHostMount ? "confined" : "sandbox";
-  } else {
-    // worktree/copy are in-process → `confined`.
-    level = "confined";
-  }
-
-  // Build warnings.
-  const warnings: string[] = [];
-  if (hasWritableHostMount) {
-    warnings.push(
-      "role has writable absolute (host) mount; guarantee capped at 'confined' (INV-004, rule 7)",
-    );
-  }
-
-  return { level, warnings, projection };
 }
 
-// ─── Mount path resolution ──────────────────────────────────────────────
-
-/**
- * Resolve a mount path. Relative paths resolve inside the pinned
- * snapshot; absolute paths are used as-is (host path).
- */
-function resolveMountPath(mountPath: string, pinDir: string, pinSha8: string): string {
-  if (isAbsolutePath(mountPath)) {
-    return mountPath;
-  }
-  // Relative → inside the pinned snapshot.
-  return join(pinDir, pinSha8, mountPath);
+/** Resolve a mount path relative to the actual shared snapshot checkout. */
+function resolveMountPath(mountPath: string, snapshotPath: string): string {
+  return isAbsolutePath(mountPath) ? mountPath : join(snapshotPath, mountPath);
 }
 
-/**
- * Check if a path is absolute.
- */
+/** Check whether a path is absolute. */
 function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\") || /^[A-Z]:/i.test(path);
 }
-
-// ─── Projection helpers ─────────────────────────────────────────────────
 
 /**
  * Check whether a path is within (or equal to) any projection root.
@@ -176,12 +109,10 @@ export function pathInProjection(
   filePath: string,
   projection: Projection,
 ): { inside: true; mount: ProjectionMount } | { inside: false; reason: string } {
-  // Check the workspace root first.
   if (isInsideOrEqual(filePath, projection.workspaceRoot)) {
     return { inside: true, mount: { path: projection.workspaceRoot, writable: true } };
   }
 
-  // Check each mount.
   for (const mount of projection.mounts) {
     if (isInsideOrEqual(filePath, mount.path)) {
       return { inside: true, mount };
@@ -191,62 +122,14 @@ export function pathInProjection(
   return { inside: false, reason: "path is outside all projection roots" };
 }
 
-/**
- * Check if a resolved path is inside (or equal to) a root directory.
- */
+/** Check if a resolved path is inside (or equal to) a root directory. */
 function isInsideOrEqual(path: string, root: string): boolean {
   const normalizedPath = normalizePath(path);
   const normalizedRoot = normalizePath(root);
   return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
 }
 
-/**
- * Normalize a path (strip trailing separators, resolve `.`, `..`).
- */
+/** Normalize a path (strip trailing separators, resolve `.`, `..`). */
 function normalizePath(path: string): string {
-  // Simple normalization — realpath would require filesystem access.
-  // This is used for string comparison after realpath has already
-  // been resolved in the caller.
   return path.replace(/\/+$/, "").replace(/\/+/g, "/");
-}
-
-/**
- * Resolve a path to its real path (for containment checks).
- * Returns `null` if the path doesn't exist.
- */
-
-// ─── Container-only guarantee computation ───────────────────────────────
-
-/**
- * Additional guarantees computed only for the `container` backend (T8).
- */
-export interface ContainerGuarantee {
-  /** Whether the container has network access (`bridge`) or none. */
-  readonly network: "bridge" | "none";
-  /** Whether the container has `shell: container` (full bash inside). */
-  readonly shell: "none" | "container";
-  /** The Docker image used (if any). */
-  readonly image?: string;
-}
-
-/**
- * Compute the full container guarantee (base + container-specific).
- */
-export function computeContainerGuarantee(
-  base: GuaranteeResult,
-  workspaceConfig: WorkspaceConfig,
-): GuaranteeResult & ContainerGuarantee {
-  const container: ContainerGuarantee = {
-    network: workspaceConfig.network ?? "bridge",
-    shell: workspaceConfig.shell ?? "none",
-  };
-  if (workspaceConfig.image !== undefined) {
-    (container as ContainerGuarantee & { image: string }).image = workspaceConfig.image;
-  }
-
-  // Container with network: none → capped at `confined` even without writable host mounts.
-  const effectiveLevel =
-    container.network === "none" && base.level === "sandbox" ? "confined" : base.level;
-
-  return { ...base, ...container, level: effectiveLevel };
 }

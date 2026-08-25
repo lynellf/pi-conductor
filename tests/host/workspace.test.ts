@@ -28,7 +28,6 @@ import {
   resumeWorkspace,
 } from "../../src/host/workspace/index.js";
 import {
-  computeContainerGuarantee,
   computeGuarantee,
   type GuaranteeResult,
   pathInProjection,
@@ -367,6 +366,26 @@ describe("provisionWorkspace (T3 per-visit provisioning)", () => {
     expect(nestedExists).toBe(true);
     expect(await rf(join(result.workspacePath, "sub", "nested.txt"), "utf-8")).toBe("nested");
   });
+
+  it("rejects container instead of provisioning an in-process worktree fallback", async () => {
+    const runStateDirShort = join(tmp, "runs", "container-unavailable");
+
+    await expect(
+      provisionWorkspace({
+        role: "implementer" as never,
+        visitIndex: 1,
+        backend: "container",
+        source: "snapshot",
+        commit,
+        primaryCheckout,
+        runStateDir: runStateDirShort,
+      }),
+    ).rejects.toMatchObject({ name: "WorkspaceError", code: "container-unavailable" });
+
+    await expect(readdir(join(runStateDirShort, "workspaces"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });
 
 // ─── Tests: resumeWorkspace ──────────────────────────────────────────────
@@ -549,10 +568,8 @@ describe("computeGuarantee (T3 guarantee computation)", () => {
   it("shared → guarantee 'none'", () => {
     const result = computeGuarantee({
       backend: "shared",
-      tools: ["read", "edit", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
+      workspacePath: "/test/integration",
+      snapshotPath: "/test/snapshots/abc12345",
     });
     expect(result.level).toBe("none");
     expect(result.warnings).toEqual([]);
@@ -561,10 +578,8 @@ describe("computeGuarantee (T3 guarantee computation)", () => {
   it("worktree (in-process) → 'confined'", () => {
     const result = computeGuarantee({
       backend: "worktree",
-      tools: ["read", "edit", "write", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
+      workspacePath: "/test/workspaces/implementer-v1",
+      snapshotPath: "/test/snapshots/abc12345",
     });
     expect(result.level).toBe("confined");
   });
@@ -572,51 +587,54 @@ describe("computeGuarantee (T3 guarantee computation)", () => {
   it("copy (in-process) → 'confined'", () => {
     const result = computeGuarantee({
       backend: "copy",
-      tools: ["read", "edit", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
+      workspacePath: "/test/workspaces/implementer-v1",
+      snapshotPath: "/test/snapshots/abc12345",
     });
     expect(result.level).toBe("confined");
   });
 
-  it("container → 'sandbox' (no writable host mounts)", () => {
+  it("uses actual snapshot-relative paths for declared mounts without synthesizing either", () => {
     const result = computeGuarantee({
-      backend: "container",
-      tools: ["read", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
+      backend: "worktree",
+      workspaceConfig: { mounts: [{ path: ".campaign", writable: false }] },
+      workspacePath: "/run/workspaces/implementer-v1",
+      snapshotPath: "/run/snapshots/abc12345",
     });
-    expect(result.level).toBe("sandbox");
+
+    expect(result.projection.workspaceRoot).toBe("/run/workspaces/implementer-v1");
+    expect(result.projection.mounts).toEqual([
+      { path: "/run/snapshots/abc12345/.campaign", writable: false },
+    ]);
   });
 
-  it("container with writable absolute mount → 'confined' + warning (rule 7)", () => {
+  it("does not expose the whole snapshot without an explicit mount", () => {
     const result = computeGuarantee({
-      backend: "container",
-      tools: ["read", "edit", "handoff", "end"],
-      workspaceConfig: {
-        mounts: [{ path: "/data/output", writable: true }],
-      },
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
+      backend: "worktree",
+      workspacePath: "/run/workspaces/implementer-v1",
+      snapshotPath: "/run/snapshots/abc12345",
     });
-    expect(result.level).toBe("confined");
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("capped at 'confined'");
+
+    expect(result.projection.mounts).toEqual([]);
+  });
+
+  it("container input fails instead of producing a guarantee", () => {
+    expect(() =>
+      computeGuarantee({
+        backend: "container",
+        workspacePath: "/test/workspaces/implementer-v1",
+        snapshotPath: "/test/snapshots/abc12345",
+      }),
+    ).toThrow(expect.objectContaining({ name: "WorkspaceError", code: "container-unavailable" }));
   });
 
   it("worktree/copy with writable absolute mount → 'confined' + warning (rule 7)", () => {
     const result = computeGuarantee({
       backend: "worktree",
-      tools: ["read", "edit", "handoff", "end"],
       workspaceConfig: {
         mounts: [{ path: "/shared/data", writable: true }],
       },
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
+      workspacePath: "/test/workspaces/implementer-v1",
+      snapshotPath: "/test/snapshots/abc12345",
     });
     expect(result.level).toBe("confined");
     expect(result.warnings).toHaveLength(1);
@@ -650,87 +668,5 @@ describe("pathInProjection (T3 containment check)", () => {
     expect((result as { inside: false; reason: string }).reason).toContain(
       "outside all projection roots",
     );
-  });
-});
-
-// ─── Tests: computeContainerGuarantee (T6/T8) ───────────────────────────
-
-describe("computeContainerGuarantee (T6/T8 container-specific)", () => {
-  it("adds container-specific fields (network, shell, image)", () => {
-    const base = computeGuarantee({
-      backend: "container",
-      tools: ["read", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
-    });
-    const result = computeContainerGuarantee(base, {
-      image: "docker.io/example/sandbox:latest",
-      network: "none",
-      shell: "container",
-    });
-    expect(result.level).toBe("confined"); // network: none caps sandbox → confined
-    expect((result as { network: string }).network).toBe("none");
-    expect((result as { shell: string }).shell).toBe("container");
-    expect((result as { image?: string }).image).toBe("docker.io/example/sandbox:latest");
-  });
-
-  it("keeps sandbox when network: bridge (no network restriction)", () => {
-    const base = computeGuarantee({
-      backend: "container",
-      tools: ["read", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
-    });
-    const result = computeContainerGuarantee(base, {
-      image: "docker.io/example/sandbox:latest",
-      network: "bridge",
-    });
-    expect(result.level).toBe("sandbox");
-    expect((result as { network: string }).network).toBe("bridge");
-  });
-
-  it("defaults network to bridge when not specified", () => {
-    const base = computeGuarantee({
-      backend: "container",
-      tools: ["read", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
-    });
-    const result = computeContainerGuarantee(base, {});
-    expect(result.level).toBe("sandbox");
-    expect((result as { network: string }).network).toBe("bridge");
-  });
-
-  it("caps sandbox at confined when network: none (even without writable host mounts)", () => {
-    const base = computeGuarantee({
-      backend: "container",
-      tools: ["read", "handoff", "end"],
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
-    });
-    const result = computeContainerGuarantee(base, {
-      network: "none",
-    });
-    expect(result.level).toBe("confined"); // network: none → capped
-  });
-
-  it("preserves confined level (no downgrade from already-limited)", () => {
-    const base = computeGuarantee({
-      backend: "container",
-      tools: ["read", "edit", "handoff", "end"],
-      workspaceConfig: {
-        mounts: [{ path: "/data/output", writable: true }],
-      },
-      source: "snapshot",
-      pinDir: "/test",
-      pinSha8: "abc12345",
-    });
-    const result = computeContainerGuarantee(base, {});
-    // Already capped at confined by rule 7 — network: none doesn't downgrade further
-    expect(result.level).toBe("confined");
   });
 });

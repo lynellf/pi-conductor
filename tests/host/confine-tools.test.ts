@@ -4,12 +4,12 @@
  * Verifies:
  *   1. Only declared tools are exposed (filtering).
  *   2. Read-only roles get no edit/write tools.
- *   3. Paths outside projection are rejected (absolute, `..`, symlink escape).
- *   4. Paths within projection succeed.
- *   5. Multi-root projections work (workspace root + mounts).
+ *   3. Paths outside the workspace are rejected (absolute, `..`, symlink escape).
+ *   4. Workspace-relative paths succeed.
+ *   5. Declared mounts are reachable only through `mounts/<index>/...`.
  */
 
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
@@ -200,6 +200,15 @@ describe("buildConfinedTools — path confinement", () => {
     ]);
   });
 
+  it("rejects a rooted Windows path", async () => {
+    const result = await readToolExecute({ path: "\\\\host\\share\\secret.txt" });
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        text: expect.stringContaining("path must be relative"),
+      }),
+    ]);
+  });
+
   it("rejects a path with `..` traversal", async () => {
     const result = await readToolExecute({ path: "../outside" });
     expect(result.content).toEqual([
@@ -224,6 +233,15 @@ describe("buildConfinedTools — path confinement", () => {
     ]);
   });
 
+  it("writes a workspace-relative path", async () => {
+    await writeToolExecute({ path: "subdir/written.txt", content: "workspace mutation" });
+
+    const { readFile } = await import("node:fs/promises");
+    await expect(readFile(join(sandbox, "subdir/written.txt"), "utf8")).resolves.toBe(
+      "workspace mutation",
+    );
+  });
+
   it("rejects a path that escapes via `..` to outside the workspace", async () => {
     const result = await writeToolExecute({
       path: "../outside-esc.txt",
@@ -237,81 +255,110 @@ describe("buildConfinedTools — path confinement", () => {
   });
 });
 
-// ─── Multi-root projection tests ───────────────────────────────────────
+// ─── Explicit virtual mount routing tests ──────────────────────────────
 
-describe("buildConfinedTools — multi-root projections", () => {
+describe("buildConfinedTools — declared mount routing", () => {
   let mountDir: string;
+  let outsideDir: string;
   let projection: Projection;
-  let writeFile: typeof import("node:fs/promises").writeFile;
-  let mkdir: typeof import("node:fs/promises").mkdir;
 
   beforeEach(async () => {
-    const fs = await import("node:fs/promises");
-    writeFile = fs.writeFile;
-    mkdir = fs.mkdir;
+    const { writeFile } = await import("node:fs/promises");
+    mountDir = await mkdtemp(join(tmpdir(), "pi-conductor-declared-mount-"));
+    outsideDir = await mkdtemp(join(tmpdir(), "pi-conductor-mount-outside-"));
     await createFile("workspace.txt", "workspace content");
-    mountDir = join(sandbox, "mount");
-    await mkdir(mountDir);
     await writeFile(join(mountDir, "mounted.txt"), "mounted content");
-
-    projection = buildProjection(sandbox, [mountDir]);
+    await writeFile(join(outsideDir, "secret.txt"), "outside content");
+    projection = {
+      workspaceRoot: sandbox,
+      mounts: [{ path: mountDir, writable: false }],
+    };
   });
 
-  async function readMount(params: { path: string }): Promise<AgentToolResult<unknown>> {
-    const result = buildConfinedTools(projection, ["read"]);
-    const readTool = await getActiveTool(result, "read");
-    if (readTool === null) throw new Error("read tool not found");
-    // The SDK passes (callId, details, state, _context, _callbacks).
-    // Cast to erase the SDK's generic detail/state types.
-    const execute = readTool as (
-      callId: string,
-      details: unknown,
-      _state: unknown,
-      _ctx: unknown,
-      _cb: unknown,
-    ) => Promise<AgentToolResult<unknown>>;
-    return execute("tool-call-id", params, undefined, undefined, undefined);
+  afterEach(async () => {
+    const { rm } = await import("node:fs/promises");
+    await rm(mountDir, { recursive: true, force: true });
+    await rm(outsideDir, { recursive: true, force: true });
+  });
+
+  async function executeTool(
+    toolName: "read" | "write",
+    params: { path: string; content?: string },
+  ): Promise<AgentToolResult<unknown>> {
+    const result = buildConfinedTools(projection, [toolName]);
+    const tool = await getActiveTool(result, toolName);
+    if (tool === null) throw new Error(`${toolName} tool not found`);
+    return (tool as (...args: unknown[]) => Promise<AgentToolResult<unknown>>)(
+      "tool-call-id",
+      params,
+    );
   }
 
-  it("succeeds for a path inside a mount root (mount within workspace)", async () => {
-    // MountDir is a subdirectory of sandbox, so it's inside the workspace root.
-    const result = await readMount({ path: "mount/mounted.txt" });
+  it("reads a separate declared mount only through its virtual prefix", async () => {
+    const result = await executeTool("read", { path: "mounts/0/mounted.txt" });
+
     expect(result.content).toEqual([
-      expect.objectContaining({
-        text: expect.stringContaining("mounted content"),
-      }),
+      expect.objectContaining({ text: expect.stringContaining("mounted content") }),
     ]);
   });
 
-  it("rejects a path outside all projection roots", async () => {
-    const otherDir = join(tmpdir(), `pi-conductor-other-${Date.now()}`);
-    await mkdir(otherDir);
-    await writeFile(join(otherDir, "other.txt"), "other");
+  it("rejects a declared mount's host absolute path", async () => {
+    const result = await executeTool("read", { path: join(mountDir, "mounted.txt") });
 
-    const otherProjection: Projection = {
-      workspaceRoot: await realpath(sandbox),
-      mounts: [{ path: await realpath(mountDir), writable: true }],
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("path must be relative") }),
+    ]);
+  });
+
+  it("rejects traversal from a declared mount", async () => {
+    const result = await executeTool("read", { path: "mounts/0/../mounted.txt" });
+
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("path must be relative") }),
+    ]);
+  });
+
+  it("refuses a write to a read-only declared mount without changing its file", async () => {
+    const result = await executeTool("write", {
+      path: "mounts/0/mounted.txt",
+      content: "must not be written",
+    });
+
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("read-only mount") }),
+    ]);
+    const { readFile } = await import("node:fs/promises");
+    await expect(readFile(join(mountDir, "mounted.txt"), "utf8")).resolves.toBe("mounted content");
+    await expect(
+      readFile(join(sandbox, "mounts", "0", "mounted.txt"), "utf8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("writes through a writable declared mount", async () => {
+    projection = {
+      ...projection,
+      mounts: [{ path: mountDir, writable: true }],
     };
 
-    const result = buildConfinedTools(otherProjection, ["read"]);
-    const readTool = await getActiveTool(result, "read");
-    if (readTool === null) throw new Error("read tool not found");
+    await executeTool("write", {
+      path: "mounts/0/mounted.txt",
+      content: "mounted mutation",
+    });
 
-    // Create a file outside all projections.
-    await writeFile(join(otherDir, "other.txt"), "other");
+    const { readFile } = await import("node:fs/promises");
+    await expect(readFile(join(mountDir, "mounted.txt"), "utf8")).resolves.toBe("mounted mutation");
+  });
 
-    // Use a path that has traversal (../) — this is caught by the hasTraversal
-    // check before the projection containment check, which is correct behavior
-    // (path traversal is a common exfiltration vector).
-    const res = await (readTool as (...args: unknown[]) => Promise<AgentToolResult<unknown>>)(
-      "tool-call-id",
-      { path: `../other-${Date.now().toString()}/other.txt` },
-    );
+  it("rejects a symlink escape from a declared mount", async () => {
+    const { symlink } = await import("node:fs/promises");
+    await symlink(outsideDir, join(mountDir, "escape"));
 
-    expect(res.content).toEqual([
-      expect.objectContaining({
-        text: expect.stringContaining("relative"),
-      }),
+    const result = await executeTool("read", { path: "mounts/0/escape/secret.txt" });
+
+    expect(result.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining("outside the projection") }),
     ]);
   });
 });

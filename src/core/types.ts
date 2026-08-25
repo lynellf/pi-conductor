@@ -256,6 +256,8 @@ export type TransitionResult =
  *  - `model_effort?: ModelEffort` — the conductor-selected thinking
  *    level for the session (§8.1). Host reads it from the manifest and
  *    defaults omitted efforts to `medium`.
+ *  - `workspace?: SessionWorkspaceDescriptor` — immutable, host-owned
+ *    workspace metadata for `session_started` only (Issue #48 R2b).
  */
 export interface ReduceLifecycleMeta {
   readonly role: Role;
@@ -271,6 +273,8 @@ export interface ReduceLifecycleMeta {
   readonly usage?: UsageRecord;
   readonly visit_index: number;
   readonly parent_session: string | null;
+  /** Host-owned metadata emitted only on `session_started` (Issue #48 R2b). */
+  readonly workspace?: SessionWorkspaceDescriptor;
 }
 
 export declare function reduceLifecycle(
@@ -292,6 +296,9 @@ export interface UsageRecord {
   readonly cost: number;
 }
 
+/** Issue #48 R1: guarantees available from this host. */
+export type WorkspaceGuarantee = "none" | "confined";
+
 /**
  * Issue #48 §9: additive workspace descriptor on `session_started`.
  *
@@ -300,14 +307,13 @@ export interface UsageRecord {
  */
 export interface SessionWorkspaceDescriptor {
   readonly backend: string;
-  readonly guarantee: string;
-  /** Absolute path (worktree/copy) or image name (container). */
+  readonly guarantee: WorkspaceGuarantee;
+  /** Absolute path to the host-provisioned worktree or copy. */
   readonly path_or_image: string;
 }
 
-/** §11.4: lifecycle record for a single role-session invocation. */
-export interface SessionLifecycleEvent {
-  readonly type: "session_started" | "session_ended" | "session_failed";
+/** §11.4: fields shared by every role-session lifecycle record. */
+interface SessionLifecycleEventBase {
   readonly run_id: string;
   readonly role: Role;
   readonly visit_index: number;
@@ -316,14 +322,36 @@ export interface SessionLifecycleEvent {
   readonly model_effort?: ModelEffort;
   readonly session_file: string;
   readonly parent_session: string | null;
-  /** Issue #48: optional workspace descriptor on `session_started`. */
-  readonly workspace?: SessionWorkspaceDescriptor;
   readonly usage?: UsageRecord;
   readonly failure_reason?: string;
   /** Optional provider/host diagnostic for a terminal failure (§11.4). */
   readonly failure_detail?: string;
   readonly ts: number;
 }
+
+/** §11.4: lifecycle record emitted when a role session begins. */
+export interface SessionStartedEvent extends SessionLifecycleEventBase {
+  readonly type: "session_started";
+  /** Issue #48: optional immutable descriptor for this session's workspace. */
+  readonly workspace?: SessionWorkspaceDescriptor;
+}
+
+/** §11.4: lifecycle record emitted when a role session ends cleanly. */
+export interface SessionEndedEvent extends SessionLifecycleEventBase {
+  readonly type: "session_ended";
+  /** Issue #48: workspace metadata belongs exclusively to `session_started`. */
+  readonly workspace?: never;
+}
+
+/** §11.4: lifecycle record emitted when a role session fails. */
+export interface SessionFailedEvent extends SessionLifecycleEventBase {
+  readonly type: "session_failed";
+  /** Issue #48: workspace metadata belongs exclusively to `session_started`. */
+  readonly workspace?: never;
+}
+
+/** §11.4: lifecycle record for a single role-session invocation. */
+export type SessionLifecycleEvent = SessionStartedEvent | SessionEndedEvent | SessionFailedEvent;
 
 // ─── §11.5: Model fallback record ───────────────────────────────────────
 

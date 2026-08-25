@@ -15,26 +15,28 @@
  *      `artifact_rejected` records for each rejection reason
  *      (`outside_projection`, `size_cap`, `count_cap`, `missing`).
  *
- * Auto-patch generation is handled separately (see `autoPatch` below).
+ * Auto-patch generation is handled separately (see `autoPatch` below). This
+ * module stays cohesive above the usual size limit because both collection
+ * paths must share the same physical artifact-store containment guarantee.
  *
  * @module host/artifacts/collect
  * @see spec §7.2 (collection rules)
  */
 
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import type { ArtifactConfig } from "../../manifest/types.js";
 import type { ArtifactCollectedRecord, ArtifactRejectedRecord } from "../../persistence/log.js";
 import type { HandoffArgs } from "../../seam/schema.js";
-import { type Projection, pathInProjection } from "../workspace/mounts.js";
+import type { Projection } from "../workspace/mounts.js";
 
 // ─── Defaults (per spec §4 validation rules) ────────────────────────────
 
 const DEFAULT_MAX_FILE_BYTES = 1_048_576; // 1 MiB
 const DEFAULT_MAX_FILES = 32;
 
-/** Resolve artifact caps from the role's manifest config, falling back to spec defaults. */
+/** Resolves artifact caps from the role's manifest config. */
 function resolveArtifactCaps(config: ArtifactConfig | undefined): {
   maxFileBytes: number;
   maxFiles: number;
@@ -55,40 +57,32 @@ export interface CollectionResult {
   readonly rejected: ArtifactRejectedRecord[];
 }
 
+type ArtifactCollectionErrorCode =
+  | "artifact_store_conflict"
+  | "artifact_store_escape"
+  | "auto_patch_failed"
+  | "not_regular"
+  | "workspace_mismatch";
+
+/** Typed failure when artifact collection cannot safely proceed. */
+export class ArtifactCollectionError extends Error {
+  readonly code: ArtifactCollectionErrorCode;
+
+  constructor(code: ArtifactCollectionErrorCode, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ArtifactCollectionError";
+    this.code = code;
+  }
+}
+
+type ArtifactPathResolution =
+  | { readonly kind: "missing" }
+  | { readonly kind: "outside_projection" }
+  | { readonly kind: "resolved"; readonly path: string; readonly storageSegments: string[] };
+
 // ─── Core collection function ───────────────────────────────────────────
 
-/**
- * Collect declared artifact files from a role session's workspace.
- *
- * Validates each declared path against the role's projection, enforces
- * caps, copies accepted files to the artifacts storage directory, and
- * generates records for both accepted and rejected files.
- *
- * @param options - collection parameters.
- * @param options.runId - the current run ID.
- * @param options.role - the emitting role name.
- * @param options.visitIndex - the role's visit index (0-based).
- * @param options.sessionId - the session ID that emitted the handoff.
- * @param options.workspaceRoot - the emitting role's workspace root path (realpath).
- * @param options.projection - the role's projection (workspace root + mounts).
- * @param options.artifactsConfig - the role's artifact config from the manifest.
- * @param options.artifactsDir - the base artifacts directory
- *   (`<runStateDir>/artifacts/<runId>/`).
- * @param targetHandoff - the validated handoff event containing declared artifacts.
- * @returns collected and rejected records.
- *
- * @remarks
- * - `realpath` containment check uses the nearest-existing-ancestor rule
- *   (same as the confinement factory).
- * - Files outside the projection are rejected with `outside_projection`.
- * - Files exceeding `max_file_bytes` are rejected with `size_cap`.
- * - Once `max_files` is reached, further declarations are rejected with
- *   `count_cap`.
- * - Missing files are recorded as `missing` (not a rejection — the file
- *   was never there to collect).
- *
- * @see spec §7.2 (collection rules)
- */
+/** Collects declared regular files from an emitter workspace — issue #48 §7.2. */
 export async function collectDeclaredArtifacts(
   options: {
     runId: string;
@@ -96,7 +90,7 @@ export async function collectDeclaredArtifacts(
     visitIndex: number;
     sessionId: string;
     workspaceRoot: string;
-    projection: ReturnType<typeof pathInProjection> extends { inside: true } ? Projection : never;
+    projection: Projection;
     artifactsConfig: ArtifactConfig | undefined;
     artifactsDir: string;
   },
@@ -112,143 +106,290 @@ export async function collectDeclaredArtifacts(
     artifactsConfig,
     artifactsDir,
   } = options;
-
-  const caps = resolveArtifactCaps(artifactsConfig);
   const declared = targetHandoff.artifacts;
 
   if (!declared || declared.length === 0) {
     return { collected: [], rejected: [] };
   }
 
+  const workspaceRootReal = await realpath(workspaceRoot);
+  const projectionWorkspaceRootReal = await realpath(projection.workspaceRoot);
+  if (workspaceRootReal !== projectionWorkspaceRootReal) {
+    throw new ArtifactCollectionError(
+      "workspace_mismatch",
+      "artifact workspace root must match the emitter projection root",
+    );
+  }
+
+  const caps = resolveArtifactCaps(artifactsConfig);
   const collected: ArtifactCollectedRecord[] = [];
   const rejected: ArtifactRejectedRecord[] = [];
-  const artifactStoreDir = join(artifactsDir, `${role}-v${visitIndex}`);
-
-  // Ensure the storage directory exists.
-  await mkdir(artifactStoreDir, { recursive: true });
-
-  for (const decl of declared) {
-    // ── Containment check ────────────────────────────────────────────
-    const containmentResult = pathInProjection(
-      decl.path,
-      projection as unknown as ReturnType<typeof pathInProjection> extends { inside: true }
-        ? Projection
-        : never,
-    );
-
-    if (!containmentResult.inside) {
-      rejected.push({
-        type: "artifact_rejected",
-        run_id: runId,
-        role,
-        session_id: sessionId,
-        path: decl.path,
-        reason: "outside_projection",
-        ts: Date.now(),
-      });
-      continue;
-    }
-
-    // ── File existence + size check ────────────────────────────────────
-    // Resolve the file within the workspace. The path is already within
-    // the projection; resolve it relative to the workspace root.
-    const resolvedPath = resolve(workspaceRoot, decl.path);
-
-    let fileStat: { size: number };
-    try {
-      fileStat = await stat(resolvedPath);
-    } catch (_err: unknown) {
-      // File doesn't exist — record as missing.
-      rejected.push({
-        type: "artifact_rejected",
-        run_id: runId,
-        role,
-        session_id: sessionId,
-        path: decl.path,
-        reason: "missing",
-        ts: Date.now(),
-      });
-      continue;
-    }
-
-    // Check file size cap.
-    if (fileStat.size > caps.maxFileBytes) {
-      rejected.push({
-        type: "artifact_rejected",
-        run_id: runId,
-        role,
-        session_id: sessionId,
-        path: decl.path,
-        reason: "size_cap",
-        ts: Date.now(),
-      });
-      continue;
-    }
-
-    // Check count cap (how many files have we already collected?).
-    if (collected.length >= caps.maxFiles) {
-      rejected.push({
-        type: "artifact_rejected",
-        run_id: runId,
-        role,
-        session_id: sessionId,
-        path: decl.path,
-        reason: "count_cap",
-        ts: Date.now(),
-      });
-      continue;
-    }
-
-    // ── Copy file to artifacts store ───────────────────────────────────
-    const fileName = decl.path.split(/[\\/]/).pop() ?? decl.path;
-    const storedPath = join(artifactStoreDir, fileName);
-
-    // Read and hash the file.
-    const fileBuffer = await readFile(resolvedPath);
-    const sha256 = createHash("sha256").update(fileBuffer).digest("hex");
-
-    // Copy to store (atomic-ish: write to temp, then rename).
-    const tempPath = `${storedPath}.tmp-${process.pid}-${Date.now()}`;
-    await mkdir(dirname(storedPath), { recursive: true });
-    await writeFile(tempPath, fileBuffer);
-    // Rename is atomic on POSIX; falls through on failure.
-    try {
-      await (rename as unknown as (from: string, to: string) => Promise<void>)(
-        tempPath,
-        storedPath,
+  for (const declaration of declared) {
+    const resolved = await resolveArtifactPath(declaration.path, workspaceRootReal, projection);
+    if (resolved.kind === "outside_projection") {
+      rejected.push(
+        rejectedArtifact(runId, role, sessionId, declaration.path, "outside_projection"),
       );
-    } catch {
-      // Fallback: try rename via fs/promises (Node 20.1.0+).
-      try {
-        const { rename: fsRename } = await import("node:fs/promises");
-        await fsRename(tempPath, storedPath);
-      } catch {
-        // Last resort: copy then delete temp.
-        await copyFile(tempPath, storedPath);
-        try {
-          await (await import("node:fs/promises")).rm(tempPath);
-        } catch {
-          // Best-effort cleanup of temp file.
-        }
-      }
+      continue;
+    }
+    if (resolved.kind === "missing") {
+      rejected.push(rejectedArtifact(runId, role, sessionId, declaration.path, "missing"));
+      continue;
     }
 
-    collected.push({
+    const fileStat = await stat(resolved.path);
+    if (!fileStat.isFile()) {
+      throw new ArtifactCollectionError(
+        "not_regular",
+        `declared artifact is not a regular file: ${declaration.path}`,
+      );
+    }
+    if (fileStat.size > caps.maxFileBytes) {
+      rejected.push(rejectedArtifact(runId, role, sessionId, declaration.path, "size_cap"));
+      continue;
+    }
+    if (collected.length >= caps.maxFiles) {
+      rejected.push(rejectedArtifact(runId, role, sessionId, declaration.path, "count_cap"));
+      continue;
+    }
+
+    const fileBuffer = await readFile(resolved.path);
+    if (fileBuffer.length > caps.maxFileBytes) {
+      rejected.push(rejectedArtifact(runId, role, sessionId, declaration.path, "size_cap"));
+      continue;
+    }
+
+    const storedPath = await prepareArtifactStorePath(
+      artifactsDir,
+      role,
+      visitIndex,
+      join(...resolved.storageSegments),
+    );
+    await writeArtifactFile(storedPath, fileBuffer);
+
+    const record: ArtifactCollectedRecord = {
       type: "artifact_collected",
       run_id: runId,
       role,
       visit_index: visitIndex,
       session_id: sessionId,
-      source_path: decl.path,
+      source_path: declaration.path,
       stored_path: storedPath,
+      ...(declaration.description !== undefined && { description: declaration.description }),
       kind: "declared",
-      bytes: fileStat.size,
-      sha256,
+      bytes: fileBuffer.length,
+      sha256: createHash("sha256").update(fileBuffer).digest("hex"),
       ts: Date.now(),
-    });
+    };
+    collected.push(record);
   }
 
   return { collected, rejected };
+}
+
+async function prepareArtifactStorePath(
+  artifactsDir: string,
+  role: string,
+  visitIndex: number,
+  relativeStoredPath: string,
+): Promise<string> {
+  const artifactStoreRoot = resolve(artifactsDir);
+  const visitStoreDir = resolve(artifactStoreRoot, `${role}-v${visitIndex}`);
+  const storedPath = resolve(visitStoreDir, relativeStoredPath);
+  if (
+    !isStrictlyWithinRoot(visitStoreDir, artifactStoreRoot) ||
+    !isStrictlyWithinRoot(storedPath, visitStoreDir)
+  ) {
+    throw new ArtifactCollectionError(
+      "artifact_store_escape",
+      `role artifact storage path escapes the run artifact store: ${role}`,
+    );
+  }
+
+  await mkdir(artifactStoreRoot, { recursive: true });
+  const artifactStoreRootReal = await assertArtifactStoreDirectory(
+    artifactStoreRoot,
+    artifactStoreRoot,
+  );
+  await ensureArtifactStoreDirectory(artifactStoreRoot, visitStoreDir, artifactStoreRootReal);
+  await ensureArtifactStoreDirectory(artifactStoreRoot, dirname(storedPath), artifactStoreRootReal);
+
+  const storedParentReal = await realpath(dirname(storedPath));
+  const storedPathReal = resolve(storedParentReal, relative(dirname(storedPath), storedPath));
+  if (!isStrictlyWithinRoot(storedPathReal, artifactStoreRootReal)) {
+    throw new ArtifactCollectionError(
+      "artifact_store_escape",
+      `artifact destination escapes the run artifact store: ${storedPath}`,
+    );
+  }
+  return storedPathReal;
+}
+
+async function ensureArtifactStoreDirectory(
+  artifactStoreRoot: string,
+  directory: string,
+  artifactStoreRootReal: string,
+): Promise<void> {
+  const directoryRelative = relative(artifactStoreRoot, directory);
+  if (!isWithinRoot(directory, artifactStoreRoot)) {
+    throw new ArtifactCollectionError(
+      "artifact_store_escape",
+      `artifact directory escapes the run artifact store: ${directory}`,
+    );
+  }
+
+  let current = artifactStoreRoot;
+  for (const segment of directoryRelative.split(sep)) {
+    if (segment.length === 0) continue;
+    try {
+      current = join(current, segment);
+      await mkdir(current);
+    } catch (cause) {
+      if (!isAlreadyExists(cause)) throw cause;
+    }
+    await assertArtifactStoreDirectory(current, artifactStoreRootReal);
+  }
+}
+
+async function assertArtifactStoreDirectory(directory: string, artifactStoreRootReal: string) {
+  const directoryStat = await lstat(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new ArtifactCollectionError(
+      "artifact_store_escape",
+      `artifact directory must not be a symbolic link: ${directory}`,
+    );
+  }
+  const directoryReal = await realpath(directory);
+  if (!isWithinRoot(directoryReal, artifactStoreRootReal)) {
+    throw new ArtifactCollectionError(
+      "artifact_store_escape",
+      `artifact directory escapes the run artifact store: ${directory}`,
+    );
+  }
+  return directoryReal;
+}
+
+async function writeArtifactFile(storedPath: string, contents: Uint8Array): Promise<void> {
+  try {
+    await writeFile(storedPath, contents, { flag: "wx" });
+  } catch (cause) {
+    if (isAlreadyExists(cause)) {
+      throw new ArtifactCollectionError(
+        "artifact_store_conflict",
+        `artifact storage already contains: ${storedPath}`,
+      );
+    }
+    throw cause;
+  }
+}
+
+function rejectedArtifact(
+  runId: string,
+  role: string,
+  sessionId: string,
+  path: string,
+  reason: ArtifactRejectedRecord["reason"],
+): ArtifactRejectedRecord {
+  return {
+    type: "artifact_rejected",
+    run_id: runId,
+    role,
+    session_id: sessionId,
+    path,
+    reason,
+    ts: Date.now(),
+  };
+}
+
+async function resolveArtifactPath(
+  declaredPath: string,
+  workspaceRoot: string,
+  projection: Projection,
+): Promise<ArtifactPathResolution> {
+  const storageSegments = pathSegments(declaredPath);
+  if (storageSegments === null) return { kind: "outside_projection" };
+
+  const mountIndex = virtualMountIndex(storageSegments);
+  if (mountIndex === null) {
+    return resolvePathInsideRoot(
+      resolve(workspaceRoot, ...storageSegments),
+      workspaceRoot,
+      storageSegments,
+    );
+  }
+
+  const mount = projection.mounts[mountIndex];
+  if (mount === undefined || !mount.writable) return { kind: "outside_projection" };
+  const mountRoot = await realpath(mount.path);
+  return resolvePathInsideRoot(
+    resolve(mountRoot, ...storageSegments.slice(2)),
+    mountRoot,
+    storageSegments,
+  );
+}
+
+function pathSegments(declaredPath: string): string[] | null {
+  if (isAbsolutePath(declaredPath)) return null;
+  const segments = declaredPath.split(/[\\/]/);
+  if (segments.includes("..")) return null;
+  return segments.filter((segment) => segment.length > 0 && segment !== ".");
+}
+
+function virtualMountIndex(segments: readonly string[]): number | null {
+  const index = segments[1];
+  if (segments[0] !== "mounts" || index === undefined || !/^(0|[1-9]\d*)$/.test(index)) {
+    return null;
+  }
+  const value = Number(index);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+async function resolvePathInsideRoot(
+  candidate: string,
+  root: string,
+  storageSegments: string[],
+): Promise<ArtifactPathResolution> {
+  if (!isWithinRoot(candidate, root)) return { kind: "outside_projection" };
+
+  let nearest = candidate;
+  for (;;) {
+    try {
+      const resolved = await realpath(nearest);
+      if (!isWithinRoot(resolved, root)) return { kind: "outside_projection" };
+      return nearest === candidate
+        ? { kind: "resolved", path: resolved, storageSegments }
+        : { kind: "missing" };
+    } catch (cause) {
+      if (!isNotFound(cause)) throw cause;
+      const parent = dirname(nearest);
+      if (parent === nearest) return { kind: "missing" };
+      nearest = parent;
+    }
+  }
+}
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+function isWithinRoot(candidate: string, root: string): boolean {
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolutePath(relativePath))
+  );
+}
+
+function isStrictlyWithinRoot(candidate: string, root: string): boolean {
+  return candidate !== root && isWithinRoot(candidate, root);
+}
+
+function isNotFound(cause: unknown): boolean {
+  return typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT";
+}
+
+function isAlreadyExists(cause: unknown): boolean {
+  return typeof cause === "object" && cause !== null && "code" in cause && cause.code === "EEXIST";
 }
 
 // ─── Auto-patch generation (writable worktree workspaces only) ──────────
@@ -268,7 +409,7 @@ export async function collectDeclaredArtifacts(
  * @param options.role - the emitting role name.
  * @param options.visitIndex - the role's visit index (0-based).
  * @param options.kind - whether this is from a normal terminal or a failure.
- * @returns the generated `ArtifactCollectedRecord` or null if patch generation fails.
+ * @returns the generated `ArtifactCollectedRecord`, or null only when Git produces an empty diff.
  *
  * @see spec §7.2 (auto-patch)
  */
@@ -280,13 +421,12 @@ export async function collectAutoPatch(options: {
   visitIndex: number;
   sessionId: string;
   kind: "declared" | "auto_patch";
+  /** Retry-terminal filename supplied by the host to avoid overwriting a prior patch. */
+  patchFileName?: string;
 }): Promise<ArtifactCollectedRecord | null> {
   const { workspacePath, artifactsDir, runId, role, visitIndex, sessionId, kind } = options;
 
-  const artifactStoreDir = join(artifactsDir, `${role}-v${visitIndex}`);
-  const patchFileName = `patch-${role}-v${visitIndex}.patch`;
-  const storedPath = join(artifactStoreDir, patchFileName);
-
+  let patchBuffer: Buffer;
   try {
     // Generate the patch via git diff.
     // This is a synchronous shell call — acceptable for a short-lived
@@ -299,45 +439,40 @@ export async function collectAutoPatch(options: {
       stdio: "pipe",
     });
 
-    // Step 2: git diff --cached --binary for the staged changes.
-    const patchBuffer = execFileSync("git", ["diff", "--cached", "--binary"], {
+    // Step 2: normal working-tree diff includes ordinary unstaged edits
+    // and the intent-to-add untracked files from step 1.
+    patchBuffer = execFileSync("git", ["diff", "--binary"], {
       cwd: workspacePath,
       stdio: "pipe",
     });
+  } catch (cause) {
+    throw new ArtifactCollectionError(
+      "auto_patch_failed",
+      "could not generate auto-patch from the Git working tree",
+      { cause },
+    );
+  }
 
-    // If no diff was generated, skip auto-patch.
-    if (patchBuffer.length === 0) {
-      return null;
-    }
-
-    // Write the patch to the artifacts store.
-    await mkdir(artifactStoreDir, { recursive: true });
-    await writeFile(storedPath, patchBuffer);
-
-    // Compute SHA-256 of the patch.
-    const sha256 = createHash("sha256").update(patchBuffer).digest("hex");
-
-    return {
-      type: "artifact_collected",
-      run_id: runId,
-      role,
-      visit_index: visitIndex,
-      session_id: sessionId,
-      source_path: "(auto_patch)",
-      stored_path: storedPath,
-      kind,
-      bytes: patchBuffer.length,
-      sha256,
-      ts: Date.now(),
-    };
-  } catch {
-    // Git not available, or workspace is not a git repo — skip.
+  // A successfully generated empty diff has no patch to retain.
+  if (patchBuffer.length === 0) {
     return null;
   }
+
+  const patchFileName = options.patchFileName ?? `patch-${role}-v${visitIndex}.patch`;
+  const storedPath = await prepareArtifactStorePath(artifactsDir, role, visitIndex, patchFileName);
+  await writeArtifactFile(storedPath, patchBuffer);
+
+  return {
+    type: "artifact_collected",
+    run_id: runId,
+    role,
+    visit_index: visitIndex,
+    session_id: sessionId,
+    source_path: "(auto_patch)",
+    stored_path: storedPath,
+    kind,
+    bytes: patchBuffer.length,
+    sha256: createHash("sha256").update(patchBuffer).digest("hex"),
+    ts: Date.now(),
+  };
 }
-
-// ─── Private helpers ────────────────────────────────────────────────────
-
-// Node 20.1.0+ exports `rename` in `fs/promises`, but earlier versions
-// don't. This import helper defers the resolution.
-const rename = (await import("node:fs/promises")).rename;

@@ -84,18 +84,27 @@ import type {
   Role,
   UsageRecord,
 } from "../core/types.js";
-import type { CheckpointSnapshot, PersistedRecord } from "../persistence/log.js";
+import {
+  type ArtifactDeliveryRecord,
+  artifactDelivery,
+  type PersistedRecord,
+} from "../persistence/log.js";
 import { summarizePayload } from "../seam/payload-summary.js";
+import type { HandoffArgs } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
+import { ArtifactCollectionError } from "./artifacts/collect.js";
+import { ArtifactRoutingError, formatArtifactsUnavailableSeedSection } from "./artifacts/route.js";
 import { NoMoreModelsError } from "./errors.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type {
+  ArtifactRouteSource,
   Host,
   RoleSession,
   SeedRunMemoryArgs,
   SessionTerminalReason,
   SpawnRoleOptions,
 } from "./host.js";
+import { RpcChildExitError } from "./rpc/protocol.js";
 import { formatGuidedPrompt, type RunControl } from "./run-control.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 
@@ -125,6 +134,8 @@ export interface RunLoopOptions {
    * role (resume). Fresh runs leave this unset.
    */
   readonly initialHandoffContextRef?: HandoffContextRef | null;
+  /** Durable accepted-handoff delivery resumed before the receiver can prompt. */
+  readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
    *  that lets the host derive model + system prompt + tools from the
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
@@ -189,6 +200,23 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // handoff_context tool. It is replaced only by an accepted handoff or by
   // the persisted run-memory envelope on an orchestrator/resume turn.
   let handoffContextRef: HandoffContextRef | null = opts.initialHandoffContextRef ?? null;
+  // A route exists only for the immediately preceding accepted handoff. Its
+  // host-owned intent is durable before the target checkpoint is persisted,
+  // so public resume can re-materialize and seed before a receiver prompt.
+  let pendingArtifactRoute: PendingArtifactRoute | null =
+    opts.initialArtifactDelivery === null || opts.initialArtifactDelivery === undefined
+      ? null
+      : {
+          role: opts.initialArtifactDelivery.role,
+          visitIndex: opts.initialArtifactDelivery.visit_index,
+          sessionId: opts.initialArtifactDelivery.session_id,
+          receiverRole: opts.initialArtifactDelivery.receiver_role,
+          status: opts.initialArtifactDelivery.status,
+          artifactSeed: opts.initialArtifactDelivery.artifact_seed,
+          ...(opts.initialArtifactDelivery.failure_reason !== undefined && {
+            failureReason: opts.initialArtifactDelivery.failure_reason,
+          }),
+        };
   // Task 17 §11.7 worker-deferral guard: a run-cap breach detected on
   // a worker terminal defers the synthesized `end` to the next
   // orchestrator-current moment (spec: "the host does NOT synthesize
@@ -313,6 +341,12 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     let modelIndex = 0;
     let retryAttempt = 0;
     let roleOutcome: RoleOutcome = { kind: "advance", nextSeed: seed };
+    // This is scoped to one receiving visit, so every fresh process attempt
+    // gets the same host-owned section while the host materializes only once.
+    let artifactSeedForVisit: string | null =
+      pendingArtifactRoute?.receiverRole === role && pendingArtifactRoute.status !== "pending"
+        ? (pendingArtifactRoute.artifactSeed ?? null)
+        : null;
 
     while (true) {
       // Spawn (may throw `NoMoreModelsError` when the list is
@@ -329,6 +363,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         delete spawnDefaults.handoffContextRef;
         session = await host.spawnRole(role, {
           ...spawnDefaults,
+          visitIndex,
           modelIndex,
           ...(handoffContextRef !== null && { handoffContextRef }),
         });
@@ -375,13 +410,100 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       let inner: InnerOutcome = { kind: "failed" };
       let sessionHostReason: SessionTerminalReason = null;
       let capturedUsage: UsageRecord = ZERO_USAGE;
-      let nextSeed = seed;
+      let nextSeed =
+        artifactSeedForVisit === null
+          ? seed
+          : appendArtifactSeedSection(seed, artifactSeedForVisit);
       let recoveringFromNoEmission = false;
 
       try {
         const sessionId = session.sessionId;
         const sessionFile = session.sessionFile;
         const sessionParentId = parentSessionId;
+
+        if (pendingArtifactRoute !== null) {
+          if (pendingArtifactRoute.receiverRole !== role) {
+            throw new Error(
+              `runLoop: artifact route receiver '${String(
+                pendingArtifactRoute.receiverRole,
+              )}' does not match spawned role '${String(role)}'`,
+            );
+          }
+
+          let artifactSeed = pendingArtifactRoute.artifactSeed;
+          if (pendingArtifactRoute.status === "unavailable") {
+            if (artifactSeed === null || artifactSeed === undefined) {
+              const failureReason =
+                pendingArtifactRoute.failureReason ?? "artifact_delivery_failed";
+              artifactSeed = formatArtifactsUnavailableSeedSection({
+                emittingRole: pendingArtifactRoute.role,
+                emittingVisitIndex: pendingArtifactRoute.visitIndex,
+                phase: "delivery",
+                failureReason,
+              });
+              host.persistRecord(
+                artifactDelivery({
+                  run_id: checkpoint.run_id,
+                  role: pendingArtifactRoute.role,
+                  visit_index: pendingArtifactRoute.visitIndex,
+                  session_id: pendingArtifactRoute.sessionId,
+                  receiver_role: pendingArtifactRoute.receiverRole,
+                  status: "unavailable",
+                  artifact_seed: artifactSeed,
+                  failure_reason: failureReason,
+                }),
+              );
+            }
+          } else if (pendingArtifactRoute.status === "pending" || artifactSeed === undefined) {
+            try {
+              if (host.routeAcceptedHandoffArtifacts === undefined) {
+                throw new Error("host does not provide accepted-handoff artifact routing");
+              }
+              artifactSeed = await host.routeAcceptedHandoffArtifacts(
+                pendingArtifactRoute,
+                session,
+              );
+              host.persistRecord(
+                artifactDelivery({
+                  run_id: checkpoint.run_id,
+                  role: pendingArtifactRoute.role,
+                  visit_index: pendingArtifactRoute.visitIndex,
+                  session_id: pendingArtifactRoute.sessionId,
+                  receiver_role: pendingArtifactRoute.receiverRole,
+                  status: "materialized",
+                  artifact_seed: artifactSeed,
+                }),
+              );
+            } catch (error) {
+              const failureReason = artifactDeliveryFailureReason(error);
+              artifactSeed = formatArtifactsUnavailableSeedSection({
+                emittingRole: pendingArtifactRoute.role,
+                emittingVisitIndex: pendingArtifactRoute.visitIndex,
+                phase: "delivery",
+                failureReason,
+              });
+              host.persistRecord(
+                artifactDelivery({
+                  run_id: checkpoint.run_id,
+                  role: pendingArtifactRoute.role,
+                  visit_index: pendingArtifactRoute.visitIndex,
+                  session_id: pendingArtifactRoute.sessionId,
+                  receiver_role: pendingArtifactRoute.receiverRole,
+                  status: "unavailable",
+                  artifact_seed: artifactSeed,
+                  failure_reason: failureReason,
+                }),
+              );
+            }
+          }
+
+          artifactSeedForVisit = artifactSeed ?? null;
+          pendingArtifactRoute = null;
+          nextSeed =
+            artifactSeedForVisit === null
+              ? seed
+              : appendArtifactSeedSection(seed, artifactSeedForVisit);
+        }
 
         // ── §12.1 step 4: session_started for the new session ─────────
         const started = reduceLifecycle(checkpoint, "session_started", def, {
@@ -393,6 +515,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           parent_session: sessionParentId,
           model: session.model,
           model_effort: session.effort,
+          ...(session.workspace !== undefined ? { workspace: session.workspace } : {}),
         });
         checkpoint = started.checkpoint;
         host.persistRecord(started.record);
@@ -406,7 +529,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         // Track this session as parent for the next session_started.
         parentSessionId = sessionId;
 
-        const finishUserAbort = (usage: UsageRecord): RunLoopResult => {
+        const finishUserAbort = async (usage: UsageRecord): Promise<RunLoopResult> => {
           const failed = reduceLifecycle(checkpoint, "session_failed", def, {
             role,
             sessionId,
@@ -422,6 +545,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           checkpoint = failed.checkpoint;
           host.persistRecord(failed.record);
           host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+          await collectSessionArtifacts(host, session, {
+            role,
+            visitIndex,
+            terminal: "session_failed",
+          });
           return { finalCheckpoint: checkpoint, exitReason: "aborted" };
         };
 
@@ -436,7 +564,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           if (prePromptHostReason === "user_aborted") {
             capturedUsage = host.captureUsage(session);
             inner = { kind: "failed" };
-            return finishUserAbort(capturedUsage);
+            return await finishUserAbort(capturedUsage);
           }
 
           let promptError: unknown = null;
@@ -455,9 +583,14 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           if (hostReasonOnPrompt === "user_aborted") {
             sessionHostReason = hostReasonOnPrompt;
             inner = { kind: "failed" };
-            return finishUserAbort(capturedUsage);
+            return await finishUserAbort(capturedUsage);
           }
-          if (promptError !== null && hostReasonOnPrompt === null) {
+          // An isolated RPC child exiting before turn settlement is a contract
+          // breach. Keep the failure reason stable and loop-owned rather than
+          // exposing the child stderr/code or throwing past lifecycle cleanup.
+          const promptFailureReason =
+            promptError instanceof RpcChildExitError ? "rpc_child_exit" : null;
+          if (promptError !== null && hostReasonOnPrompt === null && promptFailureReason === null) {
             throw promptError;
           }
 
@@ -490,6 +623,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             sessionHostReason = hostReason;
             if (
               hostReason === null &&
+              promptFailureReason === null &&
               validated.reason === "no_emission" &&
               !recoveringFromNoEmission
             ) {
@@ -497,7 +631,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               nextSeed = formatNoEmissionRecovery(role, def);
               continue;
             }
-            const failureReason: string = hostReason ?? validated.reason;
+            const failureReason: string = hostReason ?? promptFailureReason ?? validated.reason;
             const failureDetail =
               hostReason === "model_error" ? (host.sessionFailureDetail?.(session) ?? null) : null;
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
@@ -520,6 +654,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             // persist a fresh snapshot so latestCheckpoint reflects
             // the post-terminal state (active=null).
             host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+            await collectSessionArtifacts(host, session, {
+              role,
+              visitIndex,
+              terminal: "session_failed",
+            });
             inner = { kind: "failed" };
             break;
           }
@@ -558,6 +697,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               checkpoint = ended.checkpoint;
               host.persistRecord(ended.record);
               host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+              await collectSessionArtifacts(host, session, {
+                role,
+                visitIndex,
+                terminal: "session_ended",
+              });
 
               const synthesized: MachineEvent = {
                 type: "end",
@@ -598,7 +742,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           // upstream cause. This is the single point where the host
           // can override a non-empty capture buffer.
           const hostReasonOnOk = host.sessionTerminalReason(session);
-          if (hostReasonOnOk !== null) {
+          const terminalReasonOnOk = hostReasonOnOk ?? promptFailureReason;
+          if (terminalReasonOnOk !== null) {
             sessionHostReason = hostReasonOnOk;
             const failureDetail =
               hostReasonOnOk === "model_error"
@@ -612,7 +757,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               visit_index: visitIndex,
               parent_session: sessionParentId,
               usage: capturedUsage,
-              failureReason: hostReasonOnOk,
+              failureReason: terminalReasonOnOk,
               ...(failureDetail !== null && { failureDetail }),
               model: session.model,
               model_effort: session.effort,
@@ -620,6 +765,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             checkpoint = failed.checkpoint;
             host.persistRecord(failed.record);
             host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+            await collectSessionArtifacts(host, session, {
+              role,
+              visitIndex,
+              terminal: "session_failed",
+            });
             inner = { kind: "failed" };
             break;
           }
@@ -664,35 +814,97 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
                   context_ref: acceptedContextRef,
                 }
               : reduceResult.record;
-          host.persistRecord(enrichedRecord);
-
-          // Clear the capture buffer for the next attempt (whether the
-          // reduce was accepted or rejected). For accepted: defensive;
-          // the session is about to end anyway. For rejected: required,
-          // so the next prompt's emission is the sole candidate for
-          // validateEmission (without this, a second emission would read
-          // as `extra_emission` against the rejected capture).
-          session.resetCaptureBuffer();
-
           if (reduceResult.kind === "rejected") {
-            // ── Retry in-session: re-prompt with legal_targets (§11.3) ─
-            // No terminal lifecycle — the session continues. Persist the
-            // rejected record (above), then surface legal_targets to the
-            // model and re-prompt.
+            host.persistRecord(enrichedRecord);
+            // A rejected event keeps the live session open, so its next
+            // capture must become the sole seam candidate.
+            session.resetCaptureBuffer();
             nextSeed = formatRejectionMessage(reduceResult);
             recoveringFromNoEmission = false;
             continue;
           }
 
-          // ── Accepted (§12.1) ─────────────────────────────────────────
-          // 1. Update the checkpoint from the reducer and persist it.
-          checkpoint = reduceResult.checkpoint;
-          const snapshot: CheckpointSnapshot = {
-            type: "checkpoint_snapshot",
-            checkpoint,
-          };
-          host.persistRecord(snapshot);
+          // A valid machine event remains accepted even if the host cannot
+          // collect its optional artifacts. Persist the accepted transition
+          // first; artifact failure is a semantic deficiency for the receiver
+          // and must never become a session contract breach (§4, §7.3.2).
+          host.persistRecord(enrichedRecord);
+          let acceptedArtifactRoute: PendingArtifactRoute | null =
+            validated.event.type === "handoff" &&
+            reduceResult.state !== "done" &&
+            session.artifactCollection !== undefined
+              ? {
+                  role,
+                  visitIndex,
+                  sessionId,
+                  receiverRole: reduceResult.state,
+                  status: "pending",
+                  artifactSeed: null,
+                }
+              : null;
+          if (acceptedArtifactRoute !== null) {
+            host.persistRecord(
+              artifactDelivery({
+                run_id: checkpoint.run_id,
+                role: acceptedArtifactRoute.role,
+                visit_index: acceptedArtifactRoute.visitIndex,
+                session_id: acceptedArtifactRoute.sessionId,
+                receiver_role: acceptedArtifactRoute.receiverRole,
+                status: "pending",
+                artifact_seed: null,
+              }),
+            );
+          }
 
+          // The accepted checkpoint must become durable independently of
+          // host-side artifact collection. If collection fails or the process
+          // crashes while it runs, resume stays at the accepted receiver.
+          checkpoint = reduceResult.checkpoint;
+          host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+
+          try {
+            await collectSessionArtifacts(host, session, {
+              role,
+              visitIndex,
+              terminal: "session_ended",
+              ...(validated.event.type === "handoff" && {
+                handoff: validated.event.payload as HandoffArgs,
+              }),
+            });
+          } catch (error) {
+            if (acceptedArtifactRoute !== null) {
+              const failureReason = artifactCollectionFailureReason(error);
+              const artifactSeed = formatArtifactsUnavailableSeedSection({
+                emittingRole: acceptedArtifactRoute.role,
+                emittingVisitIndex: acceptedArtifactRoute.visitIndex,
+                phase: "collection",
+                failureReason,
+              });
+              acceptedArtifactRoute = {
+                ...acceptedArtifactRoute,
+                status: "unavailable",
+                artifactSeed,
+                failureReason,
+              };
+              host.persistRecord(
+                artifactDelivery({
+                  run_id: checkpoint.run_id,
+                  role: acceptedArtifactRoute.role,
+                  visit_index: acceptedArtifactRoute.visitIndex,
+                  session_id: acceptedArtifactRoute.sessionId,
+                  receiver_role: acceptedArtifactRoute.receiverRole,
+                  status: "unavailable",
+                  artifact_seed: artifactSeed,
+                  failure_reason: failureReason,
+                }),
+              );
+            }
+          }
+          session.resetCaptureBuffer();
+
+          // ── Accepted (§12.1) ─────────────────────────────────────────
+          // 1. The accepted checkpoint was persisted before host artifact
+          // collection so a semantic collection failure cannot erase it.
           // 2. §12.1 step 2: session_ended for the just-finished session.
           // active_role_session was set by session_started above; reduce
           // did NOT clear it (only lifecycle terminals do). session_ended
@@ -745,6 +957,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               : null;
           handoffContextRef = acceptedContextRef;
           nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext, acceptedContextRef);
+          pendingArtifactRoute = acceptedArtifactRoute;
           inner = { kind: "advance", nextSeed };
           break;
         }
@@ -916,6 +1129,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   return { finalCheckpoint: checkpoint, exitReason: "done" };
 }
 
+/** Append a host-owned artifact inventory after the role-provided handoff payload. */
+function appendArtifactSeedSection(seed: string, artifactSeed: string): string {
+  return `${seed}\n\n${artifactSeed}`;
+}
+
 function formatDeferredEndPrompt(): string {
   return [
     "The previous end request was deferred because new operator guidance arrived.",
@@ -937,6 +1155,13 @@ type RoleOutcome =
   | { readonly kind: "advance"; readonly nextSeed: string }
   | { readonly kind: "exhausted" };
 
+interface PendingArtifactRoute extends ArtifactRouteSource {
+  readonly status: "pending" | "materialized" | "unavailable";
+  /** Persisted host section; undefined is tolerated only for older records. */
+  readonly artifactSeed: string | null | undefined;
+  readonly failureReason?: string;
+}
+
 const ZERO_USAGE: UsageRecord = Object.freeze({
   input: 0,
   output: 0,
@@ -945,6 +1170,28 @@ const ZERO_USAGE: UsageRecord = Object.freeze({
   tokens: 0,
   cost: 0,
 }) as UsageRecord;
+
+/** Run the optional host collector before the outer loop can spawn another role. */
+function artifactCollectionFailureReason(error: unknown): string {
+  return error instanceof ArtifactCollectionError ? error.code : "artifact_collection_failed";
+}
+
+function artifactDeliveryFailureReason(error: unknown): string {
+  return error instanceof ArtifactRoutingError ? error.code : "artifact_delivery_failed";
+}
+
+async function collectSessionArtifacts(
+  host: Host,
+  session: RoleSession,
+  args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly terminal: "session_ended" | "session_failed";
+    readonly handoff?: HandoffArgs;
+  },
+): Promise<void> {
+  await host.collectTerminalArtifacts?.(session, args);
+}
 
 function waitForRetry(delayMs: number): Promise<void> {
   if (delayMs === 0) return Promise.resolve();

@@ -231,7 +231,11 @@ subagents:
       const unsubscribe = subscribeToRecords((record) => {
         if (record.type.startsWith("subagent_")) {
           seen.push(record);
-          durableAtNotify.push(log.records(checkpoint.run_id).includes(record));
+          durableAtNotify.push(
+            log
+              .records(checkpoint.run_id)
+              .some((persisted) => JSON.stringify(persisted) === JSON.stringify(record)),
+          );
         }
       });
 

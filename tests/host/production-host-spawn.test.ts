@@ -1,163 +1,12 @@
-/**
- * Task 7A.3 — ProductionHost.spawnRole wiring.
- *
- * Covers Task 7A.3's acceptance criteria:
- *   - `systemPromptOverride` is invoked through the resource loader
- *     path. (Asserted by reading `session.systemPrompt` after spawn;
- *     the SDK's `systemPrompt` getter returns the loader's
- *     `getSystemPrompt()`, which uses the override closure.)
- *   - `tools` contains role-declared tools plus force-injected
- *     `handoff` and `end` exactly once. (Asserted via
- *     `session.getActiveToolNames()` + the pure `buildToolsAllowlist`
- *     test.)
- *   - Role session files are created under a per-run conductor
- *     directory, not under pi's own session tree
- *     (`~/.pi/agent/sessions/<encoded-cwd>/`). (Asserted by
- *     checking the `sessionFile` path is under the host's
- *     `sessionDir`.)
- *   - No `ExtensionCommandContext.newSession()` / session-tree
- *     replacement surface is used. (Code-level: the implementation
- *     only calls `createAgentSession` + `SessionManager.create`,
- *     never `ctx.newSession`. The grep guard on `src/core` +
- *     `src/manifest` + `src/seam` + `src/cost` still holds; the
- *     production host stays in `src/host/` per invariant #1.)
- *
- * Splits from `production-host.test.ts` (which has the 7A.1 + 7A.2
- * tests) because the spawn test setup is heavier (real SDK session,
- * real model registry with a registered stub model) and the file
- * was approaching the 400-LOC ceiling.
- */
+/** Task 7A SDK-backed ProductionHost spawn behavior. */
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
-
-import {
-  buildToolsAllowlist,
-  InMemoryRecordLog,
-  type LoadedManifest,
-  loadManifestFromString,
-  ProductionHost,
-  type RoleSession,
-} from "../../src/index.js";
-
-// ─── Test fixture ─────────────────────────────────────────────────────
-
-/**
- * Manifest that uses the stub provider for the implementer role.
- * The stub provider must be registered with a `models` entry so
- * `ModelRegistry.find("stub", "stub-model")` returns the model —
- * `registerProvider` without a `models` list leaves the registry
- * with no models for that provider (the e2e test bypasses `find`
- * entirely by passing `model` directly; the production host goes
- * through `find` so we need the entry).
- */
-const STUB_MANIFEST = `
-version: 1
-roles:
-  - name: orchestrator
-    is_orchestrator: true
-    system_prompt: .pi/roles/orchestrator.md
-    tools: [read, handoff, end]
-  - name: implementer
-    max_visits: 3
-    models:
-      - model: stub:stub-model
-        effort: max
-    system_prompt: .pi/roles/implementer.md
-    tools: [read, edit, handoff, end]
-`;
-
-/**
- * v2 manifest with a manifest-base-relative prompt path. The
- * path is `roles/implementer.md` (no leading `.pi/`) — the
- * convention documented in the spec delta for v2. The test
- * fixture (Task 7D.4) writes the prompt file under the
- * manifest's directory, not under `<cwd>/.pi/roles/`, and
- * asserts the v2 resolver finds it via `loadedManifest.manifestDir`.
- */
-const STUB_V2_MANIFEST = `
-version: 2
-roles:
-  - name: orchestrator
-    is_orchestrator: true
-    system_prompt: roles/orchestrator.md
-    tools: [read, handoff, end]
-  - name: implementer
-    max_visits: 3
-    models:
-      - model: stub:stub-model
-        effort: high
-    system_prompt: roles/implementer.md
-    tools: [read, edit, handoff, end]
-`;
-
-function makeLoadedManifest(): LoadedManifest {
-  return loadManifestFromString(STUB_MANIFEST);
-}
-
-/**
- * Build a v2 `LoadedManifest` rooted at `manifestDir` (the
- * directory the test wrote the prompt files under). The
- * production host's `loadedManifest.manifestDir` is the load-time
- * `dirname(path)`; for this test the in-memory YAML has no file
- * path, so we pass the manifest dir explicitly via
- * `loadManifestFromString(yaml, manifestDir)`.
- */
-function makeLoadedV2Manifest(manifestDir: string): LoadedManifest {
-  return loadManifestFromString(STUB_V2_MANIFEST, manifestDir);
-}
-
-function makeModelRegistryWithStub(): ModelRegistry {
-  const authStorage = AuthStorage.inMemory();
-  const registry = ModelRegistry.inMemory(authStorage);
-  const stubModel = makeStubModel();
-  // Steps: empty script → stream() emits a single
-  // `done { reason: "stop", message }` (no tool call). The test
-  // never invokes `session.prompt()`, so the script content is
-  // inert — we only need the session to be constructible.
-  registry.registerProvider("stub", {
-    api: "anthropic-messages" as const,
-    apiKey: "stub-dummy-key-not-used",
-    baseUrl: stubModel.baseUrl,
-    streamSimple: makeStubStreamFunction({ steps: [] }),
-    models: [
-      {
-        id: stubModel.id,
-        name: stubModel.name,
-        api: stubModel.api,
-        baseUrl: stubModel.baseUrl,
-        reasoning: stubModel.reasoning,
-        input: [...stubModel.input],
-        cost: { ...stubModel.cost },
-        contextWindow: stubModel.contextWindow,
-        maxTokens: stubModel.maxTokens,
-      },
-    ],
-  });
-  return registry;
-}
-
-function makeHost(
-  cwd: string,
-  overrides: { sessionDir?: string; agentDir?: string; loadedManifest?: LoadedManifest } = {},
-): ProductionHost {
-  return new ProductionHost({
-    modelRegistry: makeModelRegistryWithStub(),
-    cwd,
-    log: new InMemoryRecordLog(),
-    loadedManifest: overrides.loadedManifest ?? makeLoadedManifest(),
-    runId: "test-run-1",
-    ...(overrides.sessionDir !== undefined && { sessionDir: overrides.sessionDir }),
-    ...(overrides.agentDir !== undefined && { agentDir: overrides.agentDir }),
-  });
-}
-
-// ─── buildToolsAllowlist — pure helper ────────────────────────────────
+import { buildToolsAllowlist, loadManifestFromString } from "../../src/index.js";
+import { asFull, makeHost, makeLoadedV2Manifest } from "./production-host-fixture.js";
 
 describe("buildToolsAllowlist — Task 7A.3", () => {
   it("returns just [handoff, end, ask_user] when the role declares no tools", () => {
@@ -166,17 +15,22 @@ describe("buildToolsAllowlist — Task 7A.3", () => {
   });
 
   it("returns the role's tools plus handoff, end, and ask_user, in declared order", () => {
-    const result = buildToolsAllowlist(["read", "edit", "bash"]);
-    // Order: declared tools first (in order), then handoff, then end.
-    expect(result).toEqual(["read", "edit", "bash", "handoff", "end", "ask_user"]);
+    expect(buildToolsAllowlist(["read", "edit", "bash"])).toEqual([
+      "read",
+      "edit",
+      "bash",
+      "handoff",
+      "end",
+      "ask_user",
+    ]);
   });
 
-  it("deduplicates when the role already declares handoff, end, or ask_user exactly once", () => {
+  it("deduplicates force-injected tools", () => {
     const result = buildToolsAllowlist(["read", "handoff", "end", "ask_user"]);
     expect(result).toEqual(["read", "handoff", "end", "ask_user"]);
-    expect(result.filter((n) => n === "handoff")).toHaveLength(1);
-    expect(result.filter((n) => n === "end")).toHaveLength(1);
-    expect(result.filter((n) => n === "ask_user")).toHaveLength(1);
+    expect(result.filter((name) => name === "handoff")).toHaveLength(1);
+    expect(result.filter((name) => name === "end")).toHaveLength(1);
+    expect(result.filter((name) => name === "ask_user")).toHaveLength(1);
   });
 
   it("adds the predecessor-only context tool only when a host reference is present", () => {
@@ -196,20 +50,16 @@ describe("buildToolsAllowlist — Task 7A.3", () => {
   });
 });
 
-// ─── ProductionHost.spawnRole — Task 7A.3 wiring ─────────────────────
-
-describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
+describe("ProductionHost.spawnRole — Task 7A.3 SDK wiring", () => {
   let workdir: string;
-  let rolePromptPath: string;
   let rolePromptMarker: string;
 
   beforeEach(async () => {
     workdir = await mkdtemp(join(tmpdir(), "pi-conductor-prod-host-spawn-"));
     await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
-    rolePromptPath = join(workdir, ".pi/roles/implementer.md");
     rolePromptMarker = "PROMPT_MARKER_spawn_test_7A3";
     await writeFile(
-      rolePromptPath,
+      join(workdir, ".pi/roles/implementer.md"),
       `You are the implementer. ${rolePromptMarker}\nFollow the user's plan.`,
       "utf8",
     );
@@ -220,65 +70,38 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it("invokes systemPromptOverride through the resource loader path (session.systemPrompt contains the loaded file)", async () => {
-    const host = makeHost(workdir);
-    const session = await host.spawnRole("implementer", { modelIndex: 0 });
-
-    // The SDK's `AgentSession.systemPrompt` is sourced from the
-    // resource loader's `getSystemPrompt()`, which uses our
-    // `systemPromptOverride` closure. Asserting the marker is
-    // present verifies the override was wired correctly.
+  it("loads the system prompt through the resource-loader override", async () => {
+    const session = await makeHost(workdir).spawnRole("implementer", { modelIndex: 0 });
     expect(asFull(session).systemPrompt).toContain(rolePromptMarker);
-
     await session.dispose();
   });
 
-  it("creates the session file under a per-run conductor directory, not under pi's session tree", async () => {
+  it("creates its session file in the conductor run directory, not Pi's session tree", async () => {
     const host = makeHost(workdir);
     const session = await host.spawnRole("implementer", { modelIndex: 0 });
-
-    // Plan: "rooted under the conductor run log directory rather
-    // than pi's own session tree." Default `sessionDir` is
-    // `<cwd>/.pi-conductor/runs/<runId>/sessions`.
-    expect(session.sessionFile).toBeTruthy();
     expect(session.sessionFile).toContain(
       join(workdir, ".pi-conductor", "runs", host.runId, "sessions"),
     );
-    // The path must NOT live under pi's default session tree
-    // (~/.pi/agent/sessions/<encoded-cwd>/). The SessionManager's
-    // default would be in `getSessionDir() = ~/.pi/agent/sessions/...`.
-    // We can't predict the home path, so we assert the inverse:
-    // the file is NOT under `~/.pi/agent/...`.
-    const homePi = join(process.env.HOME ?? "/tmp", ".pi", "agent", "sessions");
-    expect(session.sessionFile).not.toContain(homePi);
-
+    expect(session.sessionFile).not.toContain(
+      join(process.env.HOME ?? "/tmp", ".pi", "agent", "sessions"),
+    );
     await session.dispose();
   });
 
-  it("force-includes handoff, end, and ask_user in the session's active tools exactly once", async () => {
-    const host = makeHost(workdir);
-    const session = await host.spawnRole("implementer", { modelIndex: 0 });
-    const toolNames = asFull(session).getActiveToolNames();
-
-    // The session is constructed with the custom handoff + end
-    // tools and the `tools` allowlist. All should appear in
-    // the active set. The role manifest already declares
-    // [read, edit, handoff, end]; the `buildToolsAllowlist`
-    // dedup keeps them exactly once each, and force-injects
-    // ask_user for every role.
-    expect(toolNames).toContain("handoff");
-    expect(toolNames).toContain("end");
-    expect(toolNames).toContain("ask_user");
-    expect(toolNames.filter((n) => n === "handoff")).toHaveLength(1);
-    expect(toolNames.filter((n) => n === "end")).toHaveLength(1);
-    expect(toolNames.filter((n) => n === "ask_user")).toHaveLength(1);
-
+  it("force-includes handoff, end, and ask_user exactly once", async () => {
+    const session = await makeHost(workdir).spawnRole("implementer", { modelIndex: 0 });
+    const names = asFull(session).getActiveToolNames();
+    expect(names).toContain("handoff");
+    expect(names).toContain("end");
+    expect(names).toContain("ask_user");
+    expect(names.filter((name) => name === "handoff")).toHaveLength(1);
+    expect(names.filter((name) => name === "end")).toHaveLength(1);
+    expect(names.filter((name) => name === "ask_user")).toHaveLength(1);
     await session.dispose();
   });
 
   it("registers the bounded predecessor context tool for a referenced handoff", async () => {
-    const host = makeHost(workdir);
-    const session = await host.spawnRole("implementer", {
+    const session = await makeHost(workdir).spawnRole("implementer", {
       modelIndex: 0,
       handoffContextRef: {
         run_id: "test-run-1",
@@ -286,29 +109,20 @@ describe("ProductionHost.spawnRole — Task 7A.3 wiring", () => {
         source_session_file: "/tmp/previous-orchestrator.jsonl",
       },
     });
-    const toolNames = asFull(session).getActiveToolNames();
-
-    expect(toolNames).toContain("handoff_context");
-    expect(toolNames.filter((n) => n === "handoff_context")).toHaveLength(1);
-
+    const names = asFull(session).getActiveToolNames();
+    expect(names.filter((name) => name === "handoff_context")).toHaveLength(1);
     await session.dispose();
   });
 
-  it("exposes the logical provider:id and effort on the returned RoleSession for the §11.4 lifecycle record", async () => {
-    const host = makeHost(workdir);
-    const session = await host.spawnRole("implementer", { modelIndex: 0 });
-
-    // The role's manifest declares `models: [{ model: 'stub:stub-model', effort: 'max' }]`.
-    // The `logical` field is the original `provider:id` string the loop records
-    // on `session_started` (§11.4); `effort` is the manifest's thinking level.
+  it("exposes logical model and effort for lifecycle records", async () => {
+    const session = await makeHost(workdir).spawnRole("implementer", { modelIndex: 0 });
     expect(session.model).toBe("stub:stub-model");
     expect(session.effort).toBe("max");
-
     await session.dispose();
   });
 
-  it("defaults the system/default model path to effort=medium", async () => {
-    const loadedManifest = loadManifestFromString(`
+  it("defaults the system model path to medium effort", async () => {
+    const manifest = loadManifestFromString(`
 version: 1
 roles:
   - name: orchestrator
@@ -320,84 +134,43 @@ roles:
     system_prompt: .pi/roles/implementer.md
     tools: [read, edit, handoff, end]
 `);
-    const host = makeHost(workdir, { loadedManifest });
-    const session = await host.spawnRole("implementer", { modelIndex: 0 });
-
+    const session = await makeHost(workdir, { loadedManifest: manifest }).spawnRole("implementer");
     expect(session.model).toBeNull();
     expect(session.effort).toBe("medium");
-
     await session.dispose();
   });
 
-  it("derives the per-run sessionDir from cwd + runId by default (constructor does NOT require it)", async () => {
+  it("derives and creates the default per-run session directory", async () => {
     const host = makeHost(workdir);
-    // Default derivation: `<cwd>/.pi-conductor/runs/<runId>/sessions`.
     expect(host.sessionDir).toBe(join(workdir, ".pi-conductor", "runs", host.runId, "sessions"));
-    // The constructor mkdir's the dir so SessionManager.create
-    // doesn't ENOENT.
     const { existsSync } = await import("node:fs");
     expect(existsSync(host.sessionDir)).toBe(true);
   });
 
-  it("honors an explicit `sessionDir` override on the constructor options", async () => {
-    const explicitDir = join(workdir, "explicit", "sessions");
-    const host = makeHost(workdir, { sessionDir: explicitDir });
-    expect(host.sessionDir).toBe(explicitDir);
-
+  it("honors an explicit session directory", async () => {
+    const sessionDir = join(workdir, "explicit", "sessions");
+    const host = makeHost(workdir, { sessionDir });
     const session = await host.spawnRole("implementer", { modelIndex: 0 });
-    expect(session.sessionFile).toContain(explicitDir);
+    expect(session.sessionFile).toContain(sessionDir);
     await session.dispose();
   });
 
-  it("never uses `ExtensionCommandContext.newSession()` or any session-tree replacement surface (code-level check)", async () => {
-    // Behavior: the production host only calls `createAgentSession`
-    // + `SessionManager.create` (file-backed, branchless). The
-    // phase-7a plan §1 rejects `ctx.newSession` / `ctx.fork` for
-    // role sessions because that would put workers in pi's session
-    // tree and break the host-owned `run_id`-keyed log (§11.1).
-    //
-    // This test is a smoke: spawn works (the wiring is correct) and
-    // the sessionFile is in the conductor dir (not pi's tree). The
-    // stronger "no `newSession` import" guarantee is enforced by
-    // the grep guard on `src/core` + `src/manifest` + `src/seam`
-    // + `src/cost` and by code review of `src/host/production-host.ts`
-    // (no import of `ExtensionCommandContext` or any newSession /
-    // fork surface).
-    const host = makeHost(workdir);
-    const session = await host.spawnRole("implementer", { modelIndex: 0 });
+  it("uses the standalone SDK session path rather than the extension session tree", async () => {
+    const session = await makeHost(workdir).spawnRole("implementer", { modelIndex: 0 });
     expect(session.sessionFile).toBeTruthy();
     await session.dispose();
   });
 });
 
-// ─── Phase 7D Task 7D.4: v2 manifest-base-relative prompt ─────────────
-// The v1 fixture above exercises the back-compat branch (v1 +
-// cwd-relative prompt). This block exercises the new v2 branch
-// (v2 + manifestDir-relative prompt) end-to-end through
-// `ProductionHost.spawnRole`.
-
-describe("ProductionHost.spawnRole — v2 manifest-base-relative prompt (Task 7D.4)", () => {
+describe("ProductionHost.spawnRole — v2 manifest-base-relative prompt", () => {
   let workdir: string;
   let manifestDir: string;
-  let rolePromptMarker: string;
 
   beforeEach(async () => {
     workdir = await mkdtemp(join(tmpdir(), "pi-conductor-prod-host-spawn-v2-cwd-"));
-    // The v2 manifest lives in its own directory (mimics a
-    // HOME-sourced manifest under `~/.pi/`). The fixture writes
-    // prompts here, not under `<workdir>/.pi/roles/`.
     manifestDir = await mkdtemp(join(tmpdir(), "pi-conductor-prod-host-spawn-v2-manifest-"));
     await mkdir(join(manifestDir, "roles"), { recursive: true });
-    rolePromptMarker = "V2_PROMPT_MARKER_7D4";
-    await writeFile(
-      join(manifestDir, "roles", "implementer.md"),
-      `You are the implementer (v2). ${rolePromptMarker}\nFollow the plan.`,
-      "utf8",
-    );
-    // Sanity: the same path under `workdir` (where v1 would have
-    // looked) does NOT contain the marker. This is what makes
-    // the v2 test meaningful: if the resolver fell back to cwd
-    // by mistake, the assertion would fail.
+    await writeFile(join(manifestDir, "roles", "implementer.md"), "V2_PROMPT_MARKER_7D4", "utf8");
     await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
     await writeFile(join(workdir, ".pi/roles/implementer.md"), "WRONG v1 content", "utf8");
   });
@@ -408,47 +181,12 @@ describe("ProductionHost.spawnRole — v2 manifest-base-relative prompt (Task 7D
     vi.restoreAllMocks();
   });
 
-  it("v2: loads the system prompt from `manifestDir`, not from `cwd`", async () => {
-    // Build a v2 LoadedManifest rooted at `manifestDir`. The
-    // v2 manifest declares `system_prompt: roles/implementer.md`
-    // (no leading `.pi/`), which the v1 resolver would have
-    // interpreted as a cwd-relative path under `<cwd>/roles/...`.
-    // Under v2, `loadSystemPrompt` resolves against
-    // `loadedManifest.manifestDir` and finds the file in
-    // `<manifestDir>/roles/implementer.md`.
-    const v2Manifest = makeLoadedV2Manifest(manifestDir);
-    const host = makeHost(workdir, { loadedManifest: v2Manifest });
-
-    const session = await host.spawnRole("implementer", { modelIndex: 0 });
-    // The marker is in `<manifestDir>/roles/implementer.md`,
-    // not in `<workdir>/.pi/roles/implementer.md`. If the
-    // resolver accidentally fell back to cwd, the prompt would
-    // be "WRONG v1 content" (no marker).
-    expect(asFull(session).systemPrompt).toContain(rolePromptMarker);
+  it("loads the v2 prompt from manifestDir rather than cwd", async () => {
+    const session = await makeHost(workdir, {
+      loadedManifest: makeLoadedV2Manifest(manifestDir),
+    }).spawnRole("implementer", { modelIndex: 0 });
+    expect(asFull(session).systemPrompt).toContain("V2_PROMPT_MARKER_7D4");
     expect(asFull(session).systemPrompt).not.toContain("WRONG v1 content");
-
     await session.dispose();
   });
 });
-
-// ─── Session teardown ────────────────────────────────────────────────
-// Each `spawnRole` call creates a real SDK session (file-backed
-// `SessionManager`, real `AgentSession`). `dispose()` must be called
-// to release file descriptors. The test helper uses the
-// `singleFork: true` vitest pool (`vitest.config.ts`) so all tests
-// in this file share one Node process; the `afterEach` `rm -rf` on
-// the temp cwd cleans the session files, but the FD is released
-// by `session.dispose()` in each test.
-
-// The `RoleSession` interface in `src/host/host.ts` exposes only
-// the loop's seam surface. The 7A.3 tests need to read two SDK
-// fields (`systemPrompt`, `getActiveToolNames()`) that the loop
-// never sees. The cast is a one-line escape; the behavior is
-// tested in the assertions.
-type FullSession = RoleSession & {
-  systemPrompt: string;
-  getActiveToolNames(): string[];
-};
-function asFull(session: RoleSession): FullSession {
-  return session as unknown as FullSession;
-}

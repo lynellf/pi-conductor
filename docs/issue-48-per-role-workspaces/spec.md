@@ -41,8 +41,8 @@ honestly-labeled** feature:
   explicitly configured;
 - keep the normal shared-workspace mode available as the default.
 
-**Initial consumer** (per the issue): `lynellf/yugioh-dsl-compiler`'s multi-role corpus
-campaign, where planner-owned ranking/exhaustion state must not be visible to the
+**Initial consumer** (per the issue): an external multi-role corpus campaign,
+where planner-owned ranking/exhaustion state must not be visible to the
 implementer. That campaign's Docker/copy-based spike (external issue #394) validates the
 concept; this spec makes the machinery a conductor feature with an honest guarantee
 model.

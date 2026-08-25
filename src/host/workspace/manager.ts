@@ -41,11 +41,23 @@ export class WorkspaceError extends Error {
       | "worktree-exists"
       | "invalid-commit"
       | "copy-failed"
-      | "non-git",
+      | "non-git"
+      | "container-unavailable"
+      | "snapshot-pin-invalid",
     options?: { cause?: unknown },
   ) {
     super(message, options);
     this.name = "WorkspaceError";
+  }
+}
+
+/** Reject workspace backends that this host cannot provide honestly. */
+export function assertSupportedWorkspaceBackend(backend: WorkspaceBackend): void {
+  if (backend === "container") {
+    throw new WorkspaceError(
+      "workspace backend 'container' is unavailable; use 'worktree' or 'copy' for confined roles",
+      "container-unavailable",
+    );
   }
 }
 
@@ -153,6 +165,8 @@ export async function provisionWorkspace(options: {
   sharedSnapshot?: SnapshotCheckout;
 }): Promise<WorkspaceResult> {
   const { role, visitIndex, backend, commit, primaryCheckout, runStateDir } = options;
+
+  assertSupportedWorkspaceBackend(backend);
 
   if (backend === "shared") {
     // Shared role: uses the integration workspace directly.
@@ -335,15 +349,6 @@ export async function provisionWorkspace(options: {
     }
 
     return { workspacePath, backend };
-  }
-
-  // `container` backend: the workspace is provisioned the same as worktree/copy;
-  // the Docker spawn happens separately in the RPC adapter (T8).
-  // For now, provision the underlying worktree/copy as specified.
-  // The container image + network config is stored in the manifest, not here.
-  // Fall through to worktree logic (most common container use case).
-  if (backend === "container") {
-    return provisionWorkspace({ ...options, backend: "worktree" });
   }
 
   // Should not reach here — validated by manifest validation.

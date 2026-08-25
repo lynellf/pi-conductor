@@ -14,6 +14,7 @@ export {
   ROLE_FILE_TOOL_NAMES,
 } from "./confine-tools.js";
 export {
+  assertSupportedWorkspaceBackend,
   ensureSharedSnapshotForResume,
   listSnapshotShortCommits,
   listWorkspaceNames,
@@ -25,8 +26,6 @@ export {
   type WorkspaceResult,
 } from "./manager.js";
 export {
-  type ContainerGuarantee,
-  computeContainerGuarantee,
   computeGuarantee,
   type GuaranteeLevel,
   type GuaranteeResult,
@@ -34,6 +33,10 @@ export {
   type ProjectionMount,
   pathInProjection,
 } from "./mounts.js";
+export {
+  assertPersistedSnapshotPinResolves,
+  readPersistedSnapshotPin,
+} from "./run-snapshot-pin.js";
 export {
   ensureSnapshotCheckout,
   hasSnapshotCheckout,
