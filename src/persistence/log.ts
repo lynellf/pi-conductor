@@ -155,7 +155,7 @@ export interface SubagentStartedRecord {
   readonly parent_role?: Role;
   /** Loop-owned parent role visit (Issue #52; absent in legacy records). */
   readonly parent_visit_index?: number;
-  /** Exact parent-materialized subset selected for this child, when requested (Issue #52). */
+  /** Exact effective parent-materialized projection applied to this child (Issue #52). */
   readonly projection_paths?: readonly string[];
   /** Resolved profile model retained for recovery and terminal roll-up. */
   readonly model: string;
