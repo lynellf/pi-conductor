@@ -120,6 +120,19 @@ export interface HandoffValidationRejectedRecord {
   readonly ts: number;
 }
 
+/** Host-owned audit record for one explicit progressive-disclosure request (issue #51). */
+export interface ProgressiveDisclosureRecord {
+  readonly type: "progressive_disclosure";
+  readonly run_id: string;
+  readonly role: Role;
+  readonly visit_index: number;
+  readonly requested_paths: readonly string[];
+  readonly reason: string;
+  readonly outcome: "approved" | "denied" | "unavailable";
+  readonly disclosed_paths: readonly string[];
+  readonly ts: number;
+}
+
 // ─── Delegation lite §7: subagent records ──────────────────────────────
 
 /** Delegation lite §7: usage contributed to perRun, perModel, and perSubagent rollups. */
@@ -207,6 +220,7 @@ export type PersistedRecord =
   | RunSeededRecord
   | RunContextRecord
   | HandoffValidationRejectedRecord
+  | ProgressiveDisclosureRecord
   | SubagentStartedRecord
   | SubagentCompletedRecord
   | SubagentFailedRecord

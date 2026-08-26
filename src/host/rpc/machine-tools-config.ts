@@ -33,6 +33,14 @@ export const machineToolsConfigSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    requestFilesBridge: Type.Optional(
+      Type.Object(
+        {
+          directory: Type.String({ minLength: 1 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -64,6 +72,8 @@ export interface WriteMachineToolsConfigOptions {
   readonly declaredToolNames: readonly string[];
   /** Explicitly provision the host-owned bridge directory required for `delegate`. */
   readonly enableDelegateBridge?: boolean;
+  /** Explicitly provision the host-owned bridge directory required for `request_files`. */
+  readonly enableRequestFilesBridge?: boolean;
 }
 
 /** Atomically write one isolated role's static machine-tools configuration under the host run state. */
@@ -85,15 +95,20 @@ export async function writeMachineToolsConfig(
   await chmod(configuredDirectory, 0o700);
   const configDir = realpathSync(configuredDirectory);
   const roleFilename = encodeRoleFilename(options.role);
-  const delegateBridge =
-    options.enableDelegateBridge === true
+  const bridgeDirectory =
+    options.enableDelegateBridge === true || options.enableRequestFilesBridge === true
       ? await createDelegateBridgeDirectory(configDir, roleFilename, options.visitIndex)
       : undefined;
   const config: MachineToolsConfig = {
     workspaceRoot,
     mounts,
     declaredToolNames: [...options.declaredToolNames],
-    ...(delegateBridge === undefined ? {} : { delegateBridge: { directory: delegateBridge } }),
+    ...(options.enableDelegateBridge === true && bridgeDirectory !== undefined
+      ? { delegateBridge: { directory: bridgeDirectory } }
+      : {}),
+    ...(options.enableRequestFilesBridge === true && bridgeDirectory !== undefined
+      ? { requestFilesBridge: { directory: bridgeDirectory } }
+      : {}),
   };
   if (!Value.Check(machineToolsConfigSchema, config)) {
     throw new MachineToolsConfigError("machine-tools configuration has an invalid structure");
@@ -154,6 +169,16 @@ export function loadMachineToolsConfig(env: NodeJS.ProcessEnv = process.env): Ma
             directory: requireDirectory(
               parsed.delegateBridge.directory,
               "delegate bridge directory",
+            ),
+          }),
+        }),
+    ...(parsed.requestFilesBridge === undefined
+      ? {}
+      : {
+          requestFilesBridge: Object.freeze({
+            directory: requireDirectory(
+              parsed.requestFilesBridge.directory,
+              "request_files bridge directory",
             ),
           }),
         }),

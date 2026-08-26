@@ -30,6 +30,7 @@ import type {
   DelegationPolicy,
   Manifest,
   ModelConfig,
+  ProgressiveDisclosurePolicy,
   RoleConfig,
   SubagentProfile,
   WorkspaceBackend,
@@ -380,6 +381,14 @@ function parseWorkspaceConfig(raw: unknown, roleIndex: number): WorkspaceConfig 
       ? parseWorkspaceNetwork(entry.network, `${path}.network`)
       : undefined;
 
+  const progressive_disclosure =
+    entry.progressive_disclosure !== undefined
+      ? parseProgressiveDisclosurePolicy(
+          entry.progressive_disclosure,
+          `${path}.progressive_disclosure`,
+        )
+      : undefined;
+
   const config: WorkspaceConfig = {
     backend,
     source,
@@ -387,6 +396,7 @@ function parseWorkspaceConfig(raw: unknown, roleIndex: number): WorkspaceConfig 
     ...(shell !== undefined && { shell }),
     ...(image !== undefined && { image }),
     ...(network !== undefined && { network }),
+    ...(progressive_disclosure !== undefined && { progressive_disclosure }),
   };
   return Object.freeze(config) as WorkspaceConfig;
 }
@@ -411,6 +421,38 @@ function parseWorkspaceSource(value: unknown, path: string): WorkspaceSource {
     throw new ManifestParseError(`${path} must be "snapshot" or "ref:<git-ref>" (got '${value}')`);
   }
   return value as WorkspaceSource;
+}
+
+function parseProgressiveDisclosurePolicy(raw: unknown, path: string): ProgressiveDisclosurePolicy {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
+  }
+  const entry = raw as Record<string, unknown>;
+
+  return Object.freeze({
+    initial_paths: parseProgressiveDisclosurePathArray(
+      entry.initial_paths,
+      `${path}.initial_paths`,
+    ),
+    allowed_paths: parseProgressiveDisclosurePathArray(
+      entry.allowed_paths,
+      `${path}.allowed_paths`,
+    ),
+  }) as ProgressiveDisclosurePolicy;
+}
+
+function parseProgressiveDisclosurePathArray(value: unknown, path: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new ManifestParseError(`${path} must be an array of repository-relative paths`);
+  }
+  const paths: string[] = [];
+  for (const [index, item] of value.entries()) {
+    if (typeof item !== "string") {
+      throw new ManifestParseError(`${path}[${index}] must be a string`);
+    }
+    paths.push(item);
+  }
+  return Object.freeze(paths);
 }
 
 function parseWorkspaceMount(value: unknown, path: string): WorkspaceMount {

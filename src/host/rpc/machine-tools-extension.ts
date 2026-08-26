@@ -18,9 +18,11 @@ import {
   delegateArgsSchema,
   endArgsSchema,
   handoffArgsSchema,
+  type RequestFilesArgs,
+  requestFilesArgsSchema,
 } from "../../seam/schema.js";
 import { buildConfinedTools } from "../workspace/confine-tools.js";
-import { requestDelegateBridge } from "./delegate-bridge.js";
+import { requestDelegateBridge, requestFilesBridge } from "./delegate-bridge.js";
 import { loadMachineToolsConfig } from "./machine-tools-config.js";
 
 /** Register the static, config-gated tool surface for one isolated RPC role process. */
@@ -36,6 +38,12 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
   for (const tool of confined.tools) pi.registerTool(tool);
   if (config.delegateBridge !== undefined && config.declaredToolNames.includes("delegate")) {
     pi.registerTool(createDelegateBridgeTool(config.delegateBridge.directory));
+  }
+  if (
+    config.requestFilesBridge !== undefined &&
+    config.declaredToolNames.includes("request_files")
+  ) {
+    pi.registerTool(createRequestFilesBridgeTool(config.requestFilesBridge.directory));
   }
 }
 
@@ -61,6 +69,38 @@ function createDelegateBridgeTool(directory: string): ToolDefinition {
             },
           ],
           details: {},
+          isError: true,
+          terminate: false,
+        };
+      }
+    },
+  });
+}
+
+function createRequestFilesBridgeTool(directory: string): ToolDefinition {
+  return defineTool({
+    name: "request_files",
+    label: "request_files",
+    description: "Request explicitly named files from the conductor's pinned projection.",
+    parameters: requestFilesArgsSchema,
+    async execute(_toolCallId, args: RequestFilesArgs, signal, _onUpdate, ctx) {
+      try {
+        const result = await requestFilesBridge({
+          directory,
+          args,
+          ...(signal === undefined ? {} : { signal }),
+        });
+        if (result.terminate === true) ctx.shutdown();
+        return result;
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `request_files unavailable: ${error instanceof Error ? error.message : "bridge failure"}`,
+            },
+          ],
+          details: { outcome: "unavailable", code: "bridge-unavailable" },
           isError: true,
           terminate: false,
         };

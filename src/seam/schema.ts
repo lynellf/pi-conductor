@@ -204,6 +204,24 @@ export const delegateArgsSchema = Type.Object({
 /** Typed view of validated delegate args. */
 export type DelegateArgs = Static<typeof delegateArgsSchema>;
 
+// ─── Issue #51: progressive disclosure ────────────────────────────────
+
+/**
+ * Explicit, bounded request for additional files in an isolated projection.
+ * The host validates each path against the pinned snapshot and configured
+ * policy before materializing anything.
+ */
+export const requestFilesArgsSchema = Type.Object(
+  {
+    paths: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+    reason: Type.String({ minLength: 1, maxLength: 1024, pattern: "\\S" }),
+  },
+  { additionalProperties: false },
+);
+
+/** Typed view of a progressive-disclosure request at the host seam. */
+export type RequestFilesArgs = Static<typeof requestFilesArgsSchema>;
+
 // ─── Delegation lite §6: report_result tool ───────────────────────────
 
 /**
