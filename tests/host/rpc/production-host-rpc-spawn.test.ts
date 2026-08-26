@@ -126,7 +126,10 @@ function makeAbortableStubRegistry(
 }
 
 /** Hold every delegated child live until the test has inspected its worktree. */
-function makeConcurrentAbortableStubRegistry(onStarted: () => void): {
+function makeConcurrentAbortableStubRegistry(
+  onStarted: () => void,
+  onModelContext?: (context: unknown) => void,
+): {
   readonly registry: ModelRegistry;
   releaseAll(): void;
 } {
@@ -138,7 +141,8 @@ function makeConcurrentAbortableStubRegistry(onStarted: () => void): {
     api: "anthropic-messages" as const,
     apiKey: "stub-dummy-key-not-used",
     baseUrl: stubModel.baseUrl,
-    streamSimple: (_model, _context, options) => {
+    streamSimple: (_model, context, options) => {
+      onModelContext?.(context);
       const stream = createAssistantMessageEventStream();
       const message: AssistantMessage = {
         role: "assistant",
@@ -537,6 +541,149 @@ subagents:
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
+  it("does not disclose an undisclosed ancestor AGENTS.md to a delegated child model", async () => {
+    const runId = "r52-isolated-delegate-ancestor-context";
+    const log = new InMemoryRecordLog();
+    const childSessionStarted = vi.fn();
+    const childModelContexts: string[] = [];
+    const blocking = makeConcurrentAbortableStubRegistry(childSessionStarted, (context) => {
+      childModelContexts.push(JSON.stringify(context) ?? "");
+    });
+    const parentChild = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    parentChild.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") parentChild.success(command);
+    };
+    const childPromptMarker = "CHILD_PROFILE_PROMPT_MARKER_R52_ANCESTOR_CONTEXT";
+    const ancestorCanary = "UNDISCLOSED_ANCESTOR_AGENTS_CANARY_R52";
+    await writeFile(join(workdir, "delegate-child.md"), childPromptMarker, "utf8");
+    await writeFile(join(workdir, "parent-disclosed.txt"), "parent disclosure only\n", "utf8");
+    await execFileAsync("git", ["add", "delegate-child.md", "parent-disclosed.txt"], {
+      cwd: workdir,
+    });
+    await execFileAsync("git", ["commit", "-m", "add ancestor context canaries"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: blocking.registry,
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 1
+      max_parallel: 1
+    workspace:
+      backend: worktree
+      source: snapshot
+      progressive_disclosure:
+        initial_paths: [parent-disclosed.txt]
+        allowed_paths: [parent-disclosed.txt]
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
+        parentChild.success(parentChild.command("get_state"), {
+          sessionId: "isolated-delegate-ancestor-context-parent",
+          sessionFile: join(workdir, "isolated-delegate-ancestor-context-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated delegate parent configuration");
+    }
+    const parentWorkspace = parent.workspace?.path_or_image;
+    if (parentWorkspace === undefined) {
+      throw new Error("expected isolated progressive delegate parent workspace");
+    }
+    const childWorktreesRoot = join(workdir, ".pi-conductor", "runs", runId, "worktrees");
+    await mkdir(childWorktreesRoot, { recursive: true });
+    await writeFile(join(childWorktreesRoot, "AGENTS.md"), ancestorCanary, "utf8");
+
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      await expect(readFile(join(parentWorkspace, "parent-disclosed.txt"), "utf8")).resolves.toBe(
+        "parent disclosure only\n",
+      );
+      await expect(readFile(join(parentWorkspace, "AGENTS.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      const delegated = registeredMachineTool("delegate").execute(
+        "isolated-delegate-ancestor-context",
+        {
+          tasks: [
+            {
+              id: "delegate-child-ancestor-context-task",
+              subagent: "delegate-child",
+              objective: "Inspect only the disclosed parent file.",
+              expected_output: "Report the confined inspection.",
+              projection_paths: ["parent-disclosed.txt"],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+      try {
+        await vi.waitFor(() => expect(childSessionStarted).toHaveBeenCalledOnce());
+        const childStarted = log
+          .records(runId)
+          .find((record) => record.type === "subagent_started");
+        if (childStarted === undefined || childStarted.type !== "subagent_started") {
+          throw new Error("expected delegated child to start");
+        }
+        await expect(
+          readFile(join(childStarted.worktree_path, "parent-disclosed.txt"), "utf8"),
+        ).resolves.toBe("parent disclosure only\n");
+        await expect(readFile(join(childStarted.worktree_path, "AGENTS.md"))).rejects.toMatchObject(
+          {
+            code: "ENOENT",
+          },
+        );
+
+        // This is the context delivered to the child model's stream, not loader input/options.
+        expect(childModelContexts).toHaveLength(1);
+        expect(childModelContexts[0]).toContain(childPromptMarker);
+        expect(childModelContexts[0]).not.toContain(ancestorCanary);
+
+        blocking.releaseAll();
+        await expect(delegated).resolves.toMatchObject({ details: { remainingChildren: 0 } });
+      } finally {
+        blocking.releaseAll();
+        await delegated.catch(() => undefined);
+      }
     } finally {
       if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
       else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;

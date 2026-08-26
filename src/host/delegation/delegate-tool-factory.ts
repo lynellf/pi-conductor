@@ -238,6 +238,7 @@ async function createChildSession(
   const loader = new DefaultResourceLoader({
     cwd: config.worktreePath,
     agentDir: opts.agentDir,
+    noContextFiles: true,
     systemPromptOverride: () => config.systemPrompt,
   });
   await loader.reload();
