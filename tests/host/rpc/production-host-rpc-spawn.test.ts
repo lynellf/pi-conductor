@@ -52,6 +52,23 @@ function registeredMachineTool(name: string): ToolDefinition {
   return tool;
 }
 
+/** Read the actual tool set supplied to the child model, rather than loader configuration. */
+function toolNamesFromModelContext(context: unknown): string[] {
+  if (typeof context !== "object" || context === null) {
+    throw new Error("expected the child model to receive an object context");
+  }
+  const tools = Reflect.get(context, "tools");
+  if (!Array.isArray(tools)) throw new Error("expected the child model context to contain tools");
+  return tools.map((tool) => {
+    if (typeof tool !== "object" || tool === null) {
+      throw new Error("expected a child model tool definition");
+    }
+    const name = Reflect.get(tool, "name");
+    if (typeof name !== "string") throw new Error("expected a named child model tool");
+    return name;
+  });
+}
+
 function makeAbortableStubRegistry(
   onStarted: () => void,
   onAbort: () => void,
@@ -549,13 +566,13 @@ subagents:
     }
   });
 
-  it("does not disclose an undisclosed ancestor AGENTS.md to a delegated child model", async () => {
+  it("does not disclose an unprojected external agent-dir skill to a delegated child model", async () => {
     const runId = "r52-isolated-delegate-ancestor-context";
     const log = new InMemoryRecordLog();
     const childSessionStarted = vi.fn();
-    const childModelContexts: string[] = [];
+    const childModelContexts: unknown[] = [];
     const blocking = makeConcurrentAbortableStubRegistry(childSessionStarted, (context) => {
-      childModelContexts.push(JSON.stringify(context) ?? "");
+      childModelContexts.push(context);
     });
     const parentChild = new HostFakeRpcChild();
     let adapterOptions: NodeRoleSessionOptions | undefined;
@@ -565,6 +582,14 @@ subagents:
     };
     const childPromptMarker = "CHILD_PROFILE_PROMPT_MARKER_R52_ANCESTOR_CONTEXT";
     const ancestorCanary = "UNDISCLOSED_ANCESTOR_AGENTS_CANARY_R52";
+    const externalAgentDir = join(mountedDir, "unprojected-agent-dir");
+    const externalSkillMarker = "UNPROJECTED_EXTERNAL_AGENT_DIR_SKILL_CANARY_R52";
+    await mkdir(join(externalAgentDir, "skills", "unprojected-resource"), { recursive: true });
+    await writeFile(
+      join(externalAgentDir, "skills", "unprojected-resource", "SKILL.md"),
+      `---\nname: unprojected-resource\ndescription: ${externalSkillMarker}\n---\n\n# Unprojected resource\n`,
+      "utf8",
+    );
     await writeFile(join(workdir, "delegate-child.md"), childPromptMarker, "utf8");
     await writeFile(join(workdir, "parent-disclosed.txt"), "parent disclosure only\n", "utf8");
     await execFileAsync("git", ["add", "delegate-child.md", "parent-disclosed.txt"], {
@@ -577,6 +602,7 @@ subagents:
     const host = new ProductionHost({
       modelRegistry: blocking.registry,
       cwd: workdir,
+      agentDir: externalAgentDir,
       log,
       loadedManifest: loadManifestFromString(`
 version: 1
@@ -676,8 +702,21 @@ subagents:
 
         // This is the context delivered to the child model's stream, not loader input/options.
         expect(childModelContexts).toHaveLength(1);
-        expect(childModelContexts[0]).toContain(childPromptMarker);
-        expect(childModelContexts[0]).not.toContain(ancestorCanary);
+        const [childModelContext] = childModelContexts;
+        if (childModelContext === undefined) throw new Error("expected one child model context");
+        const childModelContextText = JSON.stringify(childModelContext);
+        expect(childModelContextText).toContain(childPromptMarker);
+        expect(childModelContextText).not.toContain(ancestorCanary);
+        expect(childModelContextText).not.toContain(externalSkillMarker);
+        expect(toolNamesFromModelContext(childModelContext)).toEqual([
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "edit",
+          "write",
+          "report_result",
+        ]);
 
         blocking.releaseAll();
         await expect(delegated).resolves.toMatchObject({ details: { remainingChildren: 0 } });

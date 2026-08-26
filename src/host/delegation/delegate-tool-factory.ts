@@ -238,8 +238,13 @@ async function createChildSession(
   const loader = new DefaultResourceLoader({
     cwd: config.worktreePath,
     agentDir: opts.agentDir,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
     noContextFiles: true,
     systemPromptOverride: () => config.systemPrompt,
+    appendSystemPromptOverride: () => [],
   });
   await loader.reload();
   const { session } = await createAgentSession({
