@@ -473,6 +473,159 @@ subagents:
     }
   });
 
+  it("serializes concurrent isolated delegate calls before admitting another child", async () => {
+    const runId = "r52-isolated-delegate-serial-admission";
+    const log = new InMemoryRecordLog();
+    const childStarted = vi.fn();
+    const blocking = makeAbortableStubRegistry(childStarted, vi.fn());
+    const parentChild = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    parentChild.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") parentChild.success(command);
+    };
+    await writeFile(join(workdir, "delegate-child.md"), "Report the delegated result.", "utf8");
+    await execFileAsync("git", ["add", "delegate-child.md"], { cwd: workdir });
+    await execFileAsync("git", ["commit", "-m", "add concurrent delegated child prompt"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: blocking.registry,
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 2
+      max_parallel: 1
+    workspace: { backend: worktree, source: snapshot }
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
+        parentChild.success(parentChild.command("get_state"), {
+          sessionId: "isolated-delegate-serial-admission-parent",
+          sessionFile: join(workdir, "isolated-delegate-serial-admission-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated delegate parent configuration");
+    }
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      const delegate = registeredMachineTool("delegate");
+      await expect(
+        delegate.execute(
+          "isolated-delegate-serial-admission-rejected",
+          {
+            tasks: [
+              {
+                id: "rejected-delegate-child-task",
+                subagent: "undeclared-subagent",
+                objective: "This request must be rejected.",
+                expected_output: "No child starts.",
+              },
+            ],
+          },
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        ),
+      ).resolves.toMatchObject({ isError: true, details: { remainingChildren: 2 } });
+
+      const first = delegate.execute(
+        "isolated-delegate-serial-admission-first",
+        {
+          tasks: [
+            {
+              id: "first-delegate-child-task",
+              subagent: "delegate-child",
+              objective: "Wait for the concurrent admission check.",
+              expected_output: "Return after the admission check.",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+      const second = delegate.execute(
+        "isolated-delegate-serial-admission-second",
+        {
+          tasks: [
+            {
+              id: "second-delegate-child-task",
+              subagent: "delegate-child",
+              objective: "Wait for the concurrent admission check.",
+              expected_output: "Return after the admission check.",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      await vi.waitFor(() => expect(childStarted).toHaveBeenCalledTimes(1));
+      expect(
+        log.records(runId).filter((record) => record.type === "subagent_started"),
+      ).toHaveLength(1);
+
+      blocking.release();
+      await vi.waitFor(() => expect(childStarted).toHaveBeenCalledTimes(2));
+      expect(
+        log.records(runId).filter((record) => record.type === "subagent_started"),
+      ).toHaveLength(2);
+
+      blocking.release();
+      const results = await Promise.all([first, second]);
+      expect(results[0]).toMatchObject({
+        content: [
+          expect.objectContaining({ text: expect.stringContaining("first-delegate-child-task") }),
+        ],
+      });
+      expect(results[1]).toMatchObject({
+        content: [
+          expect.objectContaining({ text: expect.stringContaining("second-delegate-child-task") }),
+        ],
+      });
+      for (const result of results) expect(result).not.toMatchObject({ isError: true });
+      expect(results.map((result) => result.details)).toEqual(
+        expect.arrayContaining([{ remainingChildren: 1 }, { remainingChildren: 0 }]),
+      );
+      expect(log.records(runId).filter((record) => record.type === "subagent_failed")).toHaveLength(
+        2,
+      );
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
   it("cancels active delegated work when an isolated parent aborts without returning late bridge success", async () => {
     const runId = "r4-isolated-delegate-abort";
     const log = new InMemoryRecordLog();

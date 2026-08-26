@@ -61,6 +61,7 @@ export interface DelegateToolFactoryOptions {
 export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefinition {
   const policy = delegationPolicy(opts.role);
   let remaining = Math.min(opts.remainingChildren, policy.max_children_per_session);
+  let executionTail = Promise.resolve();
 
   return defineTool({
     name: "delegate",
@@ -73,7 +74,13 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
         void opts.manager.abortAll();
       };
       signal?.addEventListener("abort", abortChildren, { once: true });
+      const previousExecution = executionTail;
+      let finishExecution: () => void = () => {};
+      executionTail = new Promise<void>((resolve) => {
+        finishExecution = resolve;
+      });
       try {
+        await previousExecution;
         const result = await executeDelegate({
           args,
           policy,
@@ -114,6 +121,7 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
         };
       } finally {
         signal?.removeEventListener("abort", abortChildren);
+        finishExecution();
       }
     },
   });
