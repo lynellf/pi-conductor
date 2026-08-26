@@ -16,7 +16,12 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
-import { type DelegateArgs, delegateArgsSchema } from "../../seam/schema.js";
+import {
+  type DelegateArgs,
+  delegateArgsSchema,
+  type RequestFilesArgs,
+  requestFilesArgsSchema,
+} from "../../seam/schema.js";
 
 const REQUEST_SUFFIX = ".request.json";
 const RESPONSE_SUFFIX = ".response.json";
@@ -50,6 +55,19 @@ const delegateBridgeRequestSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const requestFilesBridgeRequestSchema = Type.Object(
+  {
+    id: Type.String({ pattern: REQUEST_ID_PATTERN }),
+    args: requestFilesArgsSchema,
+  },
+  { additionalProperties: false },
+);
+
+const machineToolBridgeRequestSchema = Type.Union([
+  delegateBridgeRequestSchema,
+  requestFilesBridgeRequestSchema,
+]);
+
 const delegateBridgeResponseSchema = Type.Union([
   Type.Object(
     {
@@ -69,11 +87,22 @@ const delegateBridgeResponseSchema = Type.Union([
   ),
 ]);
 
+/** Structured result returned by a host-owned bridged machine-tool operation. */
+export type MachineToolBridgeResult = Static<typeof delegateBridgeResultSchema>;
+
 /** Structured result returned by the host-owned delegate operation. */
-export type DelegateBridgeResult = Static<typeof delegateBridgeResultSchema>;
+export type DelegateBridgeResult = MachineToolBridgeResult;
+
+/** Structured result returned by the host-owned progressive-disclosure operation. */
+export type RequestFilesBridgeResult = MachineToolBridgeResult;
 
 /** Callback supplied by a later host-delegation wiring slice. */
 export type DelegateBridgeHandler = (args: DelegateArgs) => Promise<DelegateBridgeResult>;
+
+/** Callback supplied by the host-owned progressive-disclosure wiring slice. */
+export type RequestFilesBridgeHandler = (
+  args: RequestFilesArgs,
+) => Promise<RequestFilesBridgeResult>;
 
 /** Typed failure for an invalid bridge configuration or a bridge path escape. */
 export class DelegateBridgeConfigError extends Error {
@@ -107,16 +136,50 @@ export async function requestDelegateBridge(options: {
   /** Test-only bound; production uses a five-minute operation deadline. */
   readonly timeoutMs?: number;
 }): Promise<DelegateBridgeResult> {
-  const directory = canonicalDirectory(options.directory, "delegate bridge directory");
-  if (!Value.Check(delegateArgsSchema, options.args)) {
-    throw new DelegateBridgeProtocolError("delegate bridge request arguments are invalid");
+  return requestMachineToolBridge({
+    ...options,
+    argsSchema: delegateArgsSchema,
+    toolName: "delegate",
+  });
+}
+
+/** Invoke the host-owned progressive-disclosure operation from the static RPC extension. */
+export async function requestFilesBridge(options: {
+  readonly directory: string;
+  readonly args: RequestFilesArgs;
+  readonly signal?: AbortSignal;
+  /** Test-only bound; production uses a five-minute operation deadline. */
+  readonly timeoutMs?: number;
+}): Promise<RequestFilesBridgeResult> {
+  return requestMachineToolBridge({
+    ...options,
+    argsSchema: requestFilesArgsSchema,
+    toolName: "request_files",
+  });
+}
+
+async function requestMachineToolBridge(options: {
+  readonly directory: string;
+  readonly args: DelegateArgs | RequestFilesArgs;
+  readonly argsSchema: typeof delegateArgsSchema | typeof requestFilesArgsSchema;
+  readonly toolName: "delegate" | "request_files";
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<MachineToolBridgeResult> {
+  const directory = canonicalDirectory(options.directory, `${options.toolName} bridge directory`);
+  if (!Value.Check(options.argsSchema, options.args)) {
+    throw new DelegateBridgeProtocolError(
+      `${options.toolName} bridge request arguments are invalid`,
+    );
   }
   if (options.signal?.aborted === true) {
-    throw new DelegateBridgeInterruptedError("delegate bridge request was interrupted");
+    throw new DelegateBridgeInterruptedError(`${options.toolName} bridge request was interrupted`);
   }
   const timeoutMs = options.timeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
-    throw new DelegateBridgeConfigError("delegate bridge timeout must be a positive integer");
+    throw new DelegateBridgeConfigError(
+      `${options.toolName} bridge timeout must be a positive integer`,
+    );
   }
 
   const id = randomUUID();
@@ -129,6 +192,7 @@ export async function requestDelegateBridge(options: {
       responsePath,
       signal: options.signal,
       timeoutMs,
+      toolName: options.toolName,
     });
   } finally {
     await Promise.all([rm(requestPath, { force: true }), rm(responsePath, { force: true })]);
@@ -138,7 +202,8 @@ export async function requestDelegateBridge(options: {
 /** Host-side owner for one canonical per-session bridge directory. */
 export class DelegateBridgeHost {
   private readonly directory: string;
-  private readonly delegate: DelegateBridgeHandler;
+  private readonly delegate: DelegateBridgeHandler | undefined;
+  private readonly requestFiles: RequestFilesBridgeHandler | undefined;
   private readonly handledRequests = new Set<string>();
   private readonly pending = new Map<string, PendingDelegateRequest>();
   private readonly timer: ReturnType<typeof setInterval>;
@@ -149,9 +214,14 @@ export class DelegateBridgeHost {
     /** Host-owned session root. The bridge must be inside its fixed child path. */
     readonly sessionDir: string;
     readonly directory: string;
-    readonly delegate: DelegateBridgeHandler;
+    readonly delegate?: DelegateBridgeHandler;
+    readonly requestFiles?: RequestFilesBridgeHandler;
   }) {
+    if (options.delegate === undefined && options.requestFiles === undefined) {
+      throw new DelegateBridgeConfigError("machine tool bridge requires at least one host handler");
+    }
     this.delegate = options.delegate;
+    this.requestFiles = options.requestFiles;
     const bridgeRoot = canonicalDirectory(
       resolve(options.sessionDir, "machine-tools", "delegate-bridge"),
       "delegate bridge root",
@@ -224,7 +294,7 @@ export class DelegateBridgeHost {
     }
     if (
       request === null ||
-      !Value.Check(delegateBridgeRequestSchema, request) ||
+      !Value.Check(machineToolBridgeRequestSchema, request) ||
       request.id !== pending.id ||
       this.closed ||
       !pending.active
@@ -232,21 +302,58 @@ export class DelegateBridgeHost {
       return;
     }
 
-    let result: DelegateBridgeResult;
+    const operation = this.operationFor(request);
+    if (operation === null) {
+      await this.writeFailure(pending.id, "host machine tool operation is unavailable");
+      return;
+    }
+
+    let result: MachineToolBridgeResult;
     try {
-      result = await this.delegate(request.args);
+      result =
+        operation.name === "delegate"
+          ? await operation.handler(operation.args)
+          : await operation.handler(operation.args);
     } catch {
       if (pending.active && !this.closed) {
-        await this.writeFailure(pending.id, "host delegate operation unavailable");
+        await this.writeFailure(pending.id, `host ${operation.name} operation unavailable`);
       }
       return;
     }
     if (!pending.active || this.closed) return;
     if (!Value.Check(delegateBridgeResultSchema, result)) {
-      await this.writeFailure(pending.id, "host delegate operation returned an invalid result");
+      await this.writeFailure(
+        pending.id,
+        `host ${operation.name} operation returned an invalid result`,
+      );
       return;
     }
     await this.writeResponse(pending.id, { id: pending.id, success: true, result });
+  }
+
+  private operationFor(request: Static<typeof machineToolBridgeRequestSchema>):
+    | {
+        readonly name: "delegate";
+        readonly args: DelegateArgs;
+        readonly handler: DelegateBridgeHandler;
+      }
+    | {
+        readonly name: "request_files";
+        readonly args: RequestFilesArgs;
+        readonly handler: RequestFilesBridgeHandler;
+      }
+    | null {
+    if (Value.Check(delegateBridgeRequestSchema, request)) {
+      return this.delegate === undefined
+        ? null
+        : { name: "delegate", args: request.args, handler: this.delegate };
+    }
+    if (Value.Check(requestFilesBridgeRequestSchema, request)) {
+      return this.requestFiles === undefined
+        ? null
+        : { name: "request_files", args: request.args, handler: this.requestFiles };
+    }
+    return null;
   }
 
   private async writeFailure(id: string, error: string): Promise<void> {
@@ -277,8 +384,9 @@ async function waitForResponse(options: {
   readonly responsePath: string;
   readonly signal: AbortSignal | undefined;
   readonly timeoutMs: number;
-}): Promise<DelegateBridgeResult> {
-  return new Promise<DelegateBridgeResult>((resolveResponse, rejectResponse) => {
+  readonly toolName: "delegate" | "request_files";
+}): Promise<MachineToolBridgeResult> {
+  return new Promise<MachineToolBridgeResult>((resolveResponse, rejectResponse) => {
     let settled = false;
     let reading = false;
     const settle = (callback: () => void): void => {
@@ -291,7 +399,9 @@ async function waitForResponse(options: {
     };
     const reject = (error: Error): void => settle(() => rejectResponse(error));
     const onAbort = (): void =>
-      reject(new DelegateBridgeInterruptedError("delegate bridge request was interrupted"));
+      reject(
+        new DelegateBridgeInterruptedError(`${options.toolName} bridge request was interrupted`),
+      );
     const readResponse = async (): Promise<void> => {
       if (settled || reading) return;
       reading = true;
@@ -299,12 +409,16 @@ async function waitForResponse(options: {
         const response = await readJsonRegularFile(options.responsePath);
         if (response === null) return;
         if (!Value.Check(delegateBridgeResponseSchema, response)) {
-          reject(new DelegateBridgeProtocolError("delegate bridge response is malformed"));
+          reject(
+            new DelegateBridgeProtocolError(`${options.toolName} bridge response is malformed`),
+          );
           return;
         }
         if (response.id !== options.id) {
           reject(
-            new DelegateBridgeProtocolError("delegate bridge response belongs to another request"),
+            new DelegateBridgeProtocolError(
+              `${options.toolName} bridge response belongs to another request`,
+            ),
           );
           return;
         }
@@ -314,7 +428,9 @@ async function waitForResponse(options: {
         }
         settle(() => resolveResponse(response.result));
       } catch {
-        reject(new DelegateBridgeProtocolError("delegate bridge response could not be read"));
+        reject(
+          new DelegateBridgeProtocolError(`${options.toolName} bridge response could not be read`),
+        );
       } finally {
         reading = false;
       }
@@ -323,7 +439,8 @@ async function waitForResponse(options: {
       void readResponse();
     }, SCAN_INTERVAL_MS);
     const timeout = setTimeout(
-      () => reject(new DelegateBridgeInterruptedError("delegate bridge response timed out")),
+      () =>
+        reject(new DelegateBridgeInterruptedError(`${options.toolName} bridge response timed out`)),
       options.timeoutMs,
     );
     options.signal?.addEventListener("abort", onAbort, { once: true });

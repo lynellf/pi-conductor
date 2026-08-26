@@ -18,7 +18,12 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Role } from "../../core/types.js";
 
-import type { WorkspaceBackend, WorkspaceSource } from "../../manifest/types.js";
+import type {
+  ProgressiveDisclosurePolicy,
+  WorkspaceBackend,
+  WorkspaceSource,
+} from "../../manifest/types.js";
+import { applyInitialProgressiveProjection } from "./progressive-projection.js";
 import {
   ensureSnapshotCheckout,
   hasSnapshotCheckout,
@@ -163,10 +168,18 @@ export async function provisionWorkspace(options: {
   runStateDir: string;
   /** Shared snapshot (for read-only isolated roles, reuse the same checkout). */
   sharedSnapshot?: SnapshotCheckout;
+  /** Issue #51: validated initial sparse selection for a worktree role. */
+  progressiveDisclosure?: ProgressiveDisclosurePolicy;
 }): Promise<WorkspaceResult> {
   const { role, visitIndex, backend, commit, primaryCheckout, runStateDir } = options;
 
   assertSupportedWorkspaceBackend(backend);
+  if (options.progressiveDisclosure !== undefined && backend !== "worktree") {
+    throw new WorkspaceError(
+      "initial progressive projection requires the worktree workspace backend",
+      "git-failed",
+    );
+  }
 
   if (backend === "shared") {
     // Shared role: uses the integration workspace directly.
@@ -192,6 +205,7 @@ export async function provisionWorkspace(options: {
     const safeBranch = `conductor/${safeRunId}/${workspaceName}`;
 
     // Check if the worktree already exists (resume case — INV-005).
+    let currentWorkspacePath: string | null = null;
     try {
       const resolvedPath = await realpath(workspacePath);
       // Verify it points at the same commit.
@@ -199,18 +213,27 @@ export async function provisionWorkspace(options: {
         cwd: workspacePath,
       });
       if (currentCommit.trim() === commit) {
-        return { workspacePath: resolvedPath, backend, shortCommit: commit.slice(0, 8) };
-      }
-      // Different commit — remove the stale worktree and recreate.
-      try {
-        await execFileAsync("git", ["worktree", "remove", workspacePath, "--force"], {
-          cwd: primaryCheckout,
-        });
-      } catch {
-        await rm(workspacePath, { recursive: true, force: true }).catch(() => {});
+        currentWorkspacePath = resolvedPath;
+      } else {
+        // Different commit — remove the stale worktree and recreate.
+        try {
+          await execFileAsync("git", ["worktree", "remove", workspacePath, "--force"], {
+            cwd: primaryCheckout,
+          });
+        } catch {
+          await rm(workspacePath, { recursive: true, force: true }).catch(() => {});
+        }
       }
     } catch {
       // Doesn't exist yet — fall through.
+    }
+    if (currentWorkspacePath !== null) {
+      await applyConfiguredInitialProjection(
+        currentWorkspacePath,
+        backend,
+        options.progressiveDisclosure,
+      );
+      return { workspacePath: currentWorkspacePath, backend, shortCommit: commit.slice(0, 8) };
     }
 
     try {
@@ -247,6 +270,11 @@ export async function provisionWorkspace(options: {
         await execFileAsync("git", ["worktree", "add", "-b", safeBranch, workspacePath, commit], {
           cwd: primaryCheckout,
         });
+        await applyConfiguredInitialProjection(
+          workspacePath,
+          backend,
+          options.progressiveDisclosure,
+        );
         return { workspacePath, backend, shortCommit: commit.slice(0, 8) };
       }
       throw new WorkspaceError(
@@ -256,6 +284,7 @@ export async function provisionWorkspace(options: {
       );
     }
 
+    await applyConfiguredInitialProjection(workspacePath, backend, options.progressiveDisclosure);
     return { workspacePath, backend, shortCommit: commit.slice(0, 8) };
   }
 
@@ -355,6 +384,16 @@ export async function provisionWorkspace(options: {
   throw new WorkspaceError(`unknown backend: '${backend}'`, "git-failed");
 }
 
+async function applyConfiguredInitialProjection(
+  workspacePath: string,
+  backend: WorkspaceBackend,
+  policy: ProgressiveDisclosurePolicy | undefined,
+): Promise<void> {
+  if (backend === "worktree" && policy !== undefined) {
+    await applyInitialProgressiveProjection(workspacePath, policy);
+  }
+}
+
 // ─── Resume re-creation ─────────────────────────────────────────────────
 
 /**
@@ -377,6 +416,7 @@ export async function resumeWorkspace(options: {
   primaryCheckout: string;
   runStateDir: string;
   sharedSnapshot?: SnapshotCheckout;
+  progressiveDisclosure?: ProgressiveDisclosurePolicy;
 }): Promise<WorkspaceResult> {
   return provisionWorkspace(options);
 }

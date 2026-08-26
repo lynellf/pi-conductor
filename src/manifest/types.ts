@@ -136,6 +136,14 @@ export interface WorkspaceMount {
   readonly writable: boolean;
 }
 
+/** Issue #51: opt-in paths a worktree role may disclose incrementally. */
+export interface ProgressiveDisclosurePolicy {
+  /** Static sparse selection present when the role starts. */
+  readonly initial_paths: readonly string[];
+  /** Exact-file or subtree policy roots for later disclosure requests. */
+  readonly allowed_paths: readonly string[];
+}
+
 /**
  * Issue #48 §4: per-role workspace declaration in the manifest.
  */
@@ -152,6 +160,8 @@ export interface WorkspaceConfig {
   readonly image?: string;
   /** Network policy: bridge (default) | none. */
   readonly network?: "bridge" | "none";
+  /** Issue #51: explicit policy for incremental workspace disclosure. */
+  readonly progressive_disclosure?: ProgressiveDisclosurePolicy;
 }
 
 /**
