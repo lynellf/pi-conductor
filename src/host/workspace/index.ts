@@ -34,6 +34,12 @@ export {
   pathInProjection,
 } from "./mounts.js";
 export {
+  applyInitialProgressiveProjection,
+  expandProgressiveProjection,
+  ProgressiveProjectionError,
+  type ProgressiveProjectionExpansionResult,
+} from "./progressive-projection.js";
+export {
   assertPersistedSnapshotPinResolves,
   readPersistedSnapshotPin,
 } from "./run-snapshot-pin.js";

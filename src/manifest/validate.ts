@@ -86,8 +86,26 @@ export type Issue48ErrorCode =
   /** Issue #48 §4 rule 8: artifact config values out of range. */
   | "invalid-artifact-config";
 
+// ─── Issue #51: progressive disclosure validation error codes ──────────
+
+export type Issue51ErrorCode =
+  /** `initial_paths` must select at least one starting path. */
+  | "progressive-disclosure-empty-initial-paths"
+  /** `allowed_paths` must authorize at least one policy root. */
+  | "progressive-disclosure-empty-allowed-paths"
+  /** `initial_paths` must not repeat the same static selection. */
+  | "progressive-disclosure-duplicate-initial-path"
+  /** `allowed_paths` must not repeat the same disclosure root. */
+  | "progressive-disclosure-duplicate-allowed-path"
+  /** An `initial_paths` entry is not a safe repository-relative path. */
+  | "progressive-disclosure-unsafe-initial-path"
+  /** An `allowed_paths` entry is not a safe repository-relative path. */
+  | "progressive-disclosure-unsafe-allowed-path"
+  /** The opt-in policy relies on sparse worktree expansion. */
+  | "progressive-disclosure-non-worktree-backend";
+
 export interface ManifestError {
-  readonly code: ManifestErrorCode | Issue48ErrorCode;
+  readonly code: ManifestErrorCode | Issue48ErrorCode | Issue51ErrorCode;
   readonly message: string;
   readonly role?: Role;
 }
@@ -108,6 +126,7 @@ export interface ManifestReport {
 // colon as the separator and allows colons in the id; the regex is a smoke
 // test for the `provider:id` shape only.
 const PROVIDER_ID_FORM = /^[a-zA-Z][a-zA-Z0-9_-]*:[a-zA-Z0-9._:/-]+$/;
+const GLOB_CHARACTER = /[*?[\]{}]/;
 
 function isModelEffort(value: unknown): value is ModelEffort {
   return (
@@ -119,6 +138,22 @@ function isModelEffort(value: unknown): value is ModelEffort {
     value === "xhigh" ||
     value === "max"
   );
+}
+
+function isSafeProgressiveDisclosurePath(path: string): boolean {
+  if (
+    path.trim().length === 0 ||
+    path.startsWith("~") ||
+    path.startsWith("/") ||
+    path.startsWith("\\") ||
+    /^[a-zA-Z]:/.test(path) ||
+    path.includes("\u0000") ||
+    GLOB_CHARACTER.test(path)
+  ) {
+    return false;
+  }
+
+  return !path.split(/[\\/]/).some((segment) => segment === "." || segment === "..");
 }
 
 /**
@@ -416,6 +451,36 @@ export function validateManifest(m: Manifest): ManifestReport {
 
       // Rule 6: mount paths non-empty, no duplicates — handled in parser.
 
+      // ─── Issue #51: progressive workspace disclosure ───────────────
+      const disclosure = ws.progressive_disclosure;
+      if (disclosure !== undefined) {
+        if (backend !== "worktree") {
+          errors.push({
+            code: "progressive-disclosure-non-worktree-backend",
+            message: `role '${roleName}' has \`workspace.progressive_disclosure\` but backend '${backend}' cannot extend a pinned sparse worktree`,
+            role: roleName,
+          });
+        }
+        validateProgressiveDisclosurePaths(
+          disclosure.initial_paths,
+          "initial_paths",
+          "progressive-disclosure-empty-initial-paths",
+          "progressive-disclosure-duplicate-initial-path",
+          "progressive-disclosure-unsafe-initial-path",
+          roleName,
+          errors,
+        );
+        validateProgressiveDisclosurePaths(
+          disclosure.allowed_paths,
+          "allowed_paths",
+          "progressive-disclosure-empty-allowed-paths",
+          "progressive-disclosure-duplicate-allowed-path",
+          "progressive-disclosure-unsafe-allowed-path",
+          roleName,
+          errors,
+        );
+      }
+
       // Rule 7: writable absolute (host) mount → guarantee capped at `confined`.
       if (ws.mounts) {
         const hasWritableHostMount = ws.mounts.some((m) => m.writable && /^\//.test(m.path));
@@ -434,4 +499,47 @@ export function validateManifest(m: Manifest): ManifestReport {
     errors: Object.freeze(errors),
     warnings: Object.freeze(warnings),
   };
+}
+
+function validateProgressiveDisclosurePaths(
+  paths: readonly string[],
+  field: "initial_paths" | "allowed_paths",
+  emptyCode:
+    | "progressive-disclosure-empty-initial-paths"
+    | "progressive-disclosure-empty-allowed-paths",
+  duplicateCode:
+    | "progressive-disclosure-duplicate-initial-path"
+    | "progressive-disclosure-duplicate-allowed-path",
+  unsafeCode:
+    | "progressive-disclosure-unsafe-initial-path"
+    | "progressive-disclosure-unsafe-allowed-path",
+  role: Role,
+  errors: ManifestError[],
+): void {
+  if (paths.length === 0) {
+    errors.push({
+      code: emptyCode,
+      message: `role '${role}' has empty \`workspace.progressive_disclosure.${field}\`; it must contain at least one repository-relative path`,
+      role,
+    });
+  }
+
+  const seen = new Set<string>();
+  for (const path of paths) {
+    if (seen.has(path)) {
+      errors.push({
+        code: duplicateCode,
+        message: `role '${role}' repeats '${path}' in \`workspace.progressive_disclosure.${field}\``,
+        role,
+      });
+    }
+    seen.add(path);
+    if (!isSafeProgressiveDisclosurePath(path)) {
+      errors.push({
+        code: unsafeCode,
+        message: `role '${role}' has unsafe path '${path}' in \`workspace.progressive_disclosure.${field}\`; paths must be repository-relative and cannot use home, traversal, glob, or root forms`,
+        role,
+      });
+    }
+  }
 }

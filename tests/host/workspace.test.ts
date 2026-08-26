@@ -12,7 +12,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   ensureSnapshotCheckout,
+  expandProgressiveProjection,
   hasSnapshotCheckout,
   listSnapshotShortCommits,
   listWorkspaceNames,
@@ -32,6 +33,7 @@ import {
   type GuaranteeResult,
   pathInProjection,
 } from "../../src/host/workspace/mounts.js";
+import { captureProgressiveProjectionGitAuthority } from "../../src/host/workspace/progressive-projection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -58,8 +60,31 @@ async function commitFile(dir: string, name: string, content: string): Promise<s
   return hash.trim();
 }
 
+async function commitSymlink(dir: string, name: string, target: string): Promise<string> {
+  await symlink(target, join(dir, name));
+  await execFileAsync("git", ["add", name], { cwd: dir });
+  await execFileAsync("git", ["commit", "-m", `add ${name}`], { cwd: dir });
+  const { stdout: hash } = await execFileAsync("git", ["log", "-1", "--format=%H"], { cwd: dir });
+  return hash.trim();
+}
+
+async function sparseSelection(workspacePath: string): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["sparse-checkout", "list"], {
+    cwd: workspacePath,
+  });
+  return stdout;
+}
+
 function createTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "pi-conductor-t3-"));
+}
+
+async function requireProgressiveProjectionGitAuthority(workspacePath: string) {
+  const authority = await captureProgressiveProjectionGitAuthority(workspacePath);
+  if (authority === undefined) {
+    throw new Error(`expected Git authority for progressive workspace '${workspacePath}'`);
+  }
+  return authority;
 }
 
 // ─── Tests: resolvePinnedCommit ─────────────────────────────────────────
@@ -480,6 +505,61 @@ describe("resumeWorkspace (T3 resume re-creation)", () => {
     expect(hasReadme).toBe(true);
     expect(await rf(join(r2.workspacePath, "README.md"), "utf-8")).toContain("# Test");
   });
+
+  it("preserves the initial progressive projection after re-creating a deleted worktree", async () => {
+    const runStateDirShort = join(tmp, "runs", "run5c");
+    await commitFile(primaryCheckout, "selected-canary.txt", "selected content");
+    const projectionCommit = await commitFile(
+      primaryCheckout,
+      "sibling-canary.txt",
+      "sibling content",
+    );
+    const progressiveDisclosure = {
+      initial_paths: ["selected-canary.txt"],
+      allowed_paths: ["selected-canary.txt"],
+    };
+
+    const r1 = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: projectionCommit,
+      primaryCheckout,
+      runStateDir: runStateDirShort,
+      progressiveDisclosure,
+    });
+
+    await expect(readFile(join(r1.workspacePath, "selected-canary.txt"), "utf-8")).resolves.toBe(
+      "selected content",
+    );
+    await expect(
+      readFile(join(r1.workspacePath, "sibling-canary.txt"), "utf-8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await rm(r1.workspacePath, { recursive: true, force: true });
+
+    const r2 = await resumeWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: projectionCommit,
+      primaryCheckout,
+      runStateDir: runStateDirShort,
+      progressiveDisclosure,
+    });
+
+    await expect(readFile(join(r2.workspacePath, "selected-canary.txt"), "utf-8")).resolves.toBe(
+      "selected content",
+    );
+    await expect(
+      readFile(join(r2.workspacePath, "sibling-canary.txt"), "utf-8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });
 
 // ─── Tests: INV-005 (no auto-cleanup) ────────────────────────────────────
@@ -668,5 +748,571 @@ describe("pathInProjection (T3 containment check)", () => {
     expect((result as { inside: false; reason: string }).reason).toContain(
       "outside all projection roots",
     );
+  });
+});
+
+// ─── Tests: Issue #51 progressive expansion ────────────────────────────
+
+describe("expandProgressiveProjection (Issue #51)", () => {
+  let tmp: string;
+  let primaryCheckout: string;
+
+  beforeEach(async () => {
+    tmp = await createTempDir();
+    primaryCheckout = join(tmp, "primary");
+    await mkdir(primaryCheckout, { recursive: true });
+    await createGitRepo(primaryCheckout);
+  });
+
+  afterEach(async () => {
+    await rm(tmp, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("discloses an allowed missing file without materializing an unrelated sibling", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    await commitFile(primaryCheckout, "needed.ts", "needed");
+    const pinnedCommit = await commitFile(primaryCheckout, "unrelated.ts", "unrelated");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-approved"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["needed.ts"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+
+    await expect(
+      readFile(join(workspace.workspacePath, "needed.ts"), "utf-8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["needed.ts"],
+      },
+      ["needed.ts"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "approved", disclosedPaths: ["needed.ts"] });
+    expect(await sparseSelection(workspace.workspacePath)).toBe("initial.txt\n/needed.ts\n");
+    await expect(readFile(join(workspace.workspacePath, "needed.ts"), "utf-8")).resolves.toBe(
+      "needed",
+    );
+    await expect(
+      readFile(join(workspace.workspacePath, "unrelated.ts"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("denies an empty request without changing the initial selection or materializing hidden files", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    await commitFile(primaryCheckout, "allowed.txt", "allowed");
+    const pinnedCommit = await commitFile(primaryCheckout, "unrelated.txt", "unrelated");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-empty-request"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+      [],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "denied", code: "empty-request" });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(
+      readFile(join(workspace.workspacePath, "allowed.txt"), "utf-8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      readFile(join(workspace.workspacePath, "unrelated.txt"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("denies duplicate requested paths before mutating the projection", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed.txt", "allowed");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-duplicate-path"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+      ["allowed.txt", "allowed.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "denied", code: "multiple-entries", path: "allowed.txt" });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(
+      readFile(join(workspace.workspacePath, "allowed.txt"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("denies a sibling-prefix batch without widening the selection", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    await commitFile(primaryCheckout, "allowed", "allowed");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed-sibling", "sibling");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-denied"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed"],
+      },
+      ["allowed", "allowed-sibling"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({
+      kind: "denied",
+      code: "not-allowed",
+      path: "allowed-sibling",
+    });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(readFile(join(workspace.workspacePath, "allowed"), "utf-8")).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+  });
+
+  it("denies an unsafe batch without widening the selection", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed.txt", "allowed");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-unsafe"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+      ["allowed.txt", "../outside.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "denied", code: "unsafe-path", path: "../outside.txt" });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(
+      readFile(join(workspace.workspacePath, "allowed.txt"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("denies Git pattern syntax rather than treating it as a literal request", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed.txt", "allowed");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-pattern"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+      ["allowed.txt", "*.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "denied", code: "unsafe-path", path: "*.txt" });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(
+      readFile(join(workspace.workspacePath, "allowed.txt"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports an allowed path added to the integration checkout after pinning as unavailable", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "known.txt", "known");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-unavailable"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["known.txt", "later.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    await commitFile(primaryCheckout, "later.txt", "only in integration checkout");
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["known.txt", "later.txt"],
+      },
+      ["known.txt", "later.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "unavailable", path: "later.txt" });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(
+      readFile(join(workspace.workspacePath, "known.txt"), "utf-8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      readFile(join(workspace.workspacePath, "later.txt"), "utf-8"),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("returns a typed unavailable outcome when the captured workspace is removed", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed.txt", "allowed");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-removed-workspace"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    await rm(workspace.workspacePath, { recursive: true, force: true });
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+      ["allowed.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "unavailable", code: "workspace-unavailable" });
+  });
+
+  it("returns typed unavailability without widening the projection when the host cannot acquire the index lock", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed.txt", "allowed");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-index-lock"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+    const { stdout: indexPath } = await execFileAsync("git", ["rev-parse", "--git-path", "index"], {
+      cwd: workspace.workspacePath,
+    });
+    const lockPath = `${indexPath.trim().startsWith("/") ? indexPath.trim() : join(workspace.workspacePath, indexPath.trim())}.lock`;
+    await writeFile(lockPath, "held by another host operation");
+
+    try {
+      const result = await expandProgressiveProjection(
+        authority,
+        {
+          initial_paths: ["initial.txt"],
+          allowed_paths: ["allowed.txt"],
+        },
+        ["allowed.txt"],
+        pinnedCommit,
+        false,
+      );
+
+      expect(result).toEqual({ kind: "unavailable", code: "workspace-unavailable" });
+      expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+      await expect(lstat(join(workspace.workspacePath, "allowed.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await rm(lockPath, { force: true });
+    }
+  });
+
+  it("rejects a later role-worktree HEAD without changing its sparse selection", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "known.txt", "known");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-pin-mismatch"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["later.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const laterCommit = await commitFile(primaryCheckout, "later.txt", "only in later commit");
+    await execFileAsync("git", ["checkout", "--detach", laterCommit], {
+      cwd: workspace.workspacePath,
+    });
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["later.txt"],
+      },
+      ["later.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({
+      kind: "pin-mismatch",
+      expectedPinnedCommit: pinnedCommit,
+      workspaceHead: laterCommit,
+    });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(lstat(join(workspace.workspacePath, "later.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("materializes a requested regular file from the pinned tree when the role index contains a later symlink", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitFile(primaryCheckout, "allowed.txt", "pinned content");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-pinned-index"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    await rm(join(primaryCheckout, "allowed.txt"));
+    const laterCommit = await commitSymlink(primaryCheckout, "allowed.txt", "/outside/secret");
+    await execFileAsync("git", ["read-tree", laterCommit], { cwd: workspace.workspacePath });
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed.txt"],
+      },
+      ["allowed.txt"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "approved", disclosedPaths: ["allowed.txt"] });
+    await expect(readFile(join(workspace.workspacePath, "allowed.txt"), "utf-8")).resolves.toBe(
+      "pinned content",
+    );
+    expect((await lstat(join(workspace.workspacePath, "allowed.txt"))).isSymbolicLink()).toBe(
+      false,
+    );
+    const { stdout: pinnedEntry } = await execFileAsync(
+      "git",
+      ["ls-tree", pinnedCommit, "--", "allowed.txt"],
+      { cwd: workspace.workspacePath },
+    );
+    const { stdout: indexEntry } = await execFileAsync(
+      "git",
+      ["ls-files", "-s", "--", "allowed.txt"],
+      { cwd: workspace.workspacePath },
+    );
+    expect(indexEntry.split(/\s+/)[1]).toBe(pinnedEntry.split(/\s+/)[2]);
+  });
+
+  it("denies a direct requested symlink without changing the sparse selection", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    const pinnedCommit = await commitSymlink(primaryCheckout, "allowed-link", "/outside/secret");
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-direct-symlink"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed-link"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed-link"],
+      },
+      ["allowed-link"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({ kind: "denied", code: "symlink", path: "allowed-link" });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(lstat(join(workspace.workspacePath, "allowed-link"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("denies an exact symlink request nested below a policy-allowed directory", async () => {
+    await commitFile(primaryCheckout, "initial.txt", "initial");
+    await mkdir(join(primaryCheckout, "allowed-dir"));
+    const pinnedCommit = await commitSymlink(
+      primaryCheckout,
+      "allowed-dir/secret-link",
+      "/outside/secret",
+    );
+    const workspace = await provisionWorkspace({
+      role: "implementer" as never,
+      visitIndex: 1,
+      backend: "worktree",
+      source: "snapshot",
+      commit: pinnedCommit,
+      primaryCheckout,
+      runStateDir: join(tmp, "runs", "expansion-nested-symlink"),
+      progressiveDisclosure: {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed-dir"],
+      },
+    });
+    const authority = await requireProgressiveProjectionGitAuthority(workspace.workspacePath);
+    const selectionBefore = await sparseSelection(workspace.workspacePath);
+
+    const result = await expandProgressiveProjection(
+      authority,
+      {
+        initial_paths: ["initial.txt"],
+        allowed_paths: ["allowed-dir"],
+      },
+      ["allowed-dir/secret-link"],
+      pinnedCommit,
+      false,
+    );
+
+    expect(result).toEqual({
+      kind: "denied",
+      code: "symlink",
+      path: "allowed-dir/secret-link",
+    });
+    expect(await sparseSelection(workspace.workspacePath)).toBe(selectionBefore);
+    await expect(
+      lstat(join(workspace.workspacePath, "allowed-dir", "secret-link")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

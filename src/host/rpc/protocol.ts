@@ -9,7 +9,7 @@ import type {
   UsageRecord,
 } from "../../core/types.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
-import type { DelegateBridgeHandler } from "./delegate-bridge.js";
+import type { DelegateBridgeHandler, RequestFilesBridgeHandler } from "./delegate-bridge.js";
 
 /** All-zero usage before the first child turn settles. */
 export const ZERO_USAGE: UsageRecord = Object.freeze({
@@ -87,6 +87,11 @@ export interface NodeRoleSessionOptions {
   readonly delegateBridge?: {
     readonly directory: string;
     readonly delegate: DelegateBridgeHandler;
+  };
+  /** Explicit host callback and canonical per-session directory for progressive disclosure. */
+  readonly requestFilesBridge?: {
+    readonly directory: string;
+    readonly requestFiles: RequestFilesBridgeHandler;
   };
   readonly env?: NodeJS.ProcessEnv;
   /** Release host session tracking after the child has been terminated. */

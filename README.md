@@ -495,6 +495,61 @@ Worktree roles retain host-generated auto-patches only when
 never routed to a receiver. The host never automatically applies an artifact or
 patch to the integration checkout.
 
+### Progressive file disclosure (Issue #51)
+
+An isolated `worktree` role can begin with a deliberately incomplete sparse
+projection and ask Conductor for named, policy-approved files as it discovers a
+missing dependency. This is opt-in: a role without `progressive_disclosure`
+behaves exactly as the ordinary `worktree` configuration above.
+
+```yaml
+roles:
+  - name: implementer
+    tools: [read, grep, edit, write, request_files, handoff, end]
+    workspace:
+      backend: worktree
+      source: snapshot
+      progressive_disclosure:
+        # Present at role startup.
+        initial_paths:
+          - src/schema/card.ts
+          - tests/schema/card.test.ts
+        # Exact files or roots under which later exact-file requests are allowed.
+        allowed_paths:
+          - src/schema
+          - tests/schema
+```
+
+Both path lists are required, repository-relative literal paths. Absolute
+paths, traversal, backslashes, duplicate entries, and Git-pattern syntax are
+rejected when the manifest loads. Progressive disclosure requires
+`backend: worktree`; `shared` and `copy` roles cannot enable it. The role gets
+`request_files` only when it declares both the policy and the tool.
+
+While active, the role calls the host-provided TypeBox tool:
+
+```ts
+request_files({
+  paths: ["src/schema/card.ts", "tests/schema/card.test.ts"],
+  reason: "conditions.ts imports CardSchema, which is absent from this projection.",
+});
+```
+
+Each request names one or more exact regular files. Conductor checks every path
+against the policy and the run's pinned Git snapshot before changing the
+workspace. An `allowed_paths` root permits exact file requests below that root,
+but does not disclose sibling files or a directory tree. A request returns a
+typed result: `approved` (with `disclosed_paths`), `denied` (invalid or
+unauthorized path), or `unavailable` (absent from the pin or a workspace
+failure). Denied and unavailable requests leave the existing projection
+unchanged.
+
+Disclosure does not expand write authority. Existing confined file-tool and
+mount write rules still apply: a read-only role receives disclosed files
+read-only, and disclosure never grants access to unrequested files. Every request is
+appended to the run log as a `progressive_disclosure` record with the role,
+visit, requested paths, reason, outcome, and paths actually disclosed.
+
 ### Retention
 
 Workspaces, snapshot checkouts, and artifacts are retained for inspection:
