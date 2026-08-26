@@ -31,6 +31,20 @@ export interface SubagentProfile {
   readonly models: readonly ModelConfig[];
   readonly max_session_cost_usd: number;
   readonly system_prompt: string;
+  /** Issue #55: opt-in exact-file projection policy for delegated children. */
+  readonly workspace?: SubagentWorkspaceConfig;
+}
+
+/** Issue #55: the only workspace block permitted on a subagent profile. */
+export interface SubagentWorkspaceConfig {
+  readonly projection: SubagentProjectionPolicy;
+}
+
+/** Issue #55: literal policy roots used to resolve a child exact-file projection. */
+export interface SubagentProjectionPolicy {
+  readonly required: boolean;
+  readonly allowed_paths: readonly string[];
+  readonly default_paths?: readonly string[];
 }
 
 /**
