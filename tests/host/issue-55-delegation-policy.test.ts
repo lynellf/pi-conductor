@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -336,5 +336,79 @@ describe("Issue #55 delegated projection policy", () => {
     expect(verified.isClean).toBe(false);
     expect(review.stdout).toContain("parent-reviewed change");
     expect(parentStatus.stdout).toBe("");
+  });
+
+  it("expands defaults from sparse parent H and rejects a skipped tracked file", async () => {
+    const repository = await createRepository();
+    await execFileAsync(
+      "git",
+      ["sparse-checkout", "set", "--no-cone", "--", "/.gitignore", "/child.md", "/selected/a.txt"],
+      { cwd: repository },
+    );
+    const log = new InMemoryRecordLog();
+    const childProfile = profile({
+      projection: {
+        required: false,
+        allowed_paths: ["selected"],
+        default_paths: ["selected"],
+      },
+    });
+
+    expect(await materializedPaths(repository)).toEqual([
+      ".gitignore",
+      "child.md",
+      "selected/a.txt",
+    ]);
+
+    await delegateTool(repository, childProfile, log).execute(
+      "issue-55-sparse-default",
+      { tasks: [task()] },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const accepted = startedRecord(log);
+    const worktreesPath = join(repository, ".pi-conductor", "runs", runId, "worktrees");
+    const worktreesBeforeRejection = (await readdir(worktreesPath)).sort();
+    const lifecycleBeforeRejection = log
+      .records(runId)
+      .filter(
+        (record) =>
+          record.type === "subagent_started" ||
+          record.type === "subagent_completed" ||
+          record.type === "subagent_failed",
+      );
+
+    expect(accepted.projection_paths).toEqual(["selected/a.txt"]);
+    expect(await materializedPaths(accepted.worktree_path)).toEqual(["selected/a.txt"]);
+
+    const rejected = await delegateTool(repository, childProfile, log).execute(
+      "issue-55-sparse-explicit",
+      { tasks: [task(["selected/b.txt"])] },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(rejected).toMatchObject({ isError: true });
+    expect(log.records(runId)).toContainEqual(
+      expect.objectContaining({
+        type: "delegation_validation_rejected",
+        errors: expect.arrayContaining([
+          expect.objectContaining({ code: "projection-path-not-materialized" }),
+        ]),
+      }),
+    );
+    expect(
+      log
+        .records(runId)
+        .filter(
+          (record) =>
+            record.type === "subagent_started" ||
+            record.type === "subagent_completed" ||
+            record.type === "subagent_failed",
+        ),
+    ).toEqual(lifecycleBeforeRejection);
+    expect((await readdir(worktreesPath)).sort()).toEqual(worktreesBeforeRejection);
   });
 });
