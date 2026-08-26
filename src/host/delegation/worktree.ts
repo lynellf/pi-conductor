@@ -14,6 +14,7 @@ import { realpath } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import type { ChildId } from "./ids.js";
+import { isSafeExactProjectionPath } from "./projection.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,11 @@ const execFileAsync = promisify(execFile);
 export class WorktreeError extends Error {
   constructor(
     message: string,
-    public readonly code: "git-failed" | "worktree-exists" | "invalid-commit",
+    public readonly code:
+      | "git-failed"
+      | "worktree-exists"
+      | "invalid-commit"
+      | "invalid-projection",
     options?: { cause?: unknown },
   ) {
     super(message, options);
@@ -96,6 +101,61 @@ export async function createWorktree(
     }
     throw new WorktreeError(
       `failed to create worktree '${worktreePath}' at commit '${baseCommit}': ${msg}`,
+      "git-failed",
+      { cause },
+    );
+  }
+}
+
+/** Apply a captured exact file subset and prove its child worktree remains at base (Issue #52). */
+export async function configureExactSparseWorktree(
+  worktreePath: string,
+  expectedBranch: string,
+  expectedBaseCommit: string,
+  projectionPaths: readonly string[],
+): Promise<void> {
+  if (projectionPaths.length === 0) {
+    throw new WorktreeError(
+      "exact child projection requires at least one path",
+      "invalid-projection",
+    );
+  }
+  const seenPaths = new Set<string>();
+  for (const path of projectionPaths) {
+    if (!isSafeExactProjectionPath(path) || seenPaths.has(path)) {
+      throw new WorktreeError(
+        `child projection contains invalid exact path '${path}'`,
+        "invalid-projection",
+      );
+    }
+    seenPaths.add(path);
+  }
+
+  try {
+    // No-cone inputs are Git patterns. Leading root anchors and the strict
+    // path validator make every selected entry one exact repository path.
+    await execFileAsync(
+      "git",
+      ["sparse-checkout", "set", "--no-cone", "--", ...projectionPaths.map((path) => `/${path}`)],
+      { cwd: worktreePath },
+    );
+    const verified = await verifyWorktree(worktreePath, expectedBranch);
+    if (verified.headCommit !== expectedBaseCommit) {
+      throw new WorktreeError(
+        `child worktree HEAD '${verified.headCommit}' does not match projection base '${expectedBaseCommit}'`,
+        "invalid-commit",
+      );
+    }
+    if (!verified.isClean) {
+      throw new WorktreeError(
+        "child worktree is dirty immediately after exact sparse projection setup",
+        "git-failed",
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof WorktreeError) throw cause;
+    throw new WorktreeError(
+      `failed to configure exact sparse child projection: ${(cause as Error).message}`,
       "git-failed",
       { cause },
     );

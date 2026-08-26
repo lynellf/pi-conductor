@@ -250,6 +250,9 @@ export class StubHost implements Host {
       roleConfig.tools?.includes("delegate") &&
       manifest !== undefined
     ) {
+      if (opts.visitIndex === undefined) {
+        throw new Error("delegation requires the loop-owned parent visitIndex");
+      }
       const remaining = roleConfig.delegation.max_children_per_session;
       const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
       delegateTool = createDelegateTool({
@@ -258,6 +261,7 @@ export class StubHost implements Host {
         remainingChildren: remaining,
         runId: this.runId,
         parentRole: role,
+        parentVisitIndex: opts.visitIndex,
         primaryCheckout: this.cwd,
         runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
         persistRecord: (record) => this.persistRecord(record),

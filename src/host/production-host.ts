@@ -344,7 +344,12 @@ export class ProductionHost implements Host {
         ...(hasDelegateConfiguration(roleConfig)
           ? {
               createDelegateBridgeHandler: (primaryCheckout: string) =>
-                this.createDelegateBridgeHandler(role, roleConfig, primaryCheckout),
+                this.createDelegateBridgeHandler(
+                  role,
+                  roleConfig,
+                  primaryCheckout,
+                  opts.visitIndex,
+                ),
             }
           : {}),
         visitIndex: opts.visitIndex,
@@ -356,7 +361,7 @@ export class ProductionHost implements Host {
     }
 
     const delegateTool = hasDelegateConfiguration(roleConfig)
-      ? await this.createDelegateTool(role, roleConfig, this.cwd)
+      ? await this.createDelegateTool(role, roleConfig, this.cwd, opts.visitIndex)
       : null;
 
     return spawnSharedSdkRoleSession({
@@ -392,11 +397,15 @@ export class ProductionHost implements Host {
     role: Role,
     roleConfig: RoleConfig | undefined,
     primaryCheckout: string,
+    parentVisitIndex: number | undefined,
   ): Promise<
     ReturnType<typeof import("./delegation/delegate-tool-factory.js").createDelegateTool>
   > {
     if (!hasDelegateConfiguration(roleConfig)) {
       throw new DelegateBridgeConfigError(`role '${String(role)}' is not authorized to delegate`);
+    }
+    if (parentVisitIndex === undefined) {
+      throw new Error("delegation requires the loop-owned parent visitIndex");
     }
     const manifest = this.loadedManifest.manifest;
     const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
@@ -406,6 +415,7 @@ export class ProductionHost implements Host {
       remainingChildren: roleConfig.delegation.max_children_per_session,
       runId: this.runId,
       parentRole: role,
+      parentVisitIndex,
       primaryCheckout,
       runStateDir: join(this.cwd, ".pi-conductor", "runs", this.runId),
       persistRecord: (record) => this.persistRecord(record),
@@ -423,8 +433,14 @@ export class ProductionHost implements Host {
     role: Role,
     roleConfig: RoleConfig | undefined,
     primaryCheckout: string,
+    parentVisitIndex: number | undefined,
   ): Promise<DelegateBridgeHandler> {
-    const delegateTool = await this.createDelegateTool(role, roleConfig, primaryCheckout);
+    const delegateTool = await this.createDelegateTool(
+      role,
+      roleConfig,
+      primaryCheckout,
+      parentVisitIndex,
+    );
     return async (args) =>
       adaptDelegateToolResult(
         await delegateTool.execute(
