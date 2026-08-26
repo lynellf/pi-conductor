@@ -25,6 +25,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
+import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
   DelegationPolicy,
@@ -33,8 +34,6 @@ import type {
   ProgressiveDisclosurePolicy,
   RoleConfig,
   SubagentProfile,
-  SubagentProjectionPolicy,
-  SubagentWorkspaceConfig,
   WorkspaceBackend,
   WorkspaceConfig,
   WorkspaceMount,
@@ -144,73 +143,6 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     system_prompt,
     ...(workspace === undefined ? {} : { workspace }),
   }) as SubagentProfile;
-}
-
-/** Parse Issue #55's deliberately projection-only subagent workspace block. */
-function parseSubagentWorkspace(raw: unknown, path: string): SubagentWorkspaceConfig {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
-  }
-  const workspace = raw as Record<string, unknown>;
-  rejectUnknownFields(workspace, new Set(["projection"]), path);
-  if (workspace.projection === undefined) {
-    throw new ManifestParseError(`${path} must contain a \`projection\` mapping`);
-  }
-
-  return Object.freeze({
-    projection: parseSubagentProjectionPolicy(workspace.projection, `${path}.projection`),
-  }) as SubagentWorkspaceConfig;
-}
-
-/** Parse the structural shape of a #55 policy; semantic checks live in validate.ts. */
-function parseSubagentProjectionPolicy(raw: unknown, path: string): SubagentProjectionPolicy {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
-  }
-  const projection = raw as Record<string, unknown>;
-  rejectUnknownFields(projection, new Set(["required", "allowed_paths", "default_paths"]), path);
-
-  const required = toBool(projection.required, `${path}.required`);
-  const allowed_paths = parseSubagentProjectionPathArray(
-    projection.allowed_paths,
-    `${path}.allowed_paths`,
-  );
-  const default_paths =
-    projection.default_paths === undefined
-      ? undefined
-      : parseSubagentProjectionPathArray(projection.default_paths, `${path}.default_paths`);
-
-  return Object.freeze({
-    required,
-    allowed_paths,
-    ...(default_paths === undefined ? {} : { default_paths }),
-  }) as SubagentProjectionPolicy;
-}
-
-function parseSubagentProjectionPathArray(value: unknown, path: string): readonly string[] {
-  if (!Array.isArray(value)) {
-    throw new ManifestParseError(`${path} must be an array of repository-relative literals`);
-  }
-  const paths: string[] = [];
-  for (const [index, item] of value.entries()) {
-    if (typeof item !== "string") {
-      throw new ManifestParseError(`${path}[${index}] must be a string`);
-    }
-    paths.push(item);
-  }
-  return Object.freeze(paths);
-}
-
-function rejectUnknownFields(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  path: string,
-): void {
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) {
-      throw new ManifestParseError(`${path}.${key} is not valid in this configuration block`);
-    }
-  }
 }
 
 // ─── Delegation lite §3: delegation policy parsing ────────────────────

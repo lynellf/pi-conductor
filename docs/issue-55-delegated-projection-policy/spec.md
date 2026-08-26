@@ -1,6 +1,6 @@
 # Issue #55 — Declarative projection policy for delegated subagents
 
-**Status:** Draft — requires overseer acknowledgement before implementation.
+**Status:** Acknowledged by the overseer; implementation integrated and verified. `pnpm audit` reports unrelated transitive dependency advisories (recorded below).
 **Authority:** GitHub #55; compatible with the archived FSM specification, #48, #51, and #52.
 
 ## Objective
@@ -190,6 +190,12 @@ auto-merges, discards, or overwrites a child branch.
 
 ### Parent integration and finalization
 
+**Completion record:** The parent integrated the manifest contract, host admission,
+real `delegate` batch-gate/sparse-worktree behavior tests, and README documentation.
+`pnpm build`, `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm format:check`
+passed. `pnpm audit` reports 7 high, 6 moderate, and 1 low transitive advisory;
+no dependency changes were authorized in this slice.
+
 1. Reconcile the three reviewed artifacts against this contract; make only necessary
    integration edits in the primary checkout.
 2. Add/update README delegation documentation and this plan's completion status.
@@ -207,9 +213,9 @@ and report changed files, commands/results, and residual risks.
 | Legacy delegation changes unexpectedly | Policy is opt-in; an explicit profile-less regression test preserves #52 semantics. |
 | Worktree is mistaken for a sandbox | Prompt/docs retain the file-tool path-confinement caveat and child shell remains absent. |
 
-## Acknowledgement requested
+## Acknowledgement record
 
-Approval confirms the `subagents[].workspace.projection` syntax and, in particular:
-policy literals may be exact files or host-expanded literal directory roots; the
-materialized child set is exact files capped at 64; and defaults/runtime selections
-are always intersected with the clean parent's current materialized `H` authority.
+The overseer acknowledged this contract before implementation: policy literals may
+be exact files or host-expanded literal directory roots; the materialized child set
+is exact files capped at 64; and defaults/runtime selections are always intersected
+with the clean parent's current materialized `H` authority.
