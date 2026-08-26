@@ -183,7 +183,7 @@ export async function materializePinnedPaths(
     projectionMutationStarted = true;
     await execFileAsync(
       "git",
-      ["sparse-checkout", "add", "--no-cone", "--", ...paths.map((path) => `/${path}`)],
+      ["sparse-checkout", "add", "--", ...paths.map((path) => `/${path}`)],
       progressiveProjectionGitOptions(authority, stagedIndexPath, materializationWorktreePath),
     );
     await runGitWithInput(
