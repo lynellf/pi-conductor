@@ -397,6 +397,46 @@ verified uncommitted changes in the child worktree; `no_changes` requires a
 clean worktree at the batch base. A `completed` report without changes becomes
 `no_changes`; an unexpected commit or invalid Git state becomes `failed`.
 
+### Projection-aware child authority (Issue #52)
+
+Delegation remains concurrency **inside one active parent role**; it does not
+create parallel FSM roles. A task may narrow its child workspace to exact files
+that are currently materialized in the clean parent workspace:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "parser",
+      "subagent": "api-implementer",
+      "objective": "Implement the parser change.",
+      "expected_output": "A focused parser diff.",
+      "projection_paths": ["src/parser.ts", "tests/parser.test.ts"]
+    }
+  ]
+}
+```
+
+`projection_paths` is an optional array of 1–64 safe repository-relative file
+paths. Conductor captures the parent’s Git `H` (materialized) paths at its clean
+base commit, rejects duplicates, unsafe paths, and paths outside that captured
+set, and creates no child worktree when batch validation fails. For a sparse
+parent, omitting `projection_paths` explicitly inherits its full materialized
+set; for a non-sparse parent, omission retains the legacy full-child-worktree
+behavior. An explicit subset is always applied and rechecked before the child
+session starts.
+
+A child cannot use `request_files`, `delegate`, or a shell. It cannot expand its
+own projection: the parent must decide whether to disclose more context before
+or in a later delegated batch. This keeps child authority monotonic even when
+siblings run concurrently.
+
+The run log records each accepted child's `parent_role`, `parent_visit_index`,
+and effective `projection_paths` in `subagent_started`. Rejected batches append
+a `delegation_validation_rejected` record with the parent identity, task IDs,
+and typed validation errors; no child lifecycle record is created for such a
+batch.
+
 ### Child boundary and branch integration
 
 Each child receives only `read`, `grep`, `find`, `ls`, `edit`, `write`, and
