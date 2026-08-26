@@ -90,7 +90,8 @@ interface PoisonedGitPointer {
   readonly expectUntouched: () => Promise<void>;
 }
 
-describe("Issue #51 initial progressive projection", () => {
+// This suite replaces a process-wide Node built-in; run its injected filesystem failures serially.
+describe.sequential("Issue #51 initial progressive projection", () => {
   beforeEach(() => {
     vi.resetModules();
   });
