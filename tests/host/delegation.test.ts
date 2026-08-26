@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { rollup } from "../../src/cost/rollup.js";
@@ -24,6 +25,7 @@ import { notifyListeners, subscribeToRecords } from "../../src/host/record-emitt
 import { makeStubModel } from "../../src/host/stub-provider.js";
 import type { DelegationPolicy, SubagentProfile } from "../../src/manifest/types.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
+import { delegateArgsSchema } from "../../src/seam/schema.js";
 
 const execFileAsync = promisify(execFile);
 const profile: SubagentProfile = {
@@ -38,6 +40,24 @@ const policy: DelegationPolicy = {
   max_parallel: 2,
 };
 const usage = { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 };
+
+describe("delegate task schema — Issue #52", () => {
+  it("rejects an exact child projection with more than 64 paths", () => {
+    expect(
+      Value.Check(delegateArgsSchema, {
+        tasks: [
+          {
+            id: "too-many-projection-paths",
+            subagent: "implementer",
+            objective: "Inspect the bounded projection.",
+            expected_output: "Report the result.",
+            projection_paths: Array.from({ length: 65 }, (_, index) => `file-${index}.txt`),
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("delegation batch gate (§4)", () => {
   it("rejects a dirty primary checkout before a child can be admitted", () => {

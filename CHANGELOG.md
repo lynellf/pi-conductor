@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Enhancements
+
+- **Projection-aware concurrent subagents** (Issue #52). A delegated task can
+  declare an exact `projection_paths` subset of its clean parent workspace.
+  Sparse parents pass their materialized projection to children by default;
+  child worktrees are configured and verified against that bound before their
+  sessions start. Rejected batches are durable audit records, and child start
+  records retain parent role/visit and effective projection metadata. Delegated
+  children also suppress inherited project context, extensions, skills, themes,
+  and prompt templates so host resource discovery cannot widen their authority.
+
+### Notes
+
+- Delegation is still bounded concurrency within one active FSM role. Children
+  cannot use `request_files`, `delegate`, or shell tools; the parent remains
+  responsible for context decisions, verification, and integration.
+
 ## [0.17.0] - 2026-08-26
 
 ### Enhancements

@@ -1,7 +1,7 @@
 /** Issue #48 R3 production selection of isolated Node RPC role sessions. */
 
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -50,6 +50,23 @@ function registeredMachineTool(name: string): ToolDefinition {
   const tool = registeredMachineTools().find((candidate) => candidate.name === name);
   if (tool === undefined) throw new Error(`expected static machine tool '${name}'`);
   return tool;
+}
+
+/** Read the actual tool set supplied to the child model, rather than loader configuration. */
+function toolNamesFromModelContext(context: unknown): string[] {
+  if (typeof context !== "object" || context === null) {
+    throw new Error("expected the child model to receive an object context");
+  }
+  const tools = Reflect.get(context, "tools");
+  if (!Array.isArray(tools)) throw new Error("expected the child model context to contain tools");
+  return tools.map((tool) => {
+    if (typeof tool !== "object" || tool === null) {
+      throw new Error("expected a child model tool definition");
+    }
+    const name = Reflect.get(tool, "name");
+    if (typeof name !== "string") throw new Error("expected a named child model tool");
+    return name;
+  });
 }
 
 function makeAbortableStubRegistry(
@@ -121,6 +138,81 @@ function makeAbortableStubRegistry(
     release() {
       if (release === undefined) throw new Error("delegated child has not started");
       release();
+    },
+  };
+}
+
+/** Hold every delegated child live until the test has inspected its worktree. */
+function makeConcurrentAbortableStubRegistry(
+  onStarted: () => void,
+  onModelContext?: (context: unknown) => void,
+): {
+  readonly registry: ModelRegistry;
+  releaseAll(): void;
+} {
+  const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+  const stubModel = makeStubModel();
+  const releases = new Set<() => void>();
+  let releaseFutureStarts = false;
+  registry.registerProvider("stub", {
+    api: "anthropic-messages" as const,
+    apiKey: "stub-dummy-key-not-used",
+    baseUrl: stubModel.baseUrl,
+    streamSimple: (_model, context, options) => {
+      onModelContext?.(context);
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [],
+        api: "anthropic-messages",
+        provider: "stub",
+        model: "stub-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      let released = false;
+      const release = (): void => {
+        if (released) return;
+        released = true;
+        message.stopReason = "aborted";
+        message.errorMessage = "delegated child released by projection test";
+        stream.push({ type: "error", reason: "aborted", error: message });
+        stream.end();
+      };
+      releases.add(release);
+      stream.push({ type: "start", partial: message });
+      onStarted();
+      if (releaseFutureStarts) queueMicrotask(release);
+      options?.signal?.addEventListener("abort", release, { once: true });
+      return stream;
+    },
+    models: [
+      {
+        id: "stub-model",
+        name: "Stub Model (concurrent projection test)",
+        api: stubModel.api,
+        baseUrl: stubModel.baseUrl,
+        reasoning: stubModel.reasoning,
+        input: [...stubModel.input],
+        cost: { ...stubModel.cost },
+        contextWindow: stubModel.contextWindow,
+        maxTokens: stubModel.maxTokens,
+      },
+    ],
+  });
+  return {
+    registry,
+    releaseAll() {
+      releaseFutureStarts = true;
+      for (const release of releases) release();
     },
   };
 }
@@ -337,6 +429,739 @@ subagents:
       ).rejects.toMatchObject({
         code: "ENOENT",
       });
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
+  it("inherits an isolated progressive parent's active sparse selection when projection paths are omitted", async () => {
+    const runId = "r52-isolated-progressive-delegate";
+    const log = new InMemoryRecordLog();
+    const child = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    child.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") child.success(command);
+    };
+    await writeFile(join(workdir, "delegate-child.md"), "Report the delegated result.", "utf8");
+    await writeFile(
+      join(workdir, "selected-parent-canary.txt"),
+      "selected parent workspace\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workdir, "unselected-parent-sibling.txt"),
+      "unselected parent workspace\n",
+      "utf8",
+    );
+    await execFileAsync(
+      "git",
+      ["add", "delegate-child.md", "selected-parent-canary.txt", "unselected-parent-sibling.txt"],
+      { cwd: workdir },
+    );
+    await execFileAsync("git", ["commit", "-m", "add progressive delegate canaries"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistryWithStub(),
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 1
+      max_parallel: 1
+    workspace:
+      backend: worktree
+      source: snapshot
+      progressive_disclosure:
+        initial_paths: [selected-parent-canary.txt]
+        allowed_paths: [selected-parent-canary.txt]
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => child });
+        child.success(child.command("get_state"), {
+          sessionId: "isolated-progressive-delegate-parent",
+          sessionFile: join(workdir, "isolated-progressive-delegate-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated progressive delegate parent configuration");
+    }
+    const parentWorkspace = parent.workspace?.path_or_image;
+    if (parentWorkspace === undefined) {
+      throw new Error("expected isolated progressive delegate parent workspace");
+    }
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      await expect(
+        readFile(join(parentWorkspace, "selected-parent-canary.txt"), "utf8"),
+      ).resolves.toBe("selected parent workspace\n");
+      await expect(
+        readFile(join(parentWorkspace, "unselected-parent-sibling.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      await registeredMachineTool("delegate").execute(
+        "isolated-progressive-delegate-call",
+        {
+          tasks: [
+            {
+              id: "delegate-child-task",
+              subagent: "delegate-child",
+              objective: "Inspect the parent workspace.",
+              expected_output: "Return the inspection result.",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      const childStarted = log.records(runId).find((record) => record.type === "subagent_started");
+      if (childStarted === undefined || childStarted.type !== "subagent_started") {
+        throw new Error("expected isolated progressive delegation to start a child");
+      }
+      expect(childStarted.projection_paths).toEqual(["selected-parent-canary.txt"]);
+      await expect(
+        readFile(join(childStarted.worktree_path, "selected-parent-canary.txt"), "utf8"),
+      ).resolves.toBe("selected parent workspace\n");
+      await expect(
+        readFile(join(childStarted.worktree_path, "unselected-parent-sibling.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
+  it("does not disclose an unprojected external agent-dir skill to a delegated child model", async () => {
+    const runId = "r52-isolated-delegate-ancestor-context";
+    const log = new InMemoryRecordLog();
+    const childSessionStarted = vi.fn();
+    const childModelContexts: unknown[] = [];
+    const blocking = makeConcurrentAbortableStubRegistry(childSessionStarted, (context) => {
+      childModelContexts.push(context);
+    });
+    const parentChild = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    parentChild.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") parentChild.success(command);
+    };
+    const childPromptMarker = "CHILD_PROFILE_PROMPT_MARKER_R52_ANCESTOR_CONTEXT";
+    const ancestorCanary = "UNDISCLOSED_ANCESTOR_AGENTS_CANARY_R52";
+    const externalAgentDir = join(mountedDir, "unprojected-agent-dir");
+    const externalSkillMarker = "UNPROJECTED_EXTERNAL_AGENT_DIR_SKILL_CANARY_R52";
+    await mkdir(join(externalAgentDir, "skills", "unprojected-resource"), { recursive: true });
+    await writeFile(
+      join(externalAgentDir, "skills", "unprojected-resource", "SKILL.md"),
+      `---\nname: unprojected-resource\ndescription: ${externalSkillMarker}\n---\n\n# Unprojected resource\n`,
+      "utf8",
+    );
+    await writeFile(join(workdir, "delegate-child.md"), childPromptMarker, "utf8");
+    await writeFile(join(workdir, "parent-disclosed.txt"), "parent disclosure only\n", "utf8");
+    await execFileAsync("git", ["add", "delegate-child.md", "parent-disclosed.txt"], {
+      cwd: workdir,
+    });
+    await execFileAsync("git", ["commit", "-m", "add ancestor context canaries"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: blocking.registry,
+      cwd: workdir,
+      agentDir: externalAgentDir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 1
+      max_parallel: 1
+    workspace:
+      backend: worktree
+      source: snapshot
+      progressive_disclosure:
+        initial_paths: [parent-disclosed.txt]
+        allowed_paths: [parent-disclosed.txt]
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
+        parentChild.success(parentChild.command("get_state"), {
+          sessionId: "isolated-delegate-ancestor-context-parent",
+          sessionFile: join(workdir, "isolated-delegate-ancestor-context-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated delegate parent configuration");
+    }
+    const parentWorkspace = parent.workspace?.path_or_image;
+    if (parentWorkspace === undefined) {
+      throw new Error("expected isolated progressive delegate parent workspace");
+    }
+    const childWorktreesRoot = join(workdir, ".pi-conductor", "runs", runId, "worktrees");
+    await mkdir(childWorktreesRoot, { recursive: true });
+    await writeFile(join(childWorktreesRoot, "AGENTS.md"), ancestorCanary, "utf8");
+
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      await expect(readFile(join(parentWorkspace, "parent-disclosed.txt"), "utf8")).resolves.toBe(
+        "parent disclosure only\n",
+      );
+      await expect(readFile(join(parentWorkspace, "AGENTS.md"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      const delegated = registeredMachineTool("delegate").execute(
+        "isolated-delegate-ancestor-context",
+        {
+          tasks: [
+            {
+              id: "delegate-child-ancestor-context-task",
+              subagent: "delegate-child",
+              objective: "Inspect only the disclosed parent file.",
+              expected_output: "Report the confined inspection.",
+              projection_paths: ["parent-disclosed.txt"],
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+      try {
+        await vi.waitFor(() => expect(childSessionStarted).toHaveBeenCalledOnce());
+        const childStarted = log
+          .records(runId)
+          .find((record) => record.type === "subagent_started");
+        if (childStarted === undefined || childStarted.type !== "subagent_started") {
+          throw new Error("expected delegated child to start");
+        }
+        await expect(
+          readFile(join(childStarted.worktree_path, "parent-disclosed.txt"), "utf8"),
+        ).resolves.toBe("parent disclosure only\n");
+        await expect(readFile(join(childStarted.worktree_path, "AGENTS.md"))).rejects.toMatchObject(
+          {
+            code: "ENOENT",
+          },
+        );
+
+        // This is the context delivered to the child model's stream, not loader input/options.
+        expect(childModelContexts).toHaveLength(1);
+        const [childModelContext] = childModelContexts;
+        if (childModelContext === undefined) throw new Error("expected one child model context");
+        const childModelContextText = JSON.stringify(childModelContext);
+        expect(childModelContextText).toContain(childPromptMarker);
+        expect(childModelContextText).not.toContain(ancestorCanary);
+        expect(childModelContextText).not.toContain(externalSkillMarker);
+        expect(toolNamesFromModelContext(childModelContext)).toEqual([
+          "read",
+          "grep",
+          "find",
+          "ls",
+          "edit",
+          "write",
+          "report_result",
+        ]);
+
+        blocking.releaseAll();
+        await expect(delegated).resolves.toMatchObject({ details: { remainingChildren: 0 } });
+      } finally {
+        blocking.releaseAll();
+        await delegated.catch(() => undefined);
+      }
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
+  it("confines concurrent bridged children to their exact parent-disclosed projection subsets", async () => {
+    const runId = "r52-isolated-delegate-projection-subsets";
+    const log = new InMemoryRecordLog();
+    const childSessionStarted = vi.fn();
+    const blocking = makeConcurrentAbortableStubRegistry(childSessionStarted);
+    const parentChild = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    parentChild.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") parentChild.success(command);
+    };
+    await writeFile(join(workdir, "delegate-child.md"), "Report the delegated result.", "utf8");
+    await writeFile(join(workdir, "approved-parent-alpha.txt"), "alpha only\n", "utf8");
+    await writeFile(join(workdir, "approved-parent-beta.txt"), "beta only\n", "utf8");
+    await writeFile(
+      join(workdir, "policy-only-undisclosed.txt"),
+      "must remain undisclosed\n",
+      "utf8",
+    );
+    await execFileAsync(
+      "git",
+      [
+        "add",
+        "delegate-child.md",
+        "approved-parent-alpha.txt",
+        "approved-parent-beta.txt",
+        "policy-only-undisclosed.txt",
+      ],
+      { cwd: workdir },
+    );
+    await execFileAsync("git", ["commit", "-m", "add delegated projection canaries"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: blocking.registry,
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 3
+      max_parallel: 2
+    workspace:
+      backend: worktree
+      source: snapshot
+      progressive_disclosure:
+        initial_paths: [approved-parent-alpha.txt, approved-parent-beta.txt]
+        allowed_paths:
+          [approved-parent-alpha.txt, approved-parent-beta.txt, policy-only-undisclosed.txt]
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
+        parentChild.success(parentChild.command("get_state"), {
+          sessionId: "isolated-delegate-projection-subsets-parent",
+          sessionFile: join(workdir, "isolated-delegate-projection-subsets-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated delegate parent configuration");
+    }
+    const parentWorkspace = parent.workspace?.path_or_image;
+    if (parentWorkspace === undefined) {
+      throw new Error("expected isolated progressive delegate parent workspace");
+    }
+    const parentSparseSelection = (
+      await execFileAsync("git", ["sparse-checkout", "list"], { cwd: parentWorkspace })
+    ).stdout;
+    const expectParentProjection = async (): Promise<void> => {
+      await expect(
+        readFile(join(parentWorkspace, "approved-parent-alpha.txt"), "utf8"),
+      ).resolves.toBe("alpha only\n");
+      await expect(
+        readFile(join(parentWorkspace, "approved-parent-beta.txt"), "utf8"),
+      ).resolves.toBe("beta only\n");
+      await expect(
+        readFile(join(parentWorkspace, "policy-only-undisclosed.txt")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    };
+    const firstTask = {
+      id: "delegate-alpha-subset",
+      subagent: "delegate-child",
+      objective: "Inspect only the alpha projection.",
+      expected_output: "Report the alpha inspection.",
+      projection_paths: ["approved-parent-alpha.txt"],
+    };
+    const secondTask = {
+      id: "delegate-beta-subset",
+      subagent: "delegate-child",
+      objective: "Inspect only the beta projection.",
+      expected_output: "Report the beta inspection.",
+      projection_paths: ["approved-parent-beta.txt"],
+    };
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      await expectParentProjection();
+      const delegate = registeredMachineTool("delegate");
+      const delegated = delegate.execute(
+        "isolated-delegate-projection-subsets",
+        { tasks: [firstTask, secondTask] },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+      let delegationSettled = false;
+      void delegated.then(() => {
+        delegationSettled = true;
+      });
+      try {
+        await vi.waitFor(() => expect(childSessionStarted).toHaveBeenCalledTimes(2));
+        expect(delegationSettled).toBe(false);
+        const startedRecords = log
+          .records(runId)
+          .flatMap((record) => (record.type === "subagent_started" ? [record] : []));
+        expect(startedRecords).toHaveLength(2);
+        expect(new Set(startedRecords.map((record) => record.child_id)).size).toBe(2);
+
+        const requestedPathByTask = new Map<string, string>([
+          [firstTask.id, "approved-parent-alpha.txt"],
+          [secondTask.id, "approved-parent-beta.txt"],
+        ]);
+        for (const record of startedRecords) {
+          const requestedPath = requestedPathByTask.get(record.task_id);
+          if (requestedPath === undefined) {
+            throw new Error(`unexpected delegated task '${record.task_id}'`);
+          }
+          await expect(readFile(join(record.worktree_path, requestedPath), "utf8")).resolves.toBe(
+            requestedPath === "approved-parent-alpha.txt" ? "alpha only\n" : "beta only\n",
+          );
+          const materializedPaths = (
+            await execFileAsync("git", ["ls-files", "-t", "-z"], {
+              cwd: record.worktree_path,
+            })
+          ).stdout
+            .split("\0")
+            .flatMap((entry) => (entry.startsWith("H ") ? [entry.slice(2)] : []));
+          expect(materializedPaths).toEqual([requestedPath]);
+          for (const undisclosedPath of [
+            "approved-parent-alpha.txt",
+            "approved-parent-beta.txt",
+            "policy-only-undisclosed.txt",
+          ]) {
+            if (undisclosedPath === requestedPath) continue;
+            await expect(
+              readFile(join(record.worktree_path, undisclosedPath)),
+            ).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        }
+        expect(startedRecords).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              task_id: firstTask.id,
+              parent_role: "implementer",
+              parent_visit_index: 1,
+              projection_paths: firstTask.projection_paths,
+            }),
+            expect.objectContaining({
+              task_id: secondTask.id,
+              parent_role: "implementer",
+              parent_visit_index: 1,
+              projection_paths: secondTask.projection_paths,
+            }),
+          ]),
+        );
+        await expectParentProjection();
+
+        blocking.releaseAll();
+        const delegatedResult = await delegated;
+        expect(delegatedResult).toMatchObject({ details: { remainingChildren: 1 } });
+        const delegatedText = delegatedResult.content
+          .flatMap((entry) => (entry.type === "text" ? [entry.text] : []))
+          .join("\n");
+        const delegatedPayload = JSON.parse(delegatedText) as {
+          readonly results: readonly { readonly task_id: string }[];
+        };
+        expect(delegatedPayload.results.map((result) => result.task_id)).toEqual([
+          firstTask.id,
+          secondTask.id,
+        ]);
+
+        const terminalRecords = log
+          .records(runId)
+          .flatMap((record) => (record.type === "subagent_failed" ? [record] : []));
+        expect(terminalRecords).toHaveLength(2);
+        expect(terminalRecords.map((record) => record.child_id).sort()).toEqual(
+          startedRecords.map((record) => record.child_id).sort(),
+        );
+        expect(terminalRecords.map((record) => record.task_id).sort()).toEqual(
+          [firstTask.id, secondTask.id].sort(),
+        );
+
+        const worktreesRoot = join(workdir, ".pi-conductor", "runs", runId, "worktrees");
+        const worktreesBeforeRejectedDelegate = (await readdir(worktreesRoot)).sort();
+        const startedBeforeRejectedDelegate = childSessionStarted.mock.calls.length;
+        const rejectedTask = {
+          id: "delegate-policy-only-undisclosed",
+          subagent: "delegate-child",
+          objective: "This policy-allowed path must still be rejected.",
+          expected_output: "No child may start.",
+          projection_paths: ["policy-only-undisclosed.txt"],
+        };
+        const rejectedResult = await delegate.execute(
+          "isolated-delegate-parent-undisclosed",
+          { tasks: [rejectedTask] },
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        );
+        expect(rejectedResult).toMatchObject({
+          isError: true,
+          details: {
+            remainingChildren: 1,
+            code: "batch_validation_failed",
+            errors: [
+              expect.objectContaining({
+                code: "projection-path-not-materialized",
+                path: "policy-only-undisclosed.txt",
+              }),
+            ],
+          },
+        });
+        expect(childSessionStarted).toHaveBeenCalledTimes(startedBeforeRejectedDelegate);
+        const validationRejections = log
+          .records(runId)
+          .flatMap((record) => (record.type === "delegation_validation_rejected" ? [record] : []));
+        expect(validationRejections).toEqual([
+          expect.objectContaining({
+            parent_role: "implementer",
+            parent_visit_index: 1,
+            task_ids: [rejectedTask.id],
+            code: "batch_validation_failed",
+            errors: [
+              expect.objectContaining({
+                code: "projection-path-not-materialized",
+                path: "policy-only-undisclosed.txt",
+              }),
+            ],
+          }),
+        ]);
+        expect(
+          log.records(runId).filter((record) => record.type === "subagent_started"),
+        ).toHaveLength(2);
+        expect(
+          log.records(runId).filter((record) => record.type === "subagent_failed"),
+        ).toHaveLength(2);
+        expect((await readdir(worktreesRoot)).sort()).toEqual(worktreesBeforeRejectedDelegate);
+        expect(
+          (await execFileAsync("git", ["sparse-checkout", "list"], { cwd: parentWorkspace }))
+            .stdout,
+        ).toBe(parentSparseSelection);
+        await expectParentProjection();
+      } finally {
+        blocking.releaseAll();
+        await delegated.catch(() => undefined);
+      }
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
+  it("serializes concurrent isolated delegate calls before admitting another child", async () => {
+    const runId = "r52-isolated-delegate-serial-admission";
+    const log = new InMemoryRecordLog();
+    const childStarted = vi.fn();
+    const blocking = makeAbortableStubRegistry(childStarted, vi.fn());
+    const parentChild = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    parentChild.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") parentChild.success(command);
+    };
+    await writeFile(join(workdir, "delegate-child.md"), "Report the delegated result.", "utf8");
+    await execFileAsync("git", ["add", "delegate-child.md"], { cwd: workdir });
+    await execFileAsync("git", ["commit", "-m", "add concurrent delegated child prompt"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: blocking.registry,
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 2
+      max_parallel: 1
+    workspace: { backend: worktree, source: snapshot }
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
+        parentChild.success(parentChild.command("get_state"), {
+          sessionId: "isolated-delegate-serial-admission-parent",
+          sessionFile: join(workdir, "isolated-delegate-serial-admission-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated delegate parent configuration");
+    }
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      const delegate = registeredMachineTool("delegate");
+      await expect(
+        delegate.execute(
+          "isolated-delegate-serial-admission-rejected",
+          {
+            tasks: [
+              {
+                id: "rejected-delegate-child-task",
+                subagent: "undeclared-subagent",
+                objective: "This request must be rejected.",
+                expected_output: "No child starts.",
+              },
+            ],
+          },
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        ),
+      ).resolves.toMatchObject({ isError: true, details: { remainingChildren: 2 } });
+
+      const first = delegate.execute(
+        "isolated-delegate-serial-admission-first",
+        {
+          tasks: [
+            {
+              id: "first-delegate-child-task",
+              subagent: "delegate-child",
+              objective: "Wait for the concurrent admission check.",
+              expected_output: "Return after the admission check.",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+      const second = delegate.execute(
+        "isolated-delegate-serial-admission-second",
+        {
+          tasks: [
+            {
+              id: "second-delegate-child-task",
+              subagent: "delegate-child",
+              objective: "Wait for the concurrent admission check.",
+              expected_output: "Return after the admission check.",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      await vi.waitFor(() => expect(childStarted).toHaveBeenCalledTimes(1));
+      expect(
+        log.records(runId).filter((record) => record.type === "subagent_started"),
+      ).toHaveLength(1);
+
+      blocking.release();
+      await vi.waitFor(() => expect(childStarted).toHaveBeenCalledTimes(2));
+      expect(
+        log.records(runId).filter((record) => record.type === "subagent_started"),
+      ).toHaveLength(2);
+
+      blocking.release();
+      const results = await Promise.all([first, second]);
+      expect(results[0]).toMatchObject({
+        content: [
+          expect.objectContaining({ text: expect.stringContaining("first-delegate-child-task") }),
+        ],
+      });
+      expect(results[1]).toMatchObject({
+        content: [
+          expect.objectContaining({ text: expect.stringContaining("second-delegate-child-task") }),
+        ],
+      });
+      for (const result of results) expect(result).not.toMatchObject({ isError: true });
+      expect(results.map((result) => result.details)).toEqual(
+        expect.arrayContaining([{ remainingChildren: 1 }, { remainingChildren: 0 }]),
+      );
+      expect(log.records(runId).filter((record) => record.type === "subagent_failed")).toHaveLength(
+        2,
+      );
     } finally {
       if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
       else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
