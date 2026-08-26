@@ -9,6 +9,7 @@ import { workspaceProvisioned } from "../persistence/log.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { RoleSession } from "./host.js";
+import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
 import { DelegateBridgeConfigError, type DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
 import {
   loadMachineToolsConfig,
@@ -24,6 +25,7 @@ import {
   ensureSnapshotCheckout,
   provisionWorkspace,
 } from "./workspace/index.js";
+import { captureProgressiveProjectionGitAuthority } from "./workspace/progressive-projection.js";
 
 /** Spawn one isolated role process in its provisioned worktree or copy. */
 export async function spawnIsolatedRoleSession(options: {
@@ -56,6 +58,10 @@ export async function spawnIsolatedRoleSession(options: {
 }): Promise<RoleSession> {
   const { visitIndex } = options;
   const source = options.workspaceConfig.source ?? "snapshot";
+  const progressiveDisclosure = options.workspaceConfig.progressive_disclosure;
+  const requestFilesAuthorized =
+    progressiveDisclosure !== undefined &&
+    options.roleConfig?.tools?.includes("request_files") === true;
   const runStateDir = join(options.cwd, ".pi-conductor", "runs", options.runId);
   const commit = options.snapshotCommit;
 
@@ -73,7 +79,13 @@ export async function spawnIsolatedRoleSession(options: {
     primaryCheckout: options.cwd,
     runStateDir,
     sharedSnapshot,
+    ...(progressiveDisclosure === undefined ? {} : { progressiveDisclosure }),
   });
+  // Capture authority before the role receives tools or can alter its `.git` pointer (Issue #51).
+  const progressiveProjectionGitAuthority =
+    progressiveDisclosure === undefined
+      ? undefined
+      : await captureProgressiveProjectionGitAuthority(workspaceResult.workspacePath);
   const guarantee = computeGuarantee({
     backend: options.backend,
     workspaceConfig: options.workspaceConfig,
@@ -129,27 +141,56 @@ export async function spawnIsolatedRoleSession(options: {
     declaredToolNames: [
       ...confinedTools.activeNames,
       ...(delegateAuthorized ? (["delegate"] as const) : []),
+      ...(requestFilesAuthorized ? (["request_files"] as const) : []),
     ],
     ...(delegateAuthorized ? { enableDelegateBridge: true } : {}),
+    ...(requestFilesAuthorized ? { enableRequestFilesBridge: true } : {}),
   });
   let delegateBridge: NonNullable<NodeRoleSessionOptions["delegateBridge"]> | undefined;
-  if (delegateAuthorized) {
+  let requestFilesBridge: NonNullable<NodeRoleSessionOptions["requestFilesBridge"]> | undefined;
+  if (delegateAuthorized || requestFilesAuthorized) {
     const config = loadMachineToolsConfig({
       [MACHINE_TOOLS_CONFIG_ENV]: machineToolsConfigPath,
     });
-    if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
-      throw new DelegateBridgeConfigError(
-        "isolated delegate bridge configuration is missing its authorized tool",
-      );
+    if (delegateAuthorized) {
+      if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
+        throw new DelegateBridgeConfigError(
+          "isolated delegate bridge configuration is missing its authorized tool",
+        );
+      }
+      const createHandler = options.createDelegateBridgeHandler;
+      if (createHandler === undefined) {
+        throw new DelegateBridgeConfigError("isolated delegate bridge has no host handler");
+      }
+      delegateBridge = {
+        directory: config.delegateBridge.directory,
+        delegate: await createHandler(workspaceResult.workspacePath),
+      };
     }
-    const createHandler = options.createDelegateBridgeHandler;
-    if (createHandler === undefined) {
-      throw new DelegateBridgeConfigError("isolated delegate bridge has no host handler");
+    if (requestFilesAuthorized) {
+      if (
+        progressiveDisclosure === undefined ||
+        config.requestFilesBridge === undefined ||
+        !config.declaredToolNames.includes("request_files")
+      ) {
+        throw new DelegateBridgeConfigError(
+          "isolated request_files bridge configuration is missing its authorized tool",
+        );
+      }
+      requestFilesBridge = {
+        directory: config.requestFilesBridge.directory,
+        requestFiles: createRequestFilesBridgeHandler({
+          commit,
+          policy: progressiveDisclosure,
+          role: options.role,
+          runId: options.runId,
+          visitIndex,
+          authority: progressiveProjectionGitAuthority,
+          isReadOnly: confinedTools.isReadOnly,
+          persistRecord: options.persistRecord,
+        }),
+      };
     }
-    delegateBridge = {
-      directory: config.delegateBridge.directory,
-      delegate: await createHandler(workspaceResult.workspacePath),
-    };
   }
   let sessionId: string | null = null;
   const session = await options.nodeRoleSessionFactory({
@@ -162,6 +203,7 @@ export async function spawnIsolatedRoleSession(options: {
     systemPrompt: options.systemPrompt,
     machineToolsConfigPath,
     ...(delegateBridge === undefined ? {} : { delegateBridge }),
+    ...(requestFilesBridge === undefined ? {} : { requestFilesBridge }),
     retries: options.retries,
     retryDelayMs: options.retryDelayMs,
     workspace,

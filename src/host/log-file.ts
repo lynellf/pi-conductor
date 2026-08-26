@@ -405,6 +405,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "run_seeded",
   "run_context",
   "handoff_validation_rejected",
+  "progressive_disclosure",
   "subagent_started",
   "subagent_completed",
   "subagent_failed",

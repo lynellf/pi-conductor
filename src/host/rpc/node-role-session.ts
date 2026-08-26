@@ -131,7 +131,9 @@ export class NodeRoleSession implements RoleSession {
     }
     this.terminator = new RpcChildTerminator(child);
     this.delegateBridge =
-      options.delegateBridge === undefined ? null : createDelegateBridge(options);
+      options.delegateBridge === undefined && options.requestFilesBridge === undefined
+        ? null
+        : createDelegateBridge(options);
     this.onDispose = options.onDispose;
     this.transport = new RpcChildTransport(child, {
       onEvent: (value) => this.acceptEvent(value),
@@ -423,33 +425,65 @@ export class NodeRoleSession implements RoleSession {
 }
 
 function createDelegateBridge(options: NodeRoleSessionOptions): DelegateBridgeHost {
-  const bridge = options.delegateBridge;
-  if (bridge === undefined) {
-    throw new RpcChildProcessError("RPC delegate bridge options are missing");
+  const delegateBridge = options.delegateBridge;
+  const requestFilesBridge = options.requestFilesBridge;
+  if (delegateBridge === undefined && requestFilesBridge === undefined) {
+    throw new RpcChildProcessError("RPC machine tool bridge options are missing");
   }
   try {
     const config = loadMachineToolsConfig({
       [MACHINE_TOOLS_CONFIG_ENV]: options.machineToolsConfigPath,
     });
-    if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
-      throw new RpcChildProcessError(
-        "RPC delegate bridge requires a delegate-enabled machine-tools configuration",
-      );
+    if (delegateBridge !== undefined) {
+      if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
+        throw new RpcChildProcessError(
+          "RPC delegate bridge requires a delegate-enabled machine-tools configuration",
+        );
+      }
+      if (realpathSync(delegateBridge.directory) !== config.delegateBridge.directory) {
+        throw new RpcChildProcessError(
+          "RPC delegate bridge directory does not match the machine-tools configuration",
+        );
+      }
     }
-    if (realpathSync(bridge.directory) !== config.delegateBridge.directory) {
-      throw new RpcChildProcessError(
-        "RPC delegate bridge directory does not match the machine-tools configuration",
-      );
+    if (requestFilesBridge !== undefined) {
+      if (
+        config.requestFilesBridge === undefined ||
+        !config.declaredToolNames.includes("request_files")
+      ) {
+        throw new RpcChildProcessError(
+          "RPC request_files bridge requires a request_files-enabled machine-tools configuration",
+        );
+      }
+      if (realpathSync(requestFilesBridge.directory) !== config.requestFilesBridge.directory) {
+        throw new RpcChildProcessError(
+          "RPC request_files bridge directory does not match the machine-tools configuration",
+        );
+      }
+    }
+    const directory = delegateBridge?.directory ?? requestFilesBridge?.directory;
+    if (directory === undefined) {
+      throw new RpcChildProcessError("RPC machine tool bridge directory is missing");
+    }
+    if (
+      delegateBridge !== undefined &&
+      requestFilesBridge !== undefined &&
+      realpathSync(delegateBridge.directory) !== realpathSync(requestFilesBridge.directory)
+    ) {
+      throw new RpcChildProcessError("RPC machine tool bridge handlers must share one directory");
     }
     return new DelegateBridgeHost({
       sessionDir: options.sessionDir,
-      directory: bridge.directory,
-      delegate: bridge.delegate,
+      directory,
+      ...(delegateBridge === undefined ? {} : { delegate: delegateBridge.delegate }),
+      ...(requestFilesBridge === undefined
+        ? {}
+        : { requestFiles: requestFilesBridge.requestFiles }),
     });
   } catch (error) {
     if (error instanceof RpcChildProcessError) throw error;
     throw new RpcChildProcessError(
-      `RPC delegate bridge configuration is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      `RPC machine tool bridge configuration is invalid: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
