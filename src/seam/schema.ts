@@ -176,12 +176,19 @@ export type EndArgs = Static<typeof endArgsSchema>;
  * - `subagent`: profile name allowed to this parent (validated at batch level)
  * - `objective`: 1–8,192 characters
  * - `expected_output`: 1–8,192 characters
+ * - `projection_paths`: optional 1–64 exact file subset (each ≤1,024 characters);
+ *   host validates safe syntax and membership in the clean parent's materialized sparse set
  */
 export const delegateTaskSchema = Type.Object({
   id: Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }),
   subagent: Type.String({ minLength: 1 }),
   objective: Type.String({ minLength: 1, maxLength: 8192 }),
   expected_output: Type.String({ minLength: 1, maxLength: 8192 }),
+  // Issue #52: exact parent-materialized paths only. The host validates
+  // safety, uniqueness, and membership in the captured parent H set.
+  projection_paths: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 64 }),
+  ),
 });
 
 /** Typed view of a single delegation task. */

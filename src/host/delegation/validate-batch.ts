@@ -18,6 +18,7 @@
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
 import type { DelegateArgs } from "../../seam/schema.js";
 import { isValidTaskId } from "./ids.js";
+import { isSafeExactProjectionPath } from "./projection.js";
 
 // ─── Validation errors ───────────────────────────────────────────────────
 
@@ -28,11 +29,18 @@ export type BatchValidationErrorCode =
   | "invalid-task-id"
   | "unallowed-subagent"
   | "primary-not-git"
-  | "primary-dirty";
+  | "primary-dirty"
+  | "projection-authority-unavailable"
+  | "empty-projection-paths"
+  | "unsafe-projection-path"
+  | "duplicate-projection-path"
+  | "projection-path-not-materialized";
 
 export interface BatchValidationError {
   readonly code: BatchValidationErrorCode;
   readonly message: string;
+  /** Exact path that triggered this error, when validation was path-specific. */
+  readonly path?: string;
 }
 
 /** Result of validating a delegation batch. */
@@ -50,6 +58,8 @@ export interface ValidatedTask {
   readonly profile: SubagentProfile;
   readonly objective: string;
   readonly expectedOutput: string;
+  /** Exact child projection, explicitly selected or inherited from a sparse parent. */
+  readonly projectionPaths?: readonly string[];
 }
 
 // ─── Git cleanliness check result ──────────────────────────────────────
@@ -82,9 +92,12 @@ export function validateBatch(
   profiles: readonly SubagentProfile[],
   remainingChildren: number,
   gitCheck: GitCheckResult,
+  materializedParentPaths?: readonly string[],
 ): BatchValidationResult {
   const errors: BatchValidationError[] = [];
   const profileByName = new Map(profiles.map((p) => [p.name, p]));
+  const materializedPathSet =
+    materializedParentPaths === undefined ? undefined : new Set(materializedParentPaths);
 
   // §4: at least one task.
   if (args.tasks.length === 0) {
@@ -145,6 +158,54 @@ export function validateBatch(
     }
   }
 
+  // Issue #52: projection paths are optional, but when supplied every
+  // entry must be a safe exact member of the parent H set captured at base.
+  for (const task of args.tasks) {
+    const projectionPaths = task.projection_paths;
+    if (projectionPaths === undefined) continue;
+
+    if (projectionPaths.length === 0) {
+      errors.push({
+        code: "empty-projection-paths",
+        message: `task '${task.id}' projection_paths must contain at least one exact path`,
+      });
+      continue;
+    }
+    const seenProjectionPaths = new Set<string>();
+    for (const path of projectionPaths) {
+      if (!isSafeExactProjectionPath(path)) {
+        errors.push({
+          code: "unsafe-projection-path",
+          message: `task '${task.id}' projection path '${path}' is not a safe repository-relative exact path`,
+          path,
+        });
+        continue;
+      }
+      if (seenProjectionPaths.has(path)) {
+        errors.push({
+          code: "duplicate-projection-path",
+          message: `task '${task.id}' repeats projection path '${path}'`,
+          path,
+        });
+        continue;
+      }
+      seenProjectionPaths.add(path);
+      if (materializedPathSet !== undefined && !materializedPathSet.has(path)) {
+        errors.push({
+          code: "projection-path-not-materialized",
+          message: `task '${task.id}' projection path '${path}' is not materialized in the clean parent sparse checkout`,
+          path,
+        });
+      }
+    }
+    if (materializedPathSet === undefined) {
+      errors.push({
+        code: "projection-authority-unavailable",
+        message: `task '${task.id}' requested projection_paths but no clean parent materialized-path capture is available`,
+      });
+    }
+  }
+
   // §4: Git cleanliness gate.
   if (!gitCheck.isGit) {
     errors.push({
@@ -177,6 +238,9 @@ export function validateBatch(
       profile,
       objective: task.objective,
       expectedOutput: task.expected_output,
+      ...(task.projection_paths === undefined
+        ? {}
+        : { projectionPaths: Object.freeze([...task.projection_paths]) }),
     };
   });
 

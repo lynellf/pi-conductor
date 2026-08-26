@@ -15,9 +15,15 @@ import type {
   PoolFailedResult,
 } from "./pool.js";
 import { runBoundedPool } from "./pool.js";
-import { formatBatchErrors, validateBatch } from "./validate-batch.js";
+import {
+  captureParentProjection,
+  type DelegateParentProjectionCapture,
+  ParentProjectionCaptureError,
+} from "./projection.js";
+import { formatBatchErrors, type ValidatedTask, validateBatch } from "./validate-batch.js";
 import {
   checkPrimaryGitStatus,
+  configureExactSparseWorktree,
   createWorktree,
   determineChildStatus,
   verifyWorktree,
@@ -78,6 +84,7 @@ export interface SpawnChildConfig {
   readonly worktreePath: string;
   readonly branch: string;
   readonly baseCommit: string;
+  readonly projectionPaths?: readonly string[];
   readonly systemPrompt: string;
 }
 
@@ -97,31 +104,59 @@ export interface ChildTerminal {
 /** Validate, create worktrees, run bounded children, and preserve input order. */
 export async function executeDelegate(options: DelegateToolOptions): Promise<DelegateResult> {
   const gitCheck = await checkPrimaryGitStatus(options.primaryCheckout);
+  let parentProjection: DelegateParentProjectionCapture;
+  try {
+    parentProjection = await captureParentProjection(options.primaryCheckout, gitCheck);
+  } catch (cause) {
+    const captureErrorMessage =
+      cause instanceof ParentProjectionCaptureError ? cause.message : message(cause);
+    throw new DelegateToolError("batch_validation_failed", captureErrorMessage, [
+      { code: "projection-authority-unavailable", message: captureErrorMessage },
+    ]);
+  }
   const validation = validateBatch(
     options.args,
     options.policy,
     options.profiles,
     options.remainingChildren,
     gitCheck,
+    parentProjection.materializedPaths,
   );
   if (!validation.valid) {
     throw new DelegateToolError(
       "batch_validation_failed",
       formatBatchErrors(validation.errors),
-      validation.errors.map((error) => ({ code: error.code, message: error.message })),
+      validation.errors.map((error) => ({
+        code: error.code,
+        message: error.message,
+        ...(error.path === undefined ? {} : { path: error.path }),
+      })),
     );
   }
-  if (gitCheck.headCommit === null) {
+  if (parentProjection.baseCommit === null) {
     throw new DelegateToolError("batch_validation_failed", "primary HEAD is unavailable", []);
   }
+  const baseCommit = parentProjection.baseCommit;
+  // A sparse parent grants children exactly its current materialized H set by
+  // default. Explicit task paths were already validated as a narrower subset.
+  // Full parents retain the legacy non-sparse child setup.
+  const inheritedProjectionPaths =
+    parentProjection.isSparse === true ? parentProjection.materializedPaths : undefined;
+  const tasks =
+    inheritedProjectionPaths === undefined
+      ? validation.tasks
+      : validation.tasks.map((task) =>
+          task.projectionPaths === undefined
+            ? { ...task, projectionPaths: inheritedProjectionPaths }
+            : task,
+        );
 
   await Promise.all([
     mkdir(`${options.runStateDir}/worktrees`, { recursive: true }),
     mkdir(`${options.runStateDir}/sessions`, { recursive: true }),
   ]);
-  const baseCommit = gitCheck.headCommit;
   const pool = await runBoundedPool(
-    validation.tasks,
+    tasks,
     {
       maxParallel: options.policy.max_parallel,
       baseCommit,
@@ -165,13 +200,7 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
 
 interface RunSingleChildOptions {
   readonly childId: ReturnType<typeof generateChildId>;
-  readonly task: {
-    readonly taskId: string;
-    readonly subagent: string;
-    readonly profile: SubagentProfile;
-    readonly objective: string;
-    readonly expectedOutput: string;
-  };
+  readonly task: ValidatedTask;
   readonly worktreePath: string;
   readonly branch: string;
   readonly baseCommit: string;
@@ -198,6 +227,9 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   }
   try {
     await createWorktree(worktreePath, branch, baseCommit, options.primaryCheckout);
+    if (task.projectionPaths !== undefined) {
+      await configureExactSparseWorktree(worktreePath, branch, baseCommit, task.projectionPaths);
+    }
   } catch (cause) {
     return failedResult(
       options,
@@ -241,6 +273,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       worktreePath,
       branch,
       baseCommit,
+      ...(task.projectionPaths === undefined ? {} : { projectionPaths: task.projectionPaths }),
       systemPrompt: prompt.systemPrompt,
     });
   } catch (cause) {
@@ -379,7 +412,7 @@ export class DelegateToolError extends Error {
   constructor(
     public readonly code: string,
     message: string,
-    public readonly errors: readonly { code: string; message: string }[],
+    public readonly errors: readonly { code: string; message: string; path?: string }[],
   ) {
     super(message);
     this.name = "DelegateToolError";
