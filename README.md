@@ -356,10 +356,10 @@ children and cannot exceed that allowance. Profile names cannot collide with
 FSM role names. Bump `version` when changing this policy or a profile.
 
 The child profile's `system_prompt` is a normal prompt file. Tell it to make a
-focused change, run appropriate verification, commit a clean result in its
-worktree, and call `report_result`. The host supplies the child task and its
-worktree path; do not put parent transcripts or FSM routing instructions in the
-child prompt.
+focused change and call `report_result`. The host supplies the child task and
+its worktree path; do not put parent transcripts or FSM routing instructions in
+the child prompt. The child is file-only: the parent alone runs commands,
+verifies results, commits, and reconciles a retained child worktree.
 
 ### Ask the parent to delegate
 
@@ -436,6 +436,46 @@ and effective `projection_paths` in `subagent_started`. Rejected batches append
 a `delegation_validation_rejected` record with the parent identity, task IDs,
 and typed validation errors; no child lifecycle record is created for such a
 batch.
+
+### Declarative profile projection policy (Issue #55)
+
+A subagent profile can require its own bounded child projection instead of
+relying on a parent prompt alone:
+
+```yaml
+subagents:
+  - name: focused-implementer
+    models: [{ model: anthropic:claude-sonnet-4-5, effort: high }]
+    max_session_cost_usd: 2
+    system_prompt: .pi/subagents/focused-implementer.md
+    workspace:
+      projection:
+        required: false
+        allowed_paths: [src, tests]
+        default_paths: [src/parser, tests/parser]
+```
+
+For this profile-only `workspace` block, `projection` is the sole valid field.
+`required` is an explicit boolean; `allowed_paths` is a non-empty, duplicate-free
+list of at most 64 safe repository-relative literals. A literal can name one
+tracked file or a directory root, but it is never passed raw to Git as a glob.
+The host expands roots only against the clean parent's current materialized Git
+`H` paths, then sorts and deduplicates the exact resulting files.
+
+With `required: true`, every task must provide a non-empty exact
+`projection_paths` selection. With `required: false`, `default_paths` is
+required and omission resolves to its host-expanded exact set. An explicit task
+selection may only narrow those defaults; it cannot choose a merely allowed
+sibling. In every case, the admitted set is non-empty, no larger than 64, and a
+subset of both the policy authority and the parent's captured `H`. Empty or
+over-large default expansion, unavailable parent authority, unsafe requests,
+and over-broad requests fail the whole batch before a child worktree or session
+exists. Profiles without this block retain the Issue #52 behavior above.
+
+`subagent_started.projection_paths` stores the exact effective files, never the
+policy roots. Rejected policy admission uses the existing
+`delegation_validation_rejected` record. This is file-tool path confinement,
+not an OS, credential, or network sandbox.
 
 ### Child boundary and branch integration
 
