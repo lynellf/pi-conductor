@@ -17,6 +17,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
+import type { Role } from "../../core/types.js";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type {
   PersistedRecord,
@@ -29,7 +30,7 @@ import { SessionState } from "../cost.js";
 import type { DisplaySink } from "../display-sink.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
-import { executeDelegate } from "./delegate-tool.js";
+import { DelegateToolError, executeDelegate } from "./delegate-tool.js";
 import type { DelegationManager } from "./manager.js";
 import type { PoolCompletedResult, PoolFailedResult } from "./pool.js";
 import { buildChildTools, CHILD_FILE_TOOL_NAMES } from "./run-tool.js";
@@ -40,7 +41,10 @@ export interface DelegateToolFactoryOptions {
   readonly subagents: readonly SubagentProfile[];
   readonly remainingChildren: number;
   readonly runId: string;
-  readonly parentRole: string;
+  /** Parent role that requested this batch. */
+  readonly parentRole: Role;
+  /** Loop-owned visit identity of the parent session requesting this batch. */
+  readonly parentVisitIndex: number;
   readonly primaryCheckout: string;
   readonly runStateDir: string;
   /** Host-owned append-and-notify seam for child lifecycle records. */
@@ -105,17 +109,38 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           terminate: false,
         };
       } catch (cause) {
+        const error = cause instanceof DelegateToolError ? cause : undefined;
+        const code = error?.code ?? "delegate_execution_failed";
+        if (error?.code === "batch_validation_failed") {
+          opts.persistRecord({
+            type: "delegation_validation_rejected",
+            run_id: opts.runId,
+            parent_role: opts.parentRole,
+            parent_visit_index: opts.parentVisitIndex,
+            task_ids: Object.freeze(args.tasks.map((task) => task.id)),
+            code,
+            errors: Object.freeze(
+              error.errors.map((validation) => Object.freeze({ ...validation })),
+            ),
+            ts: Date.now(),
+          });
+        }
         return {
           content: [
             {
               type: "text",
               text: JSON.stringify({
                 error: "delegate_failed",
+                code,
                 message: cause instanceof Error ? cause.message : String(cause),
               }),
             },
           ],
-          details: { remainingChildren: remaining },
+          details: {
+            remainingChildren: remaining,
+            code,
+            ...(error === undefined ? {} : { errors: error.errors }),
+          },
           isError: true,
           terminate: false,
         };
@@ -166,6 +191,11 @@ function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       child_id: config.childId,
       task_id: config.taskId,
       subagent: config.profile.name,
+      parent_role: opts.parentRole,
+      parent_visit_index: opts.parentVisitIndex,
+      ...(config.projectionPaths === undefined
+        ? {}
+        : { projection_paths: Object.freeze([...config.projectionPaths]) }),
       model: child.model,
       session_file: sessionFile,
       worktree_path: config.worktreePath,

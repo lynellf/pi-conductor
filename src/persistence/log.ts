@@ -151,12 +151,34 @@ export interface SubagentStartedRecord {
   readonly child_id: string;
   readonly task_id: string;
   readonly subagent: string;
+  /** Parent role that requested the child (Issue #52; absent in legacy records). */
+  readonly parent_role?: Role;
+  /** Loop-owned parent role visit (Issue #52; absent in legacy records). */
+  readonly parent_visit_index?: number;
+  /** Exact parent-materialized subset selected for this child, when requested (Issue #52). */
+  readonly projection_paths?: readonly string[];
   /** Resolved profile model retained for recovery and terminal roll-up. */
   readonly model: string;
   readonly session_file: string;
   readonly worktree_path: string;
   readonly branch: string;
   readonly base_commit: string;
+  readonly ts: number;
+}
+
+/** Host-owned audit record for a delegate batch rejected before a child is admitted (Issue #52). */
+export interface DelegationValidationRejectedRecord {
+  readonly type: "delegation_validation_rejected";
+  readonly run_id: string;
+  readonly parent_role: Role;
+  readonly parent_visit_index: number;
+  readonly task_ids: readonly string[];
+  readonly code: string;
+  readonly errors: readonly {
+    readonly code: string;
+    readonly message: string;
+    readonly path?: string;
+  }[];
   readonly ts: number;
 }
 
@@ -222,6 +244,7 @@ export type PersistedRecord =
   | HandoffValidationRejectedRecord
   | ProgressiveDisclosureRecord
   | SubagentStartedRecord
+  | DelegationValidationRejectedRecord
   | SubagentCompletedRecord
   | SubagentFailedRecord
   | FileMutationRecord
