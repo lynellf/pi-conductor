@@ -428,10 +428,12 @@ subagents:
     const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
     process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
     try {
-      await expect(readFile(join(parentWorkspace, "selected-parent-canary.txt"), "utf8")).resolves.toBe(
-        "selected parent workspace\n",
-      );
-      await expect(readFile(join(parentWorkspace, "unselected-parent-sibling.txt"))).rejects.toMatchObject({
+      await expect(
+        readFile(join(parentWorkspace, "selected-parent-canary.txt"), "utf8"),
+      ).resolves.toBe("selected parent workspace\n");
+      await expect(
+        readFile(join(parentWorkspace, "unselected-parent-sibling.txt")),
+      ).rejects.toMatchObject({
         code: "ENOENT",
       });
 
