@@ -805,6 +805,7 @@ describe("expandProgressiveProjection (Issue #51)", () => {
     );
 
     expect(result).toEqual({ kind: "approved", disclosedPaths: ["needed.ts"] });
+    expect(await sparseSelection(workspace.workspacePath)).toBe("initial.txt\n/needed.ts\n");
     await expect(readFile(join(workspace.workspacePath, "needed.ts"), "utf-8")).resolves.toBe(
       "needed",
     );
