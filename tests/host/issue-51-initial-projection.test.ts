@@ -5,7 +5,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Role } from "../../src/core/types.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
@@ -17,6 +17,7 @@ import { HostFakeRpcChild } from "./rpc/host-rpc-fixture.js";
 
 const execFileAsync = promisify(execFile);
 const forcedFilesystemFailure = vi.hoisted(() => ({
+  releaseBlockedChmod: undefined as (() => void) | undefined,
   onChmod: undefined as ((path: string) => Promise<void>) | undefined,
   onRename: undefined as
     | ((
@@ -92,6 +93,14 @@ interface PoisonedGitPointer {
 describe("Issue #51 initial progressive projection", () => {
   beforeEach(() => {
     vi.resetModules();
+  });
+
+  afterEach(() => {
+    forcedFilesystemFailure.releaseBlockedChmod?.();
+    forcedFilesystemFailure.releaseBlockedChmod = undefined;
+    forcedFilesystemFailure.onChmod = undefined;
+    forcedFilesystemFailure.onLink = undefined;
+    forcedFilesystemFailure.onRename = undefined;
   });
   it("uses host-captured Git authority to disclose one approved file through the isolated RPC path", async () => {
     const repository = await createRepository();
@@ -1005,7 +1014,7 @@ describe("Issue #51 initial progressive projection", () => {
         {},
       );
       await chmodAttempted;
-      const concurrentRead = await readThroughTool(tools, "requested/revealed.txt").then(
+      const concurrentRead = readThroughTool(tools, "requested/revealed.txt").then(
         (content) => ({ kind: "read" as const, content }),
         (error: unknown) => ({
           kind: "rejected" as const,
@@ -1014,13 +1023,15 @@ describe("Issue #51 initial progressive projection", () => {
       );
       const release = releaseChmod;
       if (release === undefined) throw new Error("read-only establishment did not block at chmod");
+      forcedFilesystemFailure.releaseBlockedChmod = release;
       release();
       releaseChmod = undefined;
-      const unavailable = await request;
+      forcedFilesystemFailure.releaseBlockedChmod = undefined;
+      const [unavailable, concurrentReadResult] = await Promise.all([request, concurrentRead]);
 
-      expect(concurrentRead).toMatchObject({ kind: "rejected" });
-      if (concurrentRead.kind === "rejected") {
-        expect(concurrentRead.message).not.toContain(REVEALED_CANARY);
+      expect(concurrentReadResult).toMatchObject({ kind: "rejected" });
+      if (concurrentReadResult.kind === "rejected") {
+        expect(concurrentReadResult.message).not.toContain(REVEALED_CANARY);
       }
       expect(unavailable).toMatchObject({
         details: { outcome: "unavailable", code: "workspace-unavailable" },
