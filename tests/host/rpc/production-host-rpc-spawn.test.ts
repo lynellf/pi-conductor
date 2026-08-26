@@ -344,6 +344,133 @@ subagents:
     }
   });
 
+  it("confines an isolated progressive parent's delegate child to its active sparse selection", async () => {
+    const runId = "r52-isolated-progressive-delegate";
+    const log = new InMemoryRecordLog();
+    const child = new HostFakeRpcChild();
+    let adapterOptions: NodeRoleSessionOptions | undefined;
+    child.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") child.success(command);
+    };
+    await writeFile(join(workdir, "delegate-child.md"), "Report the delegated result.", "utf8");
+    await writeFile(
+      join(workdir, "selected-parent-canary.txt"),
+      "selected parent workspace\n",
+      "utf8",
+    );
+    await writeFile(
+      join(workdir, "unselected-parent-sibling.txt"),
+      "unselected parent workspace\n",
+      "utf8",
+    );
+    await execFileAsync(
+      "git",
+      ["add", "delegate-child.md", "selected-parent-canary.txt", "unselected-parent-sibling.txt"],
+      { cwd: workdir },
+    );
+    await execFileAsync("git", ["commit", "-m", "add progressive delegate canaries"], {
+      cwd: workdir,
+    });
+
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistryWithStub(),
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: medium }]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, delegate, handoff, end]
+    delegation:
+      allowed_subagents: [delegate-child]
+      max_children_per_session: 1
+      max_parallel: 1
+    workspace:
+      backend: worktree
+      source: snapshot
+      progressive_disclosure:
+        initial_paths: [selected-parent-canary.txt]
+        allowed_paths: [selected-parent-canary.txt]
+subagents:
+  - name: delegate-child
+    models: [{ model: stub:stub-model, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: delegate-child.md
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        adapterOptions = options;
+        const starting = createNodeRoleSession({ ...options, spawn: () => child });
+        child.success(child.command("get_state"), {
+          sessionId: "isolated-progressive-delegate-parent",
+          sessionFile: join(workdir, "isolated-progressive-delegate-parent.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const parent = await host.spawnRole("implementer", { visitIndex: 1 });
+    const configPath = adapterOptions?.machineToolsConfigPath;
+    if (configPath === undefined) {
+      throw new Error("expected isolated progressive delegate parent configuration");
+    }
+    const parentWorkspace = parent.workspace?.path_or_image;
+    if (parentWorkspace === undefined) {
+      throw new Error("expected isolated progressive delegate parent workspace");
+    }
+    const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    try {
+      await expect(readFile(join(parentWorkspace, "selected-parent-canary.txt"), "utf8")).resolves.toBe(
+        "selected parent workspace\n",
+      );
+      await expect(readFile(join(parentWorkspace, "unselected-parent-sibling.txt"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
+      await registeredMachineTool("delegate").execute(
+        "isolated-progressive-delegate-call",
+        {
+          tasks: [
+            {
+              id: "delegate-child-task",
+              subagent: "delegate-child",
+              objective: "Inspect the parent workspace.",
+              expected_output: "Return the inspection result.",
+            },
+          ],
+        },
+        undefined,
+        undefined,
+        {} as ExtensionContext,
+      );
+
+      const childStarted = log.records(runId).find((record) => record.type === "subagent_started");
+      if (childStarted === undefined || childStarted.type !== "subagent_started") {
+        throw new Error("expected isolated progressive delegation to start a child");
+      }
+      await expect(
+        readFile(join(childStarted.worktree_path, "selected-parent-canary.txt"), "utf8"),
+      ).resolves.toBe("selected parent workspace\n");
+      await expect(
+        readFile(join(childStarted.worktree_path, "unselected-parent-sibling.txt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      if (priorConfigPath === undefined) delete process.env[MACHINE_TOOLS_CONFIG_ENV];
+      else process.env[MACHINE_TOOLS_CONFIG_ENV] = priorConfigPath;
+      await parent.dispose();
+    }
+  });
+
   it("cancels active delegated work when an isolated parent aborts without returning late bridge success", async () => {
     const runId = "r4-isolated-delegate-abort";
     const log = new InMemoryRecordLog();
