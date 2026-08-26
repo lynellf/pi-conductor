@@ -536,8 +536,22 @@ function validateSubagentProjectionPolicy(
     errors,
   );
 
+  const defaults = projection.default_paths;
+  if (defaults !== undefined) {
+    validateProjectionPathList(
+      profileName,
+      defaults,
+      "default_paths",
+      "subagent-projection-empty-default-paths",
+      "subagent-projection-duplicate-default-path",
+      "subagent-projection-unsafe-default-path",
+      "subagent-projection-too-many-default-paths",
+      errors,
+    );
+  }
+
   if (projection.required) {
-    if (projection.default_paths !== undefined) {
+    if (defaults !== undefined) {
       errors.push({
         code: "subagent-projection-required-with-defaults",
         message: `subagent profile '${profileName}' has \`workspace.projection.required: true\` and \`default_paths\`; required policies need an explicit runtime projection`,
@@ -546,7 +560,7 @@ function validateSubagentProjectionPolicy(
     return;
   }
 
-  if (projection.default_paths === undefined) {
+  if (defaults === undefined) {
     errors.push({
       code: "subagent-projection-missing-default-paths",
       message: `subagent profile '${profileName}' has \`workspace.projection.required: false\` without \`default_paths\``,
@@ -554,18 +568,7 @@ function validateSubagentProjectionPolicy(
     return;
   }
 
-  validateProjectionPathList(
-    profileName,
-    projection.default_paths,
-    "default_paths",
-    "subagent-projection-empty-default-paths",
-    "subagent-projection-duplicate-default-path",
-    "subagent-projection-unsafe-default-path",
-    "subagent-projection-too-many-default-paths",
-    errors,
-  );
-
-  for (const path of projection.default_paths) {
+  for (const path of defaults) {
     if (!projection.allowed_paths.some((allowed) => isLiteralDescendant(path, allowed))) {
       errors.push({
         code: "subagent-projection-default-outside-allowed",

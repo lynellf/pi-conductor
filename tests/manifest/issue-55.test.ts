@@ -104,6 +104,11 @@ subagents:
       "required: true\n        allowed_paths: [src]\n        default_paths: [src]",
     ],
     [
+      "unsafe defaults on a required policy",
+      "subagent-projection-unsafe-default-path",
+      "required: true\n        allowed_paths: [src]\n        default_paths: [../secret]",
+    ],
+    [
       "non-required policy without defaults",
       "subagent-projection-missing-default-paths",
       "required: false\n        allowed_paths: [src]",
