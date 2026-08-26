@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.17.0] - 2026-08-26
+
+### Enhancements
+
+- **Progressive isolated-workspace file disclosure** (Issue #51). A `worktree`
+  role can opt into a sparse initial projection with
+  `workspace.progressive_disclosure`, then call `request_files` for explicit
+  policy-approved regular files. Conductor verifies each request against the
+  pinned Git snapshot, preserves existing write confinement, and records every
+  request as a durable `progressive_disclosure` audit record. See the README
+  for manifest configuration and request outcomes.
+
+### Notes
+
+- The feature is additive and disabled unless the role declares both
+  `workspace.progressive_disclosure` and `request_files`. Library consumers
+  that exhaustively match on `PersistedRecord.type` should add a
+  `progressive_disclosure` case.
+
 ## [0.16.0] - 2026-08-25
 
 ### Enhancements
