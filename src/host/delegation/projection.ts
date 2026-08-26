@@ -5,16 +5,19 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** A clean parent sparse-checkout's materialized (`H`) paths at one immutable base. */
+/** A clean parent's materialized (`H`) paths at one immutable base. */
 export interface ParentMaterializedProjection {
   readonly baseCommit: string;
   readonly paths: readonly string[];
+  /** Whether the parent omitted any tracked path from its active projection. */
+  readonly isSparse: boolean;
 }
 
-/** Captured delegated-child projection authority, if the batch requested one. */
+/** Captured delegated-child projection authority at the parent's clean pinned base. */
 export interface DelegateParentProjectionCapture {
   readonly baseCommit: string | null;
   readonly materializedPaths?: readonly string[];
+  readonly isSparse?: boolean;
 }
 
 /** Failure to capture a child projection from the clean parent checkout. */
@@ -57,14 +60,28 @@ export async function captureMaterializedParentProjection(
     await assertCleanExpectedBase(primaryCheckout, expectedBaseCommit);
 
     const paths = new Set<string>();
+    let isSparse = false;
     for (const entry of stdout.split("\0")) {
       // `git ls-files -t` marks ordinary materialized index entries with H;
       // skipped sparse entries are S and must never become child authority.
+      if (entry.startsWith("S ")) {
+        isSparse = true;
+        continue;
+      }
       if (!entry.startsWith("H ")) continue;
       const path = entry.slice(2);
       if (isSafeExactProjectionPath(path)) paths.add(path);
     }
-    return Object.freeze({ baseCommit: expectedBaseCommit, paths: Object.freeze([...paths]) });
+    if (isSparse && paths.size === 0) {
+      throw new ParentProjectionCaptureError(
+        "parent sparse checkout has no materialized paths for delegated-child authority",
+      );
+    }
+    return Object.freeze({
+      baseCommit: expectedBaseCommit,
+      paths: Object.freeze([...paths]),
+      isSparse,
+    });
   } catch (cause) {
     if (cause instanceof ParentProjectionCaptureError) throw cause;
     throw new ParentProjectionCaptureError(
@@ -74,23 +91,23 @@ export async function captureMaterializedParentProjection(
   }
 }
 
-/** Capture parent H authority only when at least one task selected a child subset. */
-export async function captureRequestedParentProjection(
+/** Capture parent H authority before every clean delegated batch. */
+export async function captureParentProjection(
   primaryCheckout: string,
-  requestsProjection: boolean,
   gitCheck: {
     readonly isGit: boolean;
     readonly isClean: boolean;
     readonly headCommit: string | null;
   },
 ): Promise<DelegateParentProjectionCapture> {
-  if (!requestsProjection || !gitCheck.isGit || !gitCheck.isClean || gitCheck.headCommit === null) {
+  if (!gitCheck.isGit || !gitCheck.isClean || gitCheck.headCommit === null) {
     return Object.freeze({ baseCommit: gitCheck.headCommit });
   }
   const captured = await captureMaterializedParentProjection(primaryCheckout, gitCheck.headCommit);
   return Object.freeze({
     baseCommit: captured.baseCommit,
     materializedPaths: captured.paths,
+    isSparse: captured.isSparse,
   });
 }
 

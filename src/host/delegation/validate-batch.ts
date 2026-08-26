@@ -58,7 +58,7 @@ export interface ValidatedTask {
   readonly profile: SubagentProfile;
   readonly objective: string;
   readonly expectedOutput: string;
-  /** Exact parent materialized paths selected for this child, when requested. */
+  /** Exact child projection, explicitly selected or inherited from a sparse parent. */
   readonly projectionPaths?: readonly string[];
 }
 

@@ -419,7 +419,7 @@ subagents:
     }
   });
 
-  it("confines an isolated progressive parent's delegate child to its active sparse selection", async () => {
+  it("inherits an isolated progressive parent's active sparse selection when projection paths are omitted", async () => {
     const runId = "r52-isolated-progressive-delegate";
     const log = new InMemoryRecordLog();
     const child = new HostFakeRpcChild();
@@ -533,6 +533,7 @@ subagents:
       if (childStarted === undefined || childStarted.type !== "subagent_started") {
         throw new Error("expected isolated progressive delegation to start a child");
       }
+      expect(childStarted.projection_paths).toEqual(["selected-parent-canary.txt"]);
       await expect(
         readFile(join(childStarted.worktree_path, "selected-parent-canary.txt"), "utf8"),
       ).resolves.toBe("selected parent workspace\n");
