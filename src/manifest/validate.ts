@@ -19,7 +19,7 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
-import type { Manifest } from "./types.js";
+import type { Manifest, SubagentProjectionPolicy } from "./types.js";
 
 // ─── Result types ─────────────────────────────────────────────────────
 
@@ -104,8 +104,23 @@ export type Issue51ErrorCode =
   /** The opt-in policy relies on sparse worktree expansion. */
   | "progressive-disclosure-non-worktree-backend";
 
+// ─── Issue #55: delegated subagent projection policy errors ─────────────
+
+export type Issue55ErrorCode =
+  | "subagent-projection-empty-allowed-paths"
+  | "subagent-projection-duplicate-allowed-path"
+  | "subagent-projection-unsafe-allowed-path"
+  | "subagent-projection-too-many-allowed-paths"
+  | "subagent-projection-required-with-defaults"
+  | "subagent-projection-missing-default-paths"
+  | "subagent-projection-empty-default-paths"
+  | "subagent-projection-duplicate-default-path"
+  | "subagent-projection-unsafe-default-path"
+  | "subagent-projection-too-many-default-paths"
+  | "subagent-projection-default-outside-allowed";
+
 export interface ManifestError {
-  readonly code: ManifestErrorCode | Issue48ErrorCode | Issue51ErrorCode;
+  readonly code: ManifestErrorCode | Issue48ErrorCode | Issue51ErrorCode | Issue55ErrorCode;
   readonly message: string;
   readonly role?: Role;
 }
@@ -248,6 +263,9 @@ export function validateManifest(m: Manifest): ManifestReport {
             message: `subagent '${profile.name}' has models[${index}].effort '${model.effort}' which is not a valid thinking level`,
           });
         }
+      }
+      if (profile.workspace !== undefined) {
+        validateSubagentProjectionPolicy(profile.name, profile.workspace.projection, errors);
       }
     }
   }
@@ -499,6 +517,126 @@ export function validateManifest(m: Manifest): ManifestReport {
     errors: Object.freeze(errors),
     warnings: Object.freeze(warnings),
   };
+}
+
+/** Validate Issue #55 literal profile policy before it can authorize child projection. */
+function validateSubagentProjectionPolicy(
+  profileName: string,
+  projection: SubagentProjectionPolicy,
+  errors: ManifestError[],
+): void {
+  validateProjectionPathList(
+    profileName,
+    projection.allowed_paths,
+    "allowed_paths",
+    "subagent-projection-empty-allowed-paths",
+    "subagent-projection-duplicate-allowed-path",
+    "subagent-projection-unsafe-allowed-path",
+    "subagent-projection-too-many-allowed-paths",
+    errors,
+  );
+
+  if (projection.required) {
+    if (projection.default_paths !== undefined) {
+      errors.push({
+        code: "subagent-projection-required-with-defaults",
+        message: `subagent profile '${profileName}' has \`workspace.projection.required: true\` and \`default_paths\`; required policies need an explicit runtime projection`,
+      });
+    }
+    return;
+  }
+
+  if (projection.default_paths === undefined) {
+    errors.push({
+      code: "subagent-projection-missing-default-paths",
+      message: `subagent profile '${profileName}' has \`workspace.projection.required: false\` without \`default_paths\``,
+    });
+    return;
+  }
+
+  validateProjectionPathList(
+    profileName,
+    projection.default_paths,
+    "default_paths",
+    "subagent-projection-empty-default-paths",
+    "subagent-projection-duplicate-default-path",
+    "subagent-projection-unsafe-default-path",
+    "subagent-projection-too-many-default-paths",
+    errors,
+  );
+
+  for (const path of projection.default_paths) {
+    if (!projection.allowed_paths.some((allowed) => isLiteralDescendant(path, allowed))) {
+      errors.push({
+        code: "subagent-projection-default-outside-allowed",
+        message: `subagent profile '${profileName}' has default path '${path}' outside its allowed_paths authority`,
+      });
+    }
+  }
+}
+
+function validateProjectionPathList(
+  profileName: string,
+  paths: readonly string[],
+  field: "allowed_paths" | "default_paths",
+  emptyCode: "subagent-projection-empty-allowed-paths" | "subagent-projection-empty-default-paths",
+  duplicateCode:
+    | "subagent-projection-duplicate-allowed-path"
+    | "subagent-projection-duplicate-default-path",
+  unsafeCode: "subagent-projection-unsafe-allowed-path" | "subagent-projection-unsafe-default-path",
+  tooManyCode:
+    | "subagent-projection-too-many-allowed-paths"
+    | "subagent-projection-too-many-default-paths",
+  errors: ManifestError[],
+): void {
+  if (paths.length === 0) {
+    errors.push({
+      code: emptyCode,
+      message: `subagent profile '${profileName}' has empty workspace.projection.${field}`,
+    });
+  }
+  if (paths.length > 64) {
+    errors.push({
+      code: tooManyCode,
+      message: `subagent profile '${profileName}' has more than 64 workspace.projection.${field} entries`,
+    });
+  }
+
+  const seen = new Set<string>();
+  for (const path of paths) {
+    if (seen.has(path)) {
+      errors.push({
+        code: duplicateCode,
+        message: `subagent profile '${profileName}' repeats '${path}' in workspace.projection.${field}`,
+      });
+    }
+    seen.add(path);
+    if (!isSafeProjectionPolicyLiteral(path)) {
+      errors.push({
+        code: unsafeCode,
+        message: `subagent profile '${profileName}' has unsafe literal '${path}' in workspace.projection.${field}`,
+      });
+    }
+  }
+}
+
+function isSafeProjectionPolicyLiteral(path: string): boolean {
+  if (
+    path.length === 0 ||
+    path.startsWith("~") ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    /^[a-zA-Z]:/.test(path) ||
+    path.includes("\u0000") ||
+    GLOB_CHARACTER.test(path)
+  ) {
+    return false;
+  }
+  return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function isLiteralDescendant(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
 }
 
 function validateProgressiveDisclosurePaths(
