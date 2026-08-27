@@ -39,6 +39,11 @@ import type {
   TransitionRejected,
   UsageRecord,
 } from "../core/types.js";
+import type {
+  ChildCompletionEvidence,
+  ChildCompletionProtocol,
+  ChildProjectionFingerprint,
+} from "./child-completion.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import { materializePersistedRecord } from "./record-materialization.js";
 import type {
@@ -157,6 +162,12 @@ export interface SubagentStartedRecord {
   readonly parent_visit_index?: number;
   /** Exact effective parent-materialized projection applied to this child (Issue #52). */
   readonly projection_paths?: readonly string[];
+  /** Issue #57: profile-pinned terminal protocol; absent historical starts read as report_result. */
+  readonly completion_protocol?: ChildCompletionProtocol;
+  /** Issue #57: hash-only task cohort identity; no raw task card is retained again. */
+  readonly task_fingerprint?: string;
+  /** Issue #57: hash-only materialized projection cohort identity. */
+  readonly projection_fingerprint?: ChildProjectionFingerprint;
   /** Resolved profile model retained for recovery and terminal roll-up. */
   readonly model: string;
   readonly session_file: string;
@@ -203,11 +214,13 @@ export interface SubagentCompletedRecord {
   readonly head_commit: string;
   readonly session_file: string;
   readonly usage: SubagentUsage;
+  /** Issue #57 terminal evidence; optional to read old append-only records. */
+  readonly completion_evidence?: ChildCompletionEvidence;
   readonly ts: number;
 }
 
 /**
- * Delegation lite §7.1: appended after a child session fails or is cancelled.
+ * Delegation lite §7.1: appended after a child session fails, blocks, or is cancelled.
  *
  * `status: "failed"` — child encountered an error during execution.
  * `status: "cancelled"` — child was cancelled due to run abort or resume recovery.
@@ -220,7 +233,9 @@ export interface SubagentFailedRecord {
   readonly subagent: string;
   /** Resolved profile model; child terminal cost rolls into perModel. */
   readonly model: string;
-  readonly status: "failed" | "cancelled";
+  readonly status: "failed" | "cancelled" | "blocked";
+  /** Issue #57: bounded minimal-mode final/fallback summary; absent on legacy records. */
+  readonly summary?: string;
   readonly failure_reason: string;
   readonly branch: string;
   readonly worktree_path: string;
@@ -228,6 +243,8 @@ export interface SubagentFailedRecord {
   readonly head_commit: string | null;
   readonly session_file: string | null;
   readonly usage: SubagentUsage | null;
+  /** Issue #57 terminal evidence; optional to read old append-only records. */
+  readonly completion_evidence?: ChildCompletionEvidence;
   readonly ts: number;
 }
 

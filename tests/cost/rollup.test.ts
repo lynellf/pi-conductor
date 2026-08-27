@@ -357,6 +357,47 @@ describe("rollup: both terminal types contribute (§11.4)", () => {
   });
 });
 
+describe("rollup: child protocol cohort (Issue #57 §9.2)", () => {
+  it("adds child terminal usage once to the profile-pinned protocol dimension", () => {
+    const records: PersistedRecord[] = [
+      {
+        type: "subagent_failed",
+        run_id: RUN_A,
+        child_id: "child",
+        task_id: "task",
+        subagent: "implementer",
+        model: "stub:model",
+        status: "blocked",
+        failure_reason: "final_response_blocked",
+        branch: "conductor/run/child",
+        worktree_path: "/tmp/child",
+        base_commit: "base",
+        head_commit: "base",
+        session_file: "child.jsonl",
+        usage: mkUsage(2, 3, 0, 0, 0.5),
+        completion_evidence: {
+          completion_protocol: "minimal",
+          completion_source: "final_response",
+          normalization_reason: "final_response_blocked",
+          report_result_called: false,
+          final_response_present: true,
+          summary_truncated: false,
+          blocker_reason: "missing context",
+          worktree_state: "changed",
+          changed_path_count: 1,
+          changed_paths: ["src/file.ts"],
+          changed_paths_truncated: false,
+          file_tool_calls: { read: 1, grep: 0, find: 0, ls: 0, edit: 0, write: 1 },
+          duplicate_read_calls: 0,
+        },
+        ts: TS,
+      },
+    ];
+    const result = rollup(records, RUN_A, "orchestrator");
+    expect(result.perChildProtocol?.minimal.cost).toBe(0.5);
+  });
+});
+
 // ─── System-default model (model: null) ─────────────────────────────────
 
 describe("rollup: system-default model key", () => {

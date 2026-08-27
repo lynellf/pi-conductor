@@ -41,6 +41,7 @@
  */
 
 import type { Role, UsageRecord } from "../core/types.js";
+import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { PersistedRecord, SubagentUsage } from "../persistence/log.js";
 
 /**
@@ -86,6 +87,8 @@ export interface RunRollup {
   readonly orchestratorOverhead: UsageAggregate;
   /** Delegation lite §7: totals per subagent profile. */
   readonly perSubagent: Readonly<Record<string, UsageAggregate>>;
+  /** Issue #57: totals grouped by profile-pinned completion protocol. */
+  readonly perChildProtocol?: Readonly<Record<ChildCompletionProtocol, UsageAggregate>>;
 }
 
 /**
@@ -112,6 +115,7 @@ export function rollup(
   const perRole = new Map<Role, UsageAggregate>();
   const perModel = new Map<string, UsageAggregate>();
   const perSubagent = new Map<string, UsageAggregate>();
+  const perChildProtocol = new Map<ChildCompletionProtocol, UsageAggregate>();
 
   for (const record of records) {
     // run_id filter (§11.6: roll-up is keyed by run_id).
@@ -131,6 +135,9 @@ export function rollup(
         perSubagent.set(record.subagent, addUsage(subagentAgg, record.usage));
         const modelAgg = perModel.get(record.model) ?? ZERO_AGGREGATE;
         perModel.set(record.model, addUsage(modelAgg, record.usage));
+        const protocol = record.completion_evidence?.completion_protocol ?? "report_result";
+        const protocolAgg = perChildProtocol.get(protocol) ?? ZERO_AGGREGATE;
+        perChildProtocol.set(protocol, addUsage(protocolAgg, record.usage));
       }
       continue;
     }
@@ -166,7 +173,7 @@ export function rollup(
   // session terminated), this is ZERO_AGGREGATE.
   const orchestratorOverhead: UsageAggregate = perRole.get(orchestratorRole) ?? ZERO_AGGREGATE;
 
-  return finalize(perRun, perRole, perModel, perSubagent, orchestratorOverhead);
+  return finalize(perRun, perRole, perModel, perSubagent, perChildProtocol, orchestratorOverhead);
 }
 
 function addUsage(a: UsageAggregate, u: SubagentUsage | UsageRecord): UsageAggregate {
@@ -186,6 +193,7 @@ function finalize(
   perRole: Map<Role, UsageAggregate>,
   perModel: Map<string, UsageAggregate>,
   perSubagent: Map<string, UsageAggregate>,
+  perChildProtocol: Map<ChildCompletionProtocol, UsageAggregate>,
   orchestratorOverhead: UsageAggregate,
 ): RunRollup {
   const perRoleOut: Record<Role, UsageAggregate> = {};
@@ -200,11 +208,19 @@ function finalize(
   for (const [subagent, agg] of perSubagent.entries()) {
     perSubagentOut[subagent] = Object.freeze({ ...agg }) as UsageAggregate;
   }
+  const perChildProtocolOut: Record<ChildCompletionProtocol, UsageAggregate> = {
+    report_result: ZERO_AGGREGATE,
+    minimal: ZERO_AGGREGATE,
+  };
+  for (const [protocol, agg] of perChildProtocol.entries()) {
+    perChildProtocolOut[protocol] = Object.freeze({ ...agg }) as UsageAggregate;
+  }
   return {
     perRun: Object.freeze({ ...perRun }) as UsageAggregate,
     perRole: Object.freeze(perRoleOut),
     perModel: Object.freeze(perModelOut),
     orchestratorOverhead: Object.freeze({ ...orchestratorOverhead }) as UsageAggregate,
     perSubagent: Object.freeze(perSubagentOut),
+    perChildProtocol: Object.freeze(perChildProtocolOut),
   };
 }
