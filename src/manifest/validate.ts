@@ -19,6 +19,7 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
 import type { Manifest } from "./types.js";
 
 // ─── Result types ─────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ export type Issue51ErrorCode =
   | "progressive-disclosure-non-worktree-backend";
 
 export interface ManifestError {
-  readonly code: ManifestErrorCode | Issue48ErrorCode | Issue51ErrorCode;
+  readonly code: ManifestErrorCode | Issue48ErrorCode | Issue51ErrorCode | Issue55ErrorCode;
   readonly message: string;
   readonly role?: Role;
 }
@@ -248,6 +249,11 @@ export function validateManifest(m: Manifest): ManifestReport {
             message: `subagent '${profile.name}' has models[${index}].effort '${model.effort}' which is not a valid thinking level`,
           });
         }
+      }
+      if (profile.workspace !== undefined) {
+        errors.push(
+          ...validateSubagentProjectionPolicy(profile.name, profile.workspace.projection),
+        );
       }
     }
   }

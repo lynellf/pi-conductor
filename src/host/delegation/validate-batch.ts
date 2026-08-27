@@ -19,6 +19,11 @@ import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js"
 import type { DelegateArgs } from "../../seam/schema.js";
 import { isValidTaskId } from "./ids.js";
 import { isSafeExactProjectionPath } from "./projection.js";
+import {
+  type ProjectionAdmissionError,
+  type ProjectionAdmissionErrorCode,
+  resolveEffectiveProjection,
+} from "./projection-policy.js";
 
 // ─── Validation errors ───────────────────────────────────────────────────
 
@@ -30,11 +35,7 @@ export type BatchValidationErrorCode =
   | "unallowed-subagent"
   | "primary-not-git"
   | "primary-dirty"
-  | "projection-authority-unavailable"
-  | "empty-projection-paths"
-  | "unsafe-projection-path"
-  | "duplicate-projection-path"
-  | "projection-path-not-materialized";
+  | ProjectionAdmissionErrorCode;
 
 export interface BatchValidationError {
   readonly code: BatchValidationErrorCode;
@@ -158,52 +159,26 @@ export function validateBatch(
     }
   }
 
-  // Issue #52: projection paths are optional, but when supplied every
-  // entry must be a safe exact member of the parent H set captured at base.
+  const effectiveProjectionByTaskId = new Map<string, readonly string[]>();
+  // Policy-controlled profiles resolve E before any pool worker can create a
+  // worktree. Profiles without one retain the Issue #52 runtime path gate.
   for (const task of args.tasks) {
-    const projectionPaths = task.projection_paths;
-    if (projectionPaths === undefined) continue;
-
-    if (projectionPaths.length === 0) {
-      errors.push({
-        code: "empty-projection-paths",
-        message: `task '${task.id}' projection_paths must contain at least one exact path`,
-      });
+    const profile = profileByName.get(task.subagent);
+    const projectionPolicy = profile?.workspace?.projection;
+    if (projectionPolicy !== undefined) {
+      const resolution = resolveEffectiveProjection(
+        projectionPolicy,
+        task.projection_paths,
+        materializedParentPaths,
+      );
+      if (!resolution.valid) {
+        errors.push(...resolution.errors.map((error) => withTaskId(task.id, error)));
+        continue;
+      }
+      effectiveProjectionByTaskId.set(task.id, resolution.projection.paths);
       continue;
     }
-    const seenProjectionPaths = new Set<string>();
-    for (const path of projectionPaths) {
-      if (!isSafeExactProjectionPath(path)) {
-        errors.push({
-          code: "unsafe-projection-path",
-          message: `task '${task.id}' projection path '${path}' is not a safe repository-relative exact path`,
-          path,
-        });
-        continue;
-      }
-      if (seenProjectionPaths.has(path)) {
-        errors.push({
-          code: "duplicate-projection-path",
-          message: `task '${task.id}' repeats projection path '${path}'`,
-          path,
-        });
-        continue;
-      }
-      seenProjectionPaths.add(path);
-      if (materializedPathSet !== undefined && !materializedPathSet.has(path)) {
-        errors.push({
-          code: "projection-path-not-materialized",
-          message: `task '${task.id}' projection path '${path}' is not materialized in the clean parent sparse checkout`,
-          path,
-        });
-      }
-    }
-    if (materializedPathSet === undefined) {
-      errors.push({
-        code: "projection-authority-unavailable",
-        message: `task '${task.id}' requested projection_paths but no clean parent materialized-path capture is available`,
-      });
-    }
+    errors.push(...validateLegacyProjectionPaths(task, materializedPathSet));
   }
 
   // §4: Git cleanliness gate.
@@ -232,19 +207,82 @@ export function validateBatch(
       // This shouldn't happen because we already validated above.
       throw new Error(`profile '${task.subagent}' not found`);
     }
+    const effectiveProjectionPaths = effectiveProjectionByTaskId.get(task.id);
     return {
       taskId: task.id,
       subagent: task.subagent,
       profile,
       objective: task.objective,
       expectedOutput: task.expected_output,
-      ...(task.projection_paths === undefined
-        ? {}
-        : { projectionPaths: Object.freeze([...task.projection_paths]) }),
+      ...(effectiveProjectionPaths !== undefined
+        ? { projectionPaths: effectiveProjectionPaths }
+        : task.projection_paths === undefined
+          ? {}
+          : { projectionPaths: Object.freeze([...task.projection_paths]) }),
     };
   });
 
   return { valid: true, tasks: validatedTasks };
+}
+
+/** Preserve Issue #52 runtime projection validation for profile-less children. */
+function validateLegacyProjectionPaths(
+  task: DelegateArgs["tasks"][number],
+  materializedPathSet: ReadonlySet<string> | undefined,
+): BatchValidationError[] {
+  const projectionPaths = task.projection_paths;
+  if (projectionPaths === undefined) return [];
+
+  const errors: BatchValidationError[] = [];
+  if (projectionPaths.length === 0) {
+    errors.push({
+      code: "empty-projection-paths",
+      message: `task '${task.id}' projection_paths must contain at least one exact path`,
+    });
+    return errors;
+  }
+  const seenProjectionPaths = new Set<string>();
+  for (const path of projectionPaths) {
+    if (!isSafeExactProjectionPath(path)) {
+      errors.push({
+        code: "unsafe-projection-path",
+        message: `task '${task.id}' projection path '${path}' is not a safe repository-relative exact path`,
+        path,
+      });
+      continue;
+    }
+    if (seenProjectionPaths.has(path)) {
+      errors.push({
+        code: "duplicate-projection-path",
+        message: `task '${task.id}' repeats projection path '${path}'`,
+        path,
+      });
+      continue;
+    }
+    seenProjectionPaths.add(path);
+    if (materializedPathSet !== undefined && !materializedPathSet.has(path)) {
+      errors.push({
+        code: "projection-path-not-materialized",
+        message: `task '${task.id}' projection path '${path}' is not materialized in the clean parent sparse checkout`,
+        path,
+      });
+    }
+  }
+  if (materializedPathSet === undefined) {
+    errors.push({
+      code: "projection-authority-unavailable",
+      message: `task '${task.id}' requested projection_paths but no clean parent materialized-path capture is available`,
+    });
+  }
+  return errors;
+}
+
+function withTaskId(taskId: string, error: ProjectionAdmissionError): BatchValidationError {
+  return {
+    code: error.code,
+    message: `task '${taskId}' ${error.message}`,
+    ...(error.path === undefined ? {} : { path: error.path }),
+  };
 }
 
 /**
