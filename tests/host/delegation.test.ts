@@ -14,11 +14,16 @@ import { rollup } from "../../src/cost/rollup.js";
 import { reconcileLostChildren } from "../../src/host/api.js";
 import { executeDelegate } from "../../src/host/delegation/delegate-tool.js";
 import { runBoundedPool } from "../../src/host/delegation/pool.js";
-import { buildChildTools, CHILD_FILE_TOOL_NAMES } from "../../src/host/delegation/run-tool.js";
+import {
+  buildChildTools,
+  CHILD_FILE_TOOL_NAMES,
+  childToolNames,
+} from "../../src/host/delegation/run-tool.js";
 import { validateBatch } from "../../src/host/delegation/validate-batch.js";
 import {
   createWorktree,
   determineChildStatus,
+  inspectChildWorktree,
   verifyWorktree,
 } from "../../src/host/delegation/worktree.js";
 import { notifyListeners, subscribeToRecords } from "../../src/host/record-emitter.js";
@@ -33,6 +38,7 @@ const profile: SubagentProfile = {
   models: [{ model: "stub:model", effort: "medium" }],
   max_session_cost_usd: 1,
   system_prompt: "child.md",
+  completion_protocol: "report_result",
 };
 const policy: DelegationPolicy = {
   allowed_subagents: ["implementer"],
@@ -139,7 +145,11 @@ describe("bounded child pool (§4)", () => {
   });
 });
 
-describe("child file tools (§6, issues #24 and #26)", () => {
+describe("child file tools (§6, issues #24, #26, and #57)", () => {
+  it("selects exactly six minimal tools and preserves legacy report_result", () => {
+    expect(childToolNames("minimal")).toEqual(CHILD_FILE_TOOL_NAMES);
+    expect(childToolNames("report_result")).toEqual([...CHILD_FILE_TOOL_NAMES, "report_result"]);
+  });
   let sandbox: string | undefined;
 
   afterEach(async () => {
@@ -242,6 +252,55 @@ describe("worktree verification (§5)", () => {
     await writeFile(join(worktree, "README.md"), "changed\n");
     const changed = await verifyWorktree(worktree, "conductor/run/child");
     expect(determineChildStatus(changed.headCommit, base, changed.isClean)).toBe("completed");
+  });
+
+  it("marks a changed child HEAD invalid before reporting dirty paths", async () => {
+    repository = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-"));
+    await git(repository, "init");
+    await git(repository, "config", "user.email", "test@example.com");
+    await git(repository, "config", "user.name", "Test User");
+    await writeFile(join(repository, "README.md"), "base\n");
+    await git(repository, "add", "README.md");
+    await git(repository, "commit", "-m", "base");
+    const base = (await git(repository, "rev-parse", "HEAD")).trim();
+    const worktree = join(repository, "child");
+    await createWorktree(worktree, "conductor/run/child", base, repository);
+    await writeFile(join(worktree, "README.md"), "changed\n");
+    await git(worktree, "add", "README.md");
+    await git(worktree, "commit", "-m", "forbidden child commit");
+
+    expect(await inspectChildWorktree(worktree, "conductor/run/child", base)).toMatchObject({
+      state: "invalid",
+    });
+  });
+
+  it("retains only a sorted 64-path prefix and ignores Git-ignored files", async () => {
+    repository = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-"));
+    await git(repository, "init");
+    await git(repository, "config", "user.email", "test@example.com");
+    await git(repository, "config", "user.name", "Test User");
+    await writeFile(join(repository, "README.md"), "base\n");
+    await writeFile(join(repository, ".gitignore"), "ignored.txt\n");
+    await git(repository, "add", ".");
+    await git(repository, "commit", "-m", "base");
+    const base = (await git(repository, "rev-parse", "HEAD")).trim();
+    const worktree = join(repository, "child");
+    await createWorktree(worktree, "conductor/run/child", base, repository);
+    await Promise.all(
+      Array.from({ length: 65 }, (_, index) =>
+        writeFile(join(worktree, `file-${String(index).padStart(2, "0")}.txt`), "changed\n"),
+      ),
+    );
+    await writeFile(join(worktree, "ignored.txt"), "ignored\n");
+
+    const inspection = await inspectChildWorktree(worktree, "conductor/run/child", base);
+    expect(inspection).toMatchObject({
+      state: "changed",
+      changedPathCount: 65,
+      changedPathsTruncated: true,
+    });
+    expect(inspection.changedPaths).toHaveLength(64);
+    expect(inspection.changedPaths?.[0]).toBe("file-00.txt");
   });
 
   it("normalizes a completed report without edits to no_changes", async () => {

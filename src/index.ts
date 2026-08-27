@@ -64,7 +64,7 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
 export { parseManifest } from "./manifest/parse.js";
-export type { Manifest, ModelConfig, RoleConfig } from "./manifest/types.js";
+export type { Manifest, ModelConfig, RoleConfig, SubagentProfile } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
 
 // ─── Manifest validation + derivation (§13, §12) ──────────────────────
@@ -126,6 +126,16 @@ export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";
 // reads the last snapshot — never replays records. The host's resume
 // path (§11.9) reconstructs from this single read.
 
+export type {
+  ChildCompletionEvidence,
+  ChildCompletionProtocol,
+  ChildCompletionSource,
+  ChildFileToolCalls,
+  ChildNormalizationReason,
+  ChildProjectionFingerprint,
+  ChildWorktreeState,
+  DelegateResultStatus,
+} from "./persistence/child-completion.js";
 export type { FileMutationRecord, HunkLine, TouchedFile } from "./persistence/file-mutation.js";
 export type {
   CheckpointSnapshot,
@@ -203,6 +213,7 @@ export type {
   StartRunOptions,
   StubHostOptions,
   SubagentLifecycleStats,
+  SubagentProtocolLifecycleStats,
   TransitionRecord,
 } from "./host/index.js";
 export {

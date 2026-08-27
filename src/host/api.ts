@@ -578,6 +578,21 @@ export function reconcileLostChildren(
       head_commit: null,
       session_file: record.session_file,
       usage: null,
+      ...(record.completion_protocol === undefined
+        ? {}
+        : {
+            completion_evidence: {
+              completion_protocol: record.completion_protocol,
+              completion_source: "host",
+              normalization_reason: "cancelled",
+              report_result_called: false,
+              final_response_present: false,
+              summary_truncated: false,
+              worktree_state: "uninspected",
+              file_tool_calls: { read: 0, grep: 0, find: 0, ls: 0, edit: 0, write: 0 },
+              duplicate_read_calls: 0,
+            },
+          }),
       ts: Date.now(),
     });
     terminalChildIds.add(record.child_id);

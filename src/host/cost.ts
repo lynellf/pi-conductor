@@ -204,6 +204,13 @@ export class SessionState {
     return this._failureDetail;
   }
 
+  /** Clear an intermediate provider error when the SDK has committed to retry it. */
+  clearRetryableModelError(): void {
+    if (this._terminalReason !== "model_error") return;
+    this._terminalReason = null;
+    this._failureDetail = null;
+  }
+
   /**
    * Flip the aborted flag. The host sets this when it calls
    * `session.abort()` so the loop can distinguish "session

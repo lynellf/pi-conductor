@@ -117,6 +117,8 @@ export type StubStep =
       readonly usage?: Partial<Usage>;
     }
   | { readonly kind: "no_emission" }
+  /** Opens a turn until the host aborts the session; used for cancellation lifecycle tests. */
+  | { readonly kind: "wait" }
   | {
       readonly kind: "fail";
       readonly errorMessage: string;
@@ -189,7 +191,7 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
   const { steps, usage: cannedUsage } = opts;
   let stepIndex = 0;
 
-  return (_model, _context, _options) => {
+  return (_model, _context, options) => {
     const stream = createAssistantMessageEventStream();
 
     // Per-step usage override (Task 17). When a step declares its
@@ -230,6 +232,20 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
       stopReason: "stop",
       timestamp: Date.now(),
     };
+
+    if (step !== undefined && step.kind === "wait") {
+      stream.push({ type: "start", partial: finalMessage });
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          finalMessage.stopReason = "aborted";
+          stream.push({ type: "error", reason: "aborted", error: finalMessage });
+          stream.end();
+        },
+        { once: true },
+      );
+      return stream;
+    }
 
     if (step === undefined || step.kind === "no_emission") {
       // Past the script or an explicit no-emission: empty content,

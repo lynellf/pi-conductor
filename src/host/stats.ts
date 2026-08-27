@@ -35,6 +35,7 @@
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT, type ModelEffort, type Role } from "../core/types.js";
 import { type RunRollup, rollup } from "../cost/rollup.js";
+import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { PersistedRecord } from "../persistence/log.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
@@ -60,12 +61,29 @@ export interface ActiveSessionStats {
 }
 
 /** Counts for the host-owned child session lifecycle projection (§7). */
+export interface SubagentProtocolLifecycleStats {
+  readonly started: number;
+  readonly completed: number;
+  readonly noChanges: number;
+  readonly blocked: number;
+  readonly failed: number;
+  readonly cancelled: number;
+  readonly reportCalled: number;
+  readonly finalResponsePresent: number;
+  readonly missingFinalResponse: number;
+}
+
+/** Counts for the host-owned child session lifecycle projection (§7 / Issue #57 §9.2). */
 export interface SubagentLifecycleStats {
   readonly active: number;
   readonly completed: number;
   readonly noChanges: number;
+  /** Additive Issue #57 count; produced by current hosts. */
+  readonly blocked?: number;
   readonly failed: number;
   readonly cancelled: number;
+  /** Additive protocol cohort projection; produced by current hosts. */
+  readonly perProtocol?: Readonly<Record<ChildCompletionProtocol, SubagentProtocolLifecycleStats>>;
 }
 
 /**
@@ -167,12 +185,17 @@ function projectSubagentLifecycle(
   const terminal = new Set<string>();
   let completed = 0;
   let noChanges = 0;
+  let blocked = 0;
   let failed = 0;
   let cancelled = 0;
+  const protocols = createProtocolLifecycleStats();
 
   for (const record of records) {
     if (record.type === "subagent_started") {
-      if (record.run_id === runId) started.add(record.child_id);
+      if (record.run_id === runId && !started.has(record.child_id)) {
+        started.add(record.child_id);
+        protocols[record.completion_protocol ?? "report_result"].started += 1;
+      }
       continue;
     }
     if (
@@ -185,13 +208,31 @@ function projectSubagentLifecycle(
     }
 
     terminal.add(record.child_id);
+    const protocol = record.completion_evidence?.completion_protocol ?? "report_result";
+    const projected = protocols[protocol];
     if (record.type === "subagent_completed") {
-      if (record.status === "completed") completed += 1;
-      else noChanges += 1;
+      if (record.status === "completed") {
+        completed += 1;
+        projected.completed += 1;
+      } else {
+        noChanges += 1;
+        projected.noChanges += 1;
+      }
+    } else if (record.status === "blocked") {
+      blocked += 1;
+      projected.blocked += 1;
     } else if (record.status === "failed") {
       failed += 1;
+      projected.failed += 1;
     } else {
       cancelled += 1;
+      projected.cancelled += 1;
+    }
+    const evidence = record.completion_evidence;
+    if (evidence?.report_result_called === true) projected.reportCalled += 1;
+    if (evidence?.final_response_present === true) projected.finalResponsePresent += 1;
+    if (evidence?.normalization_reason === "missing_final_response") {
+      projected.missingFinalResponse += 1;
     }
   }
 
@@ -199,8 +240,53 @@ function projectSubagentLifecycle(
     active: started.size - terminal.size,
     completed,
     noChanges,
+    blocked,
     failed,
     cancelled,
+    perProtocol: freezeProtocolLifecycleStats(protocols),
+  });
+}
+
+type MutableProtocolLifecycleStats = {
+  -readonly [K in keyof SubagentProtocolLifecycleStats]: SubagentProtocolLifecycleStats[K];
+};
+
+function createProtocolLifecycleStats(): Record<
+  ChildCompletionProtocol,
+  MutableProtocolLifecycleStats
+> {
+  return {
+    report_result: {
+      started: 0,
+      completed: 0,
+      noChanges: 0,
+      blocked: 0,
+      failed: 0,
+      cancelled: 0,
+      reportCalled: 0,
+      finalResponsePresent: 0,
+      missingFinalResponse: 0,
+    },
+    minimal: {
+      started: 0,
+      completed: 0,
+      noChanges: 0,
+      blocked: 0,
+      failed: 0,
+      cancelled: 0,
+      reportCalled: 0,
+      finalResponsePresent: 0,
+      missingFinalResponse: 0,
+    },
+  };
+}
+
+function freezeProtocolLifecycleStats(
+  stats: Record<ChildCompletionProtocol, MutableProtocolLifecycleStats>,
+): Readonly<Record<ChildCompletionProtocol, SubagentProtocolLifecycleStats>> {
+  return Object.freeze({
+    report_result: Object.freeze({ ...stats.report_result }),
+    minimal: Object.freeze({ ...stats.minimal }),
   });
 }
 
