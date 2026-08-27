@@ -48,6 +48,7 @@ function profile(workspace?: SubagentProfile["workspace"]): SubagentProfile {
     models: [{ model: "stub:stub-model", effort: "medium" }],
     max_session_cost_usd: 1,
     system_prompt: "child.md",
+    completion_protocol: "report_result",
     ...(workspace === undefined ? {} : { workspace }),
   };
 }

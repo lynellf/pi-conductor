@@ -1,12 +1,7 @@
 /**
- * Delegate tool factory — delegation lite §4, §6, §7.
- *
- * This module intentionally keeps parent-tool construction, child-session setup,
- * terminal detection, and lifecycle-record emission together: those callbacks
- * share the same SDK session and cancellation/cleanup invariants. Splitting
- * them would separate the coupled adapter lifecycle without reducing its
- * responsibility, so this cohesive module is retained just above the ~400 LOC
- * guideline (and below the 500 LOC exception ceiling).
+ * Parent-owned delegate tool and standalone child-session adapter — delegation
+ * lite §§4, 6–7 / Issue #57 §§6–8. Child settlement, record append, and
+ * cancellation share one lifecycle boundary; no child calls the reducer.
  */
 
 import type { AgentSession, ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -17,6 +12,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
+
 import type { Role } from "../../core/types.js";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type {
@@ -29,11 +25,17 @@ import { delegateArgsSchema, reportResultArgsSchema } from "../../seam/schema.js
 import { SessionState } from "../cost.js";
 import type { DisplaySink } from "../display-sink.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
+import {
+  createReportCapture,
+  observeChildTerminal,
+  type ReportCapture,
+} from "./child-observation.js";
+import { capChildText } from "./child-result.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
 import { DelegateToolError, executeDelegate } from "./delegate-tool.js";
 import type { DelegationManager } from "./manager.js";
 import type { PoolCompletedResult, PoolFailedResult } from "./pool.js";
-import { buildChildTools, CHILD_FILE_TOOL_NAMES } from "./run-tool.js";
+import { buildChildTools, childToolNames } from "./run-tool.js";
 
 /** Dependencies for a parent role's delegate tool. */
 export interface DelegateToolFactoryOptions {
@@ -41,21 +43,15 @@ export interface DelegateToolFactoryOptions {
   readonly subagents: readonly SubagentProfile[];
   readonly remainingChildren: number;
   readonly runId: string;
-  /** Parent role that requested this batch. */
   readonly parentRole: Role;
-  /** Loop-owned visit identity of the parent session requesting this batch. */
   readonly parentVisitIndex: number;
   readonly primaryCheckout: string;
   readonly runStateDir: string;
-  /** Host-owned append-and-notify seam for child lifecycle records. */
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly agentDir: string;
-  /** Resolution root for profile system_prompt paths. */
   readonly systemPromptRoot: string;
   readonly modelRegistry: ModelRegistry;
-  /** Test hosts can supply their in-memory SDK model directly. */
   readonly resolveChildModel?: (model: string) => ReturnType<ModelRegistry["find"]>;
-  /** Host-configured sink for forwarding delegated child activity to the TUI. */
   readonly displaySink?: DisplaySink;
   readonly sessionDir: string;
   readonly manager: DelegationManager;
@@ -101,7 +97,6 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           onChildCompleted: (child) => appendCompleted(opts.persistRecord, opts.runId, child),
           onChildFailed: (child) => appendFailed(opts.persistRecord, opts.runId, child),
         });
-        // executeDelegate only returns after whole-batch validation succeeded.
         remaining -= args.tasks.length;
         return {
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -119,9 +114,7 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
             parent_visit_index: opts.parentVisitIndex,
             task_ids: Object.freeze(args.tasks.map((task) => task.id)),
             code,
-            errors: Object.freeze(
-              error.errors.map((validation) => Object.freeze({ ...validation })),
-            ),
+            errors: Object.freeze(error.errors.map((item) => Object.freeze({ ...item }))),
             ts: Date.now(),
           });
         }
@@ -132,7 +125,7 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
               text: JSON.stringify({
                 error: "delegate_failed",
                 code,
-                message: cause instanceof Error ? cause.message : String(cause),
+                message: errorMessage(cause),
               }),
             },
           ],
@@ -185,7 +178,7 @@ function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
         "child session file disappeared",
       );
     }
-    const started: SubagentStartedRecord = {
+    opts.persistRecord({
       type: "subagent_started",
       run_id: opts.runId,
       child_id: config.childId,
@@ -196,17 +189,26 @@ function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       ...(config.projectionPaths === undefined
         ? {}
         : { projection_paths: Object.freeze([...config.projectionPaths]) }),
+      completion_protocol: config.profile.completion_protocol,
+      task_fingerprint: config.taskFingerprint,
+      projection_fingerprint: config.projectionFingerprint,
       model: child.model,
       session_file: sessionFile,
       worktree_path: config.worktreePath,
       branch: config.branch,
       base_commit: config.baseCommit,
       ts: Date.now(),
-    };
-    opts.persistRecord(started);
+    } satisfies SubagentStartedRecord);
     opts.manager.register(config.childId, child.session);
 
-    const terminal = waitForChildTerminal(child, config.childId, opts.manager);
+    const terminal = observeChildTerminal({
+      session: child.session,
+      state: child.state,
+      model: child.model,
+      config,
+      manager: opts.manager,
+      reportCapture: child.reportCapture,
+    });
     void child.session.prompt(childTaskSeed(config)).catch((cause: unknown) => {
       terminal.fail(`child prompt failed: ${errorMessage(cause)}`);
     });
@@ -223,6 +225,7 @@ interface CreatedChild {
   readonly session: AgentSession;
   readonly state: SessionState;
   readonly model: string;
+  readonly reportCapture: ReportCapture;
 }
 
 async function createChildSession(
@@ -247,19 +250,19 @@ async function createChildSession(
     appendSystemPromptOverride: () => [],
   });
   await loader.reload();
+  const reportCapture = createReportCapture();
+  const reportTool =
+    config.profile.completion_protocol === "report_result"
+      ? [buildReportResultTool(reportCapture)]
+      : [];
   const { session } = await createAgentSession({
     cwd: config.worktreePath,
     model,
     modelRegistry: opts.modelRegistry,
     resourceLoader: loader,
     sessionManager: SessionManager.create(config.worktreePath, opts.sessionDir),
-    customTools: [
-      ...buildChildTools({
-        worktreePath: config.worktreePath,
-      }),
-      buildReportResultTool(),
-    ],
-    tools: [...CHILD_FILE_TOOL_NAMES, "report_result"],
+    customTools: [...buildChildTools({ worktreePath: config.worktreePath }), ...reportTool],
+    tools: childToolNames(config.profile.completion_protocol),
     thinkingLevel: entry.effort as never,
   });
   if (session.sessionFile === undefined) {
@@ -271,14 +274,10 @@ async function createChildSession(
     session,
     state,
     role: opts.parentRole,
-    ...(opts.displaySink !== undefined && { onDisplay: opts.displaySink }),
-    origin: {
-      child_id: config.childId,
-      task_id: config.taskId,
-      subagent: config.profile.name,
-    },
+    ...(opts.displaySink === undefined ? {} : { onDisplay: opts.displaySink }),
+    origin: { child_id: config.childId, task_id: config.taskId, subagent: config.profile.name },
   });
-  return { session, state, model: entry.model };
+  return { session, state, model: entry.model, reportCapture };
 }
 
 function splitModel(model: string): readonly [string, string] {
@@ -289,95 +288,33 @@ function splitModel(model: string): readonly [string, string] {
   return [model.slice(0, delimiter), model.slice(delimiter + 1)];
 }
 
-interface TerminalWait {
-  readonly promise: Promise<ChildTerminal>;
-  fail(reason: string): void;
-}
-
-function waitForChildTerminal(
-  child: CreatedChild,
-  childId: string,
-  manager: DelegationManager,
-): TerminalWait {
-  let finish: ((terminal: ChildTerminal) => void) | undefined;
-  let unsubscribe: (() => void) | undefined;
-  let settled = false;
-  const complete = (terminal: ChildTerminal): void => {
-    if (settled) return;
-    settled = true;
-    unsubscribe?.();
-    finish?.(terminal);
-  };
-  const promise = new Promise<ChildTerminal>((resolve) => {
-    finish = resolve;
-  });
-
-  unsubscribe = child.session.subscribe((event) => {
-    if (event.type === "tool_execution_start" && event.toolName === "report_result") {
-      const args = event.args as Static<typeof reportResultArgsSchema>;
-      complete({
-        started: true,
-        model: child.model,
-        status: args.status,
-        summary: args.summary.slice(0, 4096),
-        ...(args.verification !== undefined && {
-          verification: args.verification.slice(0, 16).map((line) => line.slice(0, 256)),
-        }),
-        headCommit: null,
-        sessionFile: child.session.sessionFile ?? null,
-        usage: child.state.usage(),
-        ...(args.status === "failed" && { failureReason: args.summary.slice(0, 4096) }),
-      });
-      return;
-    }
-    if (event.type === "agent_end") {
-      complete(
-        failedTerminal(
-          true,
-          child.model,
-          child.session.sessionFile ?? null,
-          child.state.usage(),
-          manager.wasCancelled(childId)
-            ? "child cancelled by run abort"
-            : "child ended without report_result",
-          manager.wasCancelled(childId) ? "cancelled" : "failed",
-        ),
-      );
-    }
-  });
-  return {
-    promise,
-    fail(reason) {
-      complete(
-        failedTerminal(
-          true,
-          child.model,
-          child.session.sessionFile ?? null,
-          child.state.usage(),
-          reason,
-        ),
-      );
-    },
-  };
-}
-
-function buildReportResultTool(): ToolDefinition {
+function buildReportResultTool(capture: ReportCapture): ToolDefinition {
   return defineTool({
     name: "report_result",
     label: "report_result",
     description: "Report the child result and terminate this child session.",
     parameters: reportResultArgsSchema,
-    async execute() {
-      return {
-        content: [{ type: "text", text: "result recorded" }],
-        details: {},
-        terminate: true,
-      };
+    async execute(_toolCallId, args: Static<typeof reportResultArgsSchema>) {
+      const capped = capChildText(args.summary);
+      capture.capture(
+        {
+          status: args.status,
+          summary: capped.text,
+          ...(args.verification === undefined
+            ? {}
+            : { verification: args.verification.slice(0, 16).map((line) => line.slice(0, 256)) }),
+        },
+        capped.truncated,
+      );
+      return { content: [{ type: "text", text: "result recorded" }], details: {}, terminate: true };
     },
   });
 }
 
 function childTaskSeed(config: SpawnChildConfig): string {
+  if (config.profile.completion_protocol === "minimal") {
+    return "Begin the assigned task using only the available file tools.";
+  }
   return [
     `Task ID: ${config.taskId}`,
     `Worktree: ${config.worktreePath}`,
@@ -390,7 +327,7 @@ function appendCompleted(
   runId: string,
   child: PoolCompletedResult,
 ): void {
-  const record: SubagentCompletedRecord = {
+  persistRecord({
     type: "subagent_completed",
     run_id: runId,
     child_id: child.childId,
@@ -399,16 +336,18 @@ function appendCompleted(
     model: child.model,
     status: child.status,
     summary: child.summary,
-    ...(child.verification !== undefined && { verification: child.verification }),
+    ...(child.verification === undefined ? {} : { verification: child.verification }),
     branch: child.branch,
     worktree_path: child.worktreePath,
     base_commit: child.baseCommit,
     head_commit: child.headCommit,
     session_file: child.sessionFile,
     usage: child.usage,
+    ...(child.completionEvidence === undefined
+      ? {}
+      : { completion_evidence: child.completionEvidence }),
     ts: Date.now(),
-  };
-  persistRecord(record);
+  } satisfies SubagentCompletedRecord);
 }
 
 function appendFailed(
@@ -417,7 +356,7 @@ function appendFailed(
   child: PoolFailedResult,
 ): void {
   if (!child.lifecycleStarted) return;
-  const record: SubagentFailedRecord = {
+  persistRecord({
     type: "subagent_failed",
     run_id: runId,
     child_id: child.childId,
@@ -425,6 +364,9 @@ function appendFailed(
     subagent: child.subagent,
     model: child.model,
     status: child.status,
+    ...(child.completionEvidence?.completion_protocol !== "minimal"
+      ? {}
+      : { summary: child.summary }),
     failure_reason: child.failureReason,
     branch: child.branch,
     worktree_path: child.worktreePath,
@@ -432,9 +374,11 @@ function appendFailed(
     head_commit: child.headCommit,
     session_file: child.sessionFile,
     usage: child.usage,
+    ...(child.completionEvidence === undefined
+      ? {}
+      : { completion_evidence: child.completionEvidence }),
     ts: Date.now(),
-  };
-  persistRecord(record);
+  } satisfies SubagentFailedRecord);
 }
 
 function failedTerminal(
@@ -442,18 +386,14 @@ function failedTerminal(
   model: string,
   sessionFile: string | null,
   usage: ReturnType<SessionState["usage"]>,
-  failureReason: string,
-  status: "failed" | "cancelled" = "failed",
+  reason: string,
 ): ChildTerminal {
   return {
     started,
     model,
-    status,
-    summary: "",
-    headCommit: null,
     sessionFile,
     usage,
-    failureReason,
+    sessionError: reason,
   };
 }
 

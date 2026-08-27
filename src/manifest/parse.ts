@@ -131,6 +131,10 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     `${path}.max_session_cost_usd`,
   );
   const system_prompt = toNonEmptyString(entry.system_prompt, `${path}.system_prompt`);
+  const completion_protocol = parseChildCompletionProtocol(
+    entry.completion_protocol,
+    `${path}.completion_protocol`,
+  );
   const workspace =
     entry.workspace === undefined
       ? undefined
@@ -141,8 +145,15 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     models,
     max_session_cost_usd,
     system_prompt,
+    completion_protocol,
     ...(workspace === undefined ? {} : { workspace }),
   }) as SubagentProfile;
+}
+
+function parseChildCompletionProtocol(value: unknown, path: string): "report_result" | "minimal" {
+  if (value === undefined) return "report_result";
+  if (value === "report_result" || value === "minimal") return value;
+  throw new ManifestParseError(`${path} must be "report_result" or "minimal"`);
 }
 
 // ─── Delegation lite §3: delegation policy parsing ────────────────────

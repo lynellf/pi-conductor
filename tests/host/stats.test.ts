@@ -151,6 +151,7 @@ function makeTransitionAccepted(opts: {
 function makeSubagentStarted(opts: {
   runId: string;
   childId: string;
+  protocol?: "report_result" | "minimal";
   ts?: number;
 }): PersistedRecord {
   return {
@@ -164,6 +165,7 @@ function makeSubagentStarted(opts: {
     worktree_path: `/tmp/${opts.childId}`,
     branch: `conductor/${opts.childId}`,
     base_commit: "base",
+    ...(opts.protocol === undefined ? {} : { completion_protocol: opts.protocol }),
     ts: opts.ts ?? Date.now(),
   };
 }
@@ -245,9 +247,82 @@ describe("runStats (§11.8) — child lifecycle projection", () => {
       active: 2,
       completed: 1,
       noChanges: 1,
+      blocked: 0,
       failed: 1,
       cancelled: 1,
+      perProtocol: {
+        report_result: {
+          started: 6,
+          completed: 1,
+          noChanges: 1,
+          blocked: 0,
+          failed: 1,
+          cancelled: 1,
+          reportCalled: 0,
+          finalResponsePresent: 0,
+          missingFinalResponse: 0,
+        },
+        minimal: {
+          started: 0,
+          completed: 0,
+          noChanges: 0,
+          blocked: 0,
+          failed: 0,
+          cancelled: 0,
+          reportCalled: 0,
+          finalResponsePresent: 0,
+          missingFinalResponse: 0,
+        },
+      },
     });
+  });
+});
+
+it("projects blocked minimal child evidence into the protocol cohort", () => {
+  const runId = "r1";
+  const stats = runStats(
+    [
+      makeSubagentStarted({ runId, childId: "blocked", protocol: "minimal" }),
+      {
+        type: "subagent_failed",
+        run_id: runId,
+        child_id: "blocked",
+        task_id: "task-blocked",
+        subagent: "implementer",
+        model: "stub:model",
+        status: "blocked",
+        failure_reason: "final_response_blocked",
+        branch: "conductor/blocked",
+        worktree_path: "/tmp/blocked",
+        base_commit: "base",
+        head_commit: "base",
+        session_file: "blocked.jsonl",
+        usage: null,
+        completion_evidence: {
+          completion_protocol: "minimal",
+          completion_source: "final_response",
+          normalization_reason: "final_response_blocked",
+          report_result_called: false,
+          final_response_present: true,
+          summary_truncated: false,
+          blocker_reason: "missing context",
+          worktree_state: "changed",
+          changed_path_count: 1,
+          changed_paths: ["src/file.ts"],
+          changed_paths_truncated: false,
+          file_tool_calls: { read: 0, grep: 0, find: 0, ls: 0, edit: 0, write: 1 },
+          duplicate_read_calls: 0,
+        },
+        ts: 2,
+      },
+    ],
+    runId,
+    makeDef(),
+    "running",
+  );
+  expect(stats.subagents.perProtocol?.minimal).toMatchObject({
+    blocked: 1,
+    finalResponsePresent: 1,
   });
 });
 
