@@ -71,9 +71,20 @@ export async function spawnSharedSdkRoleSession(options: {
   });
   const end = createEndTool(seam, rejector.shouldRejectCapture);
   const askUser = createAskUserTool() as ToolDefinition;
-  const createOpts: Parameters<typeof createAgentSession>[0] = {
+  // The parent registry owns the runtime that carries extension-registered
+  // providers (e.g. antigravity via pi-antigravity). Local SDK types (0.80.6)
+  // accept `modelRegistry` but declare no `modelRuntime`; global pi 0.84.3
+  // ignores `modelRegistry` and reads `options.modelRuntime`. The facade owns
+  // the runtime as an own property, so forward it by identity only when
+  // present. The reflection read is compile-clean under 0.80.6 (no typed field
+  // access) and absent there; under 0.84.3 it returns the exact runtime.
+  const runtime = Object.getOwnPropertyDescriptor(options.modelRegistry, "runtime")?.value;
+  const createOpts: NonNullable<Parameters<typeof createAgentSession>[0]> & {
+    modelRuntime?: unknown;
+  } = {
     cwd: options.cwd,
     modelRegistry: options.modelRegistry,
+    ...(runtime !== undefined && { modelRuntime: runtime }),
     resourceLoader: loader,
     sessionManager: SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
