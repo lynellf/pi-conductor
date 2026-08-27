@@ -178,4 +178,55 @@ describe("ProductionHost — uiContext bridge", () => {
     expect(agentSessionMocks.createAgentSession).toHaveBeenCalledTimes(1);
     expect(session.bindExtensions).not.toHaveBeenCalled();
   });
+
+  it("forwards the parent registry's exact runtime into the shared spawn seam", async () => {
+    // A parent registry (like the local 0.80.6 facade) may own a runtime that
+    // carries extension-registered providers. The shared seam must forward that
+    // runtime by identity rather than construct a fresh one.
+    const sentinelRuntime = Object.freeze({ __sentinelRuntime: true }) as never;
+    const registry = makeModelRegistry();
+    Object.defineProperty(registry, "runtime", {
+      value: sentinelRuntime,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    const uiContext = { notify: vi.fn(), setStatus: vi.fn() } as never;
+    const session = makeSession();
+    agentSessionMocks.createAgentSession.mockResolvedValue({
+      session,
+      extensionsResult: {},
+    } as never);
+
+    const host = new ProductionHost({
+      modelRegistry: registry,
+      cwd,
+      uiContext,
+      log: new InMemoryRecordLog(),
+      loadedManifest: makeLoadedManifest(),
+      runId: "run-runtime-forward-1",
+    });
+
+    await host.spawnRole("implementer");
+
+    const callArgs = agentSessionMocks.createAgentSession.mock.calls[0] ?? [];
+    const opts = callArgs[0] as Record<string, unknown>;
+    expect(opts).toBeDefined();
+    // Parent runtime-bearing object forwarded by exact identity.
+    expect(opts.modelRegistry).toBe(registry);
+    // The runtime attached to the parent registry forwarded unchanged.
+    expect(opts.modelRuntime).toBe(sentinelRuntime);
+    // Every pre-existing shared option preserved.
+    expect(opts.cwd).toBe(cwd);
+    expect(opts.resourceLoader).toBeDefined();
+    expect(opts.sessionManager).toBeDefined();
+    expect(opts.model).toBeUndefined();
+    expect(opts.thinkingLevel).toBe("medium");
+    expect((opts.customTools as { name: string }[]).map((tool) => tool.name)).toEqual([
+      "handoff",
+      "end",
+      "ask_user",
+    ]);
+    expect(opts.tools).toEqual(["read", "handoff", "end", "ask_user"]);
+  });
 });
