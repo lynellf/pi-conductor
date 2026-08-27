@@ -18,6 +18,13 @@ export {
 export { DelegationManager } from "./manager.js";
 export { runBoundedPool } from "./pool.js";
 export {
+  type EffectiveProjection,
+  type EffectiveProjectionResolution,
+  type ProjectionAdmissionError,
+  type ProjectionAdmissionErrorCode,
+  resolveEffectiveProjection,
+} from "./projection-policy.js";
+export {
   type BatchValidationResult,
   formatBatchErrors,
   type ValidatedTask,

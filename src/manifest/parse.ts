@@ -25,6 +25,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
+import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
   DelegationPolicy,
@@ -130,12 +131,17 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     `${path}.max_session_cost_usd`,
   );
   const system_prompt = toNonEmptyString(entry.system_prompt, `${path}.system_prompt`);
+  const workspace =
+    entry.workspace === undefined
+      ? undefined
+      : parseSubagentWorkspace(entry.workspace, `${path}.workspace`);
 
   return Object.freeze({
     name,
     models,
     max_session_cost_usd,
     system_prompt,
+    ...(workspace === undefined ? {} : { workspace }),
   }) as SubagentProfile;
 }
 

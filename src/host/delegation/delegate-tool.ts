@@ -137,16 +137,16 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
     throw new DelegateToolError("batch_validation_failed", "primary HEAD is unavailable", []);
   }
   const baseCommit = parentProjection.baseCommit;
-  // A sparse parent grants children exactly its current materialized H set by
-  // default. Explicit task paths were already validated as a narrower subset.
-  // Full parents retain the legacy non-sparse child setup.
+  // Only profile-less children retain Issue #52's sparse-parent inheritance.
+  // Policy-controlled tasks already carry resolved exact E; non-sparse legacy
+  // parents retain their historical full-child worktree behavior.
   const inheritedProjectionPaths =
     parentProjection.isSparse === true ? parentProjection.materializedPaths : undefined;
   const tasks =
     inheritedProjectionPaths === undefined
       ? validation.tasks
       : validation.tasks.map((task) =>
-          task.projectionPaths === undefined
+          task.profile.workspace?.projection === undefined && task.projectionPaths === undefined
             ? { ...task, projectionPaths: inheritedProjectionPaths }
             : task,
         );
