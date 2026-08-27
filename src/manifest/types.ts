@@ -17,6 +17,7 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 
 // ─── Subagent profile types (delegation lite §3) ───────────────────────
 
@@ -31,6 +32,8 @@ export interface SubagentProfile {
   readonly models: readonly ModelConfig[];
   readonly max_session_cost_usd: number;
   readonly system_prompt: string;
+  /** Issue #57: profile-pinned child terminal contract; default is legacy report_result. */
+  readonly completion_protocol: ChildCompletionProtocol;
   /** Issue #55: opt-in exact-file projection policy for delegated children. */
   readonly workspace?: SubagentWorkspaceConfig;
 }

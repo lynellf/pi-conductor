@@ -1,5 +1,6 @@
 /** Bounded concurrent child pool — delegation lite §4. */
 
+import type { ChildCompletionEvidence } from "../../persistence/child-completion.js";
 import type { SubagentUsage } from "../../persistence/log.js";
 import type { ChildId } from "./ids.js";
 import type { ValidatedTask } from "./validate-batch.js";
@@ -19,15 +20,18 @@ export interface PoolCompletedResult {
   readonly headCommit: string;
   readonly sessionFile: string;
   readonly usage: SubagentUsage;
+  /** Issue #57 host-normalization evidence; absent only on pre-feature test doubles. */
+  readonly completionEvidence?: ChildCompletionEvidence;
 }
 
-/** Failed or cancelled child result. */
+/** Failed, blocked, or cancelled child result. */
 export interface PoolFailedResult {
   readonly childId: ChildId;
   readonly taskId: string;
   readonly subagent: string;
   readonly model: string;
-  readonly status: "failed" | "cancelled";
+  readonly status: "failed" | "cancelled" | "blocked";
+  readonly summary: string;
   readonly failureReason: string;
   readonly worktreePath: string;
   readonly branch: string;
@@ -37,6 +41,8 @@ export interface PoolFailedResult {
   readonly usage: SubagentUsage | null;
   /** Whether a matching subagent_started record was appended. */
   readonly lifecycleStarted: boolean;
+  /** Issue #57 host-normalization evidence; absent only on pre-feature test doubles. */
+  readonly completionEvidence?: ChildCompletionEvidence;
 }
 
 /** One child terminal result. */
@@ -146,6 +152,7 @@ export async function runBoundedPool(
           subagent: task.subagent,
           model: task.profile.models[0]?.model ?? "",
           status: "failed",
+          summary: cause instanceof Error ? cause.message : String(cause),
           failureReason: cause instanceof Error ? cause.message : String(cause),
           worktreePath: "",
           branch: "",

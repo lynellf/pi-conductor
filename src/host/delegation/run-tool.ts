@@ -14,6 +14,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
+import type { ChildCompletionProtocol } from "../../persistence/child-completion.js";
 
 /** Context used to build a confined child tool surface. */
 export interface ChildToolOptions {
@@ -22,6 +23,13 @@ export interface ChildToolOptions {
 
 /** The only built-in tool names enabled for a child SDK session (§6). */
 export const CHILD_FILE_TOOL_NAMES = ["read", "grep", "find", "ls", "edit", "write"] as const;
+
+/** Return the exact SDK child tool allowlist for a profile-pinned protocol (§6.1). */
+export function childToolNames(protocol: ChildCompletionProtocol): string[] {
+  return protocol === "report_result"
+    ? [...CHILD_FILE_TOOL_NAMES, "report_result"]
+    : [...CHILD_FILE_TOOL_NAMES];
+}
 
 /** Build the child file tools, all confined to its generated worktree (§6). */
 export function buildChildTools(opts: ChildToolOptions): ToolDefinition[] {
