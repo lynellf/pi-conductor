@@ -1,6 +1,6 @@
 # Issue #60 — Read-only context artifacts for delegated children
 
-**Status:** Draft — awaiting overseer acknowledgement
+**Status:** Acknowledged — implementation authorized
 
 **Source:** GitHub [#60](https://github.com/lynellf/pi-conductor/issues/60).
 
