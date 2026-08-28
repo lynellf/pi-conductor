@@ -26,6 +26,6 @@ Release the merged Issue #63 trajectory-handoff feature.
 
 ### 3. Ship after merge
 
-- [ ] Open and merge the release PR.
-- [ ] Create and push annotated tag `v0.20.0` at the merged release commit.
-- [ ] Create a GitHub release from that tag.
+- [x] Open and merge the release PR.
+- [x] Create and push annotated tag `v0.20.0` at the merged release commit.
+- [x] Create a GitHub release from that tag.
