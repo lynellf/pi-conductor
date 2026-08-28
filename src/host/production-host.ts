@@ -65,6 +65,7 @@ import {
   type HandoffTransportSelectedRecord,
   sha256Canonical,
   TrajectoryResumeError,
+  validateTrajectorySelector,
 } from "../persistence/trajectory-records.js";
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
@@ -98,7 +99,11 @@ import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
 import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
 import type { SessionEventSource } from "./session-event-handler.js";
 import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
-import { admitTrajectory, TrajectoryHandoffError } from "./trajectory-admission.js";
+import {
+  admitTrajectory,
+  serializeActiveToolDefinitions,
+  TrajectoryHandoffError,
+} from "./trajectory-admission.js";
 import {
   assertPersistedSnapshotPinResolves,
   assertSupportedWorkspaceBackend,
@@ -452,61 +457,84 @@ export class ProductionHost implements Host {
     roleConfig: RoleConfig | undefined,
     selected: HandoffTransportSelectedRecord,
   ): Promise<RoleSession> {
-    if (
-      selected.schema_version !== 1 ||
-      selected.target.system_prompt.length === 0 ||
-      selected.target.active_tool_names.length === 0
-    ) {
+    const persisted = validateTrajectorySelector(selected);
+    let session: RoleSession | null = null;
+    try {
+      const resolved = resolveModel(role, persisted.target.model, this.modelRegistry);
+      session = await spawnSharedSdkRoleSession({
+        role,
+        roleConfig,
+        model: resolved.model,
+        logicalModel: persisted.target.model,
+        effort: persisted.target.requested_effort,
+        retries: 0,
+        retryDelayMs: 0,
+        systemPrompt: persisted.target.system_prompt,
+        activeToolNames: persisted.target.active_tool_names,
+        modelRegistry: this.modelRegistry,
+        cwd: this.cwd,
+        agentDir: this.agentDir,
+        sessionDir: this.sessionDir,
+        sessionManager: SessionManager.open(
+          persisted.source_conversation.file,
+          this.sessionDir,
+          this.cwd,
+        ),
+        roleSessionId: randomUUID(),
+        isTrajectory: true,
+        disableAutoCompaction:
+          this.loadedManifest.manifest.handoffs?.some(
+            (policy) => policy.from === role && policy.mode === "trajectory",
+          ) === true,
+        runId: this.runId,
+        machineDefinition: this.loadedManifest.def,
+        delegateTool: null,
+        ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
+        ...(this.isUiContextCurrent !== undefined && {
+          isUiContextCurrent: this.isUiContextCurrent,
+        }),
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+        persistRecord: (record) => this.persistRecord(record),
+        sessionStates: this.sessionStates,
+        agentsBySessionId: this.agentsBySessionId,
+      });
+      const context = session.getTrajectoryContext?.();
+      if (context === undefined) {
+        throw new TrajectoryResumeError("resumed trajectory session cannot inspect target tools");
+      }
+      const activeToolDefinitions = serializeActiveToolDefinitions(
+        persisted.target.active_tool_names.map((name) => {
+          const definition = context.toolDefinitions[name];
+          if (definition === undefined) {
+            throw new TrajectoryResumeError(
+              "trajectory selector references unavailable target tools",
+            );
+          }
+          return definition;
+        }),
+      );
+      const environmentSha = sha256Canonical({
+        system_prompt: persisted.target.system_prompt,
+        model: persisted.target.model,
+        effort: persisted.target.requested_effort,
+        active_tool_names: persisted.target.active_tool_names,
+        active_tool_definitions: activeToolDefinitions,
+      });
+      if (environmentSha !== persisted.target.environment_sha256) {
+        throw new TrajectoryResumeError(
+          "trajectory selector target environment hash does not match",
+        );
+      }
+      return session;
+    } catch (error) {
+      await session?.dispose();
+      if (error instanceof TrajectoryResumeError) throw error;
       throw new TrajectoryResumeError(
-        "trajectory selector has incomplete persisted target environment",
+        error instanceof Error
+          ? error.message
+          : "trajectory target environment could not be restored",
       );
     }
-    const resolved = resolveModel(role, selected.target.model, this.modelRegistry);
-    const session = await spawnSharedSdkRoleSession({
-      role,
-      roleConfig,
-      model: resolved.model,
-      logicalModel: selected.target.model,
-      effort: selected.target.requested_effort,
-      retries: 0,
-      retryDelayMs: 0,
-      systemPrompt: selected.target.system_prompt,
-      modelRegistry: this.modelRegistry,
-      cwd: this.cwd,
-      agentDir: this.agentDir,
-      sessionDir: this.sessionDir,
-      sessionManager: SessionManager.open(
-        selected.source_conversation.file,
-        this.sessionDir,
-        this.cwd,
-      ),
-      roleSessionId: randomUUID(),
-      isTrajectory: true,
-      disableAutoCompaction:
-        this.loadedManifest.manifest.handoffs?.some(
-          (policy) => policy.from === role && policy.mode === "trajectory",
-        ) === true,
-      runId: this.runId,
-      machineDefinition: this.loadedManifest.def,
-      delegateTool: null,
-      ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
-      ...(this.isUiContextCurrent !== undefined && {
-        isUiContextCurrent: this.isUiContextCurrent,
-      }),
-      ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-      persistRecord: (record) => this.persistRecord(record),
-      sessionStates: this.sessionStates,
-      agentsBySessionId: this.agentsBySessionId,
-    });
-    const actual = session.getTrajectoryContext?.().registeredToolNames ?? [];
-    if (
-      actual.length === 0 ||
-      selected.target.active_tool_names.some((name) => !actual.includes(name))
-    ) {
-      await session.dispose();
-      throw new TrajectoryResumeError("trajectory selector references unavailable target tools");
-    }
-    return session;
   }
 
   /** Build the existing delegation operation with the caller's constrained Git base. */
@@ -748,16 +776,18 @@ export class ProductionHost implements Host {
           `trajectory target tool '${missingTool}' is unavailable in the source registry`,
         );
       }
-      const activeToolDefinitions = activeToolNames.map((name) => {
-        const definition = sourceContext.toolDefinitions[name];
-        if (definition === undefined) {
-          throw new TrajectoryHandoffError(
-            "trajectory_environment_unsupported",
-            `trajectory target tool '${name}' has no provider-visible definition`,
-          );
-        }
-        return definition;
-      });
+      const activeToolDefinitions = serializeActiveToolDefinitions(
+        activeToolNames.map((name) => {
+          const definition = sourceContext.toolDefinitions[name];
+          if (definition === undefined) {
+            throw new TrajectoryHandoffError(
+              "trajectory_environment_unsupported",
+              `trajectory target tool '${name}' has no provider-visible definition`,
+            );
+          }
+          return definition;
+        }),
+      );
       const admission = admitTrajectory({
         source: sourceContext,
         targetModel: resolved.model,

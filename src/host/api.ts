@@ -313,11 +313,19 @@ export async function resumeRun(
 
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
+    const resumedRecords = log.records(runId);
     const initialArtifactDelivery = latestArtifactDelivery(
-      log.records(runId),
+      resumedRecords,
       runId,
       reconciledCheckpoint,
     );
+    const initialParentSessionId = latestTrajectoryParent(
+      resumedRecords,
+      runId,
+      reconciledCheckpoint,
+    );
+    const initialVisitIndexByRole =
+      initialParentSessionId === null ? undefined : nextVisitIndexes(resumedRecords, runId);
 
     const host = opts.hostFactory({ runId, def, log, loadedManifest: resumedLoaded });
 
@@ -337,6 +345,8 @@ export async function resumeRun(
       loadedManifest: resumedLoaded,
       lease,
       initialArtifactDelivery,
+      initialParentSessionId,
+      ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
     });
   } catch (error) {
     await lease.release();
@@ -364,6 +374,10 @@ interface RunWithCompletionArgs {
   readonly loadedManifest: LoadedManifest;
   /** Last accepted artifact delivery that still targets this resumed checkpoint. */
   readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
+  /** Restored logical parent for a selected trajectory receiver. */
+  readonly initialParentSessionId?: string | null;
+  /** Next lifecycle visit indexes reconstructed from durable starts. */
+  readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Live ownership held from API entry through the final loop outcome. */
   readonly lease: RunExecutionLease;
 }
@@ -410,6 +424,12 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     initialGoal: goal,
     initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
     initialArtifactDelivery: args.initialArtifactDelivery ?? null,
+    ...(args.initialParentSessionId !== undefined && {
+      initialParentSessionId: args.initialParentSessionId,
+    }),
+    ...(args.initialVisitIndexByRole !== undefined && {
+      initialVisitIndexByRole: args.initialVisitIndexByRole,
+    }),
     getRunCostCap,
     runControl,
   }).finally(async () => {
@@ -464,6 +484,45 @@ function latestArtifactDelivery(
     return record.receiver_role === checkpoint.current_role ? record : null;
   }
   return null;
+}
+
+/** Recover the selected source's logical role-session identity for a resumed trajectory receiver. */
+function latestTrajectoryParent(
+  records: readonly PersistedRecord[],
+  runId: string,
+  checkpoint: Checkpoint,
+): string | null {
+  if (checkpoint.current_role === "done") return null;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record === undefined || !("run_id" in record) || record.run_id !== runId) continue;
+    if (record.type === "handoff_transport_selected" && record.to === checkpoint.current_role) {
+      return record.source_role_session_id;
+    }
+    if (
+      record.type === "transition_accepted" &&
+      record.event === "handoff" &&
+      record.to === checkpoint.current_role
+    ) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Reconstruct each role's next logical visit index from durable lifecycle starts. */
+function nextVisitIndexes(
+  records: readonly PersistedRecord[],
+  runId: string,
+): Readonly<Record<string, number>> {
+  const highest = new Map<string, number>();
+  for (const record of records) {
+    if (record.type !== "session_started" || record.run_id !== runId) continue;
+    highest.set(record.role, Math.max(highest.get(record.role) ?? 0, record.visit_index));
+  }
+  return Object.freeze(
+    Object.fromEntries([...highest].map(([role, visitIndex]) => [role, visitIndex + 1])),
+  );
 }
 
 function latestHandoffContextRef(

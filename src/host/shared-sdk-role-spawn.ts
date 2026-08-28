@@ -50,6 +50,8 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly roleSessionId?: string;
   /** Marks a re-opened trajectory target so model failure cannot fresh-fallback. */
   readonly isTrajectory?: boolean;
+  /** Persisted trajectory target allowlist; never inferred from current role defaults on resume. */
+  readonly activeToolNames?: readonly string[];
   /** Disable SDK auto-compaction before a role with an outgoing trajectory can prompt. */
   readonly disableAutoCompaction?: boolean;
   readonly machineDefinition: MachineDefinition;
@@ -105,7 +107,7 @@ export async function spawnSharedSdkRoleSession(options: {
     () => activeSeam,
     rejector.shouldRejectCapture,
     () => activeHandoffContext,
-    options.disableAutoCompaction === true,
+    options.disableAutoCompaction === true || options.isTrajectory === true,
   );
   const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
   const askUser = createAskUserTool() as ToolDefinition;
@@ -133,10 +135,13 @@ export async function spawnSharedSdkRoleSession(options: {
       ...(handoffContext === null ? [] : [handoffContext]),
       ...(options.delegateTool === null ? [] : [options.delegateTool]),
     ],
-    tools: [
-      ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
-      ...(options.delegateTool === null ? [] : ["delegate"]),
-    ],
+    tools:
+      options.activeToolNames === undefined
+        ? [
+            ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
+            ...(options.delegateTool === null ? [] : ["delegate"]),
+          ]
+        : [...options.activeToolNames],
   };
   if (options.model !== undefined) {
     (createOpts as { model?: Model<never> }).model = options.model;
@@ -144,6 +149,16 @@ export async function spawnSharedSdkRoleSession(options: {
   (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = options.effort;
   const { session } = await createAgentSession(createOpts);
   if (options.disableAutoCompaction === true) session.setAutoCompactionEnabled(false);
+  if (options.activeToolNames !== undefined) {
+    const activeNames = session.getActiveToolNames();
+    if (
+      activeNames.length !== options.activeToolNames.length ||
+      activeNames.some((name, index) => name !== options.activeToolNames?.[index])
+    ) {
+      session.dispose();
+      throw new Error("trajectory target active tool allowlist was not applied exactly");
+    }
+  }
   try {
     if (
       options.uiContext !== undefined &&
