@@ -53,9 +53,10 @@
  * record + checkpoint transition.
  */
 
+import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
@@ -69,6 +70,8 @@ import type {
   SessionLifecycleEvent,
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
+import { toMachineDefinition } from "../manifest/definition.js";
+import { modeFor } from "../manifest/handoffs.js";
 import type {
   ArtifactDeliveryRecord,
   CheckpointSnapshot,
@@ -77,6 +80,15 @@ import type {
   RunContextRecord,
   RunSeededRecord,
 } from "../persistence/log.js";
+import {
+  createManifestSnapshot,
+  type HandoffTransportSelectedRecord,
+  type ManifestSnapshotRecord,
+  type TrajectoryHandoffFailedRecord,
+  TrajectoryResumeError,
+  validateTrajectorySelector,
+  verifyManifestSnapshot,
+} from "../persistence/trajectory-records.js";
 import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -172,6 +184,19 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   const lease = await log.acquireRunLease(runId);
 
   try {
+    // A policy-bearing run pins normalized configuration before any role
+    // session exists. No policy means no new record and the legacy fresh path.
+    if ((loaded.manifest.handoffs?.length ?? 0) > 0) {
+      log.append(
+        createManifestSnapshot({
+          runId,
+          manifest: loaded.manifest,
+          definition: def,
+          ts: Date.now(),
+        }),
+      );
+    }
+
     // Persist the initial checkpoint snapshot (§11.1: each transition
     // produces a new full snapshot).
     const initialSnapshot: CheckpointSnapshot = {
@@ -239,21 +264,41 @@ export async function resumeRun(
   runId: string,
   opts: ResumeRunOptions,
 ): Promise<RunHandle> {
-  // Load and preflight before opening the record log. A container role is
-  // unsupported for the whole manifest, including one that would run later.
-  const loaded = await loadManifest(
-    manifestPath,
-    opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
-  );
-  assertManifestWorkspaceBackendsSupported(loaded);
-
+  // Snapshot-era runs must never parse current YAML before their durable
+  // normalized manifest is hash-validated. The supplied path remains only a
+  // prompt-root UX locator in that case.
   const baseDir = await resolveBaseDir(opts.baseDir);
+  // Preserve legacy fail-fast behavior without creating a base directory.
+  // A pre-existing run file may contain the snapshot that must win over YAML.
+  const legacyPreflight = existsSync(join(baseDir, `${runId}.jsonl`))
+    ? null
+    : await loadManifest(
+        manifestPath,
+        opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
+      );
+  if (legacyPreflight !== null) assertManifestWorkspaceBackendsSupported(legacyPreflight);
   const log = new FileRecordLog({ baseDir });
   // Claim before reading a snapshot or reconciling lifecycle records: two
   // resumed hosts must never inspect, pin, or spawn the same live run.
   const lease = await log.acquireRunLease(runId);
 
   try {
+    const manifestSnapshot = latestManifestSnapshot(log.records(runId), runId);
+    const loaded: LoadedManifest =
+      manifestSnapshot === null
+        ? (legacyPreflight ??
+          (await loadManifest(
+            manifestPath,
+            opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
+          )))
+        : Object.freeze({
+            manifest: manifestSnapshot.normalized_manifest,
+            def: toMachineDefinition(manifestSnapshot.normalized_manifest),
+            warnings: Object.freeze([]),
+            manifestDir: dirname(manifestPath),
+            manifestVersion: manifestSnapshot.normalized_manifest.version,
+          });
+    assertManifestWorkspaceBackendsSupported(loaded);
     const checkpoint = log.latestCheckpoint(runId);
     if (checkpoint === null) {
       throw new Error(
@@ -261,25 +306,45 @@ export async function resumeRun(
       );
     }
 
-    // The snapshot's manifest_version is the canonical link to the
-    // manifest that was active when the run started; a mismatch
-    // means the manifest was edited mid-run, which §10 forbids.
-    if (loaded.def.manifest_version !== checkpoint.manifest_version) {
+    // Snapshot-era runs take their roles and policy from durable normalized
+    // data; legacy logs use the freshly parsed current manifest.
+    const resumedLoaded = loaded;
+    if (resumedLoaded.def.manifest_version !== checkpoint.manifest_version) {
       throw new Error(
-        `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${loaded.def.manifest_version}' (§10)`,
+        `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${resumedLoaded.def.manifest_version}' (§10)`,
       );
     }
-    const def = loaded.def;
+    const def = resumedLoaded.def;
 
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
-    const initialArtifactDelivery = latestArtifactDelivery(
-      log.records(runId),
+    const resumedRecords = log.records(runId);
+    assertNoUnselectedTrajectoryHandoff(
+      resumedRecords,
+      runId,
+      reconciledCheckpoint,
+      resumedLoaded.manifest.handoffs,
+      log,
+    );
+    // Validate the selected receiver's persisted environment at the public
+    // resume boundary. A corrupt selector must not reach seed derivation,
+    // host construction, or a fake-host prompt.
+    const trajectorySelector = latestTrajectorySelector(
+      resumedRecords,
       runId,
       reconciledCheckpoint,
     );
+    const initialArtifactDelivery = latestArtifactDelivery(
+      resumedRecords,
+      runId,
+      reconciledCheckpoint,
+    );
+    const initialParentSessionId = trajectorySelector?.source_role_session_id ?? null;
+    const initialTrajectorySeed = trajectorySelector?.target.seed ?? null;
+    const initialVisitIndexByRole =
+      initialParentSessionId === null ? undefined : nextVisitIndexes(resumedRecords, runId);
 
-    const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+    const host = opts.hostFactory({ runId, def, log, loadedManifest: resumedLoaded });
 
     // Restore the original goal from the run log (if available).
     // Falls back to opts.goal (which may be "") for runs that
@@ -294,9 +359,12 @@ export async function resumeRun(
       host,
       initialCheckpoint: reconciledCheckpoint,
       goal,
-      loadedManifest: loaded,
+      loadedManifest: resumedLoaded,
       lease,
       initialArtifactDelivery,
+      initialParentSessionId,
+      ...(initialTrajectorySeed !== null && { initialTrajectorySeed }),
+      ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
     });
   } catch (error) {
     await lease.release();
@@ -324,6 +392,12 @@ interface RunWithCompletionArgs {
   readonly loadedManifest: LoadedManifest;
   /** Last accepted artifact delivery that still targets this resumed checkpoint. */
   readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
+  /** Restored logical parent for a selected trajectory receiver. */
+  readonly initialParentSessionId?: string | null;
+  /** Exact persisted target prompt for a selected trajectory receiver. */
+  readonly initialTrajectorySeed?: string;
+  /** Next lifecycle visit indexes reconstructed from durable starts. */
+  readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Live ownership held from API entry through the final loop outcome. */
   readonly lease: RunExecutionLease;
 }
@@ -370,6 +444,15 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     initialGoal: goal,
     initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
     initialArtifactDelivery: args.initialArtifactDelivery ?? null,
+    ...(args.initialParentSessionId !== undefined && {
+      initialParentSessionId: args.initialParentSessionId,
+    }),
+    ...(args.initialTrajectorySeed !== undefined && {
+      initialTrajectorySeed: args.initialTrajectorySeed,
+    }),
+    ...(args.initialVisitIndexByRole !== undefined && {
+      initialVisitIndexByRole: args.initialVisitIndexByRole,
+    }),
     getRunCostCap,
     runControl,
   }).finally(async () => {
@@ -399,6 +482,18 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
  * `context_ref`, so derive it from the durable role/session fields; the
  * synthesized sentinel remains explicitly unreadable.
  */
+function latestManifestSnapshot(
+  records: readonly PersistedRecord[],
+  runId: string,
+): ManifestSnapshotRecord | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record?.type !== "manifest_snapshot" || record.run_id !== runId) continue;
+    return verifyManifestSnapshot(record);
+  }
+  return null;
+}
+
 function latestArtifactDelivery(
   records: readonly PersistedRecord[],
   runId: string,
@@ -412,6 +507,165 @@ function latestArtifactDelivery(
     return record.receiver_role === checkpoint.current_role ? record : null;
   }
   return null;
+}
+
+/**
+ * Fail closed when a crash reaches a trajectory receiver before its exact
+ * target environment was made durable (Issue #63 §4.5). A fresh spawn cannot
+ * reconstruct that environment without changing the selected transport.
+ */
+function assertNoUnselectedTrajectoryHandoff(
+  records: readonly PersistedRecord[],
+  runId: string,
+  checkpoint: Checkpoint,
+  handoffs: LoadedManifest["manifest"]["handoffs"],
+  log: RecordLog,
+): void {
+  if (checkpoint.current_role === "done") return;
+
+  const acceptedIndex = findIncomingAcceptedHandoff(records, runId, checkpoint.current_role);
+  if (acceptedIndex === null) return;
+  const accepted = records[acceptedIndex];
+  if (accepted?.type !== "transition_accepted") return;
+  if (modeFor(handoffs, accepted.from, accepted.to) !== "trajectory") return;
+
+  const source = sourceConversationForAcceptedHandoff(records, acceptedIndex, accepted);
+  const laterRecords = records.slice(acceptedIndex + 1);
+  const matchingSelector = laterRecords.find(
+    (record): record is HandoffTransportSelectedRecord =>
+      record.type === "handoff_transport_selected" &&
+      record.from === accepted.from &&
+      record.to === accepted.to &&
+      record.source_role_session_id === source.roleSessionId,
+  );
+  if (matchingSelector !== undefined) {
+    // Preserve the existing typed corrupt-selector path; it must not become
+    // an invented fresh receiver merely because this guard ran first.
+    validateTrajectorySelector(matchingSelector);
+    return;
+  }
+
+  const priorFailure = laterRecords.find(
+    (record): record is TrajectoryHandoffFailedRecord =>
+      record.type === "trajectory_handoff_failed" &&
+      record.from === accepted.from &&
+      record.to === accepted.to &&
+      record.source_conversation.id === source.conversation.id &&
+      record.source_conversation.file === source.conversation.file,
+  );
+  if (priorFailure !== undefined) {
+    throw new TrajectoryResumeError(priorFailure.message, priorFailure.code);
+  }
+
+  const message =
+    "trajectory receiver checkpoint has no durable target environment; refusing fresh resume";
+  log.append({
+    type: "trajectory_handoff_failed",
+    schema_version: 1,
+    run_id: runId,
+    from: accepted.from,
+    to: accepted.to,
+    source_conversation: source.conversation,
+    code: "trajectory_transport_unrecoverable",
+    message,
+    ts: Date.now(),
+  });
+  throw new TrajectoryResumeError(message, "trajectory_transport_unrecoverable");
+}
+
+/** Find the accepted handoff that produced the currently resumed role. */
+function findIncomingAcceptedHandoff(
+  records: readonly PersistedRecord[],
+  runId: string,
+  role: Role,
+): number | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (
+      record?.type === "transition_accepted" &&
+      record.run_id === runId &&
+      record.event === "handoff" &&
+      record.to === role
+    ) {
+      return index;
+    }
+  }
+  return null;
+}
+
+/** Recover the source's durable logical and physical identities for a failed selection. */
+function sourceConversationForAcceptedHandoff(
+  records: readonly PersistedRecord[],
+  acceptedIndex: number,
+  accepted: Extract<PersistedRecord, { readonly type: "transition_accepted" }>,
+): {
+  readonly roleSessionId: string;
+  readonly conversation: { readonly id: string; readonly file: string };
+} {
+  for (let index = acceptedIndex - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (
+      record?.type === "session_started" &&
+      record.role === accepted.role &&
+      record.session_file === accepted.session_file
+    ) {
+      const roleSessionId = record.role_session_id ?? accepted.session_file;
+      return {
+        roleSessionId,
+        conversation: {
+          id: record.conversation_id ?? roleSessionId,
+          file: accepted.session_file,
+        },
+      };
+    }
+  }
+
+  // A policy-bearing run writes lifecycle identities. If a damaged log lacks
+  // one, the session file remains the only durable identity; it is still
+  // safer to close the run than to reinterpret the selected edge as fresh.
+  return {
+    roleSessionId: accepted.session_file,
+    conversation: { id: accepted.session_file, file: accepted.session_file },
+  };
+}
+
+/** Find and validate the exact selector that still targets this checkpoint. */
+function latestTrajectorySelector(
+  records: readonly PersistedRecord[],
+  runId: string,
+  checkpoint: Checkpoint,
+): HandoffTransportSelectedRecord | null {
+  if (checkpoint.current_role === "done") return null;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record === undefined || !("run_id" in record) || record.run_id !== runId) continue;
+    if (record.type === "handoff_transport_selected" && record.to === checkpoint.current_role) {
+      return validateTrajectorySelector(record);
+    }
+    if (
+      record.type === "transition_accepted" &&
+      record.event === "handoff" &&
+      record.to === checkpoint.current_role
+    ) {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Reconstruct each role's next logical visit index from durable lifecycle starts. */
+function nextVisitIndexes(
+  records: readonly PersistedRecord[],
+  runId: string,
+): Readonly<Record<string, number>> {
+  const highest = new Map<string, number>();
+  for (const record of records) {
+    if (record.type !== "session_started" || record.run_id !== runId) continue;
+    highest.set(record.role, Math.max(highest.get(record.role) ?? 0, record.visit_index));
+  }
+  return Object.freeze(
+    Object.fromEntries([...highest].map(([role, visitIndex]) => [role, visitIndex + 1])),
+  );
 }
 
 function latestHandoffContextRef(
@@ -458,10 +712,20 @@ function reconcileCrash(
   const records = log.records(runId);
   const sessionFile = active.session_file;
 
-  // Find the session_started record for this session_file.
-  let sessionStarted: SessionLifecycleEvent | null = null;
+  // New records match the conductor invocation identity, not the shared
+  // physical JSONL. Legacy records have no logical identity and retain the
+  // historical session-file fallback.
+  let sessionStarted:
+    | (SessionLifecycleEvent & {
+        readonly role_session_id?: string;
+        readonly conversation_id?: string | null;
+      })
+    | null = null;
   for (const r of records) {
-    if (r.type === "session_started" && r.session_file === sessionFile) {
+    if (r.type !== "session_started") continue;
+    const matchesLogical = r.role_session_id === active.id;
+    const matchesLegacy = r.role_session_id === undefined && r.session_file === sessionFile;
+    if (matchesLogical || matchesLegacy) {
       sessionStarted = r;
       break;
     }
@@ -476,7 +740,9 @@ function reconcileCrash(
   for (const r of records) {
     if (
       (r.type === "session_ended" || r.type === "session_failed") &&
-      r.session_file === sessionFile
+      (sessionStarted.role_session_id !== undefined
+        ? r.role_session_id === sessionStarted.role_session_id
+        : r.role_session_id === undefined && r.session_file === sessionFile)
     ) {
       hasTerminal = true;
       break;
@@ -523,7 +789,13 @@ function reconcileCrash(
     model: sessionStarted.model,
     model_effort: sessionStarted.model_effort ?? DEFAULT_MODEL_EFFORT,
   });
-  log.append(result.record);
+  log.append({
+    ...result.record,
+    ...(sessionStarted.role_session_id !== undefined && {
+      role_session_id: sessionStarted.role_session_id,
+      conversation_id: sessionStarted.conversation_id ?? null,
+    }),
+  });
   // Persist the cleared checkpoint.
   const snapshot: CheckpointSnapshot = {
     type: "checkpoint_snapshot",

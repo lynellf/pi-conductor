@@ -28,7 +28,7 @@
  * untouched and remains host-agnostic.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -38,6 +38,7 @@ import {
   type ExtensionUIContext,
   getAgentDir,
   type ModelRegistry,
+  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
@@ -49,6 +50,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
+import { modeFor } from "../manifest/handoffs.js";
 import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
 
 import {
@@ -59,6 +61,12 @@ import {
   type SnapshotPinnedRecord,
   snapshotPinned,
 } from "../persistence/log.js";
+import {
+  type HandoffTransportSelectedRecord,
+  sha256Canonical,
+  TrajectoryResumeError,
+  validateTrajectorySelector,
+} from "../persistence/trajectory-records.js";
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
 import type { SessionState } from "./cost.js";
@@ -74,7 +82,12 @@ import type {
 } from "./host.js";
 import { spawnIsolatedRoleSession } from "./isolated-role-spawn.js";
 import type { LoadedManifest } from "./manifest.js";
-import { loadSystemPrompt, resolveModel, selectModelEntry } from "./production-host-resolve.js";
+import {
+  buildToolsAllowlist,
+  loadSystemPrompt,
+  resolveModel,
+  selectModelEntry,
+} from "./production-host-resolve.js";
 import { notifyListeners } from "./record-emitter.js";
 import {
   DelegateBridgeConfigError,
@@ -86,6 +99,13 @@ import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
 import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
 import type { SessionEventSource } from "./session-event-handler.js";
 import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
+import {
+  admitTrajectory,
+  assertTrajectoryEffortSupported,
+  serializeActiveToolDefinitions,
+  TrajectoryHandoffError,
+} from "./trajectory-admission.js";
+import { assertTrajectorySdkSupported } from "./trajectory-sdk-capability.js";
 import {
   assertPersistedSnapshotPinResolves,
   assertSupportedWorkspaceBackend,
@@ -260,6 +280,15 @@ export class ProductionHost implements Host {
     }
 
     const roleConfig = this.lookupRoleConfig(role);
+    const resumedTransport = this.latestTrajectoryTransport(role);
+    if (resumedTransport?.type === "failed") {
+      throw new TrajectoryResumeError(
+        `trajectory handoff ${resumedTransport.record.from} → ${resumedTransport.record.to} previously failed: ${resumedTransport.record.code}`,
+      );
+    }
+    if (resumedTransport?.type === "selected") {
+      return this.resumeTrajectoryRole(role, roleConfig, resumedTransport.record);
+    }
     const roleWorkspaceConfig = roleConfig?.workspace;
     const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
     if (workspaceBackend === "container") {
@@ -379,6 +408,10 @@ export class ProductionHost implements Host {
       sessionDir: this.sessionDir,
       runId: this.runId,
       machineDefinition: this.loadedManifest.def,
+      disableAutoCompaction:
+        this.loadedManifest.manifest.handoffs?.some(
+          (policy) => policy.from === role && policy.mode === "trajectory",
+        ) === true,
       ...(opts.handoffContextRef !== undefined && { handoffContextRef: opts.handoffContextRef }),
       delegateTool,
       ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
@@ -390,6 +423,163 @@ export class ProductionHost implements Host {
       sessionStates: this.sessionStates,
       agentsBySessionId: this.agentsBySessionId,
     });
+  }
+
+  /** Return the last durable transport outcome targeting this receiver. */
+  private latestTrajectoryTransport(role: Role):
+    | { readonly type: "selected"; readonly record: HandoffTransportSelectedRecord }
+    | {
+        readonly type: "failed";
+        readonly record: Extract<PersistedRecord, { readonly type: "trajectory_handoff_failed" }>;
+      }
+    | null {
+    const records = this.log.records(this.runId);
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const record = records[index];
+      if (record?.type === "trajectory_handoff_failed" && record.to === role) {
+        return { type: "failed", record };
+      }
+      if (record?.type === "handoff_transport_selected" && record.to === role) {
+        return { type: "selected", record };
+      }
+      if (
+        record?.type === "transition_accepted" &&
+        record.event === "handoff" &&
+        record.to === role
+      ) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /** Reopen the selected conversation with the persisted target environment (Issue #63 §4.5). */
+  private async resumeTrajectoryRole(
+    role: Role,
+    roleConfig: RoleConfig | undefined,
+    selected: HandoffTransportSelectedRecord,
+  ): Promise<RoleSession> {
+    const persisted = validateTrajectorySelector(selected);
+    let session: RoleSession | null = null;
+    try {
+      assertTrajectorySdkSupported();
+      const resolved = resolveModel(role, persisted.target.model, this.modelRegistry);
+      assertTrajectoryEffortSupported(resolved.model, persisted.target.requested_effort);
+      session = await spawnSharedSdkRoleSession({
+        role,
+        roleConfig,
+        model: resolved.model,
+        logicalModel: persisted.target.model,
+        effort: persisted.target.requested_effort,
+        retries: 0,
+        retryDelayMs: 0,
+        systemPrompt: persisted.target.system_prompt,
+        activeToolNames: persisted.target.active_tool_names,
+        modelRegistry: this.modelRegistry,
+        cwd: this.cwd,
+        agentDir: this.agentDir,
+        sessionDir: this.sessionDir,
+        sessionManager: SessionManager.open(
+          persisted.source_conversation.file,
+          this.sessionDir,
+          this.cwd,
+        ),
+        roleSessionId: randomUUID(),
+        isTrajectory: true,
+        expectedTrajectoryConversation: persisted.source_conversation,
+        // A reopened target may receive its next prompt before it becomes an
+        // outgoing source, so exact resume needs the same isolated setting.
+        disableAutoCompaction: true,
+        runId: this.runId,
+        machineDefinition: this.loadedManifest.def,
+        delegateTool: null,
+        ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
+        ...(this.isUiContextCurrent !== undefined && {
+          isUiContextCurrent: this.isUiContextCurrent,
+        }),
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+        persistRecord: (record) => this.persistRecord(record),
+        sessionStates: this.sessionStates,
+        agentsBySessionId: this.agentsBySessionId,
+      });
+      const context = session.getTrajectoryContext?.();
+      if (context === undefined) {
+        throw new TrajectoryResumeError("resumed trajectory session cannot inspect target tools");
+      }
+      const activeToolDefinitions = serializeActiveToolDefinitions(
+        persisted.target.active_tool_names.map((name) => {
+          const definition = context.toolDefinitions[name];
+          if (definition === undefined) {
+            throw new TrajectoryResumeError(
+              "trajectory selector references unavailable target tools",
+            );
+          }
+          return definition;
+        }),
+      );
+      if (context.userMessageTexts.includes(persisted.target.seed)) {
+        throw new TrajectoryResumeError(
+          "trajectory target seed is already present without an accepted target transition; refusing to duplicate an ambiguous generation",
+          "trajectory_target_seed_ambiguous",
+        );
+      }
+      const environmentSha = sha256Canonical({
+        system_prompt: persisted.target.system_prompt,
+        model: persisted.target.model,
+        effort: persisted.target.requested_effort,
+        active_tool_names: persisted.target.active_tool_names,
+        active_tool_definitions: activeToolDefinitions,
+      });
+      if (environmentSha !== persisted.target.environment_sha256) {
+        throw new TrajectoryResumeError(
+          "trajectory selector target environment hash does not match",
+        );
+      }
+      admitTrajectory({
+        source: context,
+        targetModel: resolved.model,
+        targetModelName: persisted.target.model,
+        systemPrompt: persisted.target.system_prompt,
+        activeToolNames: persisted.target.active_tool_names,
+        activeToolDefinitions,
+        targetSeed: persisted.target.seed,
+      });
+      return session;
+    } catch (error) {
+      try {
+        await session?.dispose();
+      } catch {
+        // The rehydration failure must remain durable even if cleanup fails.
+      }
+      if (
+        error instanceof TrajectoryResumeError &&
+        error.code !== "trajectory_target_seed_ambiguous"
+      ) {
+        throw error;
+      }
+      const code =
+        error instanceof TrajectoryHandoffError
+          ? error.code
+          : error instanceof TrajectoryResumeError
+            ? (error.code ?? "trajectory_environment_unsupported")
+            : "trajectory_environment_unsupported";
+      const message =
+        error instanceof Error
+          ? error.message
+          : "trajectory target environment could not be restored";
+      this.persistRecord({
+        type: "trajectory_handoff_failed",
+        schema_version: 1,
+        run_id: this.runId,
+        from: persisted.from,
+        to: persisted.to,
+        source_conversation: persisted.source_conversation,
+        code,
+        message,
+        ts: Date.now(),
+      });
+      throw new TrajectoryResumeError(message, code);
+    }
   }
 
   /** Build the existing delegation operation with the caller's constrained Git base. */
@@ -557,6 +747,159 @@ export class ProductionHost implements Host {
     if (roleConfig?.models === undefined) return null;
     const next = roleConfig.models[currentModelIndex + 1];
     return next?.model ?? null;
+  }
+
+  /** Select and prepare a policy-declared shared-session continuation (Issue #63). */
+  async selectAcceptedHandoffTransport(args: {
+    readonly from: Role;
+    readonly to: Role;
+    readonly source: RoleSession;
+    readonly targetSeed: string;
+    readonly targetVisitIndex: number;
+  }): Promise<
+    { readonly mode: "fresh" } | { readonly mode: "trajectory"; readonly session: RoleSession }
+  > {
+    if (modeFor(this.loadedManifest.manifest.handoffs, args.from, args.to) === "fresh") {
+      return { mode: "fresh" };
+    }
+
+    const sourceConversation = {
+      id: args.source.conversationId ?? args.source.sessionId,
+      file: args.source.sessionFile,
+    };
+    try {
+      assertTrajectorySdkSupported();
+      const sourceContext = args.source.getTrajectoryContext?.();
+      if (sourceContext === undefined || args.source.continueTrajectory === undefined) {
+        throw new TrajectoryHandoffError(
+          "trajectory_environment_unsupported",
+          "trajectory source is not a shared SDK session with a rebindable host bridge",
+        );
+      }
+      const sourceRole = this.lookupRoleConfig(args.from);
+      const targetRole = this.lookupRoleConfig(args.to);
+      if (
+        (sourceRole?.workspace?.backend ?? "shared") !== "shared" ||
+        (targetRole?.workspace?.backend ?? "shared") !== "shared" ||
+        hasDelegateConfiguration(sourceRole) ||
+        hasDelegateConfiguration(targetRole) ||
+        sourceRole?.workspace?.progressive_disclosure !== undefined ||
+        targetRole?.workspace?.progressive_disclosure !== undefined
+      ) {
+        throw new TrajectoryHandoffError(
+          "trajectory_environment_unsupported",
+          "trajectory requires shared workspaces and no role-specific custom-tool bridge",
+        );
+      }
+      const modelEntry = targetRole?.models?.[0];
+      if (modelEntry === undefined) {
+        throw new TrajectoryHandoffError(
+          "trajectory_target_environment_invalid",
+          `trajectory target '${args.to}' has no explicit model`,
+        );
+      }
+      const resolved = resolveModel(args.to, modelEntry.model, this.modelRegistry);
+      assertTrajectoryEffortSupported(resolved.model, modelEntry.effort);
+      const targetPrompt = await loadSystemPrompt(
+        args.to,
+        targetRole?.system_prompt,
+        this.cwd,
+        this.loadedManifest.manifestDir,
+        this.loadedManifest.manifestVersion,
+      );
+      if (targetPrompt === null) {
+        throw new TrajectoryHandoffError(
+          "trajectory_target_environment_invalid",
+          `trajectory target '${args.to}' has no explicit system prompt`,
+        );
+      }
+      const activeToolNames = buildToolsAllowlist(targetRole?.tools, false);
+      const missingTool = activeToolNames.find(
+        (name) => !sourceContext.registeredToolNames.includes(name),
+      );
+      if (missingTool !== undefined) {
+        throw new TrajectoryHandoffError(
+          "trajectory_environment_unsupported",
+          `trajectory target tool '${missingTool}' is unavailable in the source registry`,
+        );
+      }
+      const activeToolDefinitions = serializeActiveToolDefinitions(
+        activeToolNames.map((name) => {
+          const definition = sourceContext.toolDefinitions[name];
+          if (definition === undefined) {
+            throw new TrajectoryHandoffError(
+              "trajectory_environment_unsupported",
+              `trajectory target tool '${name}' has no provider-visible definition`,
+            );
+          }
+          return definition;
+        }),
+      );
+      const admission = admitTrajectory({
+        source: sourceContext,
+        targetModel: resolved.model,
+        targetModelName: resolved.logical,
+        systemPrompt: targetPrompt,
+        activeToolNames,
+        activeToolDefinitions,
+        targetSeed: args.targetSeed,
+      });
+      const environmentSha = sha256Canonical({
+        system_prompt: targetPrompt,
+        model: resolved.logical,
+        effort: modelEntry.effort,
+        active_tool_names: activeToolNames,
+        active_tool_definitions: activeToolDefinitions,
+      });
+      this.persistRecord({
+        type: "handoff_transport_selected",
+        schema_version: 1,
+        run_id: this.runId,
+        source_role_session_id: args.source.sessionId,
+        from: args.from,
+        to: args.to,
+        mode: "trajectory",
+        source_conversation: sourceConversation,
+        target: {
+          model: resolved.logical,
+          requested_effort: modelEntry.effort,
+          system_prompt: targetPrompt,
+          active_tool_names: activeToolNames,
+          seed: args.targetSeed,
+          environment_sha256: environmentSha,
+        },
+        admission,
+        ts: Date.now(),
+      });
+      const session = await args.source.continueTrajectory({
+        role: args.to,
+        model: resolved.model,
+        logicalModel: resolved.logical,
+        effort: modelEntry.effort,
+        systemPrompt: targetPrompt,
+        activeToolNames,
+        visitIndex: args.targetVisitIndex,
+        maxSessionCostUsd: targetRole?.max_session_cost_usd ?? null,
+      });
+      return { mode: "trajectory", session };
+    } catch (error) {
+      const code =
+        error instanceof TrajectoryHandoffError ? error.code : "trajectory_environment_unsupported";
+      const message = error instanceof Error ? error.message : String(error);
+      this.persistRecord({
+        type: "trajectory_handoff_failed",
+        schema_version: 1,
+        run_id: this.runId,
+        from: args.from,
+        to: args.to,
+        source_conversation: sourceConversation,
+        code,
+        message,
+        ts: Date.now(),
+      });
+      if (error instanceof TrajectoryHandoffError) throw error;
+      throw new TrajectoryHandoffError(code, message);
+    }
   }
 
   runCostSoFar(): number {

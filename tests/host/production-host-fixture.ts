@@ -45,6 +45,7 @@ roles:
 export function makeModelRegistryWithStub(
   steps: readonly import("../../src/host/stub-provider.js").StubStep[] = [],
   modelIds: readonly string[] = ["stub-model"],
+  onRequest?: (context: unknown) => void,
 ): ModelRegistry {
   const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
   const stubModel = makeStubModel();
@@ -52,7 +53,7 @@ export function makeModelRegistryWithStub(
     api: "anthropic-messages" as const,
     apiKey: "stub-dummy-key-not-used",
     baseUrl: stubModel.baseUrl,
-    streamSimple: makeStubStreamFunction({ steps }),
+    streamSimple: makeStubStreamFunction({ steps, ...(onRequest !== undefined && { onRequest }) }),
     models: modelIds.map((id) => ({
       id,
       name: `${stubModel.name} (${id})`,

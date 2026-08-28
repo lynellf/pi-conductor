@@ -1,4 +1,8 @@
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createRoleSessionAdapter } from "../../src/host/role-session.js";
 import { SessionSeam } from "../../src/host/seam.js";
@@ -49,5 +53,51 @@ describe("createRoleSessionAdapter", () => {
     expect(prompt).toHaveBeenCalledWith("seed");
     expect(dispose).toHaveBeenCalledOnce();
     expect(onDispose).toHaveBeenCalledOnce();
+  });
+
+  it("inspects compaction only on the active public session branch", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-role-session-branch-"));
+    try {
+      const sessionDir = join(workdir, "sessions");
+      await mkdir(sessionDir);
+      const manager = SessionManager.create(workdir, sessionDir);
+      const root = manager.appendCustomEntry("test", { branch: "root" });
+      const activeLeaf = manager.appendCustomEntry("test", { branch: "active" });
+      manager.branch(root);
+      manager.appendCompaction("abandoned branch summary", root, 0);
+      manager.branch(activeLeaf);
+
+      expect(manager.getEntries().some((entry) => entry.type === "compaction")).toBe(true);
+      expect(manager.buildContextEntries().some((entry) => entry.type === "compaction")).toBe(
+        false,
+      );
+
+      const session = {
+        sessionId: "native-session",
+        sessionManager: manager,
+        getContextUsage: () => ({ tokens: 12 }),
+        getAllTools: () => [],
+        messages: [],
+      } as unknown as AgentSession;
+      const adapter = createRoleSessionAdapter({
+        role: "worker",
+        session,
+        seam: new SessionSeam(),
+        sessionId: "role-session",
+        sessionFile: join(sessionDir, "session.jsonl"),
+        model: "stub:model",
+        effort: "off",
+        retries: 0,
+        retryDelayMs: 0,
+        onDispose: () => undefined,
+      });
+
+      expect(adapter.getTrajectoryContext?.().hasCompaction).toBe(false);
+
+      manager.appendCompaction("active branch summary", root, 0);
+      expect(adapter.getTrajectoryContext?.().hasCompaction).toBe(true);
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
   });
 });

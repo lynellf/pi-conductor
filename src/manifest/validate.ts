@@ -56,7 +56,25 @@ export type ManifestErrorCode =
   /** Delegation lite §3.3: `allowed_subagents` is empty. */
   | "delegation-empty-allowed-subagents"
   /** Delegation lite §3.2: `allowed_subagents` contains duplicates. */
-  | "delegation-duplicate-allowed-subagent";
+  | "delegation-duplicate-allowed-subagent"
+  /** Issue #63: policy source does not name a declared role. */
+  | "handoff-policy-from-undeclared"
+  /** Issue #63: policy target does not name a declared role. */
+  | "handoff-policy-to-undeclared"
+  /** Issue #63: transport policy cannot target its source. */
+  | "handoff-policy-self-edge"
+  /** Issue #63: one directed policy may appear only once. */
+  | "handoff-policy-duplicate-edge"
+  /** Issue #63: policy must follow the pinned hub-and-spoke edge. */
+  | "handoff-policy-illegal-edge"
+  /** Issue #63: trajectory cannot rebind a non-shared workspace. */
+  | "trajectory-workspace-unsupported"
+  /** Issue #63: trajectory cannot carry current delegation/projection bridges. */
+  | "trajectory-custom-tool-unsupported"
+  /** Issue #63: target trajectory environment requires a selected model. */
+  | "trajectory-target-model-unresolved"
+  /** Issue #63: target trajectory environment requires explicit instructions. */
+  | "trajectory-target-system-prompt-unresolved";
 
 export type ManifestWarningCode =
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
@@ -184,6 +202,7 @@ export function validateManifest(m: Manifest): ManifestReport {
 
   // ─── Delegation lite §3: collect role and subagent names ───────────
   const roleNames = new Set(m.roles.map((r) => r.name));
+  validateHandoffPolicies(m, roleNames, orchestrators, errors);
 
   if (m.end_request_roles !== undefined) {
     if (m.end_request_roles.length === 0) {
@@ -505,6 +524,99 @@ export function validateManifest(m: Manifest): ManifestReport {
     errors: Object.freeze(errors),
     warnings: Object.freeze(warnings),
   };
+}
+
+function validateHandoffPolicies(
+  manifest: Manifest,
+  roleNames: ReadonlySet<Role>,
+  orchestrators: readonly { readonly name: Role }[],
+  errors: ManifestError[],
+): void {
+  const seen = new Set<string>();
+  const orchestratorNames = new Set(orchestrators.map((role) => role.name));
+  for (const policy of manifest.handoffs ?? []) {
+    const fromDeclared = roleNames.has(policy.from);
+    const toDeclared = roleNames.has(policy.to);
+    if (!fromDeclared) {
+      errors.push({
+        code: "handoff-policy-from-undeclared",
+        message: `handoff policy source '${policy.from}' is not a declared role`,
+      });
+    }
+    if (!toDeclared) {
+      errors.push({
+        code: "handoff-policy-to-undeclared",
+        message: `handoff policy target '${policy.to}' is not a declared role`,
+      });
+    }
+    if (policy.from === policy.to) {
+      errors.push({
+        code: "handoff-policy-self-edge",
+        message: `handoff policy '${policy.from}' → '${policy.to}' is a forbidden self edge`,
+      });
+    }
+    const edge = `${policy.from}\u0000${policy.to}`;
+    if (seen.has(edge)) {
+      errors.push({
+        code: "handoff-policy-duplicate-edge",
+        message: `handoff policy '${policy.from}' → '${policy.to}' is declared more than once`,
+      });
+    }
+    seen.add(edge);
+
+    if (!fromDeclared || !toDeclared || policy.from === policy.to) continue;
+    const legal =
+      (orchestratorNames.has(policy.from) && !orchestratorNames.has(policy.to)) ||
+      (!orchestratorNames.has(policy.from) && orchestratorNames.has(policy.to));
+    if (!legal) {
+      errors.push({
+        code: "handoff-policy-illegal-edge",
+        message: `handoff policy '${policy.from}' → '${policy.to}' is not a legal hub-and-spoke edge`,
+      });
+      continue;
+    }
+    if (policy.mode !== "trajectory") continue;
+
+    const source = manifest.roles.find((role) => role.name === policy.from);
+    const target = manifest.roles.find((role) => role.name === policy.to);
+    if (source === undefined || target === undefined) continue;
+    if (
+      (source.workspace?.backend ?? "shared") !== "shared" ||
+      (target.workspace?.backend ?? "shared") !== "shared"
+    ) {
+      errors.push({
+        code: "trajectory-workspace-unsupported",
+        message: `trajectory policy '${policy.from}' → '${policy.to}' requires shared workspaces`,
+      });
+    }
+    if (hasTrajectoryUnsupportedTools(source) || hasTrajectoryUnsupportedTools(target)) {
+      errors.push({
+        code: "trajectory-custom-tool-unsupported",
+        message: `trajectory policy '${policy.from}' → '${policy.to}' cannot use delegation or progressive tool bridges`,
+      });
+    }
+    if (target.models === undefined || target.models.length === 0) {
+      errors.push({
+        code: "trajectory-target-model-unresolved",
+        message: `trajectory target '${policy.to}' must declare at least one model`,
+      });
+    }
+    if (target.system_prompt === undefined) {
+      errors.push({
+        code: "trajectory-target-system-prompt-unresolved",
+        message: `trajectory target '${policy.to}' must declare system_prompt`,
+      });
+    }
+  }
+}
+
+function hasTrajectoryUnsupportedTools(role: Manifest["roles"][number]): boolean {
+  return (
+    role.delegation !== undefined ||
+    role.workspace?.progressive_disclosure !== undefined ||
+    role.tools?.includes("delegate") === true ||
+    role.tools?.includes("request_files") === true
+  );
 }
 
 function validateProgressiveDisclosurePaths(

@@ -115,7 +115,7 @@ For the full architecture rationale, see
 ### 1. Install
 
 ```bash
-pi install ./                       # from this checkout, dev install
+pi install ./                       # from the checkout, dev install
 pi list                             # verify: pi-conductor should appear
 ```
 
@@ -886,8 +886,8 @@ the rationale.
 - **No emitter-specific record types.** The emitter is a transparent fan-out
   of the existing `PersistedRecord` union, including delegation records when
   delegation is enabled.
-- **No change to the orchestration loop.** The host's `persistRecord` is the
-  chokepoint; the loop does not need to know the emitter exists.
+- **No change to the orchestration loop.** The host's `persistRecord` is
+  the chokepoint; the loop does not need to know the emitter exists.
 
 ---
 
