@@ -1,5 +1,7 @@
 /** Shared-role SDK session spawning — preserves the Phase 7A execution path. */
 
+import { randomUUID } from "node:crypto";
+
 import type { Model } from "@earendil-works/pi-ai";
 import {
   createAgentSession,
@@ -16,7 +18,7 @@ import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
-import type { RoleSession } from "./host.js";
+import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
 import { buildToolsAllowlist } from "./production-host-resolve.js";
 import { createRoleSessionAdapter } from "./role-session.js";
 import { SessionSeam } from "./seam.js";
@@ -42,6 +44,12 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly agentDir: string;
   readonly sessionDir: string;
   readonly runId: string;
+  /** Used only by durable trajectory resume; fresh roles create a new manager. */
+  readonly sessionManager?: SessionManager;
+  /** Host-minted logical invocation identity for durable trajectory resume. */
+  readonly roleSessionId?: string;
+  /** Marks a re-opened trajectory target so model failure cannot fresh-fallback. */
+  readonly isTrajectory?: boolean;
   readonly machineDefinition: MachineDefinition;
   readonly handoffContextRef?: HandoffContextRef;
   readonly delegateTool: ToolDefinition | null;
@@ -52,10 +60,32 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly sessionStates: Map<string, SessionState>;
   readonly agentsBySessionId: Map<string, SessionEventSource>;
 }): Promise<RoleSession> {
+  // The session retains one public extension hook for its lifetime. The host
+  // changes this controller only while idle so trajectory roles replace, not
+  // append, instructions on their next native turn.
+  let activeSystemPrompt = options.systemPrompt ?? undefined;
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: options.agentDir,
-    systemPromptOverride: () => options.systemPrompt ?? undefined,
+    systemPromptOverride: () => undefined,
+    extensionFactories: [
+      {
+        name: "conductor-trajectory-role-environment",
+        factory: (pi) => {
+          // Pi 0.80.6 exposes this public hook but its factory generic is
+          // inferred narrowly from the empty resource set.
+          const roleEnvironment = pi as unknown as {
+            on(
+              event: "before_agent_start",
+              handler: () => Promise<{ systemPrompt: string | undefined }>,
+            ): void;
+          };
+          roleEnvironment.on("before_agent_start", async () => ({
+            systemPrompt: activeSystemPrompt,
+          }));
+        },
+      },
+    ],
   });
   await loader.reload();
 
@@ -63,13 +93,18 @@ export async function spawnSharedSdkRoleSession(options: {
     options.handoffContextRef === undefined
       ? null
       : createHandoffContextTool(options.handoffContextRef);
-  const seam = new SessionSeam();
-  const rejector = createCaptureRejector();
-  const handoff = createHandoffTool(seam, rejector.shouldRejectCapture, {
+  let activeSeam = new SessionSeam();
+  let activeHandoffContext = {
     role: options.role,
     def: options.machineDefinition,
-  });
-  const end = createEndTool(seam, rejector.shouldRejectCapture);
+  };
+  const rejector = createCaptureRejector();
+  const handoff = createHandoffTool(
+    () => activeSeam,
+    rejector.shouldRejectCapture,
+    () => activeHandoffContext,
+  );
+  const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
   const askUser = createAskUserTool() as ToolDefinition;
   // The parent registry owns the runtime that carries extension-registered
   // providers (e.g. antigravity via pi-antigravity). Local SDK types (0.80.6)
@@ -86,7 +121,8 @@ export async function spawnSharedSdkRoleSession(options: {
     modelRegistry: options.modelRegistry,
     ...(runtime !== undefined && { modelRuntime: runtime }),
     resourceLoader: loader,
-    sessionManager: SessionManager.create(options.cwd, options.sessionDir),
+    sessionManager:
+      options.sessionManager ?? SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
       handoff,
       end,
@@ -120,8 +156,9 @@ export async function spawnSharedSdkRoleSession(options: {
     throw error;
   }
 
-  const sessionId = session.sessionId;
-  const sessionFile = session.sessionFile ?? `${options.sessionDir}/${sessionId}.jsonl`;
+  const nativeSessionId = session.sessionId;
+  const sessionId = options.roleSessionId ?? nativeSessionId;
+  const sessionFile = session.sessionFile ?? `${options.sessionDir}/${nativeSessionId}.jsonl`;
   const state = new SessionState({
     cap: options.roleConfig?.max_session_cost_usd ?? null,
     model: options.logicalModel,
@@ -142,19 +179,91 @@ export async function spawnSharedSdkRoleSession(options: {
     ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
   });
 
+  let nativeRetained = false;
+
+  const continueTrajectory = async (
+    target: TrajectoryContinuationOptions,
+  ): Promise<RoleSession> => {
+    if (!session.isIdle) {
+      throw new Error("trajectory reconfiguration requires an idle source session");
+    }
+    // All mutations follow a preflight performed by ProductionHost. The
+    // assertions turn Pi's silent unknown-tool behavior into a hard failure.
+    await session.setModel(target.model);
+    session.setThinkingLevel(target.effort);
+    if (session.model?.id !== target.model.id || session.thinkingLevel !== target.effort) {
+      throw new Error("trajectory target model or effort was not applied exactly");
+    }
+    session.setActiveToolsByName([...target.activeToolNames]);
+    const activeNames = session.getActiveToolNames();
+    if (
+      activeNames.length !== target.activeToolNames.length ||
+      activeNames.some((name, index) => name !== target.activeToolNames[index])
+    ) {
+      throw new Error("trajectory target active tool allowlist was not applied exactly");
+    }
+
+    nativeRetained = true;
+    activeSystemPrompt = target.systemPrompt;
+    activeSeam = new SessionSeam();
+    activeHandoffContext = { role: target.role, def: options.machineDefinition };
+    const targetSessionId = randomUUID();
+    const targetState = new SessionState({
+      cap: target.maxSessionCostUsd,
+      model: target.logicalModel,
+    });
+    options.sessionStates.set(targetSessionId, targetState);
+    options.agentsBySessionId.set(targetSessionId, session);
+    rejector.bindState(targetState);
+    attachSessionEventHandler({
+      session,
+      state: targetState,
+      role: target.role,
+      fileMutation: {
+        runId: options.runId,
+        sessionId: targetSessionId,
+        sessionFile,
+        persist: options.persistRecord,
+      },
+      ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
+    });
+
+    return createRoleSessionAdapter({
+      role: target.role,
+      session,
+      seam: activeSeam,
+      sessionId: targetSessionId,
+      sessionFile,
+      model: target.logicalModel,
+      effort: target.effort,
+      retries: 0,
+      retryDelayMs: 0,
+      isTrajectory: true,
+      continueTrajectory,
+      onDispose: () => {
+        options.sessionStates.delete(targetSessionId);
+        options.agentsBySessionId.delete(targetSessionId);
+        session.dispose();
+      },
+    });
+  };
+
   return createRoleSessionAdapter({
     role: options.role,
     session,
-    seam,
+    seam: activeSeam,
     sessionId,
     sessionFile,
     model: options.logicalModel,
     effort: options.effort,
     retries: options.retries,
     retryDelayMs: options.retryDelayMs,
+    ...(options.isTrajectory === true && { isTrajectory: true }),
+    continueTrajectory,
     onDispose: () => {
       options.sessionStates.delete(sessionId);
       options.agentsBySessionId.delete(sessionId);
+      if (!nativeRetained) session.dispose();
     },
   });
 }

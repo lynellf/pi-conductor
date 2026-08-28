@@ -92,12 +92,12 @@ export interface EmissionToolDetails {
 // ─── Internal factory: shared logic for handoff + end ──────────────────
 
 interface EmissionToolFactoryOptions {
-  readonly seam: SessionSeam;
+  readonly seam: SessionSeam | (() => SessionSeam);
   readonly toolName: "handoff" | "end";
   readonly schema: TSchema;
   readonly description: string;
   readonly label: string;
-  readonly handoffContext?: HandoffContractContext;
+  readonly handoffContext?: HandoffContractContext | (() => HandoffContractContext);
   /**
    * Optional: host-supplied predicate consulted at the start of
    * `execute`. When the predicate returns `true`, the tool returns
@@ -124,6 +124,9 @@ interface EmissionToolFactoryOptions {
 
 function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
   const { seam, toolName, schema, description, label, handoffContext, shouldRejectCapture } = opts;
+  const activeSeam = (): SessionSeam => (typeof seam === "function" ? seam() : seam);
+  const activeHandoffContext = (): HandoffContractContext | undefined =>
+    typeof handoffContext === "function" ? handoffContext() : handoffContext;
 
   return defineTool({
     name: toolName,
@@ -194,8 +197,8 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // loop reads; the flag is only flipped on a *valid* first
       // capture (Task 15.5 reads it to short-circuit side-effecting
       // tools).
-      if (seam.read().length > 0) {
-        seam.push({ toolName, args: params });
+      if (activeSeam().read().length > 0) {
+        activeSeam().push({ toolName, args: params });
         return {
           content: [
             {
@@ -210,14 +213,15 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
 
       // ── First handoff call: same-session actionable correction ───
       if (toolName === "handoff" && isObject(params) && typeof params.target_role === "string") {
-        const failure = validateRoleHandoff(params as HandoffCandidate, handoffContext);
+        const roleContext = activeHandoffContext();
+        const failure = validateRoleHandoff(params as HandoffCandidate, roleContext);
         if (failure !== null) {
-          seam.rejectHandoff(failure);
+          activeSeam().rejectHandoff(failure);
           return {
             content: [
               {
                 type: "text" as const,
-                text: formatHandoffCorrection(failure, handoffContext),
+                text: formatHandoffCorrection(failure, roleContext),
               },
             ],
             details: {
@@ -239,14 +243,14 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // `validateEmission` re-derives the breach reason from the
       // single-element buffer, so the schema-invalid path stays
       // observable at the loop level.
-      seam.push({ toolName, args: params });
+      activeSeam().push({ toolName, args: params });
 
       if (validated.kind === "ok") {
         // ── Valid capture. Set the sealed flag (§12.1). ───────────
         // Task 15.5 wires the host's tool wrappers to short-circuit
         // while this is true; the role's first valid emission is its
         // LAST chance to execute side-effecting tools.
-        seam.seal();
+        activeSeam().seal();
         const targetText =
           validated.event.type === "handoff" ? ` → ${validated.event.target_role}` : "";
         return {
@@ -298,16 +302,16 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
  * (`HandoffArgs`). No second schema.
  */
 export function createHandoffTool(
-  seam: SessionSeam,
+  seam: SessionSeam | (() => SessionSeam),
   shouldRejectCapture?: () => boolean,
-  context?: HandoffContractContext,
+  context?: HandoffContractContext | (() => HandoffContractContext),
 ): ToolDefinition {
   return createEmissionTool({
     seam,
     toolName: "handoff",
     schema: handoffArgsSchema,
     label: "Handoff",
-    description: formatHandoffDescription(context),
+    description: formatHandoffDescription(typeof context === "function" ? context() : context),
     ...(context !== undefined && { handoffContext: context }),
     ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
   });
@@ -325,7 +329,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * the transition is accepted.
  */
 export function createEndTool(
-  seam: SessionSeam,
+  seam: SessionSeam | (() => SessionSeam),
   shouldRejectCapture?: () => boolean,
 ): ToolDefinition {
   return createEmissionTool({

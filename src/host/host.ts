@@ -91,6 +91,8 @@ export interface RoleSession {
   readonly role: Role;
   /** Host-allocated session id (used in `reduceLifecycle`, §11.4). */
   readonly sessionId: string;
+  /** Physical Pi conversation identity; distinct from the host role invocation. */
+  readonly conversationId?: string;
   /** Path to the session log file (used in `reduceLifecycle`, §11.4). */
   readonly sessionFile: string;
   /**
@@ -163,8 +165,36 @@ export interface RoleSession {
    *  before reading the capture buffer. */
   prompt(text: string): Promise<void>;
 
+  /**
+   * Reconfigure this idle shared SDK conversation for an accepted trajectory
+   * successor. Omitted by fresh/isolated/test sessions.
+   */
+  continueTrajectory?(options: TrajectoryContinuationOptions): Promise<RoleSession>;
+
+  /** Public, read-only preflight data for trajectory admission. */
+  getTrajectoryContext?(): {
+    readonly tokens: number | null | undefined;
+    readonly hasCompaction: boolean;
+    readonly registeredToolNames: readonly string[];
+  };
+
+  /** True when this logical invocation reuses a predecessor conversation. */
+  readonly isTrajectory?: boolean;
+
   /** Release the session's underlying resources (file handles, …). */
   dispose(): Promise<void>;
+}
+
+/** Host-owned target environment supplied only after a trajectory preflight. */
+export interface TrajectoryContinuationOptions {
+  readonly role: Role;
+  readonly model: Model<never>;
+  readonly logicalModel: string;
+  readonly effort: ModelEffort;
+  readonly systemPrompt: string;
+  readonly activeToolNames: readonly string[];
+  readonly visitIndex: number;
+  readonly maxSessionCostUsd: number | null;
 }
 
 // ─── Spawn options ─────────────────────────────────────────────────────
@@ -438,6 +468,17 @@ export interface Host {
    * the policy.
    */
   runCostSoFar(): number;
+
+  /** Choose host transport only after an accepted handoff; absent keeps fresh behavior. */
+  selectAcceptedHandoffTransport?(args: {
+    readonly from: Role;
+    readonly to: Role;
+    readonly source: RoleSession;
+    readonly targetSeed: string;
+    readonly targetVisitIndex: number;
+  }): Promise<
+    { readonly mode: "fresh" } | { readonly mode: "trajectory"; readonly session: RoleSession }
+  >;
 }
 
 /**

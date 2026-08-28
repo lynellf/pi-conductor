@@ -1,6 +1,6 @@
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
-import type { RoleSession } from "./host.js";
+import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
 import type { SessionSeam } from "./seam.js";
 
 /** RoleSession plus production-only inspection fields used by wiring tests. */
@@ -20,6 +20,9 @@ export function createRoleSessionAdapter(opts: {
   readonly effort: ModelEffort;
   readonly retries: number;
   readonly retryDelayMs: number;
+  readonly isTrajectory?: boolean;
+  /** Reconfigure a shared native session for the next trajectory role. */
+  readonly continueTrajectory?: (options: TrajectoryContinuationOptions) => Promise<RoleSession>;
   /** Host-owned workspace metadata for an isolated worktree/copy session. */
   readonly workspace?: SessionWorkspaceDescriptor;
   readonly onDispose: () => Promise<void> | void;
@@ -32,12 +35,14 @@ export function createRoleSessionAdapter(opts: {
   return {
     role: opts.role,
     sessionId: opts.sessionId,
+    conversationId: session.sessionId,
     sessionFile: opts.sessionFile,
     model: opts.model,
     effort: opts.effort,
     ...(workspace !== undefined ? { workspace } : {}),
     retries: opts.retries,
     retryDelayMs: opts.retryDelayMs,
+    ...(opts.isTrajectory === true && { isTrajectory: true }),
     readCaptureBuffer: () => seam.read(),
     resetCaptureBuffer: () => seam.reset(),
     takeHandoffValidationFailures: () => seam.takeHandoffValidationFailures(),
@@ -47,6 +52,16 @@ export function createRoleSessionAdapter(opts: {
     isSealed: () => seam.isSealed,
     subscribeSealed: (listener: () => void) => seam.subscribeSealed(listener),
     prompt: (text: string) => session.prompt(text),
+    getTrajectoryContext: () => ({
+      tokens: session.getContextUsage()?.tokens,
+      hasCompaction: session.sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "compaction"),
+      registeredToolNames: session.getAllTools().map((tool) => tool.name),
+    }),
+    ...(opts.continueTrajectory !== undefined && {
+      continueTrajectory: opts.continueTrajectory,
+    }),
     dispose: async () => {
       session.dispose();
       await opts.onDispose();
