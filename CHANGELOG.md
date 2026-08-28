@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.20.0] - 2026-08-28
+
+### Enhancements
+
+- **Trajectory-preserving handoffs** (Issue #63). A manifest may opt a legal,
+  shared-workspace handoff edge into `mode: trajectory`, retaining the exact
+  Pi conversation (including tool results) while applying the target role's
+  declared model, effort, prompt, and tool allowlist. Undeclared and explicit
+  `fresh` edges retain the existing new-session handoff behavior.
+- **Durable trajectory recovery.** Policy-bearing runs pin a normalized
+  manifest snapshot and each selected trajectory stores its admitted target
+  environment. Resume reopens only that recorded conversation; corrupt,
+  incomplete, ambiguous, compacted, unsupported, or oversized trajectories
+  fail closed without compaction, truncation, retry, or fresh fallback.
+
+### Security
+
+- Pin the coupled Pi development SDK packages to the proven `0.80.6` release.
+  The planned Pi `0.84.3` migration is deferred because its public extension
+  context does not expose the `ModelRuntime` required by its documented SDK
+  session API; trajectory transport continues to reject unproven runtimes.
+
 ## [0.19.1] - 2026-08-28
 
 ### Documentation

@@ -1,6 +1,6 @@
 {
   "name": "pi-conductor",
-  "version": "0.19.1",
+  "version": "0.20.0",
   "description": "Multi-role LLM orchestration via a guarded, observable handoff state machine — installs as a pi extension exposing `/conduct`.",
   "license": "MIT",
   "author": "Ezell <lynellf@gmail.com>",
@@ -75,9 +75,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@earendil-works/pi-ai": "^0.80.5",
-    "@earendil-works/pi-coding-agent": "^0.80.5",
-    "@earendil-works/pi-tui": "^0.80.5",
+    "@earendil-works/pi-ai": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-tui": "0.80.6",
     "@types/node": "^22.10.0",
     "lefthook": "^2.1.9",
     "typebox": "^1.1.38",
