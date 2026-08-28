@@ -47,25 +47,30 @@ export async function resolveFileContextArtifact(
       readonly artifact: ResolvedContextArtifact;
       readonly capture: ContextArtifactFileCapture;
     }
-  | ContextArtifactResolutionError
+  | {
+      readonly error: ContextArtifactResolutionError;
+      readonly oversizedByteLength?: number;
+    }
 > {
   const lexicalPath = join(canonicalRoot, ...safePath.split("/"));
   const walked = await walkRegularSource(canonicalRoot, safePath, taskId, artifactId);
-  if ("code" in walked) return walked;
+  if ("code" in walked) return { error: walked };
   await options.testHook?.("after-source-lstat");
 
   let sourceRealPath: string;
   try {
     sourceRealPath = await realpath(lexicalPath);
   } catch (cause) {
-    return filesystemError(cause, taskId, artifactId, safePath);
+    return { error: filesystemError(cause, taskId, artifactId, safePath) };
   }
   if (!isBeneath(canonicalRoot, sourceRealPath)) {
-    return contextArtifactError("context-artifact-realpath-escape", taskId, artifactId, safePath);
+    return {
+      error: contextArtifactError("context-artifact-realpath-escape", taskId, artifactId, safePath),
+    };
   }
 
   const identity = await openIdentity(lexicalPath, taskId, artifactId, safePath);
-  if ("code" in identity) return identity;
+  if ("code" in identity) return { error: identity };
   const blob = await readPinnedBlob(
     options.primaryCheckout,
     options.baseCommit,
@@ -74,17 +79,21 @@ export async function resolveFileContextArtifact(
     artifactId,
     options.limits.max_item_utf8_bytes,
   );
-  if ("code" in blob) return blob;
+  if (!blob.valid) return blob;
 
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(blob);
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(blob.bytes);
   } catch {
-    return contextArtifactError("context-artifact-invalid-utf8", taskId, artifactId, safePath);
+    return {
+      error: contextArtifactError("context-artifact-invalid-utf8", taskId, artifactId, safePath),
+    };
   }
   const encoded = new TextEncoder().encode(text);
-  if (!Buffer.from(encoded).equals(blob)) {
-    return contextArtifactError("context-artifact-invalid-utf8", taskId, artifactId, safePath);
+  if (!Buffer.from(encoded).equals(blob.bytes)) {
+    return {
+      error: contextArtifactError("context-artifact-invalid-utf8", taskId, artifactId, safePath),
+    };
   }
   return {
     artifact: Object.freeze({
@@ -96,8 +105,8 @@ export async function resolveFileContextArtifact(
         base_commit: options.baseCommit,
       }),
       text,
-      byte_length: blob.byteLength,
-      sha256: contextArtifactDigest(blob),
+      byte_length: blob.bytes.byteLength,
+      sha256: contextArtifactDigest(blob.bytes),
     }),
     capture: Object.freeze({
       taskId,
@@ -209,22 +218,39 @@ async function readPinnedBlob(
   taskId: string,
   artifactId: string,
   itemLimit: number,
-): Promise<Buffer | ContextArtifactResolutionError> {
+): Promise<
+  | { readonly valid: true; readonly bytes: Buffer }
+  | {
+      readonly valid: false;
+      readonly error: ContextArtifactResolutionError;
+      readonly oversizedByteLength?: number;
+    }
+> {
   const object = `${baseCommit}:${safePath}`;
   try {
     const type = (await execFileAsync("git", ["cat-file", "-t", object], { cwd })).stdout.trim();
     if (type !== "blob") {
-      return contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath);
+      return {
+        valid: false,
+        error: contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath),
+      };
     }
     const sizeText = (
       await execFileAsync("git", ["cat-file", "-s", object], { cwd })
     ).stdout.trim();
     const size = Number(sizeText);
     if (!Number.isSafeInteger(size) || size < 0) {
-      return contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath);
+      return {
+        valid: false,
+        error: contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath),
+      };
     }
     if (size > itemLimit) {
-      return oversizedContextArtifact(taskId, artifactId, safePath, size, itemLimit);
+      return {
+        valid: false,
+        error: oversizedContextArtifact(taskId, artifactId, safePath, size, itemLimit),
+        oversizedByteLength: size,
+      };
     }
     const result = await execFileAsync("git", ["cat-file", "blob", object], {
       cwd,
@@ -233,11 +259,17 @@ async function readPinnedBlob(
     });
     const bytes = Buffer.isBuffer(result.stdout) ? result.stdout : Buffer.from(result.stdout);
     if (bytes.byteLength !== size) {
-      return contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath);
+      return {
+        valid: false,
+        error: contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath),
+      };
     }
-    return bytes;
+    return { valid: true, bytes };
   } catch {
-    return contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath);
+    return {
+      valid: false,
+      error: contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath),
+    };
   }
 }
 
