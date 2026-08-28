@@ -62,6 +62,9 @@ export function createRoleSessionAdapter(opts: {
         .getEntries()
         .some((entry) => entry.type === "compaction"),
       registeredToolNames: session.getAllTools().map((tool) => tool.name),
+      userMessageTexts: session.messages.flatMap((message) =>
+        message.role === "user" ? textParts(message.content) : [],
+      ),
       toolDefinitions: Object.fromEntries(session.getAllTools().map((tool) => [tool.name, tool])),
     }),
     ...(opts.continueTrajectory !== undefined && {
@@ -77,4 +80,19 @@ export function createRoleSessionAdapter(opts: {
     getActiveToolNames: () => session.getActiveToolNames(),
     isAutoCompactionEnabled: () => session.autoCompactionEnabled,
   };
+}
+
+function textParts(content: unknown): readonly string[] {
+  if (typeof content === "string") return [content];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part) =>
+    typeof part === "object" &&
+    part !== null &&
+    "type" in part &&
+    part.type === "text" &&
+    "text" in part &&
+    typeof part.text === "string"
+      ? [part.text]
+      : [],
+  );
 }

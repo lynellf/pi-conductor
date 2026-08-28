@@ -62,6 +62,17 @@ function requestPrompt(context: unknown): unknown {
     : undefined;
 }
 
+function requestToolNames(context: unknown): readonly string[] {
+  if (typeof context !== "object" || context === null || !("tools" in context)) return [];
+  const tools = (context as { readonly tools?: unknown }).tools;
+  if (!Array.isArray(tools)) return [];
+  return tools.flatMap((tool) =>
+    typeof tool === "object" && tool !== null && "name" in tool && typeof tool.name === "string"
+      ? [tool.name]
+      : [],
+  );
+}
+
 function textContent(message: unknown): string | null {
   if (typeof message !== "object" || message === null || !("content" in message)) return null;
   const content = message.content;
@@ -273,6 +284,10 @@ describe("Issue #63 trajectory environment", () => {
     expect(requests.length).toBe(5);
     expect(requestPrompt(requests[2])).toBe("ORCHESTRATOR_PROMPT");
     expect(requestPrompt(requests[3])).toBe("IMPLEMENTER_PROMPT");
+    expect(requestToolNames(requests[2])).toEqual(["handoff", "end", "ask_user"]);
+    expect(requestToolNames(requests[3])).toEqual(["handoff", "end", "ask_user"]);
+    expect(requestToolNames(requests[2])).not.toContain("handoff_context");
+    expect(requestToolNames(requests[3])).not.toContain("handoff_context");
     assertExactPriorHandoff(requests[2], lastUserText(requests[1]), "orchestrator");
     assertExactPriorHandoff(requests[3], lastUserText(requests[2]), "implementer");
     expect(selected[0]?.target.seed).toBe(lastUserText(requests[2]));

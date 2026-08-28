@@ -81,7 +81,9 @@ import type {
 } from "../persistence/log.js";
 import {
   createManifestSnapshot,
+  type HandoffTransportSelectedRecord,
   type ManifestSnapshotRecord,
+  validateTrajectorySelector,
   verifyManifestSnapshot,
 } from "../persistence/trajectory-records.js";
 import type { Host } from "./host.js";
@@ -314,17 +316,21 @@ export async function resumeRun(
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
     const resumedRecords = log.records(runId);
+    // Validate the selected receiver's persisted environment at the public
+    // resume boundary. A corrupt selector must not reach seed derivation,
+    // host construction, or a fake-host prompt.
+    const trajectorySelector = latestTrajectorySelector(
+      resumedRecords,
+      runId,
+      reconciledCheckpoint,
+    );
     const initialArtifactDelivery = latestArtifactDelivery(
       resumedRecords,
       runId,
       reconciledCheckpoint,
     );
-    const initialParentSessionId = latestTrajectoryParent(
-      resumedRecords,
-      runId,
-      reconciledCheckpoint,
-    );
-    const initialTrajectorySeed = latestTrajectorySeed(resumedRecords, runId, reconciledCheckpoint);
+    const initialParentSessionId = trajectorySelector?.source_role_session_id ?? null;
+    const initialTrajectorySeed = trajectorySelector?.target.seed ?? null;
     const initialVisitIndexByRole =
       initialParentSessionId === null ? undefined : nextVisitIndexes(resumedRecords, runId);
 
@@ -493,42 +499,18 @@ function latestArtifactDelivery(
   return null;
 }
 
-/** Recover the exact selected target prompt for a resumed trajectory receiver. */
-function latestTrajectorySeed(
+/** Find and validate the exact selector that still targets this checkpoint. */
+function latestTrajectorySelector(
   records: readonly PersistedRecord[],
   runId: string,
   checkpoint: Checkpoint,
-): string | null {
+): HandoffTransportSelectedRecord | null {
   if (checkpoint.current_role === "done") return null;
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
     if (record === undefined || !("run_id" in record) || record.run_id !== runId) continue;
     if (record.type === "handoff_transport_selected" && record.to === checkpoint.current_role) {
-      return record.target.seed;
-    }
-    if (
-      record.type === "transition_accepted" &&
-      record.event === "handoff" &&
-      record.to === checkpoint.current_role
-    ) {
-      return null;
-    }
-  }
-  return null;
-}
-
-/** Recover the selected source's logical role-session identity for a resumed trajectory receiver. */
-function latestTrajectoryParent(
-  records: readonly PersistedRecord[],
-  runId: string,
-  checkpoint: Checkpoint,
-): string | null {
-  if (checkpoint.current_role === "done") return null;
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    if (record === undefined || !("run_id" in record) || record.run_id !== runId) continue;
-    if (record.type === "handoff_transport_selected" && record.to === checkpoint.current_role) {
-      return record.source_role_session_id;
+      return validateTrajectorySelector(record);
     }
     if (
       record.type === "transition_accepted" &&

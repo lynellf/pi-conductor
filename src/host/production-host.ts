@@ -101,9 +101,11 @@ import type { SessionEventSource } from "./session-event-handler.js";
 import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
 import {
   admitTrajectory,
+  assertTrajectoryEffortSupported,
   serializeActiveToolDefinitions,
   TrajectoryHandoffError,
 } from "./trajectory-admission.js";
+import { assertTrajectorySdkSupported } from "./trajectory-sdk-capability.js";
 import {
   assertPersistedSnapshotPinResolves,
   assertSupportedWorkspaceBackend,
@@ -460,7 +462,9 @@ export class ProductionHost implements Host {
     const persisted = validateTrajectorySelector(selected);
     let session: RoleSession | null = null;
     try {
+      assertTrajectorySdkSupported();
       const resolved = resolveModel(role, persisted.target.model, this.modelRegistry);
+      assertTrajectoryEffortSupported(resolved.model, persisted.target.requested_effort);
       session = await spawnSharedSdkRoleSession({
         role,
         roleConfig,
@@ -513,6 +517,12 @@ export class ProductionHost implements Host {
           return definition;
         }),
       );
+      if (context.userMessageTexts.includes(persisted.target.seed)) {
+        throw new TrajectoryResumeError(
+          "trajectory target seed is already present without an accepted target transition; refusing to duplicate an ambiguous generation",
+          "trajectory_target_seed_ambiguous",
+        );
+      }
       const environmentSha = sha256Canonical({
         system_prompt: persisted.target.system_prompt,
         model: persisted.target.model,
@@ -537,9 +547,18 @@ export class ProductionHost implements Host {
       return session;
     } catch (error) {
       await session?.dispose();
-      if (error instanceof TrajectoryResumeError) throw error;
+      if (
+        error instanceof TrajectoryResumeError &&
+        error.code !== "trajectory_target_seed_ambiguous"
+      ) {
+        throw error;
+      }
       const code =
-        error instanceof TrajectoryHandoffError ? error.code : "trajectory_environment_unsupported";
+        error instanceof TrajectoryHandoffError
+          ? error.code
+          : error instanceof TrajectoryResumeError
+            ? (error.code ?? "trajectory_environment_unsupported")
+            : "trajectory_environment_unsupported";
       const message =
         error instanceof Error
           ? error.message
@@ -745,6 +764,7 @@ export class ProductionHost implements Host {
       file: args.source.sessionFile,
     };
     try {
+      assertTrajectorySdkSupported();
       const sourceContext = args.source.getTrajectoryContext?.();
       if (sourceContext === undefined || args.source.continueTrajectory === undefined) {
         throw new TrajectoryHandoffError(
@@ -775,6 +795,7 @@ export class ProductionHost implements Host {
         );
       }
       const resolved = resolveModel(args.to, modelEntry.model, this.modelRegistry);
+      assertTrajectoryEffortSupported(resolved.model, modelEntry.effort);
       const targetPrompt = await loadSystemPrompt(
         args.to,
         targetRole?.system_prompt,

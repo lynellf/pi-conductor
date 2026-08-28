@@ -50,6 +50,7 @@ import type {
   HandoffTransportSelectedRecord,
   ManifestSnapshotRecord,
   TrajectoryHandoffFailedRecord,
+  TrajectoryTargetSeedDeliveredRecord,
 } from "./trajectory-records.js";
 import type {
   ArtifactCollectedRecord,
@@ -321,7 +322,8 @@ export type PersistedRecord =
   | ArtifactDeliveryRecord
   | ManifestSnapshotRecord
   | HandoffTransportSelectedRecord
-  | TrajectoryHandoffFailedRecord;
+  | TrajectoryHandoffFailedRecord
+  | TrajectoryTargetSeedDeliveredRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
