@@ -305,13 +305,17 @@ export function createHandoffTool(
   seam: SessionSeam | (() => SessionSeam),
   shouldRejectCapture?: () => boolean,
   context?: HandoffContractContext | (() => HandoffContractContext),
+  /** Use when a shared session may later change roles; no source authority leaks into the schema description. */
+  transportNeutralDescription = false,
 ): ToolDefinition {
   return createEmissionTool({
     seam,
     toolName: "handoff",
     schema: handoffArgsSchema,
     label: "Handoff",
-    description: formatHandoffDescription(typeof context === "function" ? context() : context),
+    description: formatHandoffDescription(
+      transportNeutralDescription ? undefined : typeof context === "function" ? context() : context,
+    ),
     ...(context !== undefined && { handoffContext: context }),
     ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
   });

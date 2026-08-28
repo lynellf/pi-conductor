@@ -528,13 +528,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           ...(session.workspace !== undefined ? { workspace: session.workspace } : {}),
         });
         checkpoint = started.checkpoint;
-        host.persistRecord({
-          ...started.record,
-          ...(session.conversationId !== undefined && {
-            role_session_id: sessionId,
-            conversation_id: session.conversationId,
-          }),
-        });
+        host.persistRecord(withRoleSessionIdentity(started.record, session));
         // §11.1: each transition produces a new full checkpoint snapshot.
         // session_started sets active_role_session; a snapshot here is
         // what resumeRun reads when a run crashed mid-prompt — without
@@ -711,7 +705,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
                 usage: capturedUsage,
               });
               checkpoint = ended.checkpoint;
-              host.persistRecord(ended.record);
+              host.persistRecord(withRoleSessionIdentity(ended.record, session));
               host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
               await collectSessionArtifacts(host, session, {
                 role,
@@ -938,13 +932,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             model_effort: session.effort,
           });
           checkpoint = ended.checkpoint;
-          host.persistRecord({
-            ...ended.record,
-            ...(session.conversationId !== undefined && {
-              role_session_id: sessionId,
-              conversation_id: session.conversationId,
-            }),
-          });
+          host.persistRecord(withRoleSessionIdentity(ended.record, session));
           // §11.1: each transition produces a new full checkpoint
           // snapshot. session_ended clears active_role_session;
           // persist a fresh snapshot so latestCheckpoint reflects

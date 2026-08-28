@@ -26,7 +26,10 @@ export function createRoleSessionAdapter(opts: {
   readonly continueTrajectory?: (options: TrajectoryContinuationOptions) => Promise<RoleSession>;
   /** Host-owned workspace metadata for an isolated worktree/copy session. */
   readonly workspace?: SessionWorkspaceDescriptor;
+  /** Detach logical resources; native conversation ownership is host-controlled. */
   readonly onDispose: () => Promise<void> | void;
+  /** Whether this logical adapter still owns physical SDK disposal. */
+  readonly disposeNative?: () => boolean;
 }): RoleSessionAdapter {
   const { session, seam } = opts;
   const workspace =
@@ -59,12 +62,13 @@ export function createRoleSessionAdapter(opts: {
         .getEntries()
         .some((entry) => entry.type === "compaction"),
       registeredToolNames: session.getAllTools().map((tool) => tool.name),
+      toolDefinitions: Object.fromEntries(session.getAllTools().map((tool) => [tool.name, tool])),
     }),
     ...(opts.continueTrajectory !== undefined && {
       continueTrajectory: opts.continueTrajectory,
     }),
     dispose: async () => {
-      session.dispose();
+      if (opts.disposeNative?.() !== false) session.dispose();
       await opts.onDispose();
     },
     get systemPrompt(): string {

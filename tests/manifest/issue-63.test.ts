@@ -33,7 +33,10 @@ describe("Issue #63 manifest handoff policies", () => {
   it("defaults absent and undeclared policies to fresh", () => {
     expect(modeFor(parseManifest(VALID).handoffs, "planner", "orchestrator")).toBe("trajectory");
     expect(modeFor(parseManifest(VALID).handoffs, "implementer", "orchestrator")).toBe("fresh");
-    expect(modeFor(parseManifest("version: 1\nroles: []").handoffs, "a", "b")).toBe("fresh");
+    const absent = parseManifest("version: 1\nroles: []").handoffs;
+    expect(modeFor(absent, "a", "b")).toBe("fresh");
+    expect(absent).toEqual([]);
+    expect(Object.isFrozen(absent)).toBe(true);
   });
 
   it("parses frozen explicit policies", () => {
