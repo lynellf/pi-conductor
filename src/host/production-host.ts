@@ -546,7 +546,11 @@ export class ProductionHost implements Host {
       });
       return session;
     } catch (error) {
-      await session?.dispose();
+      try {
+        await session?.dispose();
+      } catch {
+        // The rehydration failure must remain durable even if cleanup fails.
+      }
       if (
         error instanceof TrajectoryResumeError &&
         error.code !== "trajectory_target_seed_ambiguous"
