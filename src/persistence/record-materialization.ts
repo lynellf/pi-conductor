@@ -1,6 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
 /** Typed rejection of an unavailable workspace guarantee at the persistence boundary. */
 export class WorkspaceGuaranteeError extends Error {
@@ -40,6 +41,10 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   assertNoSandboxGuarantee(record);
 
   if (!isRecord(record)) return;
+
+  if (record.type === "manifest_snapshot") {
+    verifyManifestSnapshot(record as unknown as ManifestSnapshotRecord);
+  }
 
   if (record.type === "workspace_provisioned") {
     assertWorkspaceGuarantee(record.guarantee);

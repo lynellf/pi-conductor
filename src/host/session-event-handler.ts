@@ -94,7 +94,7 @@ export function attachSessionEventHandler(args: {
   /** Identity to preserve on display events from a delegated child. */
   origin?: ChildDisplayOrigin;
   fileMutation?: FileMutationTelemetry;
-}): void {
+}): () => void {
   // Per-session buffer: toolCallId → { summary, args, writeHunks }.
   // The args are needed at `tool_execution_end` to populate
   // `DisplayEvent.files` for write/edit tools (issue #12).
@@ -118,7 +118,7 @@ export function attachSessionEventHandler(args: {
     }
   >();
 
-  args.session.subscribe((event) =>
+  return args.session.subscribe((event) =>
     onSessionEvent(
       args.session,
       args.state,

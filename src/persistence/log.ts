@@ -47,6 +47,12 @@ import type {
 import type { FileMutationRecord } from "./file-mutation.js";
 import { materializePersistedRecord } from "./record-materialization.js";
 import type {
+  HandoffTransportSelectedRecord,
+  ManifestSnapshotRecord,
+  TrajectoryHandoffFailedRecord,
+  TrajectoryTargetSeedDeliveredRecord,
+} from "./trajectory-records.js";
+import type {
   ArtifactCollectedRecord,
   ArtifactDeliveryRecord,
   ArtifactRejectedRecord,
@@ -283,11 +289,20 @@ export interface SubagentFailedRecord {
   readonly ts: number;
 }
 
+/**
+ * Lifecycle identity is logical role invocation first, physical conversation
+ * second. Both remain optional only for append-only legacy record reading.
+ */
+export type RoleSessionLifecycleRecord = SessionLifecycleEvent & {
+  readonly role_session_id?: string;
+  readonly conversation_id?: string | null;
+};
+
 /** Union of every record the host appends to its run_id-keyed log. */
 export type PersistedRecord =
   | TransitionAccepted
   | TransitionRejected
-  | SessionLifecycleEvent
+  | RoleSessionLifecycleRecord
   | ModelFallback
   | ModelRetry
   | CheckpointSnapshot
@@ -304,7 +319,11 @@ export type PersistedRecord =
   | WorkspaceProvisionedRecord
   | ArtifactCollectedRecord
   | ArtifactRejectedRecord
-  | ArtifactDeliveryRecord;
+  | ArtifactDeliveryRecord
+  | ManifestSnapshotRecord
+  | HandoffTransportSelectedRecord
+  | TrajectoryHandoffFailedRecord
+  | TrajectoryTargetSeedDeliveredRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

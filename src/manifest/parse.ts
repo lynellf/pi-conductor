@@ -30,6 +30,8 @@ import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
   DelegationPolicy,
+  HandoffMode,
+  HandoffPolicy,
   Manifest,
   ModelConfig,
   ProgressiveDisclosurePolicy,
@@ -88,6 +90,9 @@ export function parseManifestFromObject(raw: unknown): Manifest {
 
   const subagentsRaw = obj.subagents;
   const subagents = subagentsRaw !== undefined ? parseSubagentProfiles(subagentsRaw) : undefined;
+  // Absent policy is the immutable empty policy, not an optional runtime
+  // branch. This makes the all-fresh default a normalized manifest contract.
+  const handoffs = obj.handoffs === undefined ? Object.freeze([]) : parseHandoffs(obj.handoffs);
   const endRequestRolesRaw = obj.end_request_roles;
   const end_request_roles =
     endRequestRolesRaw !== undefined
@@ -97,9 +102,44 @@ export function parseManifestFromObject(raw: unknown): Manifest {
   return Object.freeze({
     version,
     ...(end_request_roles !== undefined && { end_request_roles }),
+    handoffs,
     roles: Object.freeze(roles),
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
   }) as Manifest;
+}
+
+// ─── Issue #63 handoff policy parsing ───────────────────────────────────
+
+const HANDOFF_KEYS = new Set(["from", "to", "mode"]);
+
+function parseHandoffs(raw: unknown): readonly HandoffPolicy[] {
+  if (!Array.isArray(raw)) {
+    throw new ManifestParseError("`handoffs:` must be an array");
+  }
+  const policies = raw.map((entry, index) => parseHandoffPolicy(entry, index));
+  return Object.freeze(policies);
+}
+
+function parseHandoffPolicy(raw: unknown, index: number): HandoffPolicy {
+  const path = `handoffs[${index}]`;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!HANDOFF_KEYS.has(key)) {
+      throw new ManifestParseError(`${path} has unknown key '${key}'`);
+    }
+  }
+  const mode = entry.mode;
+  if (mode !== "fresh" && mode !== "trajectory") {
+    throw new ManifestParseError(`${path}.mode must be "fresh" or "trajectory"`);
+  }
+  return Object.freeze({
+    from: toNonEmptyString(entry.from, `${path}.from`),
+    to: toNonEmptyString(entry.to, `${path}.to`),
+    mode: mode as HandoffMode,
+  }) as HandoffPolicy;
 }
 
 // ─── Delegation lite §3: subagent profile parsing ───────────────────────
