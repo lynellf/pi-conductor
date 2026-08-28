@@ -5,6 +5,36 @@ import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { TrajectoryAdmission } from "../persistence/trajectory-records.js";
 
 /** Stable fail-closed trajectory admission error. */
+/** Extract the provider-visible portion of each active tool for stable admission and resume hashing. */
+export function serializeActiveToolDefinitions(definitions: readonly unknown[]): readonly {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: unknown;
+}[] {
+  return Object.freeze(
+    definitions.map((definition) => {
+      if (typeof definition !== "object" || definition === null || Array.isArray(definition)) {
+        throw new TrajectoryHandoffError(
+          "trajectory_environment_unsupported",
+          "trajectory target tool has no serializable provider-visible definition",
+        );
+      }
+      const tool = definition as Record<string, unknown>;
+      if (typeof tool.name !== "string" || typeof tool.description !== "string") {
+        throw new TrajectoryHandoffError(
+          "trajectory_environment_unsupported",
+          "trajectory target tool has an incomplete provider-visible definition",
+        );
+      }
+      return Object.freeze({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      });
+    }),
+  );
+}
+
 export class TrajectoryHandoffError extends Error {
   readonly code:
     | "trajectory_context_metadata_unknown"
@@ -53,10 +83,15 @@ export function admitTrajectory(args: {
       "trajectory source history contains a compaction entry",
     );
   }
-  if (args.source.tokens === undefined || args.source.tokens === null) {
+  if (
+    args.source.tokens === undefined ||
+    args.source.tokens === null ||
+    !Number.isFinite(args.source.tokens) ||
+    args.source.tokens < 0
+  ) {
     throw new TrajectoryHandoffError(
       "trajectory_context_unknown",
-      "Pi cannot estimate the trajectory context before generation",
+      "Pi cannot provide a finite non-negative trajectory context estimate before generation",
     );
   }
 

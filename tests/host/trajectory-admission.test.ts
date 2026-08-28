@@ -70,6 +70,11 @@ describe("Issue #63 trajectory admission", () => {
       args: input({ source: { tokens: null, hasCompaction: false } }),
       code: "trajectory_context_unknown",
     },
+    ...([-1, Number.NaN, Number.POSITIVE_INFINITY] as const).map((tokens) => ({
+      name: `invalid source estimate ${String(tokens)} fails closed`,
+      args: input({ source: { tokens, hasCompaction: false } }),
+      code: "trajectory_context_unknown" as const,
+    })),
     {
       name: "invalid target metadata fails closed",
       args: input({ targetModel: model({ contextWindow: Number.NaN }) }),

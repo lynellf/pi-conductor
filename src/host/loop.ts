@@ -137,6 +137,10 @@ export interface RunLoopOptions {
   readonly initialHandoffContextRef?: HandoffContextRef | null;
   /** Durable accepted-handoff delivery resumed before the receiver can prompt. */
   readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
+  /** Logical predecessor restored from a trajectory selector before a resumed target starts. */
+  readonly initialParentSessionId?: string | null;
+  /** Next visit index per role reconstructed from durable lifecycle starts on resume. */
+  readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
    *  that lets the host derive model + system prompt + tools from the
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
@@ -195,7 +199,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   let checkpoint: Checkpoint = initialCheckpoint;
   // parent_session for the next session_started (§11.4). Initialized to
   // the snapshot's active_role_session id (resume case) or null (fresh).
-  let parentSessionId: string | null = checkpoint.active_role_session?.id ?? null;
+  let parentSessionId: string | null =
+    checkpoint.active_role_session?.id ?? opts.initialParentSessionId ?? null;
   let seed = initialGoal;
   // Host-generated predecessor pointer for the next role's optional
   // handoff_context tool. It is replaced only by an accepted handoff or by
@@ -241,7 +246,9 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // for model retries — the primary's `session_failed` is recorded
   // before the fallback's `session_started`, which would inflate
   // the count).
-  const visitIndexByRole = new Map<Role, number>();
+  const visitIndexByRole = new Map<Role, number>(
+    Object.entries(opts.initialVisitIndexByRole ?? {}) as [Role, number][],
+  );
   // Sentinel sessionFile for the synthesized `end` records. There is
   // no live session at the time of synthesis, so the record's
   // `session_file` field carries a stable marker rather than a real

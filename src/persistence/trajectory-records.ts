@@ -66,6 +66,75 @@ export interface HandoffTransportSelectedRecord {
   readonly ts: number;
 }
 
+/** Validate a persisted selector before any resumed target environment is opened. */
+export function validateTrajectorySelector(
+  record: HandoffTransportSelectedRecord,
+): HandoffTransportSelectedRecord {
+  const target = record.target;
+  if (
+    record.schema_version !== 1 ||
+    record.mode !== "trajectory" ||
+    !nonEmptyString(record.run_id) ||
+    !nonEmptyString(record.source_role_session_id) ||
+    !nonEmptyString(record.from) ||
+    !nonEmptyString(record.to) ||
+    !nonEmptyString(record.source_conversation?.id) ||
+    !nonEmptyString(record.source_conversation?.file) ||
+    !nonEmptyString(target?.model) ||
+    !isModelEffort(target?.requested_effort) ||
+    !nonEmptyString(target?.system_prompt) ||
+    !isExactToolNameList(target?.active_tool_names) ||
+    !isSha256(target?.environment_sha256) ||
+    !isTrajectoryAdmission(record.admission)
+  ) {
+    throw new TrajectoryResumeError(
+      "trajectory selector has incomplete persisted target environment",
+    );
+  }
+  return record;
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isModelEffort(value: unknown): value is ModelEffort {
+  return (
+    typeof value === "string" &&
+    ["off", "minimal", "low", "medium", "high", "xhigh"].includes(value)
+  );
+}
+
+function isExactToolNameList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(nonEmptyString) &&
+    new Set(value).size === value.length
+  );
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function isTrajectoryAdmission(value: unknown): value is TrajectoryAdmission {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const admission = value as Record<string, unknown>;
+  return (
+    admission.schema_version === 1 &&
+    typeof admission.target_model === "string" &&
+    [
+      "observed_context_tokens",
+      "role_envelope_tokens",
+      "target_max_tokens",
+      "safety_reservation_tokens",
+      "required_tokens",
+      "target_context_window",
+    ].every((name) => typeof admission[name] === "number" && Number.isFinite(admission[name]))
+  );
+}
+
 /** Observable fail-closed result for a trajectory preflight/reconfiguration failure. */
 export interface TrajectoryHandoffFailedRecord {
   readonly type: "trajectory_handoff_failed";
