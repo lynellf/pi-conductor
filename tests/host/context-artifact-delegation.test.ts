@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { access, chmod, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -59,6 +69,66 @@ async function repository(): Promise<string> {
   return path;
 }
 
+async function missingPromisorBlobRepository(): Promise<{
+  readonly path: string;
+  readonly remoteContactMarker: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "pi-conductor-context-promisor-"));
+  repositories.push(root);
+  const source = join(root, "source");
+  const origin = join(root, "origin.git");
+  const path = join(root, "partial");
+  await mkdir(source);
+  await execFileAsync("git", ["init"], { cwd: source });
+  await execFileAsync("git", ["config", "user.email", "issue-60@example.test"], {
+    cwd: source,
+  });
+  await execFileAsync("git", ["config", "user.name", "Issue 60 Test"], { cwd: source });
+  await writeFile(join(source, "contract.md"), "over-cap-contract\n");
+  await execFileAsync("git", ["add", "."], { cwd: source });
+  await execFileAsync("git", ["commit", "-m", "fixture"], { cwd: source });
+  await execFileAsync("git", ["clone", "--bare", source, origin]);
+  await execFileAsync("git", ["config", "uploadpack.allowFilter", "true"], { cwd: origin });
+  await execFileAsync("git", [
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    `file://${origin}`,
+    path,
+  ]);
+
+  const packDirectory = join(path, ".git", "objects", "pack");
+  const packsBeforeMaterialization = new Set(await readdir(packDirectory));
+  await execFileAsync("git", ["checkout", "HEAD", "--", "contract.md"], { cwd: path });
+  for (const packFile of await readdir(packDirectory)) {
+    if (!packsBeforeMaterialization.has(packFile)) {
+      await unlink(join(packDirectory, packFile));
+    }
+  }
+
+  const { stdout: missingObjects } = await execFileAsync(
+    "git",
+    ["rev-list", "--objects", "--missing=print", "HEAD"],
+    { cwd: path },
+  );
+  if (!missingObjects.split("\n").some((line) => line.startsWith("?"))) {
+    throw new Error("promisor fixture retained the contract blob locally");
+  }
+  const { stdout: status } = await execFileAsync(
+    "git",
+    ["status", "--porcelain=v1", "--untracked-files=all"],
+    { cwd: path },
+  );
+  if (status !== "") throw new Error("promisor fixture is not clean");
+
+  const remoteContactMarker = join(root, "remote-contacted");
+  const uploadPack = join(root, "record-upload-pack");
+  await writeFile(uploadPack, `#!/bin/sh\n: > "${remoteContactMarker}"\nexit 1\n`);
+  await chmod(uploadPack, 0o755);
+  await execFileAsync("git", ["config", "remote.origin.uploadpack", uploadPack], { cwd: path });
+  return { path, remoteContactMarker };
+}
+
 function task(id: string, contextArtifacts?: ContextArtifact[]) {
   return {
     id,
@@ -89,12 +159,17 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-function delegateTool(primaryCheckout: string, runId: string, log: InMemoryRecordLog) {
+function delegateTool(
+  primaryCheckout: string,
+  runId: string,
+  log: InMemoryRecordLog,
+  delegationPolicy: DelegationPolicy = policy,
+) {
   const role: RoleConfig = {
     name: "parent" as Role,
     max_visits: 1,
     tools: ["delegate"],
-    delegation: policy,
+    delegation: delegationPolicy,
   };
   return createDelegateTool({
     role,
@@ -166,6 +241,57 @@ describe("Issue #60 delegate preflight and prompt wiring", () => {
     expect(spawnCount).toBe(0);
     expect(await exists(join(runStateDir, "worktrees"))).toBe(false);
     expect(await exists(join(runStateDir, "sessions"))).toBe(false);
+  });
+
+  it("fails closed without fetching a missing over-cap blob from a promisor remote", async () => {
+    const repo = await missingPromisorBlobRepository();
+    const runId = "promisor-no-lazy-fetch";
+    const runStateDir = join(repo.path, ".pi-conductor", "runs", runId);
+    const log = new InMemoryRecordLog();
+    const result = await delegateTool(repo.path, runId, log, {
+      ...policy,
+      context_artifact_limits: {
+        max_items: 8,
+        max_item_utf8_bytes: 4,
+        max_total_utf8_bytes: 4,
+      },
+    }).execute(
+      "delegate",
+      {
+        tasks: [
+          {
+            id: "promisor",
+            subagent: "focused",
+            objective: "Inspect the supplied contract.",
+            expected_output: "Report without changes.",
+            context_artifacts: [{ id: "contract", source: "file", path: "contract.md" }],
+          },
+        ],
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const records = log.records(runId);
+
+    expect(result).toMatchObject({ isError: true });
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        type: "delegation_validation_rejected",
+        errors: [
+          expect.objectContaining({
+            code: "context-artifact-unreadable",
+            task_id: "promisor",
+            artifact_id: "contract",
+            path: "contract.md",
+          }),
+        ],
+      }),
+    );
+    expect(records.some((record) => record.type.startsWith("subagent_"))).toBe(false);
+    expect(await exists(join(runStateDir, "worktrees"))).toBe(false);
+    expect(await exists(join(runStateDir, "sessions"))).toBe(false);
+    expect(await exists(repo.remoteContactMarker)).toBe(false);
   });
 
   it.each([

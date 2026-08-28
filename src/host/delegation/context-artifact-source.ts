@@ -227,8 +227,14 @@ async function readPinnedBlob(
     }
 > {
   const object = `${baseCommit}:${safePath}`;
+  const localOnlyEnvironment = { ...process.env, GIT_NO_LAZY_FETCH: "1" };
   try {
-    const type = (await execFileAsync("git", ["cat-file", "-t", object], { cwd })).stdout.trim();
+    const type = (
+      await execFileAsync("git", ["cat-file", "-t", object], {
+        cwd,
+        env: localOnlyEnvironment,
+      })
+    ).stdout.trim();
     if (type !== "blob") {
       return {
         valid: false,
@@ -236,7 +242,10 @@ async function readPinnedBlob(
       };
     }
     const sizeText = (
-      await execFileAsync("git", ["cat-file", "-s", object], { cwd })
+      await execFileAsync("git", ["cat-file", "-s", object], {
+        cwd,
+        env: localOnlyEnvironment,
+      })
     ).stdout.trim();
     const size = Number(sizeText);
     if (!Number.isSafeInteger(size) || size < 0) {
@@ -254,6 +263,7 @@ async function readPinnedBlob(
     }
     const result = await execFileAsync("git", ["cat-file", "blob", object], {
       cwd,
+      env: localOnlyEnvironment,
       encoding: "buffer",
       maxBuffer: itemLimit + 1,
     });
