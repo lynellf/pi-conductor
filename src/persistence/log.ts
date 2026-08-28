@@ -47,6 +47,11 @@ import type {
 import type { FileMutationRecord } from "./file-mutation.js";
 import { materializePersistedRecord } from "./record-materialization.js";
 import type {
+  HandoffTransportSelectedRecord,
+  ManifestSnapshotRecord,
+  TrajectoryHandoffFailedRecord,
+} from "./trajectory-records.js";
+import type {
   ArtifactCollectedRecord,
   ArtifactDeliveryRecord,
   ArtifactRejectedRecord,
@@ -304,7 +309,10 @@ export type PersistedRecord =
   | WorkspaceProvisionedRecord
   | ArtifactCollectedRecord
   | ArtifactRejectedRecord
-  | ArtifactDeliveryRecord;
+  | ArtifactDeliveryRecord
+  | ManifestSnapshotRecord
+  | HandoffTransportSelectedRecord
+  | TrajectoryHandoffFailedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
