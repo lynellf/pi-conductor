@@ -482,10 +482,10 @@ export class ProductionHost implements Host {
         ),
         roleSessionId: randomUUID(),
         isTrajectory: true,
-        disableAutoCompaction:
-          this.loadedManifest.manifest.handoffs?.some(
-            (policy) => policy.from === role && policy.mode === "trajectory",
-          ) === true,
+        expectedTrajectoryConversation: persisted.source_conversation,
+        // A reopened target may receive its next prompt before it becomes an
+        // outgoing source, so exact resume needs the same isolated setting.
+        disableAutoCompaction: true,
         runId: this.runId,
         machineDefinition: this.loadedManifest.def,
         delegateTool: null,

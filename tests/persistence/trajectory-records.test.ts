@@ -85,6 +85,39 @@ describe("Issue #63 trajectory persistence records", () => {
     }
   });
 
+  it("accepts max as a persisted selector effort", () => {
+    const selector: HandoffTransportSelectedRecord = {
+      type: "handoff_transport_selected",
+      schema_version: 1,
+      run_id: "run-63",
+      source_role_session_id: "source-role-session",
+      from: "planner",
+      to: "orchestrator",
+      mode: "trajectory",
+      source_conversation: { id: "conversation", file: "/tmp/conversation.jsonl" },
+      target: {
+        model: "stub:orchestrator",
+        requested_effort: "max",
+        system_prompt: "TARGET",
+        active_tool_names: ["handoff", "end", "ask_user"],
+        environment_sha256: "a".repeat(64),
+      },
+      admission: {
+        schema_version: 1,
+        observed_context_tokens: 1,
+        role_envelope_tokens: 1,
+        target_max_tokens: 1,
+        safety_reservation_tokens: 8192,
+        required_tokens: 8195,
+        target_context_window: 10000,
+        target_model: "stub:orchestrator",
+      },
+      ts: 1,
+    };
+
+    expect(validateTrajectorySelector(selector)).toEqual(selector);
+  });
+
   it("rejects a corrupt manifest snapshot instead of guessing a current manifest", () => {
     const snapshot = createManifestSnapshot({
       runId: "run-63",

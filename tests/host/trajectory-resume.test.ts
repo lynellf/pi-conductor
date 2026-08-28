@@ -49,6 +49,11 @@ describe("Issue #63 trajectory resume", () => {
       const manifestPath = join(workdir, ".pi", "conductor.yaml");
       await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
       await writeFile(manifestPath, MANIFEST, "utf8");
+      await writeFile(
+        join(workdir, ".pi", "settings.json"),
+        JSON.stringify({ compaction: { enabled: true } }),
+        "utf8",
+      );
       await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
       await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
       const loaded = await loadManifest(manifestPath);
@@ -80,6 +85,7 @@ describe("Issue #63 trajectory resume", () => {
         runId: checkpoint.run_id,
       });
       const source = await sourceHost.spawnRole("orchestrator");
+      await source.prompt("source trajectory");
       const sourceConversation = {
         id: source.conversationId ?? source.sessionId,
         file: source.sessionFile,
@@ -139,6 +145,21 @@ describe("Issue #63 trajectory resume", () => {
         },
         ts: 2,
       });
+
+      const directResumeHost = new ProductionHost({
+        modelRegistry: makeModelRegistryWithStub(),
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: checkpoint.run_id,
+      });
+      const resumedTarget = await directResumeHost.spawnRole("implementer");
+      expect(
+        (
+          resumedTarget as typeof resumedTarget & { isAutoCompactionEnabled(): boolean }
+        ).isAutoCompactionEnabled(),
+      ).toBe(false);
+      await resumedTarget.dispose();
 
       // Snapshot-era resume must not parse a changed (or malformed) current YAML.
       await writeFile(manifestPath, "this: [is not valid", "utf8");
@@ -368,6 +389,92 @@ describe("Issue #63 trajectory resume", () => {
 
     await expect(host.spawnRole("implementer")).rejects.toBeInstanceOf(TrajectoryResumeError);
     expect(log.records("invalid-trajectory-selector")).toHaveLength(1);
+  });
+
+  it("fails a clamped persisted target effort before its provider can receive a prompt", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-effort-"));
+    try {
+      const manifestPath = join(workdir, ".pi", "conductor.yaml");
+      await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+      await writeFile(manifestPath, MANIFEST, "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
+      const loaded = await loadManifest(manifestPath);
+      const log = new InMemoryRecordLog();
+      const requests: unknown[] = [];
+      const registry = makeModelRegistryWithStub([], ["stub-model"], (context) => {
+        requests.push(context);
+      });
+      const sourceHost = new ProductionHost({
+        modelRegistry: registry,
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: "clamped-trajectory-effort",
+      });
+      const source = await sourceHost.spawnRole("orchestrator");
+      await source.prompt("source trajectory");
+      const context = source.getTrajectoryContext?.();
+      if (context === undefined) throw new Error("source did not expose trajectory context");
+      const activeToolNames = ["handoff", "end", "ask_user"];
+      const activeToolDefinitions = serializeActiveToolDefinitions(
+        activeToolNames.map((name) => context.toolDefinitions[name]),
+      );
+      const sourceConversation = {
+        id: source.conversationId ?? source.sessionId,
+        file: source.sessionFile,
+      };
+      await source.dispose();
+      log.append({
+        type: "handoff_transport_selected",
+        schema_version: 1,
+        run_id: "clamped-trajectory-effort",
+        source_role_session_id: source.sessionId,
+        from: "orchestrator",
+        to: "implementer",
+        mode: "trajectory",
+        source_conversation: sourceConversation,
+        target: {
+          model: "stub:stub-model",
+          requested_effort: "high",
+          system_prompt: "IMPLEMENTER",
+          active_tool_names: activeToolNames,
+          environment_sha256: sha256Canonical({
+            system_prompt: "IMPLEMENTER",
+            model: "stub:stub-model",
+            effort: "high",
+            active_tool_names: activeToolNames,
+            active_tool_definitions: activeToolDefinitions,
+          }),
+        },
+        admission: {
+          schema_version: 1,
+          observed_context_tokens: 0,
+          role_envelope_tokens: 0,
+          target_max_tokens: 8192,
+          safety_reservation_tokens: 8192,
+          required_tokens: 16384,
+          target_context_window: 200000,
+          target_model: "stub:stub-model",
+        },
+        ts: 1,
+      });
+
+      const targetHost = new ProductionHost({
+        modelRegistry: registry,
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: "clamped-trajectory-effort",
+      });
+      const requestCountBeforeTarget = requests.length;
+      await expect(targetHost.spawnRole("implementer")).rejects.toBeInstanceOf(
+        TrajectoryResumeError,
+      );
+      expect(requests).toHaveLength(requestCountBeforeTarget);
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
   });
 
   it("surfaces a durable trajectory failure without reopening or retrying its target", async () => {

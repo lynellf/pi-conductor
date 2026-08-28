@@ -28,6 +28,7 @@ import {
   type SessionEventSource,
 } from "./session-event-handler.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
+import { createTrajectorySettingsManager } from "./trajectory-settings.js";
 
 /** Spawn one shared role using the existing in-process Pi SDK path. */
 export async function spawnSharedSdkRoleSession(options: {
@@ -54,6 +55,8 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly activeToolNames?: readonly string[];
   /** Disable SDK auto-compaction before a role with an outgoing trajectory can prompt. */
   readonly disableAutoCompaction?: boolean;
+  /** Exact persisted physical conversation identity required for a resumed target. */
+  readonly expectedTrajectoryConversation?: { readonly id: string; readonly file: string };
   readonly machineDefinition: MachineDefinition;
   readonly handoffContextRef?: HandoffContextRef;
   readonly delegateTool: ToolDefinition | null;
@@ -68,9 +71,14 @@ export async function spawnSharedSdkRoleSession(options: {
   // changes this controller only while idle so trajectory roles replace, not
   // append, instructions on their next native turn.
   let activeSystemPrompt = options.systemPrompt ?? undefined;
+  const settingsManager =
+    options.disableAutoCompaction === true || options.isTrajectory === true
+      ? createTrajectorySettingsManager({ cwd: options.cwd, agentDir: options.agentDir })
+      : undefined;
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: options.agentDir,
+    ...(settingsManager !== undefined && { settingsManager }),
     systemPromptOverride: () => activeSystemPrompt,
     extensionFactories: [
       {
@@ -126,6 +134,7 @@ export async function spawnSharedSdkRoleSession(options: {
     modelRegistry: options.modelRegistry,
     ...(runtime !== undefined && { modelRuntime: runtime }),
     resourceLoader: loader,
+    ...(settingsManager !== undefined && { settingsManager }),
     sessionManager:
       options.sessionManager ?? SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
@@ -148,18 +157,17 @@ export async function spawnSharedSdkRoleSession(options: {
   }
   (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = options.effort;
   const { session } = await createAgentSession(createOpts);
-  if (options.disableAutoCompaction === true) session.setAutoCompactionEnabled(false);
-  if (options.activeToolNames !== undefined) {
-    const activeNames = session.getActiveToolNames();
-    if (
-      activeNames.length !== options.activeToolNames.length ||
-      activeNames.some((name, index) => name !== options.activeToolNames?.[index])
-    ) {
-      session.dispose();
-      throw new Error("trajectory target active tool allowlist was not applied exactly");
-    }
-  }
   try {
+    assertExactResumedTrajectoryEnvironment(session, options);
+    if (options.activeToolNames !== undefined) {
+      const activeNames = session.getActiveToolNames();
+      if (
+        activeNames.length !== options.activeToolNames.length ||
+        activeNames.some((name, index) => name !== options.activeToolNames?.[index])
+      ) {
+        throw new Error("trajectory target active tool allowlist was not applied exactly");
+      }
+    }
     if (
       options.uiContext !== undefined &&
       (options.isUiContextCurrent === undefined || options.isUiContextCurrent())
@@ -297,4 +305,35 @@ export async function spawnSharedSdkRoleSession(options: {
       options.agentsBySessionId.delete(sessionId);
     },
   });
+}
+
+function assertExactResumedTrajectoryEnvironment(
+  session: Awaited<ReturnType<typeof createAgentSession>>["session"],
+  options: {
+    readonly isTrajectory?: boolean;
+    readonly model: Model<never> | undefined;
+    readonly effort: ModelEffort;
+    readonly expectedTrajectoryConversation?: { readonly id: string; readonly file: string };
+  },
+): void {
+  const expectedConversation = options.expectedTrajectoryConversation;
+  if (expectedConversation !== undefined) {
+    if (
+      session.sessionId !== expectedConversation.id ||
+      session.sessionFile !== expectedConversation.file
+    ) {
+      throw new Error(
+        `resumed trajectory conversation identity does not match its selector: expected ${expectedConversation.id} (${expectedConversation.file}), received ${session.sessionId} (${session.sessionFile})`,
+      );
+    }
+  }
+  if (options.isTrajectory !== true) return;
+  if (
+    options.model === undefined ||
+    session.model?.provider !== options.model.provider ||
+    session.model.id !== options.model.id ||
+    session.thinkingLevel !== options.effort
+  ) {
+    throw new Error("resumed trajectory target model or effort was not applied exactly");
+  }
 }

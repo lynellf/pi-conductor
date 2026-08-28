@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,6 +32,21 @@ roles:
     max_visits: 1
     models: [{ model: stub:implementer, effort: off }]
     system_prompt: .pi/roles/implementer.md
+    tools: [handoff, end]
+`;
+
+const FRESH_MANIFEST = `
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [{ model: stub:orchestrator, effort: off }]
+    system_prompt: .pi/roles/orchestrator.md
+    tools: [handoff, end]
+  - name: planner
+    max_visits: 1
+    models: [{ model: stub:planner, effort: off }]
+    system_prompt: .pi/roles/planner.md
     tools: [handoff, end]
 `;
 
@@ -103,18 +118,35 @@ describe("Issue #63 trajectory environment", () => {
 
   afterEach(async () => rm(workdir, { recursive: true, force: true }));
 
-  it("disables automatic compaction before an outgoing trajectory source can prompt", async () => {
-    const loaded = await loadManifest(manifestPath);
-    const host = new ProductionHost({
+  it("defeats project compaction only for trajectory sessions without changing a later fresh host", async () => {
+    const settingsPath = join(workdir, ".pi", "settings.json");
+    await writeFile(settingsPath, JSON.stringify({ compaction: { enabled: true } }), "utf8");
+    const trajectoryHost = new ProductionHost({
       modelRegistry: registryWithTrajectoryScript([]),
       cwd: workdir,
       log: new FileRecordLog({ baseDir: runs }),
-      loadedManifest: loaded,
+      loadedManifest: await loadManifest(manifestPath),
       runId: "auto-compaction-test",
     });
-    const session = await host.spawnRole("planner");
-    expect(autoCompactionEnabled(session)).toBe(false);
-    await session.dispose();
+    const trajectorySession = await trajectoryHost.spawnRole("planner");
+    expect(autoCompactionEnabled(trajectorySession)).toBe(false);
+    await trajectorySession.dispose();
+    expect(JSON.parse(await readFile(settingsPath, "utf8"))).toEqual({
+      compaction: { enabled: true },
+    });
+
+    const freshManifestPath = join(workdir, ".pi", "fresh-conductor.yaml");
+    await writeFile(freshManifestPath, FRESH_MANIFEST, "utf8");
+    const freshHost = new ProductionHost({
+      modelRegistry: registryWithTrajectoryScript([]),
+      cwd: workdir,
+      log: new FileRecordLog({ baseDir: runs }),
+      loadedManifest: await loadManifest(freshManifestPath),
+      runId: "fresh-after-trajectory",
+    });
+    const freshSession = await freshHost.spawnRole("planner");
+    expect(autoCompactionEnabled(freshSession)).toBe(true);
+    await freshSession.dispose();
   });
 
   it("keeps two selected edges in one conversation then returns to a fresh session", async () => {
