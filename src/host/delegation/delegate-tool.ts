@@ -20,6 +20,13 @@ import {
   selectedFailureReason,
   selectedSummary,
 } from "./child-result-mapping.js";
+import { type PreparedTask, prepareTaskContextArtifacts } from "./context-artifact-admission.js";
+import type { ResolvedContextArtifact } from "./context-artifacts.js";
+import { DelegateToolError } from "./delegate-error.js";
+
+export type { DelegateValidationErrorItem } from "./delegate-error.js";
+export { DelegateToolError } from "./delegate-error.js";
+
 import { projectionFingerprint, taskFingerprint } from "./fingerprints.js";
 import { buildBranchName, buildWorktreePath, generateChildId } from "./ids.js";
 import type {
@@ -34,7 +41,7 @@ import {
   type DelegateParentProjectionCapture,
   ParentProjectionCaptureError,
 } from "./projection.js";
-import { formatBatchErrors, type ValidatedTask, validateBatch } from "./validate-batch.js";
+import { formatBatchErrors, validateBatch } from "./validate-batch.js";
 import {
   checkPrimaryGitStatus,
   configureExactSparseWorktree,
@@ -98,6 +105,8 @@ export interface SpawnChildConfig {
   readonly branch: string;
   readonly baseCommit: string;
   readonly projectionPaths?: readonly string[];
+  /** Frozen host-resolved prompt-only snapshots; raw descriptors never reach a child. */
+  readonly contextArtifacts: readonly ResolvedContextArtifact[];
   readonly taskFingerprint: string;
   readonly projectionFingerprint: ChildProjectionFingerprint;
   readonly systemPrompt: string;
@@ -165,7 +174,7 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
   const materializedParentPaths = parentProjection.materializedPaths;
   const inheritedProjectionPaths =
     parentProjection.isSparse === true ? parentProjection.materializedPaths : undefined;
-  const tasks =
+  const projectionResolvedTasks =
     inheritedProjectionPaths === undefined
       ? validation.tasks
       : validation.tasks.map((task) =>
@@ -173,6 +182,24 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
             ? { ...task, projectionPaths: inheritedProjectionPaths }
             : task,
         );
+  const contextResolution = await prepareTaskContextArtifacts(
+    projectionResolvedTasks,
+    options.policy,
+    options.primaryCheckout,
+    baseCommit,
+    materializedParentPaths,
+  );
+  if (!contextResolution.valid) {
+    const errors = contextResolution.errors;
+    throw new DelegateToolError(
+      "batch_validation_failed",
+      errors.length === 1
+        ? `${errors[0]?.code}: ${errors[0]?.message}`
+        : `${errors.length} context artifact validation errors`,
+      errors,
+    );
+  }
+  const tasks = contextResolution.tasks;
 
   await Promise.all([
     mkdir(`${options.runStateDir}/worktrees`, { recursive: true }),
@@ -221,7 +248,7 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
 
 interface RunSingleChildOptions {
   readonly childId: ReturnType<typeof generateChildId>;
-  readonly task: ValidatedTask;
+  readonly task: PreparedTask;
   readonly worktreePath: string;
   readonly branch: string;
   readonly baseCommit: string;
@@ -260,6 +287,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       options.parentRole,
       worktreePath,
       task.projectionPaths,
+      task.resolvedContextArtifacts,
     );
   } catch (cause) {
     return preStartFailure(options, "failed", `failed to load child prompt: ${message(cause)}`);
@@ -289,6 +317,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       branch,
       baseCommit,
       ...(task.projectionPaths === undefined ? {} : { projectionPaths: task.projectionPaths }),
+      contextArtifacts: task.resolvedContextArtifacts,
       taskFingerprint: childTaskFingerprint,
       projectionFingerprint: childProjectionFingerprint,
       systemPrompt: prompt.systemPrompt,
@@ -377,16 +406,4 @@ function zeroUsage(): SubagentUsage {
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
-}
-
-/** Structured parent-tool validation error. */
-export class DelegateToolError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-    public readonly errors: readonly { code: string; message: string; path?: string }[],
-  ) {
-    super(message);
-    this.name = "DelegateToolError";
-  }
 }
