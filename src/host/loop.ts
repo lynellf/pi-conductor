@@ -95,6 +95,7 @@ import { validateEmission } from "../seam/validate-emission.js";
 import { ArtifactCollectionError } from "./artifacts/collect.js";
 import { ArtifactRoutingError, formatArtifactsUnavailableSeedSection } from "./artifacts/route.js";
 import { NoMoreModelsError } from "./errors.js";
+import { TrajectoryHandoffError } from "./trajectory-admission.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type {
   ArtifactRouteSource,
@@ -223,6 +224,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // `end` while a worker is current"). Set here, consumed at the
   // top of the next outer iteration.
   let pendingForcedEnd = false;
+  // A selected trajectory target is already a reconfigured, idle SDK
+  // session. It bypasses only the next fresh spawn; every other loop path is
+  // unchanged.
+  let pendingTrajectorySession: RoleSession | null = null;
   // Task 18: visit_index tracking. A role's visit_index is the same
   // across all model retries within that visit (the role didn't
   // transition, it re-ran). The index is captured BEFORE the fallback
@@ -356,17 +361,22 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // the latter propagates to abort the run per §9.4.
       let session: RoleSession;
       try {
-        // `spawnDefaults` is a test/host override surface, not a provenance
-        // surface. Remove any caller-supplied reference before adding the
-        // loop's trusted value so it cannot override or seed the envelope.
-        const spawnDefaults = { ...(opts.spawnDefaults ?? {}) };
-        delete spawnDefaults.handoffContextRef;
-        session = await host.spawnRole(role, {
-          ...spawnDefaults,
-          visitIndex,
-          modelIndex,
-          ...(handoffContextRef !== null && { handoffContextRef }),
-        });
+        if (pendingTrajectorySession !== null) {
+          session = pendingTrajectorySession;
+          pendingTrajectorySession = null;
+        } else {
+          // `spawnDefaults` is a test/host override surface, not a provenance
+          // surface. Remove any caller-supplied reference before adding the
+          // loop's trusted value so it cannot override or seed the envelope.
+          const spawnDefaults = { ...(opts.spawnDefaults ?? {}) };
+          delete spawnDefaults.handoffContextRef;
+          session = await host.spawnRole(role, {
+            ...spawnDefaults,
+            visitIndex,
+            modelIndex,
+            ...(handoffContextRef !== null && { handoffContextRef }),
+          });
+        }
       } catch (err) {
         if (err instanceof NoMoreModelsError) {
           roleOutcome = { kind: "exhausted" };
@@ -518,7 +528,13 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           ...(session.workspace !== undefined ? { workspace: session.workspace } : {}),
         });
         checkpoint = started.checkpoint;
-        host.persistRecord(started.record);
+        host.persistRecord({
+          ...started.record,
+          ...(session.conversationId !== undefined && {
+            role_session_id: sessionId,
+            conversation_id: session.conversationId,
+          }),
+        });
         // §11.1: each transition produces a new full checkpoint snapshot.
         // session_started sets active_role_session; a snapshot here is
         // what resumeRun reads when a run crashed mid-prompt — without
@@ -543,7 +559,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             model_effort: session.effort,
           });
           checkpoint = failed.checkpoint;
-          host.persistRecord(failed.record);
+          host.persistRecord(withRoleSessionIdentity(failed.record, session));
           host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
           await collectSessionArtifacts(host, session, {
             role,
@@ -648,7 +664,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               model_effort: session.effort,
             });
             checkpoint = failed.checkpoint;
-            host.persistRecord(failed.record);
+            host.persistRecord(withRoleSessionIdentity(failed.record, session));
             // §11.1: each transition produces a new full checkpoint
             // snapshot. session_failed clears active_role_session;
             // persist a fresh snapshot so latestCheckpoint reflects
@@ -763,7 +779,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               model_effort: session.effort,
             });
             checkpoint = failed.checkpoint;
-            host.persistRecord(failed.record);
+            host.persistRecord(withRoleSessionIdentity(failed.record, session));
             host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
             await collectSessionArtifacts(host, session, {
               role,
@@ -922,7 +938,13 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             model_effort: session.effort,
           });
           checkpoint = ended.checkpoint;
-          host.persistRecord(ended.record);
+          host.persistRecord({
+            ...ended.record,
+            ...(session.conversationId !== undefined && {
+              role_session_id: sessionId,
+              conversation_id: session.conversationId,
+            }),
+          });
           // §11.1: each transition produces a new full checkpoint
           // snapshot. session_ended clears active_role_session;
           // persist a fresh snapshot so latestCheckpoint reflects
@@ -958,6 +980,22 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           handoffContextRef = acceptedContextRef;
           nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext, acceptedContextRef);
           pendingArtifactRoute = acceptedArtifactRoute;
+          try {
+            const selected = await host.selectAcceptedHandoffTransport?.({
+              from: role,
+              to: nextRole,
+              source: session,
+              targetSeed: nextSeed,
+              targetVisitIndex: visitIndexByRole.get(nextRole) ?? 1,
+            });
+            if (selected?.mode === "trajectory") pendingTrajectorySession = selected.session;
+          } catch (error) {
+            if (error instanceof TrajectoryHandoffError) {
+              inner = { kind: "failed" };
+              break;
+            }
+            throw error;
+          }
           inner = { kind: "advance", nextSeed };
           break;
         }
@@ -996,7 +1034,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       // its `unavailableRole` marker, and the catch below sets
       // `exhausted` and breaks. State is unchanged across model
       // retries (same role, same `visitIndex` captured above).
-      if (inner.kind === "failed" && sessionHostReason === "model_error") {
+      if (
+        inner.kind === "failed" &&
+        sessionHostReason === "model_error" &&
+        session.isTrajectory !== true
+      ) {
         // The failed terminal is already persisted before this branch. Do
         // not start another session once the run budget is exhausted;
         // retries and model fallback must not bypass the run cap (§11.7).
@@ -1130,6 +1172,16 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
 }
 
 /** Append a host-owned artifact inventory after the role-provided handoff payload. */
+/** Add host role/conversation identities without teaching the pure lifecycle reducer transport. */
+function withRoleSessionIdentity<T extends PersistedRecord>(record: T, session: RoleSession): T {
+  if (session.conversationId === undefined) return record;
+  return {
+    ...record,
+    role_session_id: session.sessionId,
+    conversation_id: session.conversationId,
+  } as T;
+}
+
 function appendArtifactSeedSection(seed: string, artifactSeed: string): string {
   return `${seed}\n\n${artifactSeed}`;
 }

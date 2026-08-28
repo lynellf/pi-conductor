@@ -139,6 +139,8 @@ export interface StubStreamOptions {
    *  zeros. Field shape matches `Usage` (camelCase + nested `cost`),
    *  which is the §11.4 SDK mapping source. */
   readonly usage?: Partial<Usage>;
+  /** Test-only observation of the real provider context supplied by Pi. */
+  readonly onRequest?: (context: unknown) => void;
 }
 
 /** A single-tool-call record the stub pushes through the event protocol. */
@@ -188,10 +190,11 @@ export function makeStubModel(): Model<any> {
  * `AssistantMessage` (Task 17 reads `usage` from there).
  */
 export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction {
-  const { steps, usage: cannedUsage } = opts;
+  const { steps, usage: cannedUsage, onRequest } = opts;
   let stepIndex = 0;
 
-  return (_model, _context, options) => {
+  return (_model, context, options) => {
+    onRequest?.(context);
     const stream = createAssistantMessageEventStream();
 
     // Per-step usage override (Task 17). When a step declares its
