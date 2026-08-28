@@ -101,7 +101,7 @@ function nonEmptyString(value: unknown): value is string {
 function isModelEffort(value: unknown): value is ModelEffort {
   return (
     typeof value === "string" &&
-    ["off", "minimal", "low", "medium", "high", "xhigh"].includes(value)
+    ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(value)
   );
 }
 
