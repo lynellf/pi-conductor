@@ -171,6 +171,7 @@ function registryWithTrajectoryScript(requests: unknown[]): ModelRegistry {
     streamSimple: makeStubStreamFunction({
       steps: [
         { kind: "emit_handoff", target_role: "planner" },
+        { kind: "emit_tool_calls", calls: [{ name: "handoff_context", arguments: {} }] },
         { kind: "emit_handoff", target_role: "orchestrator" },
         { kind: "emit_handoff", target_role: "implementer" },
         { kind: "emit_handoff", target_role: "orchestrator" },
@@ -281,16 +282,22 @@ describe("Issue #63 trajectory environment", () => {
     expect(planner?.conversation_id).toBe(trajectoryOrchestrator?.conversation_id);
     expect(planner?.conversation_id).toBe(implementer?.conversation_id);
     expect(implementer?.session_file).not.toBe(freshOrchestrator?.session_file);
-    expect(requests.length).toBe(5);
-    expect(requestPrompt(requests[2])).toBe("ORCHESTRATOR_PROMPT");
-    expect(requestPrompt(requests[3])).toBe("IMPLEMENTER_PROMPT");
-    expect(requestToolNames(requests[2])).toEqual(["handoff", "end", "ask_user"]);
+    expect(requests.length).toBe(6);
+    expect(requestPrompt(requests[3])).toBe("ORCHESTRATOR_PROMPT");
+    expect(requestPrompt(requests[4])).toBe("IMPLEMENTER_PROMPT");
     expect(requestToolNames(requests[3])).toEqual(["handoff", "end", "ask_user"]);
-    expect(requestToolNames(requests[2])).not.toContain("handoff_context");
+    expect(requestToolNames(requests[4])).toEqual(["handoff", "end", "ask_user"]);
     expect(requestToolNames(requests[3])).not.toContain("handoff_context");
-    assertExactPriorHandoff(requests[2], lastUserText(requests[1]), "orchestrator");
-    assertExactPriorHandoff(requests[3], lastUserText(requests[2]), "implementer");
-    expect(selected[0]?.target.seed).toBe(lastUserText(requests[2]));
-    expect(selected[1]?.target.seed).toBe(lastUserText(requests[3]));
+    expect(requestToolNames(requests[4])).not.toContain("handoff_context");
+    expect(
+      requestMessages(requests[3]).some(
+        (message) =>
+          message.role === "toolResult" && textContent(message)?.startsWith("[handoff context]"),
+      ),
+    ).toBe(true);
+    assertExactPriorHandoff(requests[3], lastUserText(requests[2]), "orchestrator");
+    assertExactPriorHandoff(requests[4], lastUserText(requests[3]), "implementer");
+    expect(selected[0]?.target.seed).toBe(lastUserText(requests[3]));
+    expect(selected[1]?.target.seed).toBe(lastUserText(requests[4]));
   });
 });
