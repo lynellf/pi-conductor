@@ -334,6 +334,10 @@ roles:
       allowed_subagents: [api-implementer, test-writer]
       max_children_per_session: 6
       max_parallel: 2
+      context_artifact_limits:
+        max_items: 8
+        max_item_utf8_bytes: 8192
+        max_total_utf8_bytes: 32768
 
 subagents:
   - name: api-implementer
@@ -353,7 +357,12 @@ subagents:
 `max_children_per_session` is the total child-task allowance for one parent
 session; completed children do not free a slot. `max_parallel` bounds concurrent
 children and cannot exceed that allowance. Profile names cannot collide with
-FSM role names. Bump `version` when changing this policy or a profile.
+FSM role names. The optional closed `context_artifact_limits` block applies per
+task. Its defaults are exactly 8 items, 8,192 UTF-8 bytes per item, and 32,768
+UTF-8 bytes total; hard maxima are 16, 32,768, and 131,072 respectively. All
+three positive safe-integer fields are required when the block is present, and
+the total cannot be smaller than the per-item limit. Bump `version` when
+changing this policy or a profile.
 
 The child profile's `system_prompt` is a normal prompt file. Tell it to make a
 focused change and call `report_result`. The host supplies the child task and
@@ -372,13 +381,13 @@ The enabled parent calls `delegate` with one or more independent tasks:
       "id": "api",
       "subagent": "api-implementer",
       "objective": "Add the endpoint validation described in issue 42.",
-      "expected_output": "A committed implementation and relevant unit tests."
+      "expected_output": "A focused implementation and relevant unit tests."
     },
     {
       "id": "tests",
       "subagent": "test-writer",
       "objective": "Add edge-case coverage for the endpoint contract.",
-      "expected_output": "Committed tests and the test command used."
+      "expected_output": "Focused edge-case test changes."
     }
   ]
 }
@@ -436,6 +445,57 @@ and effective `projection_paths` in `subagent_started`. Rejected batches append
 a `delegation_validation_rejected` record with the parent identity, task IDs,
 and typed validation errors; no child lifecycle record is created for such a
 batch.
+
+### Read-only context artifacts (Issue #60)
+
+A task may also attach a small ordered text inventory without widening its file
+projection:
+
+```json
+{
+  "id": "parser",
+  "subagent": "focused-implementer",
+  "objective": "Implement the parser branch.",
+  "expected_output": "A focused parser diff and tests.",
+  "projection_paths": ["src/parser.ts", "tests/parser.test.ts"],
+  "context_artifacts": [
+    {
+      "id": "api-contract",
+      "source": "inline",
+      "text": "ParserOptions.mode is exactly strict | lenient."
+    },
+    {
+      "id": "acceptance",
+      "source": "file",
+      "path": "docs/contracts/parser-acceptance.md"
+    }
+  ]
+}
+```
+
+Artifact IDs use the task-ID grammar and are unique within the task. Inline text
+is measured as its exact UTF-8 bytes. A file source must be one exact safe path
+in the clean parent's currently materialized Git `H`; the host checks that the
+materialized source is a non-symlink regular file, then snapshots canonical
+UTF-8 bytes from the immutable `B:path` Git blob. It does not trim, normalize,
+fetch, glob, reopen the source while prompting, or add the path to
+`projection_paths`. Duplicate IDs/file sources, unsafe or unmaterialized paths,
+invalid text, races, unreadable sources, and item/total overflow reject the
+whole batch before a worktree or child session exists.
+
+The child receives one host-labeled compact JSON section in its prompt. Artifact
+text is explicitly untrusted reference data: it grants no file, tool, shell,
+network, mount, write, `request_files`, or integration authority and is not a
+sandbox. A file artifact remains absent from the child worktree unless its path
+is independently projected.
+
+New `subagent_started.context_artifacts` records contain the ordered IDs,
+provenance, UTF-8 byte lengths, and domain-separated SHA-256 digests. Inline text
+is retained in this append-only audit record; do not put secrets there.
+File-derived text is not copied into JSONL: its recorded base commit, exact path,
+length, and digest reconstruct it. New no-artifact starts write an explicit empty
+version-1 inventory; historical starts without the optional field mean “not
+recorded” and are never rewritten.
 
 ### Declarative profile projection policy (Issue #55)
 

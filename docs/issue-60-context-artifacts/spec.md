@@ -631,66 +631,66 @@ No implementation task may begin before §16 acknowledgement.
 
 ### Slice 1 — Contract tests and schema/manifest foundation
 
-- [ ] Write failing TypeBox and manifest table tests for §3–4 before source edits.
-- [ ] Add schemas/types, strict limits parsing/validation/default helper, and public
+- [x] Write failing TypeBox and manifest table tests for §3–4 before source edits.
+- [x] Add schemas/types, strict limits parsing/validation/default helper, and public
   type exports only where existing package export policy requires them.
-- [ ] Acceptance: invalid input is rejected before `executeDelegate`; an omitted
+- [x] Acceptance: invalid input is rejected before `executeDelegate`; an omitted
   task field and omitted limits preserve legacy parsed/runtime behavior.
-- [ ] Verify: focused seam/manifest tests, `pnpm typecheck`, `pnpm lint`.
+- [x] Verify: focused seam/manifest tests, `pnpm typecheck`, `pnpm lint`.
 
 ### Slice 2 — Pure resolved-artifact and source-capture seam
 
-- [ ] Write failing table tests for byte canonicalization, digests, duplicate
+- [x] Write failing table tests for byte canonicalization, digests, duplicate
   rules, UTF-8, file classification, and race-check outcomes.
-- [ ] Add a small host/delegation resolver using existing `H` capture/path helpers
+- [x] Add a small host/delegation resolver using existing `H` capture/path helpers
   and Node built-ins only. Return frozen snapshots and typed safe failures.
-- [ ] Acceptance: resolver has no child spawn, persistence, reducer, or prompt
+- [x] Acceptance: resolver has no child spawn, persistence, reducer, or prompt
   side effect; every §9 source failure is deterministic.
-- [ ] Verify: focused resolver/delegation tests, `pnpm typecheck`.
+- [x] Verify: focused resolver/delegation tests, `pnpm typecheck`.
 
 ### Checkpoint C1 — admission is proven before child wiring
 
-- [ ] A mixed valid/invalid batch has no child workspace/session/lifecycle side
+- [x] A mixed valid/invalid batch has no child workspace/session/lifecycle side
   effects, while successful resolution gives immutable snapshots for all tasks.
 
 ### Slice 3 — Delegate-batch preflight and child prompt injection
 
-- [ ] Write failing real-Git/stub-provider tests for full-batch preflight,
+- [x] Write failing real-Git/stub-provider tests for full-batch preflight,
   snapshot-before-spawn, legacy/minimal rendering, and projection separation.
-- [ ] Wire resolver output through `validateBatch`/`executeDelegate`, then pass
+- [x] Wire resolver output through `validateBatch`/`executeDelegate`, then pass
   frozen artifacts through `SpawnChildConfig` and `buildChildPrompt` without
   re-reading sources or materializing files.
-- [ ] Acceptance: all admission work happens before pool/worktree creation; no
+- [x] Acceptance: all admission work happens before pool/worktree creation; no
   tool, projection, or completion behavior changes.
-- [ ] Verify: focused delegation, Issue #55, Issue #57, and child-prompt tests;
+- [x] Verify: focused delegation, Issue #55, Issue #57, and child-prompt tests;
   `pnpm typecheck`.
 
 ### Slice 4 — Durable inventory and compatibility
 
-- [ ] Write failing persistence/JSONL tests for start inventory, historical
+- [x] Write failing persistence/JSONL tests for start inventory, historical
   missing fields, file-content non-retention, inline reconstruction, and safe
   rejection error metadata.
-- [ ] Add additive record types/serialization and append the resolved inventory
+- [x] Add additive record types/serialization and append the resolved inventory
   only to new `subagent_started` records; enrich rejection error items.
-- [ ] Acceptance: append-only logs remain readable, one terminal still follows
+- [x] Acceptance: append-only logs remain readable, one terminal still follows
   every started child, and no raw file-derived bytes enter JSONL.
-- [ ] Verify: focused persistence/log/delegation tests and `pnpm typecheck`.
+- [x] Verify: focused persistence/log/delegation tests and `pnpm typecheck`.
 
 ### Checkpoint C2 — end-to-end regression
 
-- [ ] Real-Git tests demonstrate a narrow child receiving an inline and a
+- [x] Real-Git tests demonstrate a narrow child receiving an inline and a
   non-projected file-derived contract with no worktree materialization.
-- [ ] Issue #52/#55/#57 regression tests remain green; no reducer, checkpoint,
+- [x] Issue #52/#55/#57 regression tests remain green; no reducer, checkpoint,
   FSM, tool-surface, or automatic-integration diff exists.
 
 ### Slice 5 — documentation and full gates
 
-- [ ] Update README delegation documentation and public API comments to describe
+- [x] Update README delegation documentation and public API comments to describe
   task input, limits, log visibility, source authority, and the non-sandbox
   boundary; do not change the archived FSM specification.
-- [ ] Inspect durable JSONL examples and the final diff for raw file content or
+- [x] Inspect durable JSONL examples and the final diff for raw file content or
   unbounded input retention.
-- [ ] Run the complete verification set and report `pnpm audit` truthfully.
+- [x] Run the complete verification set and report `pnpm audit` truthfully.
 
 ## 14. Likely file ownership
 
