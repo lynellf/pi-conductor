@@ -1,26 +1,53 @@
 # Changelog
 
+## [0.19.1] - 2026-08-28
+
+### Documentation
+
+- Correct the v0.19.0 release record to cover every merged change since the
+  previous published release, v0.16.0.
+
 ## [0.19.0] - 2026-08-28
 
 ### Enhancements
 
-- **Read-only context artifacts for projected delegates** (Issue #60). Delegated
-  tasks can supply bounded inline text or a clean, Git-pinned repository file as
+- **Progressive isolated-workspace disclosure** (Issue #51). A `worktree` role
+  can opt into a sparse initial projection and request only policy-approved,
+  pinned-snapshot regular files through `request_files`; each outcome is
+  durably recorded.
+- **Projection-aware concurrent subagents** (Issue #52). Delegated tasks can
+  declare an exact `projection_paths` subset of a clean parent projection;
+  child resource loading is isolated so inherited project context cannot widen
+  their authority.
+- **Delegated projection policies** (Issue #55). Subagent profiles can declare
+  a bounded workspace projection policy that resolves to exact child files from
+  the captured parent materialization before any child starts.
+- **Minimal delegated-child completion protocol** (Issue #57). Profiles can
+  opt into `completion_protocol: minimal`, allowing terminal child outcomes to
+  derive from final text and verified worktree state while preserving the
+  structured `report_result` default.
+- **Read-only context artifacts for projected delegates** (Issue #60). Tasks
+  can supply bounded inline text or clean, Git-pinned repository files as
   immutable prompt context. The host rejects unsafe, duplicate, changed,
   oversized, non-UTF-8, or unavailable sources for the entire batch before any
-  child is created. Durable start and rejection records retain a redacted
-  artifact inventory for auditability without persisting supplied text.
+  child is created, and persists redacted start and rejection inventories.
+
+### Bug fixes
+
+- **Shared-role model runtime inheritance** (Issue #56). Shared SDK role
+  sessions now receive the parent `ModelRuntime`, preserving dynamically
+  registered and authenticated providers such as `pi-antigravity`.
 
 ### Security
 
-- Pinned blob reads disable Git promisor lazy fetches, so a missing local object
-  fails closed instead of causing an unexpected remote fetch during delegation
-  preflight.
+- Pinned context-artifact blob reads disable Git promisor lazy fetches, so a
+  missing local object fails closed instead of causing an unexpected remote
+  fetch during delegation preflight.
 
 ### Notes
 
-- Context artifacts are additive. They provide prompt context only and do not
-  widen a child’s projected file-tool authority.
+- The delegation additions are additive. Context artifacts provide prompt
+  context only and do not widen a child’s projected file-tool authority.
 
 ## [0.18.0] - 2026-08-26
 
