@@ -31,6 +31,7 @@ import {
   type ReportCapture,
 } from "./child-observation.js";
 import { capChildText } from "./child-result.js";
+import { contextArtifactsAudit } from "./context-artifact-audit.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
 import { DelegateToolError, executeDelegate } from "./delegate-tool.js";
 import type { DelegationManager } from "./manager.js";
@@ -192,6 +193,7 @@ function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       completion_protocol: config.profile.completion_protocol,
       task_fingerprint: config.taskFingerprint,
       projection_fingerprint: config.projectionFingerprint,
+      context_artifacts: contextArtifactsAudit(config.contextArtifacts),
       model: child.model,
       session_file: sessionFile,
       worktree_path: config.worktreePath,
