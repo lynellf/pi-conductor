@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { serializeActiveToolDefinitions } from "../../src/host/trajectory-admission.js";
 import {
   createInitialCheckpoint,
@@ -723,18 +723,22 @@ describe("Issue #63 trajectory resume", () => {
     }
   });
 
-  it("rejects an unsupported target effort before selector persistence or target generation", async () => {
+  it("rejects a requested max level omitted from Pi's supported map before selector persistence or session mutation", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-effort-preflight-"));
     try {
       const manifestPath = join(workdir, ".pi", "conductor.yaml");
       await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
-      await writeFile(manifestPath, MANIFEST.replaceAll("effort: off", "effort: high"), "utf8");
+      await writeFile(manifestPath, MANIFEST.replaceAll("effort: off", "effort: max"), "utf8");
       await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
       await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
       const requests: unknown[] = [];
       const registry = makeModelRegistryWithStub([], ["stub-model"], (request) =>
         requests.push(request),
       );
+      const targetModel = registry.find("stub", "stub-model");
+      if (targetModel === undefined) throw new Error("stub target model was not registered");
+      targetModel.reasoning = true;
+      targetModel.thinkingLevelMap = { high: "provider-high" };
       const log = new InMemoryRecordLog();
       const host = new ProductionHost({
         modelRegistry: registry,
@@ -744,27 +748,39 @@ describe("Issue #63 trajectory resume", () => {
         runId: "effort-preflight",
       });
       const source = await host.spawnRole("orchestrator");
-      const requestsBeforeSelection = requests.length;
-      await expect(
-        host.selectAcceptedHandoffTransport({
-          from: "orchestrator",
-          to: "implementer",
-          source,
-          targetSeed: "TARGET_SEED_EXACT",
-          targetVisitIndex: 1,
-        }),
-      ).rejects.toMatchObject({ code: "trajectory_target_environment_invalid" });
-      expect(requests).toHaveLength(requestsBeforeSelection);
-      expect(
-        log
-          .records("effort-preflight")
-          .some((record) => record.type === "handoff_transport_selected"),
-      ).toBe(false);
-      expect(log.records("effort-preflight").at(-1)).toMatchObject({
-        type: "trajectory_handoff_failed",
-        code: "trajectory_target_environment_invalid",
-      });
-      await source.dispose();
+      const setModel = vi.spyOn(AgentSession.prototype, "setModel");
+      const setThinkingLevel = vi.spyOn(AgentSession.prototype, "setThinkingLevel");
+      const setActiveToolsByName = vi.spyOn(AgentSession.prototype, "setActiveToolsByName");
+      try {
+        const requestsBeforeSelection = requests.length;
+        await expect(
+          host.selectAcceptedHandoffTransport({
+            from: "orchestrator",
+            to: "implementer",
+            source,
+            targetSeed: "TARGET_SEED_EXACT",
+            targetVisitIndex: 1,
+          }),
+        ).rejects.toMatchObject({ code: "trajectory_target_environment_invalid" });
+        expect(requests).toHaveLength(requestsBeforeSelection);
+        expect(setModel).not.toHaveBeenCalled();
+        expect(setThinkingLevel).not.toHaveBeenCalled();
+        expect(setActiveToolsByName).not.toHaveBeenCalled();
+        expect(
+          log
+            .records("effort-preflight")
+            .some((record) => record.type === "handoff_transport_selected"),
+        ).toBe(false);
+        expect(log.records("effort-preflight").at(-1)).toMatchObject({
+          type: "trajectory_handoff_failed",
+          code: "trajectory_target_environment_invalid",
+        });
+      } finally {
+        setModel.mockRestore();
+        setThinkingLevel.mockRestore();
+        setActiveToolsByName.mockRestore();
+        await source.dispose();
+      }
     } finally {
       await rm(workdir, { recursive: true, force: true });
     }

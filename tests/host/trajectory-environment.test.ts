@@ -289,10 +289,24 @@ describe("Issue #63 trajectory environment", () => {
     expect(requestToolNames(requests[4])).toEqual(["handoff", "end", "ask_user"]);
     expect(requestToolNames(requests[3])).not.toContain("handoff_context");
     expect(requestToolNames(requests[4])).not.toContain("handoff_context");
+    const plannerSourcePrompt = lastUserText(requests[1]);
+    const plannerHandoffContext = requestMessages(requests[3]).find(
+      (message) =>
+        message.role === "toolResult" && textContent(message)?.startsWith("[handoff context]"),
+    );
+    const plannerHandoffContextText = textContent(plannerHandoffContext);
+    expect(plannerHandoffContextText).not.toBeNull();
+    // The final receiver retains the planner's original user prompt and the
+    // exact planner-produced handoff_context result through both selected edges.
     expect(
-      requestMessages(requests[3]).some(
+      requestMessages(requests[4]).some(
+        (message) => message.role === "user" && textContent(message) === plannerSourcePrompt,
+      ),
+    ).toBe(true);
+    expect(
+      requestMessages(requests[4]).some(
         (message) =>
-          message.role === "toolResult" && textContent(message)?.startsWith("[handoff context]"),
+          message.role === "toolResult" && textContent(message) === plannerHandoffContextText,
       ),
     ).toBe(true);
     assertExactPriorHandoff(requests[3], lastUserText(requests[2]), "orchestrator");
