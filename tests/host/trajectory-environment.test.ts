@@ -146,6 +146,12 @@ describe("Issue #63 trajectory environment", () => {
     const freshOrchestrator = starts.filter((record) => record.role === "orchestrator")[2];
     expect(planner?.session_file).toBe(trajectoryOrchestrator?.session_file);
     expect(planner?.session_file).toBe(implementer?.session_file);
+    // Logical invocation identities remain distinct even as physical Pi
+    // conversation identity is intentionally shared across trajectory edges.
+    expect(planner?.role_session_id).not.toBe(trajectoryOrchestrator?.role_session_id);
+    expect(trajectoryOrchestrator?.role_session_id).not.toBe(implementer?.role_session_id);
+    expect(planner?.conversation_id).toBe(trajectoryOrchestrator?.conversation_id);
+    expect(planner?.conversation_id).toBe(implementer?.conversation_id);
     expect(implementer?.session_file).not.toBe(freshOrchestrator?.session_file);
     expect(requests.length).toBe(5);
     expect(requestPrompt(requests[2])).toBe("ORCHESTRATOR_PROMPT");

@@ -273,9 +273,14 @@ export class ProductionHost implements Host {
     }
 
     const roleConfig = this.lookupRoleConfig(role);
-    const resumedTrajectory = this.latestTrajectorySelection(role);
-    if (resumedTrajectory !== null) {
-      return this.resumeTrajectoryRole(role, roleConfig, resumedTrajectory);
+    const resumedTransport = this.latestTrajectoryTransport(role);
+    if (resumedTransport?.type === "failed") {
+      throw new TrajectoryResumeError(
+        `trajectory handoff ${resumedTransport.record.from} → ${resumedTransport.record.to} previously failed: ${resumedTransport.record.code}`,
+      );
+    }
+    if (resumedTransport?.type === "selected") {
+      return this.resumeTrajectoryRole(role, roleConfig, resumedTransport.record);
     }
     const roleWorkspaceConfig = roleConfig?.workspace;
     const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
@@ -413,12 +418,23 @@ export class ProductionHost implements Host {
     });
   }
 
-  /** Return the selector only when it is the latest handoff artifact for this role. */
-  private latestTrajectorySelection(role: Role): HandoffTransportSelectedRecord | null {
+  /** Return the last durable transport outcome targeting this receiver. */
+  private latestTrajectoryTransport(role: Role):
+    | { readonly type: "selected"; readonly record: HandoffTransportSelectedRecord }
+    | {
+        readonly type: "failed";
+        readonly record: Extract<PersistedRecord, { readonly type: "trajectory_handoff_failed" }>;
+      }
+    | null {
     const records = this.log.records(this.runId);
     for (let index = records.length - 1; index >= 0; index -= 1) {
       const record = records[index];
-      if (record?.type === "handoff_transport_selected" && record.to === role) return record;
+      if (record?.type === "trajectory_handoff_failed" && record.to === role) {
+        return { type: "failed", record };
+      }
+      if (record?.type === "handoff_transport_selected" && record.to === role) {
+        return { type: "selected", record };
+      }
       if (
         record?.type === "transition_accepted" &&
         record.event === "handoff" &&
@@ -732,12 +748,23 @@ export class ProductionHost implements Host {
           `trajectory target tool '${missingTool}' is unavailable in the source registry`,
         );
       }
+      const activeToolDefinitions = activeToolNames.map((name) => {
+        const definition = sourceContext.toolDefinitions[name];
+        if (definition === undefined) {
+          throw new TrajectoryHandoffError(
+            "trajectory_environment_unsupported",
+            `trajectory target tool '${name}' has no provider-visible definition`,
+          );
+        }
+        return definition;
+      });
       const admission = admitTrajectory({
         source: sourceContext,
         targetModel: resolved.model,
         targetModelName: resolved.logical,
         systemPrompt: targetPrompt,
         activeToolNames,
+        activeToolDefinitions,
         targetSeed: args.targetSeed,
       });
       const environmentSha = sha256Canonical({
@@ -745,6 +772,7 @@ export class ProductionHost implements Host {
         model: resolved.logical,
         effort: modelEntry.effort,
         active_tool_names: activeToolNames,
+        active_tool_definitions: activeToolDefinitions,
       });
       this.persistRecord({
         type: "handoff_transport_selected",

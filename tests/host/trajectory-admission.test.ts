@@ -28,6 +28,11 @@ function input(overrides: Partial<Parameters<typeof admitTrajectory>[0]> = {}) {
     targetModelName: "stub:target",
     systemPrompt: "target instructions",
     activeToolNames: ["handoff", "end", "ask_user"],
+    activeToolDefinitions: [
+      { name: "handoff", description: "handoff contract", parameters: { type: "object" } },
+      { name: "end", description: "end contract", parameters: { type: "object" } },
+      { name: "ask_user", description: "ask user", parameters: { type: "object" } },
+    ],
     targetSeed: "continue",
     ...overrides,
   };
@@ -38,6 +43,16 @@ describe("Issue #63 trajectory admission", () => {
     const admitted = admitTrajectory(input());
     expect(admitted.safety_reservation_tokens).toBe(8192);
     expect(admitted.required_tokens).toBeGreaterThan(100 + 100 + 8192);
+  });
+
+  it("counts full active tool definitions in the role envelope", () => {
+    const small = admitTrajectory(input());
+    const large = admitTrajectory(
+      input({
+        activeToolDefinitions: [{ name: "target", description: "x".repeat(20_000) }],
+      }),
+    );
+    expect(large.role_envelope_tokens).toBeGreaterThan(small.role_envelope_tokens);
   });
 
   const failures: readonly {

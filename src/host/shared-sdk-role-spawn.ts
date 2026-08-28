@@ -105,6 +105,7 @@ export async function spawnSharedSdkRoleSession(options: {
     () => activeSeam,
     rejector.shouldRejectCapture,
     () => activeHandoffContext,
+    options.disableAutoCompaction === true,
   );
   const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
   const askUser = createAskUserTool() as ToolDefinition;
@@ -169,7 +170,7 @@ export async function spawnSharedSdkRoleSession(options: {
   options.sessionStates.set(sessionId, state);
   options.agentsBySessionId.set(sessionId, session);
   rejector.bindState(state);
-  attachSessionEventHandler({
+  const sourceEventUnsubscribe = attachSessionEventHandler({
     session,
     state,
     role: options.role,
@@ -206,6 +207,9 @@ export async function spawnSharedSdkRoleSession(options: {
       throw new Error("trajectory target active tool allowlist was not applied exactly");
     }
 
+    // A source invocation is terminal before this continuation starts. Its
+    // listener/state must not observe target traffic or charge target usage.
+    sourceEventUnsubscribe();
     nativeRetained = true;
     activeSystemPrompt = target.systemPrompt;
     activeSeam = new SessionSeam();
@@ -218,7 +222,7 @@ export async function spawnSharedSdkRoleSession(options: {
     options.sessionStates.set(targetSessionId, targetState);
     options.agentsBySessionId.set(targetSessionId, session);
     rejector.bindState(targetState);
-    attachSessionEventHandler({
+    const targetEventUnsubscribe = attachSessionEventHandler({
       session,
       state: targetState,
       role: target.role,
@@ -231,6 +235,7 @@ export async function spawnSharedSdkRoleSession(options: {
       ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
     });
 
+    let targetRetained = false;
     return createRoleSessionAdapter({
       role: target.role,
       session,
@@ -242,11 +247,18 @@ export async function spawnSharedSdkRoleSession(options: {
       retries: 0,
       retryDelayMs: 0,
       isTrajectory: true,
-      continueTrajectory,
+      continueTrajectory: async (nextTarget) => {
+        // This target becomes the source of another selected edge. Detach its
+        // logical accounting before rebinding and transfer native ownership.
+        targetRetained = true;
+        targetEventUnsubscribe();
+        return continueTrajectory(nextTarget);
+      },
+      disposeNative: () => !targetRetained,
       onDispose: () => {
+        targetEventUnsubscribe();
         options.sessionStates.delete(targetSessionId);
         options.agentsBySessionId.delete(targetSessionId);
-        session.dispose();
       },
     });
   };
@@ -263,10 +275,11 @@ export async function spawnSharedSdkRoleSession(options: {
     retryDelayMs: options.retryDelayMs,
     ...(options.isTrajectory === true && { isTrajectory: true }),
     continueTrajectory,
+    disposeNative: () => !nativeRetained,
     onDispose: () => {
+      sourceEventUnsubscribe();
       options.sessionStates.delete(sessionId);
       options.agentsBySessionId.delete(sessionId);
-      if (!nativeRetained) session.dispose();
     },
   });
 }

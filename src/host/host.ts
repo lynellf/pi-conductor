@@ -176,6 +176,8 @@ export interface RoleSession {
     readonly tokens: number | null | undefined;
     readonly hasCompaction: boolean;
     readonly registeredToolNames: readonly string[];
+    /** Canonical provider-visible definitions indexed by registered tool name. */
+    readonly toolDefinitions: Readonly<Record<string, unknown>>;
   };
 
   /** True when this logical invocation reuses a predecessor conversation. */

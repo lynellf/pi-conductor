@@ -31,6 +31,8 @@ export function admitTrajectory(args: {
   readonly targetModelName: string;
   readonly systemPrompt: string;
   readonly activeToolNames: readonly string[];
+  /** Exact serializable definitions of the active target tools. */
+  readonly activeToolDefinitions: readonly unknown[];
   readonly targetSeed: string;
 }): TrajectoryAdmission {
   const { targetModel } = args;
@@ -66,6 +68,7 @@ export function admitTrajectory(args: {
         text: JSON.stringify({
           system_prompt: args.systemPrompt,
           active_tool_names: args.activeToolNames,
+          active_tool_definitions: args.activeToolDefinitions,
           seed: args.targetSeed,
         }),
       },

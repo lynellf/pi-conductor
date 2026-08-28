@@ -99,7 +99,7 @@ export interface Manifest {
   readonly version: number;
   /** Authorized worker roles that may request completion through handoff. */
   readonly end_request_roles?: readonly Role[];
-  /** Optional host-only transport policies. Omitted policies are fresh (Issue #63). */
+  /** Normalized host-only transport policies. Parser output always has a frozen empty list when YAML omits it; optional preserves programmatic legacy inputs. */
   readonly handoffs?: readonly HandoffPolicy[];
   readonly roles: readonly RoleConfig[];
   /** Delegation lite §3: optional subagent profile declarations. */

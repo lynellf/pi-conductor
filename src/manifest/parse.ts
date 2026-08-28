@@ -90,7 +90,9 @@ export function parseManifestFromObject(raw: unknown): Manifest {
 
   const subagentsRaw = obj.subagents;
   const subagents = subagentsRaw !== undefined ? parseSubagentProfiles(subagentsRaw) : undefined;
-  const handoffs = obj.handoffs === undefined ? undefined : parseHandoffs(obj.handoffs);
+  // Absent policy is the immutable empty policy, not an optional runtime
+  // branch. This makes the all-fresh default a normalized manifest contract.
+  const handoffs = obj.handoffs === undefined ? Object.freeze([]) : parseHandoffs(obj.handoffs);
   const endRequestRolesRaw = obj.end_request_roles;
   const end_request_roles =
     endRequestRolesRaw !== undefined
@@ -100,7 +102,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
   return Object.freeze({
     version,
     ...(end_request_roles !== undefined && { end_request_roles }),
-    ...(handoffs !== undefined && { handoffs }),
+    handoffs,
     roles: Object.freeze(roles),
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
   }) as Manifest;

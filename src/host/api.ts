@@ -53,9 +53,10 @@
  * record + checkpoint transition.
  */
 
+import { existsSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
@@ -258,21 +259,41 @@ export async function resumeRun(
   runId: string,
   opts: ResumeRunOptions,
 ): Promise<RunHandle> {
-  // Load and preflight before opening the record log. A container role is
-  // unsupported for the whole manifest, including one that would run later.
-  const loaded = await loadManifest(
-    manifestPath,
-    opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
-  );
-  assertManifestWorkspaceBackendsSupported(loaded);
-
+  // Snapshot-era runs must never parse current YAML before their durable
+  // normalized manifest is hash-validated. The supplied path remains only a
+  // prompt-root UX locator in that case.
   const baseDir = await resolveBaseDir(opts.baseDir);
+  // Preserve legacy fail-fast behavior without creating a base directory.
+  // A pre-existing run file may contain the snapshot that must win over YAML.
+  const legacyPreflight = existsSync(join(baseDir, `${runId}.jsonl`))
+    ? null
+    : await loadManifest(
+        manifestPath,
+        opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
+      );
+  if (legacyPreflight !== null) assertManifestWorkspaceBackendsSupported(legacyPreflight);
   const log = new FileRecordLog({ baseDir });
   // Claim before reading a snapshot or reconciling lifecycle records: two
   // resumed hosts must never inspect, pin, or spawn the same live run.
   const lease = await log.acquireRunLease(runId);
 
   try {
+    const manifestSnapshot = latestManifestSnapshot(log.records(runId), runId);
+    const loaded: LoadedManifest =
+      manifestSnapshot === null
+        ? (legacyPreflight ??
+          (await loadManifest(
+            manifestPath,
+            opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
+          )))
+        : Object.freeze({
+            manifest: manifestSnapshot.normalized_manifest,
+            def: toMachineDefinition(manifestSnapshot.normalized_manifest),
+            warnings: Object.freeze([]),
+            manifestDir: dirname(manifestPath),
+            manifestVersion: manifestSnapshot.normalized_manifest.version,
+          });
+    assertManifestWorkspaceBackendsSupported(loaded);
     const checkpoint = log.latestCheckpoint(runId);
     if (checkpoint === null) {
       throw new Error(
@@ -280,18 +301,9 @@ export async function resumeRun(
       );
     }
 
-    const manifestSnapshot = latestManifestSnapshot(log.records(runId), runId);
     // Snapshot-era runs take their roles and policy from durable normalized
-    // data. Legacy logs retain the original manifest-version check.
-    const resumedLoaded: LoadedManifest =
-      manifestSnapshot === null
-        ? loaded
-        : Object.freeze({
-            ...loaded,
-            manifest: manifestSnapshot.normalized_manifest,
-            def: toMachineDefinition(manifestSnapshot.normalized_manifest),
-            manifestVersion: manifestSnapshot.normalized_manifest.version,
-          });
+    // data; legacy logs use the freshly parsed current manifest.
+    const resumedLoaded = loaded;
     if (resumedLoaded.def.manifest_version !== checkpoint.manifest_version) {
       throw new Error(
         `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${resumedLoaded.def.manifest_version}' (§10)`,
@@ -498,10 +510,20 @@ function reconcileCrash(
   const records = log.records(runId);
   const sessionFile = active.session_file;
 
-  // Find the session_started record for this session_file.
-  let sessionStarted: SessionLifecycleEvent | null = null;
+  // New records match the conductor invocation identity, not the shared
+  // physical JSONL. Legacy records have no logical identity and retain the
+  // historical session-file fallback.
+  let sessionStarted:
+    | (SessionLifecycleEvent & {
+        readonly role_session_id?: string;
+        readonly conversation_id?: string | null;
+      })
+    | null = null;
   for (const r of records) {
-    if (r.type === "session_started" && r.session_file === sessionFile) {
+    if (r.type !== "session_started") continue;
+    const matchesLogical = r.role_session_id === active.id;
+    const matchesLegacy = r.role_session_id === undefined && r.session_file === sessionFile;
+    if (matchesLogical || matchesLegacy) {
       sessionStarted = r;
       break;
     }
@@ -516,7 +538,9 @@ function reconcileCrash(
   for (const r of records) {
     if (
       (r.type === "session_ended" || r.type === "session_failed") &&
-      r.session_file === sessionFile
+      (sessionStarted.role_session_id !== undefined
+        ? r.role_session_id === sessionStarted.role_session_id
+        : r.role_session_id === undefined && r.session_file === sessionFile)
     ) {
       hasTerminal = true;
       break;
@@ -563,7 +587,13 @@ function reconcileCrash(
     model: sessionStarted.model,
     model_effort: sessionStarted.model_effort ?? DEFAULT_MODEL_EFFORT,
   });
-  log.append(result.record);
+  log.append({
+    ...result.record,
+    ...(sessionStarted.role_session_id !== undefined && {
+      role_session_id: sessionStarted.role_session_id,
+      conversation_id: sessionStarted.conversation_id ?? null,
+    }),
+  });
   // Persist the cleared checkpoint.
   const snapshot: CheckpointSnapshot = {
     type: "checkpoint_snapshot",

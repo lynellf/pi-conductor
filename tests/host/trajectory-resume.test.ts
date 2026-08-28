@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   createInitialCheckpoint,
   FileRecordLog,
+  InMemoryRecordLog,
   loadManifest,
+  loadManifestFromString,
   ProductionHost,
   resumeRun,
   type SessionLifecycleEvent,
@@ -106,6 +108,8 @@ describe("Issue #63 trajectory resume", () => {
         ts: 2,
       });
 
+      // Snapshot-era resume must not parse a changed (or malformed) current YAML.
+      await writeFile(manifestPath, "this: [is not valid", "utf8");
       const handle = await resumeRun(manifestPath, checkpoint.run_id, {
         goal: "ignored",
         baseDir,
@@ -133,5 +137,31 @@ describe("Issue #63 trajectory resume", () => {
     } finally {
       await rm(workdir, { recursive: true, force: true });
     }
+  });
+
+  it("surfaces a durable trajectory failure without reopening or retrying its target", async () => {
+    const loaded = loadManifestFromString(MANIFEST);
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "trajectory_handoff_failed",
+      schema_version: 1,
+      run_id: "failed-trajectory",
+      from: "orchestrator",
+      to: "implementer",
+      source_conversation: { id: "shared-conversation", file: "/unused.jsonl" },
+      code: "trajectory_context_too_large",
+      message: "admission failed before target start",
+      ts: 1,
+    });
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistryWithStub(),
+      cwd: process.cwd(),
+      log,
+      loadedManifest: loaded,
+      runId: "failed-trajectory",
+    });
+
+    await expect(host.spawnRole("implementer")).rejects.toThrow("previously failed");
+    expect(log.records("failed-trajectory")).toHaveLength(1);
   });
 });

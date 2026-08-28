@@ -288,11 +288,20 @@ export interface SubagentFailedRecord {
   readonly ts: number;
 }
 
+/**
+ * Lifecycle identity is logical role invocation first, physical conversation
+ * second. Both remain optional only for append-only legacy record reading.
+ */
+export type RoleSessionLifecycleRecord = SessionLifecycleEvent & {
+  readonly role_session_id?: string;
+  readonly conversation_id?: string | null;
+};
+
 /** Union of every record the host appends to its run_id-keyed log. */
 export type PersistedRecord =
   | TransitionAccepted
   | TransitionRejected
-  | SessionLifecycleEvent
+  | RoleSessionLifecycleRecord
   | ModelFallback
   | ModelRetry
   | CheckpointSnapshot
