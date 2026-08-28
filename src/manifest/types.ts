@@ -50,6 +50,13 @@ export interface SubagentProjectionPolicy {
   readonly default_paths?: readonly string[];
 }
 
+/** Issue #60: parent-owned admission limits for each task's context artifacts. */
+export interface ContextArtifactLimits {
+  readonly max_items: number;
+  readonly max_item_utf8_bytes: number;
+  readonly max_total_utf8_bytes: number;
+}
+
 /**
  * §3: the delegation policy attached to a parent role.
  *
@@ -60,6 +67,8 @@ export interface DelegationPolicy {
   readonly allowed_subagents: readonly string[];
   readonly max_children_per_session: number;
   readonly max_parallel: number;
+  /** Issue #60: optional strict limits; admission supplies defaults when absent. */
+  readonly context_artifact_limits?: ContextArtifactLimits;
 }
 
 /** Parsed manifest model entry: logical model id plus conductor-owned effort. */

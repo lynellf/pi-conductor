@@ -169,6 +169,55 @@ export type EndArgs = Static<typeof endArgsSchema>;
 
 // ─── Delegation lite §4: delegate tool ────────────────────────────────
 
+const CONTEXT_ARTIFACT_ID_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$";
+const MAX_CONTEXT_ARTIFACTS_HARD = 16;
+const MAX_CONTEXT_ARTIFACT_INLINE_CODE_UNITS = 32 * 1024;
+
+/** Stable task-local identifier for a prompt-only context artifact (Issue #60 §3). */
+export const contextArtifactIdSchema = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: CONTEXT_ARTIFACT_ID_PATTERN,
+});
+
+/** Closed inline context-artifact descriptor (Issue #60 §3). */
+export const inlineContextArtifactSchema = Type.Object(
+  {
+    id: contextArtifactIdSchema,
+    source: Type.Literal("inline"),
+    text: Type.String({ minLength: 0, maxLength: MAX_CONTEXT_ARTIFACT_INLINE_CODE_UNITS }),
+  },
+  { additionalProperties: false },
+);
+
+/** Closed parent-materialized-file context-artifact descriptor (Issue #60 §3). */
+export const fileContextArtifactSchema = Type.Object(
+  {
+    id: contextArtifactIdSchema,
+    source: Type.Literal("file"),
+    path: Type.String({ minLength: 1, maxLength: 1024 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Single closed context-artifact descriptor union (Issue #60 §3). */
+export const contextArtifactSchema = Type.Union([
+  inlineContextArtifactSchema,
+  fileContextArtifactSchema,
+]);
+
+/** Bounded non-empty context-artifact inventory (Issue #60 §3). */
+export const contextArtifactsSchema = Type.Array(contextArtifactSchema, {
+  minItems: 1,
+  maxItems: MAX_CONTEXT_ARTIFACTS_HARD,
+});
+
+/** Typed view of one validated context-artifact descriptor. */
+export type ContextArtifact = Static<typeof contextArtifactSchema>;
+
+/** Typed view of a validated task-local context-artifact inventory. */
+export type ContextArtifacts = Static<typeof contextArtifactsSchema>;
+
 /**
  * §4: `delegate` task entry schema.
  *
@@ -178,6 +227,7 @@ export type EndArgs = Static<typeof endArgsSchema>;
  * - `expected_output`: 1–8,192 characters
  * - `projection_paths`: optional 1–64 exact file subset (each ≤1,024 characters);
  *   host validates safe syntax and membership in the clean parent's materialized sparse set
+ * - `context_artifacts`: optional prompt-only immutable text inventory (Issue #60)
  */
 export const delegateTaskSchema = Type.Object({
   id: Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }),
@@ -189,6 +239,7 @@ export const delegateTaskSchema = Type.Object({
   projection_paths: Type.Optional(
     Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 64 }),
   ),
+  context_artifacts: Type.Optional(contextArtifactsSchema),
 });
 
 /** Typed view of a single delegation task. */
