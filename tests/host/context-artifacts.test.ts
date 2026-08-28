@@ -184,6 +184,10 @@ describe("Issue #60 file source classification and race checks", () => {
     await unlink(join(directoryRepo.path, "source.txt"));
     await mkdir(join(directoryRepo.path, "source.txt"));
 
+    const device = await repository({ "source.txt": "source" });
+    await unlink(join(device.path, "source.txt"));
+    await execFileAsync("mkfifo", [join(device.path, "source.txt")]);
+
     const invalid = await repository({ "source.txt": new Uint8Array([0xff]) });
     const oversized = await repository({ "source.txt": "12345" });
     const descriptor = [{ id: "source", source: "file", path: "source.txt" }] as ContextArtifacts;
@@ -195,6 +199,9 @@ describe("Issue #60 file source classification and race checks", () => {
       "context-artifact-symlink",
     );
     expect(codes(await resolveContextArtifactBatch(options(directoryRepo, descriptor)))).toContain(
+      "context-artifact-not-regular-file",
+    );
+    expect(codes(await resolveContextArtifactBatch(options(device, descriptor)))).toContain(
       "context-artifact-not-regular-file",
     );
     expect(codes(await resolveContextArtifactBatch(options(invalid, descriptor)))).toContain(

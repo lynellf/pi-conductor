@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -168,6 +168,80 @@ describe("Issue #60 delegate preflight and prompt wiring", () => {
     expect(await exists(join(runStateDir, "sessions"))).toBe(false);
   });
 
+  it.each([
+    "invalid",
+    "missing",
+    "unreadable",
+    "changed",
+    "oversized",
+  ] as const)("keeps the whole batch side-effect free for a %s artifact failure", async (failure) => {
+    const primaryCheckout = await repository();
+    const runStateDir = join(primaryCheckout, ".pi-conductor", "runs", `atomic-${failure}`);
+    let spawnCount = 0;
+    const descriptor: ContextArtifact =
+      failure === "invalid"
+        ? { id: "source", source: "inline", text: "\uD800" }
+        : { id: "source", source: "file", path: "contract.md" };
+    const limits =
+      failure === "oversized"
+        ? { max_items: 8, max_item_utf8_bytes: 4, max_total_utf8_bytes: 4 }
+        : undefined;
+    let hookCalled = false;
+
+    const expectedCode = {
+      invalid: "context-artifact-invalid-inline-text",
+      missing: "context-artifact-missing",
+      unreadable: "context-artifact-unreadable",
+      changed: "context-artifact-changed",
+      oversized: "context-artifact-oversized",
+    }[failure];
+    await expect(
+      executeDelegate({
+        args: {
+          tasks: [
+            task("first", [{ id: "sibling", source: "inline", text: "valid" }]),
+            task("failing", [descriptor]),
+          ],
+        },
+        policy: {
+          ...policy,
+          ...(limits === undefined ? {} : { context_artifact_limits: limits }),
+        },
+        profiles: [profile],
+        remainingChildren: 2,
+        runStateDir,
+        runId: `atomic-${failure}`,
+        parentRole: "parent",
+        primaryCheckout,
+        systemPromptRoot: primaryCheckout,
+        contextArtifactTestHook: async (stage) => {
+          if (hookCalled) return;
+          if (failure === "missing" && stage === "after-source-lstat") {
+            hookCalled = true;
+            await unlink(join(primaryCheckout, "contract.md"));
+          } else if (failure === "unreadable" && stage === "after-source-lstat") {
+            hookCalled = true;
+            await chmod(join(primaryCheckout, "contract.md"), 0);
+          } else if (failure === "changed" && stage === "before-final-check") {
+            hookCalled = true;
+            await writeFile(join(primaryCheckout, "contract.md"), "changed\n");
+          }
+        },
+        spawnAndRunChild: async () => {
+          spawnCount += 1;
+          return terminal();
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "batch_validation_failed",
+      errors: expect.arrayContaining([expect.objectContaining({ code: expectedCode })]),
+    });
+
+    expect(spawnCount).toBe(0);
+    expect(await exists(join(runStateDir, "worktrees"))).toBe(false);
+    expect(await exists(join(runStateDir, "sessions"))).toBe(false);
+  });
+
   it("passes frozen inline and pinned-file snapshots into the actual child prompt only", async () => {
     const primaryCheckout = await repository();
     const runStateDir = join(primaryCheckout, ".pi-conductor", "runs", "accepted");
@@ -214,6 +288,40 @@ describe("Issue #60 delegate preflight and prompt wiring", () => {
     expect(await readFile(join(spawned.worktreePath, "src", "owned.ts"), "utf8")).toContain(
       "owned",
     );
+  });
+
+  it("retains ordinary file-tool authority when the artifact source is independently projected", async () => {
+    const primaryCheckout = await repository();
+    let spawned: SpawnChildConfig | undefined;
+
+    await executeDelegate({
+      args: {
+        tasks: [
+          {
+            ...task("projected", [{ id: "file", source: "file", path: "contract.md" }]),
+            projection_paths: ["contract.md"],
+          },
+        ],
+      },
+      policy,
+      profiles: [profile],
+      remainingChildren: 1,
+      runStateDir: join(primaryCheckout, ".pi-conductor", "runs", "projected"),
+      runId: "projected",
+      parentRole: "parent",
+      primaryCheckout,
+      systemPromptRoot: primaryCheckout,
+      spawnAndRunChild: async (config) => {
+        spawned = config;
+        return terminal();
+      },
+    });
+
+    if (spawned === undefined) throw new Error("expected child spawn");
+    expect(await readFile(join(spawned.worktreePath, "contract.md"), "utf8")).toBe(
+      "Pinned contract.\n",
+    );
+    expect(spawned.contextArtifacts[0]?.text).toBe("Pinned contract.\n");
   });
 
   it("persists exact new empty/nonempty inventories without file-derived text", async () => {
