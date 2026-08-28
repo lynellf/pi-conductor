@@ -7,6 +7,7 @@ import type { SessionSeam } from "./seam.js";
 export interface RoleSessionAdapter extends RoleSession {
   readonly systemPrompt: string;
   getActiveToolNames(): string[];
+  isAutoCompactionEnabled(): boolean;
 }
 
 /** Build the common production/stub adapter around a native pi `AgentSession`. */
@@ -70,5 +71,6 @@ export function createRoleSessionAdapter(opts: {
       return session.systemPrompt;
     },
     getActiveToolNames: () => session.getActiveToolNames(),
+    isAutoCompactionEnabled: () => session.autoCompactionEnabled,
   };
 }

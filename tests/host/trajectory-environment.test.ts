@@ -4,8 +4,9 @@ import { join } from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { RoleSession } from "../../src/host/host.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
-import { FileRecordLog, ProductionHost, startRun } from "../../src/index.js";
+import { FileRecordLog, loadManifest, ProductionHost, startRun } from "../../src/index.js";
 
 const MANIFEST = `
 version: 1
@@ -44,6 +45,12 @@ function requestPrompt(context: unknown): unknown {
   return typeof context === "object" && context !== null && "systemPrompt" in context
     ? (context as { readonly systemPrompt?: unknown }).systemPrompt
     : undefined;
+}
+
+function autoCompactionEnabled(session: RoleSession): boolean {
+  return (
+    session as RoleSession & { readonly isAutoCompactionEnabled: () => boolean }
+  ).isAutoCompactionEnabled();
 }
 
 function registryWithTrajectoryScript(requests: unknown[]): ModelRegistry {
@@ -95,6 +102,20 @@ describe("Issue #63 trajectory environment", () => {
   });
 
   afterEach(async () => rm(workdir, { recursive: true, force: true }));
+
+  it("disables automatic compaction before an outgoing trajectory source can prompt", async () => {
+    const loaded = await loadManifest(manifestPath);
+    const host = new ProductionHost({
+      modelRegistry: registryWithTrajectoryScript([]),
+      cwd: workdir,
+      log: new FileRecordLog({ baseDir: runs }),
+      loadedManifest: loaded,
+      runId: "auto-compaction-test",
+    });
+    const session = await host.spawnRole("planner");
+    expect(autoCompactionEnabled(session)).toBe(false);
+    await session.dispose();
+  });
 
   it("keeps two selected edges in one conversation then returns to a fresh session", async () => {
     const requests: unknown[] = [];
