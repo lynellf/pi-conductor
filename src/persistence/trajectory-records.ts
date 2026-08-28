@@ -15,7 +15,10 @@ export class ManifestSnapshotError extends Error {
 
 /** Typed rejection of a trajectory selector that cannot be resumed exactly. */
 export class TrajectoryResumeError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: string,
+  ) {
     super(message);
     this.name = "TrajectoryResumeError";
   }
@@ -60,6 +63,8 @@ export interface HandoffTransportSelectedRecord {
     readonly requested_effort: ModelEffort;
     readonly system_prompt: string;
     readonly active_tool_names: readonly string[];
+    /** Exact host-generated target prompt admitted before the source was released. */
+    readonly seed: string;
     readonly environment_sha256: string;
   };
   readonly admission: TrajectoryAdmission;
@@ -83,6 +88,7 @@ export function validateTrajectorySelector(
     !nonEmptyString(target?.model) ||
     !isModelEffort(target?.requested_effort) ||
     !nonEmptyString(target?.system_prompt) ||
+    !nonEmptyString(target?.seed) ||
     !isExactToolNameList(target?.active_tool_names) ||
     !isSha256(target?.environment_sha256) ||
     !isTrajectoryAdmission(record.admission)

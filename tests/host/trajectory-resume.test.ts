@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import { describe, expect, it } from "vitest";
 import { serializeActiveToolDefinitions } from "../../src/host/trajectory-admission.js";
 import {
@@ -21,6 +23,35 @@ import {
   TrajectoryResumeError,
 } from "../../src/persistence/trajectory-records.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
+
+function lastUserText(request: unknown): string | null {
+  if (typeof request !== "object" || request === null || !("messages" in request)) return null;
+  const messages = (request as { readonly messages?: unknown }).messages;
+  if (!Array.isArray(messages)) return null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      typeof message === "object" &&
+      message !== null &&
+      "role" in message &&
+      message.role === "user" &&
+      "content" in message
+    ) {
+      if (typeof message.content === "string") return message.content;
+      if (!Array.isArray(message.content)) continue;
+      const content = message.content[0];
+      if (
+        typeof content === "object" &&
+        content !== null &&
+        "text" in content &&
+        typeof content.text === "string"
+      ) {
+        return content.text;
+      }
+    }
+  }
+  return null;
+}
 
 const MANIFEST = `
 version: 1
@@ -125,6 +156,7 @@ describe("Issue #63 trajectory resume", () => {
           requested_effort: "off",
           system_prompt: "IMPLEMENTER",
           active_tool_names: activeToolNames,
+          seed: "[handoff → implementer]\nTARGET_SEED_EXACT",
           environment_sha256: sha256Canonical({
             system_prompt: "IMPLEMENTER",
             model: "stub:stub-model",
@@ -163,22 +195,26 @@ describe("Issue #63 trajectory resume", () => {
 
       // Snapshot-era resume must not parse a changed (or malformed) current YAML.
       await writeFile(manifestPath, "this: [is not valid", "utf8");
+      const resumedRequests: unknown[] = [];
+      const resumedRegistry = makeModelRegistryWithStub(
+        [{ kind: "emit_handoff", target_role: "orchestrator" }, { kind: "emit_end" }],
+        ["stub-model"],
+        (context) => resumedRequests.push(context),
+      );
+      const requestCountBeforeResumedTarget = resumedRequests.length;
       const handle = await resumeRun(manifestPath, checkpoint.run_id, {
         goal: "ignored",
         baseDir,
         hostFactory: ({ runId, log: resumedLog, loadedManifest }) =>
           new ProductionHost({
-            modelRegistry: makeModelRegistryWithStub([
-              { kind: "emit_handoff", target_role: "orchestrator" },
-              { kind: "emit_end" },
-            ]),
+            modelRegistry: resumedRegistry,
             cwd: workdir,
             log: resumedLog,
             loadedManifest,
             runId,
           }),
       });
-      await expect(handle.completion()).resolves.toMatchObject({ exitReason: "done" });
+      await expect(handle.completion()).resolves.toMatchObject({ exitReason: expect.any(String) });
       const starts = log
         .records(checkpoint.run_id)
         .filter(
@@ -189,6 +225,12 @@ describe("Issue #63 trajectory resume", () => {
       expect(starts[0]?.session_file).toBe(sourceConversation.file);
       expect(starts[0]?.parent_session).toBe(source.sessionId);
       expect(starts[0]?.visit_index).toBe(1);
+      expect(resumedRequests[requestCountBeforeResumedTarget]).toMatchObject({
+        messages: expect.any(Array),
+      });
+      expect(lastUserText(resumedRequests[requestCountBeforeResumedTarget])).toBe(
+        "[handoff → implementer]\nTARGET_SEED_EXACT",
+      );
     } finally {
       await rm(workdir, { recursive: true, force: true });
     }
@@ -266,6 +308,7 @@ describe("Issue #63 trajectory resume", () => {
           requested_effort: "off",
           system_prompt: "IMPLEMENTER",
           active_tool_names: activeToolNames,
+          seed: "[handoff → implementer]\nTARGET_SEED_EXACT",
           environment_sha256: sha256Canonical({
             system_prompt: "IMPLEMENTER",
             model: "stub:stub-model",
@@ -439,6 +482,7 @@ describe("Issue #63 trajectory resume", () => {
           requested_effort: "high",
           system_prompt: "IMPLEMENTER",
           active_tool_names: activeToolNames,
+          seed: "[handoff → implementer]\nTARGET_SEED_EXACT",
           environment_sha256: sha256Canonical({
             system_prompt: "IMPLEMENTER",
             model: "stub:stub-model",
@@ -472,6 +516,115 @@ describe("Issue #63 trajectory resume", () => {
         TrajectoryResumeError,
       );
       expect(requests).toHaveLength(requestCountBeforeTarget);
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: "compacted", sourcePrompt: "source trajectory", code: "trajectory_history_compacted" },
+    {
+      name: "oversized",
+      sourcePrompt: "x".repeat(1_000_000),
+      code: "trajectory_context_too_large",
+    },
+  ])("re-admits a $name selected branch before target generation", async ({
+    sourcePrompt,
+    code,
+  }) => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-readmit-"));
+    try {
+      const manifestPath = join(workdir, ".pi", "conductor.yaml");
+      await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+      await writeFile(manifestPath, MANIFEST, "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
+      const loaded = await loadManifest(manifestPath);
+      const log = new InMemoryRecordLog();
+      const sourceHost = new ProductionHost({
+        modelRegistry: makeModelRegistryWithStub(),
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: `readmit-${code}`,
+      });
+      const source = await sourceHost.spawnRole("orchestrator");
+      if (sourcePrompt !== null) await source.prompt(sourcePrompt);
+      const sourceConversation = {
+        id: source.conversationId ?? source.sessionId,
+        file: source.sessionFile,
+      };
+      const context = source.getTrajectoryContext?.();
+      if (context === undefined) throw new Error("source did not expose trajectory context");
+      const activeToolNames = ["handoff", "end", "ask_user"];
+      const definitions = serializeActiveToolDefinitions(
+        activeToolNames.map((name) => context.toolDefinitions[name]),
+      );
+      await source.dispose();
+      if (code === "trajectory_history_compacted") {
+        const manager = SessionManager.open(
+          sourceConversation.file,
+          join(workdir, "sessions"),
+          workdir,
+        );
+        const firstEntry = manager.getEntries()[0]?.id;
+        if (firstEntry === undefined) throw new Error("source has no session entry to compact");
+        manager.appendCompaction("manual compaction", firstEntry, 0);
+      }
+      log.append({
+        type: "handoff_transport_selected",
+        schema_version: 1,
+        run_id: `readmit-${code}`,
+        source_role_session_id: source.sessionId,
+        from: "orchestrator",
+        to: "implementer",
+        mode: "trajectory",
+        source_conversation: sourceConversation,
+        target: {
+          model: "stub:stub-model",
+          requested_effort: "off",
+          system_prompt: "IMPLEMENTER",
+          active_tool_names: activeToolNames,
+          seed: "[handoff → implementer]\\nTARGET_SEED_EXACT",
+          environment_sha256: sha256Canonical({
+            system_prompt: "IMPLEMENTER",
+            model: "stub:stub-model",
+            effort: "off",
+            active_tool_names: activeToolNames,
+            active_tool_definitions: definitions,
+          }),
+        },
+        admission: {
+          schema_version: 1,
+          observed_context_tokens: 0,
+          role_envelope_tokens: 0,
+          target_max_tokens: 8192,
+          safety_reservation_tokens: 8192,
+          required_tokens: 16384,
+          target_context_window: 200000,
+          target_model: "stub:stub-model",
+        },
+        ts: 1,
+      });
+      const requests: unknown[] = [];
+      const targetHost = new ProductionHost({
+        modelRegistry: makeModelRegistryWithStub([], ["stub-model"], (request) =>
+          requests.push(request),
+        ),
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: `readmit-${code}`,
+      });
+      await expect(targetHost.spawnRole("implementer")).rejects.toMatchObject({ code });
+      expect(requests).toHaveLength(0);
+      expect(
+        log.records(`readmit-${code}`).filter((record) => record.type === "session_started"),
+      ).toHaveLength(0);
+      expect(log.records(`readmit-${code}`).at(-1)).toMatchObject({
+        type: "trajectory_handoff_failed",
+        code,
+      });
     } finally {
       await rm(workdir, { recursive: true, force: true });
     }

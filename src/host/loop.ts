@@ -139,6 +139,8 @@ export interface RunLoopOptions {
   readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
   /** Logical predecessor restored from a trajectory selector before a resumed target starts. */
   readonly initialParentSessionId?: string | null;
+  /** Exact host-generated target prompt persisted by a selected trajectory handoff. */
+  readonly initialTrajectorySeed?: string | null;
   /** Next visit index per role reconstructed from durable lifecycle starts on resume. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
@@ -201,7 +203,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // the snapshot's active_role_session id (resume case) or null (fresh).
   let parentSessionId: string | null =
     checkpoint.active_role_session?.id ?? opts.initialParentSessionId ?? null;
-  let seed = initialGoal;
+  let seed = opts.initialTrajectorySeed ?? initialGoal;
+  // A resumed trajectory target must receive its durable, admission-checked
+  // user prompt byte-for-byte, including when that target is the orchestrator.
+  let useInitialTrajectorySeed = opts.initialTrajectorySeed !== undefined;
   // Host-generated predecessor pointer for the next role's optional
   // handoff_context tool. It is replaced only by an accepted handoff or by
   // the persisted run-memory envelope on an orchestrator/resume turn.
@@ -321,7 +326,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // (Task 15's `formatHandoffSeed`) instead. The host owns the
     // record log and the buildRunMemory call — the loop just calls
     // host.seedRunMemory and formats the result.
-    if (role === def.orchestrator) {
+    if (role === def.orchestrator && !useInitialTrajectorySeed) {
       const runMemory = host.seedRunMemory({
         checkpoint,
         def,
@@ -335,6 +340,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       seed = formatRunMemorySeed(runMemory);
       handoffContextRef = runMemory.last_message?.context_ref ?? null;
     }
+    useInitialTrajectorySeed = false;
 
     // ── Task 18: model-fallback loop ─────────────────────────
     // Per §8.2, on `session_failed(model_error)`, try the next model
@@ -976,11 +982,22 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext, acceptedContextRef);
           pendingArtifactRoute = acceptedArtifactRoute;
           try {
+            const trajectoryTargetSeed =
+              nextRole === def.orchestrator
+                ? formatRunMemorySeed(
+                    host.seedRunMemory({
+                      checkpoint,
+                      def,
+                      goal: opts.initialGoal,
+                      runCostCap: opts.getRunCostCap?.() ?? opts.runCostCap ?? null,
+                    }),
+                  )
+                : nextSeed;
             const selected = await host.selectAcceptedHandoffTransport?.({
               from: role,
               to: nextRole,
               source: session,
-              targetSeed: nextSeed,
+              targetSeed: trajectoryTargetSeed,
               targetVisitIndex: visitIndexByRole.get(nextRole) ?? 1,
             });
             if (selected?.mode === "trajectory") pendingTrajectorySession = selected.session;

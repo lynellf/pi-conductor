@@ -193,6 +193,7 @@ interface HandoffTransportSelectedRecord {
     readonly requested_effort: ModelEffort;
     readonly system_prompt: string;
     readonly active_tool_names: readonly string[];
+    readonly seed: string; // exact host-generated target user prompt used for admission and resume
     readonly environment_sha256: string;
   };
   readonly admission: TrajectoryAdmission;

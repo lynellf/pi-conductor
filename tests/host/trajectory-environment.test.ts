@@ -62,6 +62,88 @@ function requestPrompt(context: unknown): unknown {
     : undefined;
 }
 
+function textContent(message: unknown): string | null {
+  if (typeof message !== "object" || message === null || !("content" in message)) return null;
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const text = content.find(
+    (item): item is { readonly type: "text"; readonly text: string } =>
+      typeof item === "object" &&
+      item !== null &&
+      "type" in item &&
+      item.type === "text" &&
+      "text" in item &&
+      typeof item.text === "string",
+  );
+  return text?.text ?? null;
+}
+
+function handoffCall(
+  message: unknown,
+): { readonly name: string; readonly arguments: unknown } | null {
+  if (typeof message !== "object" || message === null || !("content" in message)) return null;
+  const content = message.content;
+  if (!Array.isArray(content)) return null;
+  const call = content.find(
+    (item): item is { readonly name: string; readonly arguments: unknown } =>
+      typeof item === "object" &&
+      item !== null &&
+      "type" in item &&
+      item.type === "toolCall" &&
+      "name" in item &&
+      typeof item.name === "string" &&
+      "arguments" in item,
+  );
+  return call ?? null;
+}
+
+function lastUserText(request: unknown): string {
+  const user = [...requestMessages(request)].reverse().find((message) => message.role === "user");
+  const text = textContent(user);
+  if (text === null) throw new Error("stub provider request has no text user message");
+  return text;
+}
+
+function assertExactPriorHandoff(
+  request: unknown,
+  priorUserText: string,
+  targetRole: string,
+): void {
+  const messages = requestMessages(request);
+  expect(
+    messages.some((message) => message.role === "user" && textContent(message) === priorUserText),
+  ).toBe(true);
+  const call = messages
+    .map(handoffCall)
+    .find(
+      (candidate) =>
+        candidate?.name === "handoff" &&
+        typeof candidate.arguments === "object" &&
+        candidate.arguments !== null &&
+        "target_role" in candidate.arguments &&
+        candidate.arguments.target_role === targetRole,
+    );
+  expect(call).toMatchObject({
+    name: "handoff",
+    arguments: {
+      target_role: targetRole,
+      status: "ready",
+      objective: `Continue the run as ${targetRole}.`,
+      summary: `Handoff to ${targetRole}.`,
+      requested_action: `Complete the next ${targetRole} step and report the result.`,
+    },
+  });
+  expect(
+    messages.some(
+      (message) =>
+        message.role === "toolResult" &&
+        textContent(message) ===
+          `emission recorded: handoff → ${targetRole}. Do not call further tools; the loop will end this session.`,
+    ),
+  ).toBe(true);
+}
+
 function autoCompactionEnabled(session: RoleSession): boolean {
   return (
     session as RoleSession & { readonly isAutoCompactionEnabled: () => boolean }
@@ -169,7 +251,10 @@ describe("Issue #63 trajectory environment", () => {
     expect(completion.exitReason).toBe("done");
 
     const records = new FileRecordLog({ baseDir: runs }).records(handle.runId);
-    const selected = records.filter((record) => record.type === "handoff_transport_selected");
+    const selected = records.filter(
+      (record): record is Extract<typeof record, { readonly type: "handoff_transport_selected" }> =>
+        record.type === "handoff_transport_selected",
+    );
     expect(selected).toHaveLength(2);
     const starts = records.filter((record) => record.type === "session_started");
     const planner = starts.find((record) => record.role === "planner");
@@ -188,7 +273,9 @@ describe("Issue #63 trajectory environment", () => {
     expect(requests.length).toBe(5);
     expect(requestPrompt(requests[2])).toBe("ORCHESTRATOR_PROMPT");
     expect(requestPrompt(requests[3])).toBe("IMPLEMENTER_PROMPT");
-    expect(requestMessages(requests[2]).map((message) => message.role)).toContain("toolResult");
-    expect(requestMessages(requests[3]).map((message) => message.role)).toContain("toolResult");
+    assertExactPriorHandoff(requests[2], lastUserText(requests[1]), "orchestrator");
+    assertExactPriorHandoff(requests[3], lastUserText(requests[2]), "implementer");
+    expect(selected[0]?.target.seed).toBe(lastUserText(requests[2]));
+    expect(selected[1]?.target.seed).toBe(lastUserText(requests[3]));
   });
 });
