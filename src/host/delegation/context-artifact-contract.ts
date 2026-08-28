@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 
 import type { ContextArtifactLimits } from "../../manifest/types.js";
-import type { ContextArtifacts } from "../../seam/schema.js";
+import type { ContextArtifact } from "../../seam/schema.js";
 
 const DIGEST_DOMAIN = "pi-conductor/context-artifact/v1\0";
 
@@ -61,7 +61,7 @@ export interface ContextArtifactResolutionError {
 /** One task and its optional raw descriptors after the ordinary batch gate. */
 export interface ContextArtifactResolutionTask {
   readonly taskId: string;
-  readonly artifacts?: ContextArtifacts;
+  readonly artifacts?: readonly ContextArtifact[];
 }
 
 /** Inputs tied to the clean parent base and exact materialized H capture. */
