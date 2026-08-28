@@ -6,13 +6,18 @@ import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { Role } from "../../src/core/types.js";
 import {
   type ChildTerminal,
   executeDelegate,
   type SpawnChildConfig,
 } from "../../src/host/delegation/delegate-tool.js";
-import type { DelegationPolicy, SubagentProfile } from "../../src/manifest/types.js";
+import { createDelegateTool } from "../../src/host/delegation/delegate-tool-factory.js";
+import { DelegationManager } from "../../src/host/delegation/manager.js";
+import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../src/manifest/types.js";
+import { InMemoryRecordLog } from "../../src/persistence/log.js";
 import type { ContextArtifact } from "../../src/seam/schema.js";
+import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 
 const execFileAsync = promisify(execFile);
 const repositories: string[] = [];
@@ -25,7 +30,7 @@ const policy: DelegationPolicy = {
 
 const profile: SubagentProfile = {
   name: "focused",
-  models: [{ model: "stub:model", effort: "medium" }],
+  models: [{ model: "stub:stub-model", effort: "medium" }],
   max_session_cost_usd: 1,
   system_prompt: "child.md",
   completion_protocol: "report_result",
@@ -82,6 +87,41 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function delegateTool(primaryCheckout: string, runId: string, log: InMemoryRecordLog) {
+  const role: RoleConfig = {
+    name: "parent" as Role,
+    max_visits: 1,
+    tools: ["delegate"],
+    delegation: policy,
+  };
+  return createDelegateTool({
+    role,
+    subagents: [profile],
+    remainingChildren: 2,
+    runId,
+    parentRole: role.name,
+    parentVisitIndex: 1,
+    primaryCheckout,
+    runStateDir: join(primaryCheckout, ".pi-conductor", "runs", runId),
+    persistRecord: (record) => log.append(record),
+    agentDir: primaryCheckout,
+    systemPromptRoot: primaryCheckout,
+    modelRegistry: makeModelRegistryWithStub([
+      {
+        kind: "emit_tool_calls",
+        calls: [
+          {
+            name: "report_result",
+            arguments: { status: "no_changes", summary: "Inspected." },
+          },
+        ],
+      },
+    ]),
+    sessionDir: join(primaryCheckout, ".pi-conductor", "sessions"),
+    manager: new DelegationManager(),
+  });
 }
 
 describe("Issue #60 delegate preflight and prompt wiring", () => {
@@ -174,5 +214,95 @@ describe("Issue #60 delegate preflight and prompt wiring", () => {
     expect(await readFile(join(spawned.worktreePath, "src", "owned.ts"), "utf8")).toContain(
       "owned",
     );
+  });
+
+  it("persists exact new empty/nonempty inventories without file-derived text", async () => {
+    const withArtifacts = await repository();
+    const artifactLog = new InMemoryRecordLog();
+    await delegateTool(withArtifacts, "audit-artifacts", artifactLog).execute(
+      "delegate",
+      {
+        tasks: [
+          task("audited", [
+            { id: "inline", source: "inline", text: "Inline contract." },
+            { id: "file", source: "file", path: "contract.md" },
+          ]),
+        ],
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const started = artifactLog
+      .records("audit-artifacts")
+      .find((record) => record.type === "subagent_started");
+    if (started === undefined || started.type !== "subagent_started") {
+      throw new Error("expected start record");
+    }
+
+    expect(started.context_artifacts).toMatchObject({
+      version: 1,
+      total_utf8_bytes: 33,
+      artifacts: [
+        { ordinal: 0, id: "inline", source: "inline", text: "Inline contract." },
+        { ordinal: 1, id: "file", source: "file", provenance: { path: "contract.md" } },
+      ],
+    });
+    expect(JSON.stringify(started.context_artifacts)).not.toContain("Pinned contract.");
+
+    const withoutArtifacts = await repository();
+    const emptyLog = new InMemoryRecordLog();
+    await delegateTool(withoutArtifacts, "audit-empty", emptyLog).execute(
+      "delegate",
+      { tasks: [task("empty")] },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const emptyStarted = emptyLog
+      .records("audit-empty")
+      .find((record) => record.type === "subagent_started");
+
+    expect(emptyStarted).toMatchObject({
+      type: "subagent_started",
+      context_artifacts: { version: 1, total_utf8_bytes: 0, artifacts: [] },
+    });
+  });
+
+  it("persists safe structured context rejection identity and no raw text", async () => {
+    const primaryCheckout = await repository();
+    const log = new InMemoryRecordLog();
+    const result = await delegateTool(primaryCheckout, "audit-rejection", log).execute(
+      "delegate",
+      {
+        tasks: [
+          task("rejected", [
+            { id: "secret-inline", source: "inline", text: "do-not-log-on-rejection" },
+            { id: "missing", source: "file", path: "missing.md" },
+          ]),
+        ],
+      },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const rejection = log
+      .records("audit-rejection")
+      .find((record) => record.type === "delegation_validation_rejected");
+
+    expect(result).toMatchObject({ isError: true });
+    expect(rejection).toMatchObject({
+      type: "delegation_validation_rejected",
+      errors: [
+        expect.objectContaining({
+          code: "context-artifact-not-materialized",
+          task_id: "rejected",
+          artifact_id: "missing",
+          path: "missing.md",
+        }),
+      ],
+    });
+    expect(JSON.stringify(rejection)).not.toContain("do-not-log-on-rejection");
+    expect(JSON.stringify(rejection)).not.toContain(primaryCheckout);
   });
 });
