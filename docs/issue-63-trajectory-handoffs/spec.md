@@ -1,6 +1,6 @@
 # Issue #63 — trajectory-preserving handoffs
 
-**Status: Acknowledged — fail-closed pre-selector resume remediation in progress**
+**Status: Acknowledged — implementation complete; fail-closed resume remediation re-review requested**
 
 ## Objective and scope
 
