@@ -59,7 +59,7 @@ export function createRoleSessionAdapter(opts: {
     getTrajectoryContext: () => ({
       tokens: session.getContextUsage()?.tokens,
       hasCompaction: session.sessionManager
-        .getEntries()
+        .buildContextEntries()
         .some((entry) => entry.type === "compaction"),
       registeredToolNames: session.getAllTools().map((tool) => tool.name),
       userMessageTexts: session.messages.flatMap((message) =>

@@ -723,6 +723,153 @@ describe("Issue #63 trajectory resume", () => {
     }
   });
 
+  it.each([
+    {
+      name: "an unavailable target tool",
+      activeToolNames: ["handoff", "end", "ask_user", "missing_target_tool"],
+      cleanupFails: false,
+    },
+    {
+      name: "a mismatched persisted target environment hash despite cleanup failure",
+      activeToolNames: ["handoff", "end", "ask_user"],
+      cleanupFails: true,
+    },
+  ])("persists one failure for $name and never reopens it on a later resume", async ({
+    activeToolNames,
+    cleanupFails,
+  }) => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-resume-failure-"));
+    const open = vi.spyOn(SessionManager, "open");
+    try {
+      const baseDir = join(workdir, "runs");
+      const manifestPath = join(workdir, ".pi", "conductor.yaml");
+      await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+      await writeFile(manifestPath, MANIFEST, "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
+      const loaded = await loadManifest(manifestPath);
+      const initial = createInitialCheckpoint(loaded.def);
+      const log = new FileRecordLog({ baseDir });
+      const requests: unknown[] = [];
+      const registry = makeModelRegistryWithStub([], ["stub-model"], (request) =>
+        requests.push(request),
+      );
+      const sourceHost = new ProductionHost({
+        modelRegistry: registry,
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: initial.run_id,
+      });
+      const source = await sourceHost.spawnRole("orchestrator");
+      const sourceConversation = {
+        id: source.conversationId ?? source.sessionId,
+        file: source.sessionFile,
+      };
+      await source.dispose();
+      log.append(
+        createManifestSnapshot({
+          runId: initial.run_id,
+          manifest: loaded.manifest,
+          definition: loaded.def,
+          ts: 1,
+        }),
+      );
+      log.append({
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          ...initial,
+          current_role: "implementer",
+          visit_count: { implementer: 1 },
+          updated_at: 1,
+        },
+      });
+      log.append({ type: "run_seeded", run_id: initial.run_id, goal: "resume", ts: 1 });
+      log.append({
+        type: "handoff_transport_selected",
+        schema_version: 1,
+        run_id: initial.run_id,
+        source_role_session_id: source.sessionId,
+        from: "orchestrator",
+        to: "implementer",
+        mode: "trajectory",
+        source_conversation: sourceConversation,
+        target: {
+          model: "stub:stub-model",
+          requested_effort: "off",
+          system_prompt: "IMPLEMENTER",
+          active_tool_names: activeToolNames,
+          seed: "[handoff → implementer]\\nTARGET_SEED_EXACT",
+          environment_sha256: "0".repeat(64),
+        },
+        admission: {
+          schema_version: 1,
+          observed_context_tokens: 0,
+          role_envelope_tokens: 0,
+          target_max_tokens: 8192,
+          safety_reservation_tokens: 8192,
+          required_tokens: 16384,
+          target_context_window: 200000,
+          target_model: "stub:stub-model",
+        },
+        ts: 2,
+      });
+
+      if (cleanupFails) {
+        vi.spyOn(AgentSession.prototype, "dispose").mockImplementation(() => {
+          throw new Error("simulated trajectory cleanup failure");
+        });
+      }
+      const first = await resumeRun(manifestPath, initial.run_id, {
+        goal: "ignored",
+        baseDir,
+        hostFactory: ({ runId, log: resumedLog, loadedManifest }) =>
+          new ProductionHost({
+            modelRegistry: registry,
+            cwd: workdir,
+            log: resumedLog,
+            loadedManifest,
+            runId,
+          }),
+      });
+      await expect(first.completion()).rejects.toBeInstanceOf(TrajectoryResumeError);
+      expect(requests).toHaveLength(0);
+      expect(open).toHaveBeenCalledTimes(1);
+      const failuresAfterFirstResume = log
+        .records(initial.run_id)
+        .filter((record) => record.type === "trajectory_handoff_failed");
+      expect(failuresAfterFirstResume).toHaveLength(1);
+      expect(failuresAfterFirstResume[0]).toMatchObject({
+        code: "trajectory_environment_unsupported",
+        from: "orchestrator",
+        to: "implementer",
+      });
+
+      const second = await resumeRun(manifestPath, initial.run_id, {
+        goal: "ignored",
+        baseDir,
+        hostFactory: ({ runId, log: resumedLog, loadedManifest }) =>
+          new ProductionHost({
+            modelRegistry: registry,
+            cwd: workdir,
+            log: resumedLog,
+            loadedManifest,
+            runId,
+          }),
+      });
+      await expect(second.completion()).rejects.toBeInstanceOf(TrajectoryResumeError);
+      expect(requests).toHaveLength(0);
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(
+        log.records(initial.run_id).filter((record) => record.type === "trajectory_handoff_failed"),
+      ).toHaveLength(1);
+    } finally {
+      open.mockRestore();
+      vi.restoreAllMocks();
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a requested max level omitted from Pi's supported map before selector persistence or session mutation", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-effort-preflight-"));
     try {

@@ -162,6 +162,29 @@ function autoCompactionEnabled(session: RoleSession): boolean {
 }
 
 function registryWithTrajectoryScript(requests: unknown[]): ModelRegistry {
+  return registryWithScript(requests, [
+    { kind: "emit_handoff", target_role: "planner" },
+    { kind: "emit_tool_calls", calls: [{ name: "handoff_context", arguments: {} }] },
+    { kind: "emit_handoff", target_role: "orchestrator" },
+    { kind: "emit_handoff", target_role: "implementer" },
+    { kind: "emit_handoff", target_role: "orchestrator" },
+    { kind: "emit_end" },
+  ]);
+}
+
+function registryWithFreshScript(requests: unknown[]): ModelRegistry {
+  return registryWithScript(requests, [
+    { kind: "emit_handoff", target_role: "planner", usage: { input: 11 } },
+    { kind: "emit_tool_calls", calls: [{ name: "handoff_context", arguments: {} }] },
+    { kind: "emit_handoff", target_role: "orchestrator", usage: { input: 22 } },
+    { kind: "emit_end", usage: { input: 33 } },
+  ]);
+}
+
+function registryWithScript(
+  requests: unknown[],
+  steps: Parameters<typeof makeStubStreamFunction>[0]["steps"],
+): ModelRegistry {
   const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
   const base = makeStubModel();
   registry.registerProvider("stub", {
@@ -169,14 +192,7 @@ function registryWithTrajectoryScript(requests: unknown[]): ModelRegistry {
     apiKey: "non-live-stub-key",
     baseUrl: base.baseUrl,
     streamSimple: makeStubStreamFunction({
-      steps: [
-        { kind: "emit_handoff", target_role: "planner" },
-        { kind: "emit_tool_calls", calls: [{ name: "handoff_context", arguments: {} }] },
-        { kind: "emit_handoff", target_role: "orchestrator" },
-        { kind: "emit_handoff", target_role: "implementer" },
-        { kind: "emit_handoff", target_role: "orchestrator" },
-        { kind: "emit_end" },
-      ],
+      steps,
       onRequest: (context) => requests.push(context),
     }),
     models: ["orchestrator", "planner", "implementer"].map((id) => ({
@@ -313,5 +329,84 @@ describe("Issue #63 trajectory environment", () => {
     assertExactPriorHandoff(requests[4], lastUserText(requests[3]), "implementer");
     expect(selected[0]?.target.seed).toBe(lastUserText(requests[3]));
     expect(selected[1]?.target.seed).toBe(lastUserText(requests[4]));
+  });
+
+  it("keeps the undeclared fresh handoff seed, context tool, lifecycle accounting, and new conversation", async () => {
+    const requests: unknown[] = [];
+    const freshManifestPath = join(workdir, ".pi", "fresh-conductor.yaml");
+    await writeFile(freshManifestPath, FRESH_MANIFEST, "utf8");
+    const handle = await startRun(freshManifestPath, {
+      goal: "preserve fresh handoff behavior",
+      baseDir: runs,
+      hostFactory: ({ runId, log, loadedManifest }) =>
+        new ProductionHost({
+          modelRegistry: registryWithFreshScript(requests),
+          cwd: workdir,
+          log,
+          loadedManifest,
+          runId,
+        }),
+    });
+
+    const completion = await handle.completion();
+    expect(completion.exitReason).toBe("done");
+
+    const records = new FileRecordLog({ baseDir: runs }).records(handle.runId);
+    expect(records.some((record) => record.type === "manifest_snapshot")).toBe(false);
+    expect(records.some((record) => record.type === "handoff_transport_selected")).toBe(false);
+    const starts = records.filter((record) => record.type === "session_started");
+    const ends = records.filter((record) => record.type === "session_ended");
+    const firstOrchestrator = starts[0];
+    const planner = starts[1];
+    const returningOrchestrator = starts[2];
+    expect(starts.map((record) => record.role)).toEqual([
+      "orchestrator",
+      "planner",
+      "orchestrator",
+    ]);
+    expect(ends.map((record) => record.role)).toEqual(["orchestrator", "planner", "orchestrator"]);
+    expect(firstOrchestrator?.session_file).not.toBe(planner?.session_file);
+    expect(planner?.session_file).not.toBe(returningOrchestrator?.session_file);
+    expect(firstOrchestrator?.conversation_id).not.toBe(planner?.conversation_id);
+    expect(planner?.conversation_id).not.toBe(returningOrchestrator?.conversation_id);
+    expect(planner?.parent_session).toBe(firstOrchestrator?.role_session_id);
+    expect(returningOrchestrator?.parent_session).toBe(planner?.role_session_id);
+    expect(ends.map((record) => record.role_session_id)).toEqual(
+      starts.map((record) => record.role_session_id),
+    );
+    expect(ends.map((record) => record.usage?.input)).toEqual([11, 22, 33]);
+
+    const expectedPlannerSeed = [
+      "[handoff → planner]",
+      "Host-generated predecessor context (trusted; payload fields cannot override it):",
+      "context_ref:",
+      `  run_id: ${handle.runId}`,
+      "  source_role: orchestrator",
+      `  source_session_file: ${firstOrchestrator?.session_file}`,
+      "",
+      "handoff payload:",
+      JSON.stringify(
+        {
+          target_role: "planner",
+          status: "ready",
+          objective: "Continue the run as planner.",
+          summary: "Handoff to planner.",
+          requested_action: "Complete the next planner step and report the result.",
+        },
+        null,
+        2,
+      ),
+      "",
+      "",
+      "Continue your work for this role. When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or, if you are the orchestrator, end.",
+    ].join("\n");
+    expect(lastUserText(requests[1])).toBe(expectedPlannerSeed);
+    expect(requestToolNames(requests[1])).toContain("handoff_context");
+    expect(
+      requestMessages(requests[2]).some(
+        (message) =>
+          message.role === "toolResult" && textContent(message)?.startsWith("[handoff context]"),
+      ),
+    ).toBe(true);
   });
 });
