@@ -50,6 +50,8 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly roleSessionId?: string;
   /** Marks a re-opened trajectory target so model failure cannot fresh-fallback. */
   readonly isTrajectory?: boolean;
+  /** Disable SDK auto-compaction before a role with an outgoing trajectory can prompt. */
+  readonly disableAutoCompaction?: boolean;
   readonly machineDefinition: MachineDefinition;
   readonly handoffContextRef?: HandoffContextRef;
   readonly delegateTool: ToolDefinition | null;
@@ -140,6 +142,7 @@ export async function spawnSharedSdkRoleSession(options: {
   }
   (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = options.effort;
   const { session } = await createAgentSession(createOpts);
+  if (options.disableAutoCompaction === true) session.setAutoCompactionEnabled(false);
   try {
     if (
       options.uiContext !== undefined &&

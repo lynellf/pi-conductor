@@ -396,6 +396,10 @@ export class ProductionHost implements Host {
       sessionDir: this.sessionDir,
       runId: this.runId,
       machineDefinition: this.loadedManifest.def,
+      disableAutoCompaction:
+        this.loadedManifest.manifest.handoffs?.some(
+          (policy) => policy.from === role && policy.mode === "trajectory",
+        ) === true,
       ...(opts.handoffContextRef !== undefined && { handoffContextRef: opts.handoffContextRef }),
       delegateTool,
       ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
@@ -462,6 +466,10 @@ export class ProductionHost implements Host {
       ),
       roleSessionId: randomUUID(),
       isTrajectory: true,
+      disableAutoCompaction:
+        this.loadedManifest.manifest.handoffs?.some(
+          (policy) => policy.from === role && policy.mode === "trajectory",
+        ) === true,
       runId: this.runId,
       machineDefinition: this.loadedManifest.def,
       delegateTool: null,
