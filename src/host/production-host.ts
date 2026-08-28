@@ -62,9 +62,9 @@ import {
   snapshotPinned,
 } from "../persistence/log.js";
 import {
+  type HandoffTransportSelectedRecord,
   sha256Canonical,
   TrajectoryResumeError,
-  type HandoffTransportSelectedRecord,
 } from "../persistence/trajectory-records.js";
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
@@ -72,7 +72,6 @@ import type { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
-import { admitTrajectory, TrajectoryHandoffError } from "./trajectory-admission.js";
 import type {
   ArtifactRouteSource,
   Host,
@@ -99,6 +98,7 @@ import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
 import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
 import type { SessionEventSource } from "./session-event-handler.js";
 import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
+import { admitTrajectory, TrajectoryHandoffError } from "./trajectory-admission.js";
 import {
   assertPersistedSnapshotPinResolves,
   assertSupportedWorkspaceBackend,
@@ -275,7 +275,7 @@ export class ProductionHost implements Host {
     const roleConfig = this.lookupRoleConfig(role);
     const resumedTrajectory = this.latestTrajectorySelection(role);
     if (resumedTrajectory !== null) {
-      return this.resumeTrajectoryRole(role, roleConfig, resumedTrajectory, opts.visitIndex ?? 1);
+      return this.resumeTrajectoryRole(role, roleConfig, resumedTrajectory);
     }
     const roleWorkspaceConfig = roleConfig?.workspace;
     const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
@@ -431,7 +431,6 @@ export class ProductionHost implements Host {
     role: Role,
     roleConfig: RoleConfig | undefined,
     selected: HandoffTransportSelectedRecord,
-    visitIndex: number,
   ): Promise<RoleSession> {
     if (
       selected.schema_version !== 1 ||

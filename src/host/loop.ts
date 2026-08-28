@@ -95,7 +95,6 @@ import { validateEmission } from "../seam/validate-emission.js";
 import { ArtifactCollectionError } from "./artifacts/collect.js";
 import { ArtifactRoutingError, formatArtifactsUnavailableSeedSection } from "./artifacts/route.js";
 import { NoMoreModelsError } from "./errors.js";
-import { TrajectoryHandoffError } from "./trajectory-admission.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type {
   ArtifactRouteSource,
@@ -108,6 +107,7 @@ import type {
 import { RpcChildExitError } from "./rpc/protocol.js";
 import { formatGuidedPrompt, type RunControl } from "./run-control.js";
 import { formatRunMemorySeed } from "./run-memory.js";
+import { TrajectoryHandoffError } from "./trajectory-admission.js";
 
 // ─── Public API ────────────────────────────────────────────────────────
 

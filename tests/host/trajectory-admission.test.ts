@@ -1,6 +1,9 @@
 import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { admitTrajectory, TrajectoryHandoffError } from "../../src/host/trajectory-admission.js";
+import {
+  admitTrajectory,
+  type TrajectoryHandoffError,
+} from "../../src/host/trajectory-admission.js";
 
 function model(overrides: Partial<Model<never>> = {}): Model<never> {
   return {
