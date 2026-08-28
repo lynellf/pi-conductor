@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.19.0] - 2026-08-28
+
+### Enhancements
+
+- **Read-only context artifacts for projected delegates** (Issue #60). Delegated
+  tasks can supply bounded inline text or a clean, Git-pinned repository file as
+  immutable prompt context. The host rejects unsafe, duplicate, changed,
+  oversized, non-UTF-8, or unavailable sources for the entire batch before any
+  child is created. Durable start and rejection records retain a redacted
+  artifact inventory for auditability without persisting supplied text.
+
+### Security
+
+- Pinned blob reads disable Git promisor lazy fetches, so a missing local object
+  fails closed instead of causing an unexpected remote fetch during delegation
+  preflight.
+
+### Notes
+
+- Context artifacts are additive. They provide prompt context only and do not
+  widen a child’s projected file-tool authority.
+
 ## [0.18.0] - 2026-08-26
 
 ### Enhancements
