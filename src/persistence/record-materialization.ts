@@ -1,7 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
-import { verifyManifestSnapshot, type ManifestSnapshotRecord } from "./trajectory-records.js";
+import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
 /** Typed rejection of an unavailable workspace guarantee at the persistence boundary. */
 export class WorkspaceGuaranteeError extends Error {

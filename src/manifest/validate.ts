@@ -580,7 +580,10 @@ function validateHandoffPolicies(
     const source = manifest.roles.find((role) => role.name === policy.from);
     const target = manifest.roles.find((role) => role.name === policy.to);
     if (source === undefined || target === undefined) continue;
-    if ((source.workspace?.backend ?? "shared") !== "shared" || (target.workspace?.backend ?? "shared") !== "shared") {
+    if (
+      (source.workspace?.backend ?? "shared") !== "shared" ||
+      (target.workspace?.backend ?? "shared") !== "shared"
+    ) {
       errors.push({
         code: "trajectory-workspace-unsupported",
         message: `trajectory policy '${policy.from}' → '${policy.to}' requires shared workspaces`,
