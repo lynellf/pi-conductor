@@ -71,6 +71,7 @@ import type {
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
+import { modeFor } from "../manifest/handoffs.js";
 import type {
   ArtifactDeliveryRecord,
   CheckpointSnapshot,
@@ -83,6 +84,8 @@ import {
   createManifestSnapshot,
   type HandoffTransportSelectedRecord,
   type ManifestSnapshotRecord,
+  type TrajectoryHandoffFailedRecord,
+  TrajectoryResumeError,
   validateTrajectorySelector,
   verifyManifestSnapshot,
 } from "../persistence/trajectory-records.js";
@@ -316,6 +319,13 @@ export async function resumeRun(
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
     const resumedRecords = log.records(runId);
+    assertNoUnselectedTrajectoryHandoff(
+      resumedRecords,
+      runId,
+      reconciledCheckpoint,
+      resumedLoaded.manifest.handoffs,
+      log,
+    );
     // Validate the selected receiver's persisted environment at the public
     // resume boundary. A corrupt selector must not reach seed derivation,
     // host construction, or a fake-host prompt.
@@ -497,6 +507,126 @@ function latestArtifactDelivery(
     return record.receiver_role === checkpoint.current_role ? record : null;
   }
   return null;
+}
+
+/**
+ * Fail closed when a crash reaches a trajectory receiver before its exact
+ * target environment was made durable (Issue #63 §4.5). A fresh spawn cannot
+ * reconstruct that environment without changing the selected transport.
+ */
+function assertNoUnselectedTrajectoryHandoff(
+  records: readonly PersistedRecord[],
+  runId: string,
+  checkpoint: Checkpoint,
+  handoffs: LoadedManifest["manifest"]["handoffs"],
+  log: RecordLog,
+): void {
+  if (checkpoint.current_role === "done") return;
+
+  const acceptedIndex = findIncomingAcceptedHandoff(records, runId, checkpoint.current_role);
+  if (acceptedIndex === null) return;
+  const accepted = records[acceptedIndex];
+  if (accepted?.type !== "transition_accepted") return;
+  if (modeFor(handoffs, accepted.from, accepted.to) !== "trajectory") return;
+
+  const source = sourceConversationForAcceptedHandoff(records, acceptedIndex, accepted);
+  const laterRecords = records.slice(acceptedIndex + 1);
+  const matchingSelector = laterRecords.find(
+    (record): record is HandoffTransportSelectedRecord =>
+      record.type === "handoff_transport_selected" &&
+      record.from === accepted.from &&
+      record.to === accepted.to &&
+      record.source_role_session_id === source.roleSessionId,
+  );
+  if (matchingSelector !== undefined) {
+    // Preserve the existing typed corrupt-selector path; it must not become
+    // an invented fresh receiver merely because this guard ran first.
+    validateTrajectorySelector(matchingSelector);
+    return;
+  }
+
+  const priorFailure = laterRecords.find(
+    (record): record is TrajectoryHandoffFailedRecord =>
+      record.type === "trajectory_handoff_failed" &&
+      record.from === accepted.from &&
+      record.to === accepted.to &&
+      record.source_conversation.id === source.conversation.id &&
+      record.source_conversation.file === source.conversation.file,
+  );
+  if (priorFailure !== undefined) {
+    throw new TrajectoryResumeError(priorFailure.message, priorFailure.code);
+  }
+
+  const message =
+    "trajectory receiver checkpoint has no durable target environment; refusing fresh resume";
+  log.append({
+    type: "trajectory_handoff_failed",
+    schema_version: 1,
+    run_id: runId,
+    from: accepted.from,
+    to: accepted.to,
+    source_conversation: source.conversation,
+    code: "trajectory_transport_unrecoverable",
+    message,
+    ts: Date.now(),
+  });
+  throw new TrajectoryResumeError(message, "trajectory_transport_unrecoverable");
+}
+
+/** Find the accepted handoff that produced the currently resumed role. */
+function findIncomingAcceptedHandoff(
+  records: readonly PersistedRecord[],
+  runId: string,
+  role: Role,
+): number | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (
+      record?.type === "transition_accepted" &&
+      record.run_id === runId &&
+      record.event === "handoff" &&
+      record.to === role
+    ) {
+      return index;
+    }
+  }
+  return null;
+}
+
+/** Recover the source's durable logical and physical identities for a failed selection. */
+function sourceConversationForAcceptedHandoff(
+  records: readonly PersistedRecord[],
+  acceptedIndex: number,
+  accepted: Extract<PersistedRecord, { readonly type: "transition_accepted" }>,
+): {
+  readonly roleSessionId: string;
+  readonly conversation: { readonly id: string; readonly file: string };
+} {
+  for (let index = acceptedIndex - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (
+      record?.type === "session_started" &&
+      record.role === accepted.role &&
+      record.session_file === accepted.session_file
+    ) {
+      const roleSessionId = record.role_session_id ?? accepted.session_file;
+      return {
+        roleSessionId,
+        conversation: {
+          id: record.conversation_id ?? roleSessionId,
+          file: accepted.session_file,
+        },
+      };
+    }
+  }
+
+  // A policy-bearing run writes lifecycle identities. If a damaged log lacks
+  // one, the session file remains the only durable identity; it is still
+  // safer to close the run than to reinterpret the selected edge as fresh.
+  return {
+    roleSessionId: accepted.session_file,
+    conversation: { id: accepted.session_file, file: accepted.session_file },
+  };
 }
 
 /** Find and validate the exact selector that still targets this checkpoint. */
