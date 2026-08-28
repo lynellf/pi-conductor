@@ -21,7 +21,10 @@ import {
   selectedSummary,
 } from "./child-result-mapping.js";
 import { type PreparedTask, prepareTaskContextArtifacts } from "./context-artifact-admission.js";
-import type { ResolvedContextArtifact } from "./context-artifacts.js";
+import type {
+  ResolveContextArtifactBatchOptions,
+  ResolvedContextArtifact,
+} from "./context-artifacts.js";
 import { DelegateToolError } from "./delegate-error.js";
 
 export type { DelegateValidationErrorItem } from "./delegate-error.js";
@@ -88,6 +91,8 @@ export interface DelegateToolOptions {
   readonly primaryCheckout: string;
   readonly systemPromptRoot: string;
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
+  /** Deterministic resolver race injection for tests; never exposed by the delegate tool schema. */
+  readonly contextArtifactTestHook?: ResolveContextArtifactBatchOptions["testHook"];
   readonly isAdmissionClosed?: () => boolean;
   readonly onChildStarted?: (info: PoolChildStartedInfo) => void;
   readonly onChildCompleted?: (result: PoolCompletedResult) => void;
@@ -188,6 +193,7 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
     options.primaryCheckout,
     baseCommit,
     materializedParentPaths,
+    options.contextArtifactTestHook,
   );
   if (!contextResolution.valid) {
     const errors = contextResolution.errors;

@@ -4,6 +4,7 @@ import { effectiveContextArtifactLimits } from "../../manifest/context-artifact-
 import type { DelegationPolicy } from "../../manifest/types.js";
 import type {
   ContextArtifactResolutionError,
+  ResolveContextArtifactBatchOptions,
   ResolvedContextArtifact,
 } from "./context-artifacts.js";
 import { resolveContextArtifactBatch } from "./context-artifacts.js";
@@ -21,6 +22,7 @@ export async function prepareTaskContextArtifacts(
   primaryCheckout: string,
   baseCommit: string,
   materializedParentPaths: readonly string[],
+  testHook?: ResolveContextArtifactBatchOptions["testHook"],
 ): Promise<
   | { readonly valid: true; readonly tasks: readonly PreparedTask[] }
   | { readonly valid: false; readonly errors: readonly ContextArtifactResolutionError[] }
@@ -41,6 +43,7 @@ export async function prepareTaskContextArtifacts(
       taskId: task.taskId,
       ...(task.contextArtifacts === undefined ? {} : { artifacts: task.contextArtifacts }),
     })),
+    ...(testHook === undefined ? {} : { testHook }),
   });
   if (!resolution.valid) return resolution;
 
