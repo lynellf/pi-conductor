@@ -106,10 +106,14 @@ export function createManifestSnapshot(args: {
 /** Verify that a persisted snapshot's hash and pinned definition agree. */
 export function verifyManifestSnapshot(record: ManifestSnapshotRecord): ManifestSnapshotRecord {
   if (record.schema_version !== 1) {
-    throw new ManifestSnapshotError(`unsupported manifest snapshot schema ${record.schema_version}`);
+    throw new ManifestSnapshotError(
+      `unsupported manifest snapshot schema ${record.schema_version}`,
+    );
   }
   if (record.manifest_version !== record.definition.manifest_version) {
-    throw new ManifestSnapshotError("manifest snapshot version does not match its pinned definition");
+    throw new ManifestSnapshotError(
+      "manifest snapshot version does not match its pinned definition",
+    );
   }
   const expected = sha256Canonical({
     schema_version: record.schema_version,

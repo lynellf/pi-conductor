@@ -131,7 +131,7 @@ function parseHandoffPolicy(raw: unknown, index: number): HandoffPolicy {
   }
   const mode = entry.mode;
   if (mode !== "fresh" && mode !== "trajectory") {
-    throw new ManifestParseError(`${path}.mode must be \"fresh\" or \"trajectory\"`);
+    throw new ManifestParseError(`${path}.mode must be "fresh" or "trajectory"`);
   }
   return Object.freeze({
     from: toNonEmptyString(entry.from, `${path}.from`),

@@ -60,7 +60,6 @@ import { join } from "node:path";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { createInitialCheckpoint } from "../core/reduce.js";
-import { toMachineDefinition } from "../manifest/definition.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type {
   Checkpoint,
@@ -70,6 +69,7 @@ import type {
   SessionLifecycleEvent,
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
+import { toMachineDefinition } from "../manifest/definition.js";
 import type {
   ArtifactDeliveryRecord,
   CheckpointSnapshot,
@@ -80,8 +80,8 @@ import type {
 } from "../persistence/log.js";
 import {
   createManifestSnapshot,
-  verifyManifestSnapshot,
   type ManifestSnapshotRecord,
+  verifyManifestSnapshot,
 } from "../persistence/trajectory-records.js";
 import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
