@@ -84,11 +84,23 @@ export interface ModelConfig {
 /**
  * §8 / §10 / delegation lite §3: raw manifest shape parsed from `.pi/conductor.yaml`.
  */
+/** Host-selected transport mode for an accepted legal handoff (Issue #63). */
+export type HandoffMode = "fresh" | "trajectory";
+
+/** One optional transport policy; the reducer never receives this configuration. */
+export interface HandoffPolicy {
+  readonly from: Role;
+  readonly to: Role;
+  readonly mode: HandoffMode;
+}
+
 export interface Manifest {
   /** §10: human-bumped integer, pinned at run-start, never mutated. */
   readonly version: number;
   /** Authorized worker roles that may request completion through handoff. */
   readonly end_request_roles?: readonly Role[];
+  /** Optional host-only transport policies. Omitted policies are fresh (Issue #63). */
+  readonly handoffs?: readonly HandoffPolicy[];
   readonly roles: readonly RoleConfig[];
   /** Delegation lite §3: optional subagent profile declarations. */
   readonly subagents?: readonly SubagentProfile[];
