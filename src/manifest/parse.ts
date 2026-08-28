@@ -25,6 +25,7 @@
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
+import { parseContextArtifactLimits } from "./context-artifact-limits.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
@@ -174,11 +175,19 @@ function parseDelegationPolicy(raw: unknown, roleIndex: number): DelegationPolic
     `${path}.max_children_per_session`,
   );
   const max_parallel = toPositiveInt(entry.max_parallel, `${path}.max_parallel`);
+  const context_artifact_limits =
+    entry.context_artifact_limits === undefined
+      ? undefined
+      : parseContextArtifactLimits(
+          entry.context_artifact_limits,
+          `${path}.context_artifact_limits`,
+        );
 
   return Object.freeze({
     allowed_subagents,
     max_children_per_session,
     max_parallel,
+    ...(context_artifact_limits === undefined ? {} : { context_artifact_limits }),
   }) as DelegationPolicy;
 }
 
