@@ -16,7 +16,7 @@
  */
 
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
-import type { DelegateArgs } from "../../seam/schema.js";
+import type { ContextArtifact, DelegateArgs } from "../../seam/schema.js";
 import { isValidTaskId } from "./ids.js";
 import { isSafeExactProjectionPath } from "./projection.js";
 import {
@@ -61,6 +61,8 @@ export interface ValidatedTask {
   readonly expectedOutput: string;
   /** Exact child projection, explicitly selected or inherited from a sparse parent. */
   readonly projectionPaths?: readonly string[];
+  /** Raw Issue #60 descriptors retained only until pre-spawn host resolution. */
+  readonly contextArtifacts?: readonly ContextArtifact[];
 }
 
 // ─── Git cleanliness check result ──────────────────────────────────────
@@ -219,6 +221,9 @@ export function validateBatch(
         : task.projection_paths === undefined
           ? {}
           : { projectionPaths: Object.freeze([...task.projection_paths]) }),
+      ...(task.context_artifacts === undefined
+        ? {}
+        : { contextArtifacts: Object.freeze([...task.context_artifacts]) }),
     };
   });
 
