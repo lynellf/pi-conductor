@@ -53,6 +53,7 @@ describe("Issue #63 trajectory persistence records", () => {
         requested_effort: "medium",
         system_prompt: "TARGET",
         active_tool_names: ["handoff", "end", "ask_user"],
+        seed: "[handoff → orchestrator]\nTARGET_SEED_EXACT",
         environment_sha256: "a".repeat(64),
       },
       admission: {
@@ -72,6 +73,7 @@ describe("Issue #63 trajectory persistence records", () => {
       "requested_effort",
       "system_prompt",
       "active_tool_names",
+      "seed",
       "environment_sha256",
     ] as const) {
       const target = { ...selector.target } as Record<string, unknown>;
@@ -100,6 +102,7 @@ describe("Issue #63 trajectory persistence records", () => {
         requested_effort: "max",
         system_prompt: "TARGET",
         active_tool_names: ["handoff", "end", "ask_user"],
+        seed: "[handoff → orchestrator]\nTARGET_SEED_EXACT",
         environment_sha256: "a".repeat(64),
       },
       admission: {

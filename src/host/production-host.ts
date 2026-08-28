@@ -525,15 +525,37 @@ export class ProductionHost implements Host {
           "trajectory selector target environment hash does not match",
         );
       }
+      admitTrajectory({
+        source: context,
+        targetModel: resolved.model,
+        targetModelName: persisted.target.model,
+        systemPrompt: persisted.target.system_prompt,
+        activeToolNames: persisted.target.active_tool_names,
+        activeToolDefinitions,
+        targetSeed: persisted.target.seed,
+      });
       return session;
     } catch (error) {
       await session?.dispose();
       if (error instanceof TrajectoryResumeError) throw error;
-      throw new TrajectoryResumeError(
+      const code =
+        error instanceof TrajectoryHandoffError ? error.code : "trajectory_environment_unsupported";
+      const message =
         error instanceof Error
           ? error.message
-          : "trajectory target environment could not be restored",
-      );
+          : "trajectory target environment could not be restored";
+      this.persistRecord({
+        type: "trajectory_handoff_failed",
+        schema_version: 1,
+        run_id: this.runId,
+        from: persisted.from,
+        to: persisted.to,
+        source_conversation: persisted.source_conversation,
+        code,
+        message,
+        ts: Date.now(),
+      });
+      throw new TrajectoryResumeError(message, code);
     }
   }
 
@@ -818,6 +840,7 @@ export class ProductionHost implements Host {
           requested_effort: modelEntry.effort,
           system_prompt: targetPrompt,
           active_tool_names: activeToolNames,
+          seed: args.targetSeed,
           environment_sha256: environmentSha,
         },
         admission,

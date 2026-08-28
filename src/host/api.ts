@@ -324,6 +324,7 @@ export async function resumeRun(
       runId,
       reconciledCheckpoint,
     );
+    const initialTrajectorySeed = latestTrajectorySeed(resumedRecords, runId, reconciledCheckpoint);
     const initialVisitIndexByRole =
       initialParentSessionId === null ? undefined : nextVisitIndexes(resumedRecords, runId);
 
@@ -346,6 +347,7 @@ export async function resumeRun(
       lease,
       initialArtifactDelivery,
       initialParentSessionId,
+      ...(initialTrajectorySeed !== null && { initialTrajectorySeed }),
       ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
     });
   } catch (error) {
@@ -376,6 +378,8 @@ interface RunWithCompletionArgs {
   readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
   /** Restored logical parent for a selected trajectory receiver. */
   readonly initialParentSessionId?: string | null;
+  /** Exact persisted target prompt for a selected trajectory receiver. */
+  readonly initialTrajectorySeed?: string;
   /** Next lifecycle visit indexes reconstructed from durable starts. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Live ownership held from API entry through the final loop outcome. */
@@ -426,6 +430,9 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     initialArtifactDelivery: args.initialArtifactDelivery ?? null,
     ...(args.initialParentSessionId !== undefined && {
       initialParentSessionId: args.initialParentSessionId,
+    }),
+    ...(args.initialTrajectorySeed !== undefined && {
+      initialTrajectorySeed: args.initialTrajectorySeed,
     }),
     ...(args.initialVisitIndexByRole !== undefined && {
       initialVisitIndexByRole: args.initialVisitIndexByRole,
@@ -482,6 +489,30 @@ function latestArtifactDelivery(
     const record = records[index];
     if (record?.type !== "artifact_delivery" || record.run_id !== runId) continue;
     return record.receiver_role === checkpoint.current_role ? record : null;
+  }
+  return null;
+}
+
+/** Recover the exact selected target prompt for a resumed trajectory receiver. */
+function latestTrajectorySeed(
+  records: readonly PersistedRecord[],
+  runId: string,
+  checkpoint: Checkpoint,
+): string | null {
+  if (checkpoint.current_role === "done") return null;
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record === undefined || !("run_id" in record) || record.run_id !== runId) continue;
+    if (record.type === "handoff_transport_selected" && record.to === checkpoint.current_role) {
+      return record.target.seed;
+    }
+    if (
+      record.type === "transition_accepted" &&
+      record.event === "handoff" &&
+      record.to === checkpoint.current_role
+    ) {
+      return null;
+    }
   }
   return null;
 }
