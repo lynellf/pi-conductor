@@ -67,7 +67,7 @@ export async function spawnSharedSdkRoleSession(options: {
   const loader = new DefaultResourceLoader({
     cwd: options.cwd,
     agentDir: options.agentDir,
-    systemPromptOverride: () => undefined,
+    systemPromptOverride: () => activeSystemPrompt,
     extensionFactories: [
       {
         name: "conductor-trajectory-role-environment",
