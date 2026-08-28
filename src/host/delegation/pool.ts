@@ -83,8 +83,8 @@ export interface PoolConfig {
 }
 
 /** Arguments supplied to one pool worker. */
-export interface PoolSpawnOpts {
-  readonly task: ValidatedTask;
+export interface PoolSpawnOpts<Task extends ValidatedTask = ValidatedTask> {
+  readonly task: Task;
   readonly baseCommit: string;
   readonly runStateDir: string;
   readonly runId: string;
@@ -98,10 +98,10 @@ export interface PoolSpawnOpts {
  * required for every task; an unexpected throw becomes one synthetic failure
  * so a sibling can always continue.
  */
-export async function runBoundedPool(
-  tasks: readonly ValidatedTask[],
+export async function runBoundedPool<Task extends ValidatedTask>(
+  tasks: readonly Task[],
   config: PoolConfig,
-  spawnTask: (opts: PoolSpawnOpts) => Promise<void>,
+  spawnTask: (opts: PoolSpawnOpts<Task>) => Promise<void>,
 ): Promise<PoolResult> {
   const results: PoolChildResult[] = new Array(tasks.length);
   let nextIndex = 0;
@@ -116,7 +116,7 @@ export async function runBoundedPool(
     }
   }
 
-  function runOne(task: ValidatedTask): Promise<PoolChildResult> {
+  function runOne(task: Task): Promise<PoolChildResult> {
     return new Promise((resolve) => {
       let settled = false;
       const settle = (result: PoolChildResult): void => {

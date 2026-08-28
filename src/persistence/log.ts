@@ -143,6 +143,37 @@ export interface ProgressiveDisclosureRecord {
 /** Delegation lite §7: usage contributed to perRun, perModel, and perSubagent rollups. */
 export interface SubagentUsage extends UsageRecord {}
 
+/** Issue #60: bounded append-only audit entry for one supplied artifact. */
+export type ContextArtifactAuditEntry =
+  | {
+      readonly ordinal: number;
+      readonly id: string;
+      readonly source: "inline";
+      readonly provenance: { readonly kind: "parent_inline" };
+      readonly byte_length: number;
+      readonly sha256: string;
+      readonly text: string;
+    }
+  | {
+      readonly ordinal: number;
+      readonly id: string;
+      readonly source: "file";
+      readonly provenance: {
+        readonly kind: "parent_materialized_file";
+        readonly path: string;
+        readonly base_commit: string;
+      };
+      readonly byte_length: number;
+      readonly sha256: string;
+    };
+
+/** Issue #60 versioned ordered inventory retained on newly written child starts. */
+export interface ContextArtifactsAudit {
+  readonly version: 1;
+  readonly total_utf8_bytes: number;
+  readonly artifacts: readonly ContextArtifactAuditEntry[];
+}
+
 /**
  * Delegation lite §7.1: appended after the child SDK session exists and its
  * real session file, worktree path, branch, and base commit are known, before prompt.
@@ -168,6 +199,8 @@ export interface SubagentStartedRecord {
   readonly task_fingerprint?: string;
   /** Issue #57: hash-only materialized projection cohort identity. */
   readonly projection_fingerprint?: ChildProjectionFingerprint;
+  /** Issue #60 audit inventory; absent historical records mean not recorded. */
+  readonly context_artifacts?: ContextArtifactsAudit;
   /** Resolved profile model retained for recovery and terminal roll-up. */
   readonly model: string;
   readonly session_file: string;
@@ -188,6 +221,8 @@ export interface DelegationValidationRejectedRecord {
   readonly errors: readonly {
     readonly code: string;
     readonly message: string;
+    readonly task_id?: string;
+    readonly artifact_id?: string;
     readonly path?: string;
   }[];
   readonly ts: number;
