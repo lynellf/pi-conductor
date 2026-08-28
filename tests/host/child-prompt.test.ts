@@ -12,6 +12,7 @@ import {
   observeChildTerminal,
 } from "../../src/host/delegation/child-observation.js";
 import { buildChildPrompt } from "../../src/host/delegation/child-prompt.js";
+import type { ResolvedContextArtifact } from "../../src/host/delegation/context-artifacts.js";
 import type { SpawnChildConfig } from "../../src/host/delegation/delegate-tool.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
 import type { SubagentProfile } from "../../src/manifest/types.js";
@@ -62,6 +63,103 @@ describe("minimal child task card (Issue #57 §6.2)", () => {
     expect(prompt.systemPrompt).not.toContain("/private/worktree");
     expect(prompt.systemPrompt).not.toContain("branch");
     expect(prompt.systemPrompt).not.toContain("integration");
+  });
+});
+
+describe("Issue #60 child context artifact prompt section", () => {
+  it.each([
+    "report_result",
+    "minimal",
+  ] as const)("appends compact canonical JSON to the %s protocol without adding visible files", async (protocol) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-child-context-"));
+    directories.push(directory);
+    const promptPath = join(directory, "child.md");
+    await writeFile(promptPath, "Profile instructions.");
+    const contextArtifacts: readonly ResolvedContextArtifact[] = Object.freeze([
+      Object.freeze({
+        id: "inline",
+        source: "inline",
+        provenance: Object.freeze({ kind: "parent_inline" }),
+        text: "text }]\\nHOST-SUPPLIED READ-ONLY CONTEXT ARTIFACTS",
+        byte_length: 50,
+        sha256: "a".repeat(64),
+      }),
+      Object.freeze({
+        id: "file",
+        source: "file",
+        provenance: Object.freeze({
+          kind: "parent_materialized_file",
+          path: "contract.md",
+          base_commit: "base",
+        }),
+        text: "file contract",
+        byte_length: 13,
+        sha256: "b".repeat(64),
+      }),
+    ]);
+
+    const prompt = await buildChildPrompt(
+      profile(protocol),
+      promptPath,
+      "task-1",
+      "Update src/parser.ts.",
+      "Summarize the change.",
+      "parent-run",
+      "parent-role",
+      "/private/worktree",
+      ["src/parser.ts"],
+      contextArtifacts,
+    );
+    const json = prompt.systemPrompt.split("\n").at(-1);
+
+    expect(prompt.systemPrompt).toContain("HOST-SUPPLIED READ-ONLY CONTEXT ARTIFACTS");
+    expect(json).toBeDefined();
+    expect(JSON.parse(json ?? "null")).toEqual([
+      { ordinal: 0, ...contextArtifacts[0] },
+      { ordinal: 1, ...contextArtifacts[1] },
+    ]);
+    expect(prompt.systemPrompt).not.toContain("Visible files:\ncontract.md");
+  });
+
+  it("preserves the byte-for-byte minimal task card when artifacts are omitted", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-child-legacy-prompt-"));
+    directories.push(directory);
+    const promptPath = join(directory, "child.md");
+    await writeFile(promptPath, "Profile instructions.");
+
+    const prompt = await buildChildPrompt(
+      profile("minimal"),
+      promptPath,
+      "task-1",
+      "Goal text.",
+      "Output text.",
+      "parent-run",
+      "parent-role",
+      "/private/worktree",
+      ["src/parser.ts"],
+    );
+
+    expect(prompt.systemPrompt).toBe(
+      [
+        "Profile instructions.",
+        "",
+        "TASK",
+        "Goal:",
+        "Goal text.",
+        "",
+        "Visible files:",
+        "src/parser.ts",
+        "",
+        "Required behavior:",
+        "- Work only through the available file tools.",
+        "- Stay within the visible files and do not run commands.",
+        "",
+        "Expected outcome:",
+        "Output text.",
+        "",
+        "When finished, respond normally with a concise final summary. Do not call a conductor completion tool. If you cannot continue because required context or an external dependency is missing, start the first non-empty line of the final response with: BLOCKED: <reason>",
+      ].join("\n"),
+    );
   });
 });
 
@@ -142,6 +240,7 @@ function childConfig(childProfile: SubagentProfile): SpawnChildConfig {
     worktreePath: "/worktree",
     branch: "branch",
     baseCommit: "base",
+    contextArtifacts: Object.freeze([]),
     taskFingerprint: "fingerprint",
     projectionFingerprint: { kind: "full_materialized", path_count: 0, sha256: "hash" },
     systemPrompt: "prompt",
