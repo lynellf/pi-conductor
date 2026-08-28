@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FileRecordLog, ProductionHost, startRun } from "../../src/index.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
+import { FileRecordLog, ProductionHost, startRun } from "../../src/index.js";
 
 const MANIFEST = `
 version: 1

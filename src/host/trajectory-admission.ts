@@ -1,7 +1,7 @@
 /** Conservative trajectory-context admission — Issue #63 §5. */
 
-import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import type { TrajectoryAdmission } from "../persistence/trajectory-records.js";
 
 /** Stable fail-closed trajectory admission error. */
