@@ -169,6 +169,43 @@ describe("Issue #60 context artifact canonical resolution", () => {
     expect(codes(item)).toContain("context-artifact-oversized");
     expect(codes(total)).toContain("context-artifact-total-oversized");
   });
+
+  it.each([
+    {
+      name: "inline descriptors",
+      files: { "contract.txt": "contract" },
+      artifacts: [
+        { id: "one", source: "inline", text: "ééé" },
+        { id: "two", source: "inline", text: "ééé" },
+      ] as ContextArtifacts,
+    },
+    {
+      name: "file descriptors",
+      files: { "one.txt": "ééé", "two.txt": "ééé" },
+      artifacts: [
+        { id: "one", source: "file", path: "one.txt" },
+        { id: "two", source: "file", path: "two.txt" },
+      ] as ContextArtifacts,
+    },
+  ])("reports item and aggregate overflow together for $name", async ({ files, artifacts }) => {
+    const repo = await repository(files);
+    const result = await resolveContextArtifactBatch(
+      options(repo, artifacts, {
+        limits: { max_items: 8, max_item_utf8_bytes: 4, max_total_utf8_bytes: 6 },
+      }),
+    );
+    if (result.valid) throw new Error("expected bounded admission failure");
+
+    expect(result.errors.map((error) => error.code)).toEqual([
+      "context-artifact-oversized",
+      "context-artifact-oversized",
+      "context-artifact-total-oversized",
+    ]);
+    expect(result.errors[2]).toMatchObject({
+      task_id: "task-1",
+      message: "context artifact payload total is 12 bytes; limit is 6",
+    });
+  });
 });
 
 describe("Issue #60 file source classification and race checks", () => {

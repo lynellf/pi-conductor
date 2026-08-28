@@ -50,6 +50,7 @@ export async function resolveContextArtifactBatch(
       continue;
     }
     const taskArtifacts: ResolvedContextArtifact[] = [];
+    let totalByteLength = 0;
     if (descriptors.length === 0) {
       errors.push(contextArtifactError("context-artifact-empty-list", task.taskId));
     }
@@ -82,8 +83,15 @@ export async function resolveContextArtifactBatch(
           descriptor.text,
           options.limits,
         );
-        if ("code" in resolved) errors.push(resolved);
-        else taskArtifacts.push(resolved);
+        if ("code" in resolved) {
+          errors.push(resolved);
+          if (resolved.code === "context-artifact-oversized") {
+            totalByteLength += new TextEncoder().encode(descriptor.text).byteLength;
+          }
+        } else {
+          taskArtifacts.push(resolved);
+          totalByteLength += resolved.byte_length;
+        }
         continue;
       }
 
@@ -131,22 +139,24 @@ export async function resolveContextArtifactBatch(
         descriptor.id,
         safePath,
       );
-      if ("code" in resolved) errors.push(resolved);
-      else {
+      if ("error" in resolved) {
+        errors.push(resolved.error);
+        totalByteLength += resolved.oversizedByteLength ?? 0;
+      } else {
         taskArtifacts.push(resolved.artifact);
+        totalByteLength += resolved.artifact.byte_length;
         captures.push(resolved.capture);
       }
     }
 
-    const total = taskArtifacts.reduce((sum, artifact) => sum + artifact.byte_length, 0);
-    if (total > options.limits.max_total_utf8_bytes) {
+    if (totalByteLength > options.limits.max_total_utf8_bytes) {
       errors.push(
         contextArtifactError(
           "context-artifact-total-oversized",
           task.taskId,
           undefined,
           undefined,
-          `context artifact payload total is ${total} bytes; limit is ${options.limits.max_total_utf8_bytes}`,
+          `context artifact payload total is ${totalByteLength} bytes; limit is ${options.limits.max_total_utf8_bytes}`,
         ),
       );
     }
