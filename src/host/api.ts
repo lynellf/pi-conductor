@@ -60,6 +60,7 @@ import { join } from "node:path";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { createInitialCheckpoint } from "../core/reduce.js";
+import { toMachineDefinition } from "../manifest/definition.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type {
   Checkpoint,
@@ -77,6 +78,11 @@ import type {
   RunContextRecord,
   RunSeededRecord,
 } from "../persistence/log.js";
+import {
+  createManifestSnapshot,
+  verifyManifestSnapshot,
+  type ManifestSnapshotRecord,
+} from "../persistence/trajectory-records.js";
 import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -172,6 +178,19 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   const lease = await log.acquireRunLease(runId);
 
   try {
+    // A policy-bearing run pins normalized configuration before any role
+    // session exists. No policy means no new record and the legacy fresh path.
+    if ((loaded.manifest.handoffs?.length ?? 0) > 0) {
+      log.append(
+        createManifestSnapshot({
+          runId,
+          manifest: loaded.manifest,
+          definition: def,
+          ts: Date.now(),
+        }),
+      );
+    }
+
     // Persist the initial checkpoint snapshot (§11.1: each transition
     // produces a new full snapshot).
     const initialSnapshot: CheckpointSnapshot = {
@@ -261,15 +280,24 @@ export async function resumeRun(
       );
     }
 
-    // The snapshot's manifest_version is the canonical link to the
-    // manifest that was active when the run started; a mismatch
-    // means the manifest was edited mid-run, which §10 forbids.
-    if (loaded.def.manifest_version !== checkpoint.manifest_version) {
+    const manifestSnapshot = latestManifestSnapshot(log.records(runId), runId);
+    // Snapshot-era runs take their roles and policy from durable normalized
+    // data. Legacy logs retain the original manifest-version check.
+    const resumedLoaded: LoadedManifest =
+      manifestSnapshot === null
+        ? loaded
+        : Object.freeze({
+            ...loaded,
+            manifest: manifestSnapshot.normalized_manifest,
+            def: toMachineDefinition(manifestSnapshot.normalized_manifest),
+            manifestVersion: manifestSnapshot.normalized_manifest.version,
+          });
+    if (resumedLoaded.def.manifest_version !== checkpoint.manifest_version) {
       throw new Error(
-        `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${loaded.def.manifest_version}' (§10)`,
+        `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${resumedLoaded.def.manifest_version}' (§10)`,
       );
     }
-    const def = loaded.def;
+    const def = resumedLoaded.def;
 
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
@@ -279,7 +307,7 @@ export async function resumeRun(
       reconciledCheckpoint,
     );
 
-    const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+    const host = opts.hostFactory({ runId, def, log, loadedManifest: resumedLoaded });
 
     // Restore the original goal from the run log (if available).
     // Falls back to opts.goal (which may be "") for runs that
@@ -294,7 +322,7 @@ export async function resumeRun(
       host,
       initialCheckpoint: reconciledCheckpoint,
       goal,
-      loadedManifest: loaded,
+      loadedManifest: resumedLoaded,
       lease,
       initialArtifactDelivery,
     });
@@ -399,6 +427,18 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
  * `context_ref`, so derive it from the durable role/session fields; the
  * synthesized sentinel remains explicitly unreadable.
  */
+function latestManifestSnapshot(
+  records: readonly PersistedRecord[],
+  runId: string,
+): ManifestSnapshotRecord | null {
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (record?.type !== "manifest_snapshot" || record.run_id !== runId) continue;
+    return verifyManifestSnapshot(record);
+  }
+  return null;
+}
+
 function latestArtifactDelivery(
   records: readonly PersistedRecord[],
   runId: string,
