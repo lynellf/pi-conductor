@@ -655,4 +655,209 @@ describe("Issue #63 trajectory resume", () => {
     await expect(host.spawnRole("implementer")).rejects.toThrow("previously failed");
     expect(log.records("failed-trajectory")).toHaveLength(1);
   });
+
+  it("rejects a malformed selector at the public resume boundary before host construction", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-resume-boundary-"));
+    try {
+      const loaded = loadManifestFromString(MANIFEST);
+      const initial = createInitialCheckpoint(loaded.def);
+      const log = new FileRecordLog({ baseDir: workdir });
+      log.append(
+        createManifestSnapshot({
+          runId: initial.run_id,
+          manifest: loaded.manifest,
+          definition: loaded.def,
+          ts: 1,
+        }),
+      );
+      log.append({
+        type: "checkpoint_snapshot",
+        checkpoint: {
+          ...initial,
+          current_role: "implementer",
+          visit_count: { implementer: 1 },
+        },
+      });
+      log.append({
+        type: "handoff_transport_selected",
+        schema_version: 1,
+        run_id: initial.run_id,
+        source_role_session_id: "source",
+        from: "orchestrator",
+        to: "implementer",
+        mode: "trajectory",
+        source_conversation: { id: "conversation", file: "/must-not-open.jsonl" },
+        target: {
+          model: "stub:stub-model",
+          requested_effort: "off",
+          system_prompt: "IMPLEMENTER",
+          active_tool_names: ["handoff", "end", "ask_user"],
+          environment_sha256: "0".repeat(64),
+        },
+        admission: {
+          schema_version: 1,
+          observed_context_tokens: 0,
+          role_envelope_tokens: 0,
+          target_max_tokens: 8192,
+          safety_reservation_tokens: 8192,
+          required_tokens: 16384,
+          target_context_window: 200000,
+          target_model: "stub:stub-model",
+        },
+        ts: 1,
+      } as unknown as PersistedRecord);
+      let hostConstructed = false;
+      await expect(
+        resumeRun(join(workdir, "ignored.yaml"), initial.run_id, {
+          goal: "ignored",
+          baseDir: workdir,
+          hostFactory: () => {
+            hostConstructed = true;
+            throw new Error("host must not be constructed");
+          },
+        }),
+      ).rejects.toBeInstanceOf(TrajectoryResumeError);
+      expect(hostConstructed).toBe(false);
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unsupported target effort before selector persistence or target generation", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-effort-preflight-"));
+    try {
+      const manifestPath = join(workdir, ".pi", "conductor.yaml");
+      await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+      await writeFile(manifestPath, MANIFEST.replaceAll("effort: off", "effort: high"), "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
+      const requests: unknown[] = [];
+      const registry = makeModelRegistryWithStub([], ["stub-model"], (request) =>
+        requests.push(request),
+      );
+      const log = new InMemoryRecordLog();
+      const host = new ProductionHost({
+        modelRegistry: registry,
+        cwd: workdir,
+        log,
+        loadedManifest: await loadManifest(manifestPath),
+        runId: "effort-preflight",
+      });
+      const source = await host.spawnRole("orchestrator");
+      const requestsBeforeSelection = requests.length;
+      await expect(
+        host.selectAcceptedHandoffTransport({
+          from: "orchestrator",
+          to: "implementer",
+          source,
+          targetSeed: "TARGET_SEED_EXACT",
+          targetVisitIndex: 1,
+        }),
+      ).rejects.toMatchObject({ code: "trajectory_target_environment_invalid" });
+      expect(requests).toHaveLength(requestsBeforeSelection);
+      expect(
+        log
+          .records("effort-preflight")
+          .some((record) => record.type === "handoff_transport_selected"),
+      ).toBe(false);
+      expect(log.records("effort-preflight").at(-1)).toMatchObject({
+        type: "trajectory_handoff_failed",
+        code: "trajectory_target_environment_invalid",
+      });
+      await source.dispose();
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed instead of appending a target seed already present in the reopened conversation", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-trajectory-duplicate-seed-"));
+    try {
+      const manifestPath = join(workdir, ".pi", "conductor.yaml");
+      await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+      await writeFile(manifestPath, MANIFEST, "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "orchestrator.md"), "ORCHESTRATOR", "utf8");
+      await writeFile(join(workdir, ".pi", "roles", "implementer.md"), "IMPLEMENTER", "utf8");
+      const loaded = await loadManifest(manifestPath);
+      const log = new InMemoryRecordLog();
+      const requests: unknown[] = [];
+      const registry = makeModelRegistryWithStub([], ["stub-model"], (request) =>
+        requests.push(request),
+      );
+      const sourceHost = new ProductionHost({
+        modelRegistry: registry,
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: "duplicate-target-seed",
+      });
+      const source = await sourceHost.spawnRole("orchestrator");
+      const targetSeed = "[handoff → implementer]\\nTARGET_SEED_EXACT";
+      await source.prompt(targetSeed);
+      const context = source.getTrajectoryContext?.();
+      if (context === undefined) throw new Error("source did not expose trajectory context");
+      const names = ["handoff", "end", "ask_user"];
+      const definitions = serializeActiveToolDefinitions(
+        names.map((name) => context.toolDefinitions[name]),
+      );
+      const conversation = {
+        id: source.conversationId ?? source.sessionId,
+        file: source.sessionFile,
+      };
+      await source.dispose();
+      log.append({
+        type: "handoff_transport_selected",
+        schema_version: 1,
+        run_id: "duplicate-target-seed",
+        source_role_session_id: source.sessionId,
+        from: "orchestrator",
+        to: "implementer",
+        mode: "trajectory",
+        source_conversation: conversation,
+        target: {
+          model: "stub:stub-model",
+          requested_effort: "off",
+          system_prompt: "IMPLEMENTER",
+          active_tool_names: names,
+          seed: targetSeed,
+          environment_sha256: sha256Canonical({
+            system_prompt: "IMPLEMENTER",
+            model: "stub:stub-model",
+            effort: "off",
+            active_tool_names: names,
+            active_tool_definitions: definitions,
+          }),
+        },
+        admission: {
+          schema_version: 1,
+          observed_context_tokens: 0,
+          role_envelope_tokens: 0,
+          target_max_tokens: 8192,
+          safety_reservation_tokens: 8192,
+          required_tokens: 16384,
+          target_context_window: 200000,
+          target_model: "stub:stub-model",
+        },
+        ts: 1,
+      });
+      const targetHost = new ProductionHost({
+        modelRegistry: registry,
+        cwd: workdir,
+        log,
+        loadedManifest: loaded,
+        runId: "duplicate-target-seed",
+      });
+      const requestsBeforeTarget = requests.length;
+      await expect(targetHost.spawnRole("implementer")).rejects.toMatchObject({
+        code: "trajectory_target_seed_ambiguous",
+      });
+      expect(requests).toHaveLength(requestsBeforeTarget);
+      expect(log.records("duplicate-target-seed").at(-1)).toMatchObject({
+        type: "trajectory_handoff_failed",
+        code: "trajectory_target_seed_ambiguous",
+      });
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
 });

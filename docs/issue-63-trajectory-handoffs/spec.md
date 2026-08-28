@@ -1,6 +1,6 @@
 # Issue #63 — trajectory-preserving handoffs
 
-**Status: Acknowledged — implementation authorized**
+**Status: Acknowledged — implementation complete; re-review requested**
 
 ## Objective and scope
 
@@ -80,7 +80,7 @@ The target provider inspected—not merely typed—the source user prompt, sourc
 
 There is **no single public 0.80.6 `replaceEnvironment()` transaction**. `setModel`, `setThinkingLevel`, and `setActiveToolsByName` are separate operations; `setActiveToolsByName` silently ignores unknown names by declaration. A role-specific system prompt must be supplied by a public extension hook for the next prompt. The host therefore needs a small, explicit reconfiguration seam with prepare/commit/assert/cleanup steps. It must not reach into private session fields.
 
-The original `AgentSession` tool registry also binds built-in tools to its construction `cwd`, and current conductor-created custom `handoff`, `end`, and `delegate` tools close over one role/session seam. Thus 0.80.6 does **not** safely support trajectory across isolated workspaces or an arbitrary per-role custom-tool implementation without a host bridge. The MVP is bounded to shared-workspace roles and conductor-owned rebindable tools. Any later peer/runtime upgrade is allowed only after this exact artifact passes against that exact installed version and the compatibility matrix is updated; 0.84.3 is not assumed compatible.
+The original `AgentSession` tool registry also binds built-in tools to its construction `cwd`, and current conductor-created custom `handoff`, `end`, and `delegate` tools close over one role/session seam. Thus 0.80.6 does **not** safely support trajectory across isolated workspaces or an arbitrary per-role custom-tool implementation without a host bridge. The MVP is bounded to shared-workspace roles and conductor-owned rebindable tools. Any later peer/runtime upgrade is allowed only after this exact artifact passes against that exact installed version and the compatibility matrix is updated; 0.84.3 is not assumed compatible. The host also gates trajectory mode at runtime to exact SDK version `0.80.6`; a different version fails closed with `trajectory_environment_unsupported` rather than relying on the package's wildcard peer range.
 
 ## 1. Additive manifest contract
 
@@ -293,7 +293,7 @@ The SDK can reopen a durable JSONL conversation. Current conductor cannot select
 3. add a trajectory-specific host spawn that calls `SessionManager.open(selected.source_conversation.file, sessionDir, cwd)`, rehydrates the target environment from the persisted record, and uses the same lifecycle/reconfiguration path; and
 4. restore fresh behavior when no trajectory selector is present.
 
-This is smaller and safer than putting Pi conversation data in `Checkpoint`, teaching the reducer transport, or relying on Pi's session tree as conductor persistence.
+This is smaller and safer than putting Pi conversation data in `Checkpoint`, teaching the reducer transport, or relying on Pi's session tree as conductor persistence. Target-seed delivery is additionally fail-closed: the loop records `trajectory_target_seed_delivered` after a target prompt completes. On a crash-recovery reopen, if the exact selected seed is already in the active Pi conversation before an accepted target transition is durable, the host records `trajectory_handoff_failed(trajectory_target_seed_ambiguous)` and refuses to prompt again. This avoids a duplicate user seed or unobservable second generation; a selected target with no seed present can still be resumed normally.
 
 ## 5. Context admission contract
 

@@ -49,6 +49,16 @@ export interface ManifestSnapshotRecord {
 }
 
 /** Persisted selection for one successfully admitted trajectory handoff. */
+export interface TrajectoryTargetSeedDeliveredRecord {
+  readonly type: "trajectory_target_seed_delivered";
+  readonly schema_version: 1;
+  readonly run_id: string;
+  readonly role_session_id: string;
+  readonly conversation_id: string;
+  readonly seed_sha256: string;
+  readonly ts: number;
+}
+
 export interface HandoffTransportSelectedRecord {
   readonly type: "handoff_transport_selected";
   readonly schema_version: 1;

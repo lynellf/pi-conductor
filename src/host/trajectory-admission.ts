@@ -2,6 +2,7 @@
 
 import type { Model } from "@earendil-works/pi-ai";
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
+import type { ModelEffort } from "../core/types.js";
 import type { TrajectoryAdmission } from "../persistence/trajectory-records.js";
 
 /** Stable fail-closed trajectory admission error. */
@@ -33,6 +34,18 @@ export function serializeActiveToolDefinitions(definitions: readonly unknown[]):
       });
     }),
   );
+}
+
+/** Reject an effort which Pi would otherwise clamp after the source is sealed. */
+export function assertTrajectoryEffortSupported(model: Model<never>, effort: ModelEffort): void {
+  const declared = model.thinkingLevelMap?.[effort];
+  const unavailable = declared === null || (effort !== "off" && model.reasoning !== true);
+  if (unavailable) {
+    throw new TrajectoryHandoffError(
+      "trajectory_target_environment_invalid",
+      `trajectory target model '${model.provider}:${model.id}' does not support exact effort '${effort}'`,
+    );
+  }
 }
 
 export class TrajectoryHandoffError extends Error {

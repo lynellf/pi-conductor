@@ -89,6 +89,7 @@ import {
   artifactDelivery,
   type PersistedRecord,
 } from "../persistence/log.js";
+import { sha256Canonical } from "../persistence/trajectory-records.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
@@ -438,6 +439,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           ? seed
           : appendArtifactSeedSection(seed, artifactSeedForVisit);
       let recoveringFromNoEmission = false;
+      let trajectorySeedDeliveryRecorded = false;
 
       try {
         const sessionId = session.sessionId;
@@ -597,6 +599,18 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               opts.runControl?.takePendingGuidance() ?? [],
             );
             await session.prompt(promptSeed);
+            if (session.isTrajectory === true && !trajectorySeedDeliveryRecorded) {
+              host.persistRecord({
+                type: "trajectory_target_seed_delivered",
+                schema_version: 1,
+                run_id: checkpoint.run_id,
+                role_session_id: sessionId,
+                conversation_id: session.conversationId ?? sessionId,
+                seed_sha256: sha256Canonical(nextSeed),
+                ts: Date.now(),
+              });
+              trajectorySeedDeliveryRecorded = true;
+            }
           } catch (err) {
             promptError = err;
           }
