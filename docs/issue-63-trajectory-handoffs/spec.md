@@ -1,6 +1,6 @@
 # Issue #63 — trajectory-preserving handoffs
 
-**Status: Acknowledged — implementation complete; re-review requested**
+**Status: Acknowledged — fail-closed pre-selector resume remediation in progress**
 
 ## Objective and scope
 
@@ -292,6 +292,8 @@ The SDK can reopen a durable JSONL conversation. Current conductor cannot select
 2. let `resumeRun` obtain the latest selector targeting the current checkpoint role before it constructs `ProductionHost`;
 3. add a trajectory-specific host spawn that calls `SessionManager.open(selected.source_conversation.file, sessionDir, cwd)`, rehydrates the target environment from the persisted record, and uses the same lifecycle/reconfiguration path; and
 4. restore fresh behavior when no trajectory selector is present.
+
+A resume between the accepted receiver checkpoint and selector durability has no stored exact target seed/environment, so it is **not** a fresh case. If the current checkpoint was reached by a pinned `mode: trajectory` accepted edge and the log has neither its valid matching selector nor a durable `trajectory_handoff_failed`, resume appends exactly one `trajectory_handoff_failed(trajectory_transport_unrecoverable)` using the durable source conversation identity and fails before host construction, session opening, compaction, or prompting. This covers both crashes before and after source `session_ended`; a later resume observes that failure and neither reopens nor duplicates it.
 
 This is smaller and safer than putting Pi conversation data in `Checkpoint`, teaching the reducer transport, or relying on Pi's session tree as conductor persistence. Target-seed delivery is additionally fail-closed: the loop records `trajectory_target_seed_delivered` after a target prompt completes. On a crash-recovery reopen, if the exact selected seed is already in the active Pi conversation before an accepted target transition is durable, the host records `trajectory_handoff_failed(trajectory_target_seed_ambiguous)` and refuses to prompt again. This avoids a duplicate user seed or unobservable second generation; a selected target with no seed present can still be resumed normally.
 
