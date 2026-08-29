@@ -29,9 +29,11 @@ import {
   createInitialCheckpoint,
   FileRecordLog,
   type HostFactoryContext,
+  InMemoryRecordLog,
   listRuns,
   type MachineDefinition,
   type PersistedRecord,
+  type RoleTurnRecord,
   resumeRun,
   type SessionLifecycleEvent,
   startRun,
@@ -534,5 +536,78 @@ describe("Task 13.5 — file-backed log + resume", () => {
     expect(stats.exitReason).toBe("done");
     expect(stats.latestCheckpoint?.current_role).toBe("done");
     expect(stats.recordsCount).toBeGreaterThan(0);
+  });
+
+  // ─── Issue #68 remediation ────────────────────────────────────────────
+  // Recreated StubHost on the same run/log must continue the durable
+  // `role_turn` sequence with a fresh per-invocation logical id rather than
+  // reusing the prior logical id (which the fail-closed producer would reject).
+
+  const TEXT = "first durable turn";
+  const encoder = new TextEncoder();
+  const expectedTextBlock = (text: string) => ({
+    kind: "text" as const,
+    text,
+    original_utf8_bytes: encoder.encode(text).byteLength,
+    original_characters: Array.from(text).length,
+    truncated: false,
+    truncated_by: [] as const,
+  });
+
+  it("recreated StubHost on the same run/log continues the role_turn sequence with a fresh logical id", async () => {
+    const runId = "run-recreate-stub";
+    const log = new InMemoryRecordLog();
+
+    // Host A: first logical invocation writes the first durable role_turn (seq 1).
+    const hostA = new StubHost({
+      runId,
+      log,
+      steps: [{ kind: "emit_text", text: TEXT }],
+    });
+    const sessionA = await hostA.spawnRole("worker");
+    await sessionA.prompt("do work");
+
+    // Host B: a fresh host recreated on the SAME run/log simulates resume.
+    const hostB = new StubHost({
+      runId,
+      log,
+      steps: [{ kind: "emit_text", text: "second durable turn" }],
+    });
+    const sessionB = await hostB.spawnRole("worker");
+    await sessionB.prompt("do work");
+
+    const roleTurns = log.records(runId).filter((r): r is RoleTurnRecord => r.type === "role_turn");
+
+    // Two distinct durable role_turn records, continuous run-scoped sequence [1,2].
+    expect(roleTurns.map((r) => r.sequence)).toEqual([1, 2]);
+
+    // Fresh per-invocation logical identity — the recreated host did NOT reuse
+    // A's logical role_session_id (the prior counter-reset bug), so the
+    // fail-closed producer accepted the continuation instead of rejecting it.
+    const logicalIds = roleTurns.map((r) => r.role_session_id);
+    expect(new Set(logicalIds).size).toBe(2);
+
+    // No duplication: exactly one record per captured assistant message.
+    expect(roleTurns).toHaveLength(2);
+
+    // Fully-resolved default limits, identical across both records (spec §5.1).
+    const limits = roleTurns[0]?.capture.limits;
+    expect(limits).toEqual(roleTurns[1]?.capture.limits);
+    expect(limits?.max_block_utf8_bytes).toBe(8192);
+    expect(limits?.max_turn_utf8_bytes).toBe(32768);
+    expect(limits?.max_turn_blocks).toBe(64);
+    expect(limits?.max_session_utf8_bytes).toBe(262144);
+    expect(limits?.max_session_turns).toBe(128);
+    expect(limits?.max_run_utf8_bytes).toBe(1048576);
+    expect(limits?.max_run_turns).toBe(512);
+
+    // Each record retains only its own message's readable text block, with
+    // precise original measures and no truncation (spec §4.1 / §5.2).
+    const blocksA = roleTurns[0]?.blocks;
+    const blocksB = roleTurns[1]?.blocks;
+    expect(blocksA).toEqual([expectedTextBlock(TEXT)]);
+    expect(blocksB).toEqual([expectedTextBlock("second durable turn")]);
+    expect(roleTurns[0]?.conversation_id).toBeDefined();
+    expect(roleTurns[1]?.conversation_id).toBeDefined();
   });
 });
