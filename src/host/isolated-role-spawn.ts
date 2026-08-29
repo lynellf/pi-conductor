@@ -10,6 +10,7 @@ import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { RoleSession } from "./host.js";
 import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
+import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { DelegateBridgeConfigError, type DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
 import {
   loadMachineToolsConfig,
@@ -55,6 +56,8 @@ export async function spawnIsolatedRoleSession(options: {
   readonly sessionStates: Map<string, SessionState>;
   readonly agentsBySessionId: Map<string, SessionEventSource>;
   readonly displaySink?: DisplaySink;
+  /** Issue #68: run-owned producer shared across every logical invocation. */
+  readonly roleTurnProducer: RoleTurnProducer;
 }): Promise<RoleSession> {
   const { visitIndex } = options;
   const source = options.workspaceConfig.source ?? "snapshot";
@@ -225,6 +228,17 @@ export async function spawnIsolatedRoleSession(options: {
     session,
     state,
     role: options.role,
+    roleTurn: {
+      producer: options.roleTurnProducer,
+      context: {
+        runId: options.runId,
+        role: options.role,
+        roleSessionId: sessionId ?? session.sessionId,
+        conversationId: session.sessionId,
+        sessionFile: session.sessionFile,
+        persist: options.persistRecord,
+      },
+    },
     ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
   });
   return session;

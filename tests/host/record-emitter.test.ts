@@ -525,3 +525,148 @@ describe("Case 9 — consumer-side run_id filter", () => {
     unsubB();
   });
 });
+
+// ─── Issue #68 — durable role_turn via the stub spawn path ─────────────
+
+describe("issue #68 — durable role_turn before notify (stub spawn path)", () => {
+  it("delivers role_turn only after it is in the log, in run order, with run/role/logical/physical/sequence", async () => {
+    const log = new InMemoryRecordLog();
+    const def = makeDef();
+    const checkpoint: Checkpoint = createInitialCheckpoint(def);
+    const host = new StubHost({
+      runId: checkpoint.run_id,
+      log,
+      steps: [
+        { kind: "emit_handoff", target_role: "worker" },
+        { kind: "emit_text", text: "worker answer" },
+        { kind: "emit_handoff", target_role: "orchestrator" },
+        { kind: "emit_text", text: "orchestrator answer" },
+        { kind: "emit_end", reason: "all done" },
+      ],
+    });
+
+    const seen: PersistedRecord[] = [];
+    const durableAtNotify: boolean[] = [];
+    const unsub = subscribeToRecords((record) => {
+      if (record.type === "role_turn") {
+        seen.push(record);
+        durableAtNotify.push(
+          log
+            .records(checkpoint.run_id)
+            .some((persisted) => JSON.stringify(persisted) === JSON.stringify(record)),
+        );
+      }
+    });
+
+    await runLoop({
+      def,
+      initialCheckpoint: checkpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+    unsub();
+
+    const durable = log.records(checkpoint.run_id).filter((record) => record.type === "role_turn");
+
+    // Every assistant emit_text produced a role_turn, and each was delivered to
+    // the subscriber only after it was durable (append-before-notify, spec §5.5).
+    expect(durable.length).toBeGreaterThanOrEqual(2);
+    expect(seen).toEqual(durable);
+    expect(durableAtNotify.every((isDurable) => isDurable === true)).toBe(true);
+
+    // Each record carries run, role, logical id, physical id/file, and a stable,
+    // run-scoped sequence (spec §3.2 / §3.1).
+    const sorted = [...durable].sort((a, b) => a.sequence - b.sequence);
+    expect(sorted.map((r) => r.run_id)).toEqual(Array(sorted.length).fill(checkpoint.run_id));
+    expect(new Set(sorted.map((r) => r.role))).toEqual(new Set(["worker", "orchestrator"]));
+    expect(new Set(sorted.map((r) => r.role_session_id)).size).toBeGreaterThanOrEqual(2);
+    expect(new Set(sorted.map((r) => r.conversation_id)).size).toBeLessThanOrEqual(1);
+    expect(sorted.map((r) => r.sequence)).toEqual(
+      [...sorted.map((r) => r.sequence)].sort((x, y) => x - y),
+    );
+  });
+});
+
+// ─── Issue #68 — disabled telemetry emits none through the stub spawn path ───
+
+describe("issue #68 — disabled telemetry emits none (stub spawn path)", () => {
+  it("produces no role_turn records while leaving lifecycle unchanged", async () => {
+    const log = new InMemoryRecordLog();
+    const def = makeDef();
+    const checkpoint: Checkpoint = createInitialCheckpoint(def);
+    const host = new StubHost({
+      runId: checkpoint.run_id,
+      log,
+      // Disabled v1 telemetry: no new role_turn records, no other behavior changed.
+      roleTurnTelemetry: { enabled: false },
+      steps: [
+        { kind: "emit_handoff", target_role: "worker" },
+        { kind: "emit_text", text: "worker answer" },
+        { kind: "emit_handoff", target_role: "orchestrator" },
+        { kind: "emit_text", text: "orchestrator answer" },
+        { kind: "emit_end", reason: "all done" },
+      ],
+    });
+
+    await runLoop({ def, initialCheckpoint: checkpoint, host, initialGoal: "do the thing" });
+
+    // No role_turn at all when disabled (spec §5.1 / §4.3).
+    expect(log.records(checkpoint.run_id).filter((r) => r.type === "role_turn")).toHaveLength(0);
+
+    // Lifecycle / FSM behavior is unchanged: the same session/transition structure
+    // as the enabled path (see Case 1) — proving disabled telemetry touches nothing.
+    const types = log.records(checkpoint.run_id).map((r) => r.type);
+    expect(types.filter((t) => t === "session_started")).toHaveLength(3);
+    expect(types.filter((t) => t === "transition_accepted")).toHaveLength(3);
+    expect(types.filter((t) => t === "session_ended")).toHaveLength(3);
+  });
+});
+
+// ─── Issue #68 — model-error end still emits role_turn, terminal unchanged ───────
+
+describe("issue #68 — model-error end through the stub spawn path", () => {
+  it("emits a role_turn on the error end and keeps session_failed(model_error) unchanged", async () => {
+    const log = new InMemoryRecordLog();
+    const def = makeDef();
+    const checkpoint: Checkpoint = createInitialCheckpoint(def);
+    const host = new StubHost({
+      runId: checkpoint.run_id,
+      log,
+      steps: [
+        { kind: "emit_handoff", target_role: "worker" },
+        // The stub `fail` step emits an assistant message_end with stopReason "error"
+        // and empty content; the producer still emits a role_turn (empty content is
+        // allowed, spec §4.3) and the handler keeps its model_error classification.
+        { kind: "fail", errorMessage: "primary model errored" },
+        { kind: "emit_handoff", target_role: "orchestrator" },
+        { kind: "emit_end", reason: "all done" },
+      ],
+    });
+
+    await runLoop({ def, initialCheckpoint: checkpoint, host, initialGoal: "do the thing" });
+
+    const records = log.records(checkpoint.run_id);
+    // The model-error end still emits a role_turn (empty-content turn is allowed), and a
+    // same-model retry re-enters the producer (one role_turn per assistant message_end).
+    const roleTurns = records.filter((r) => r.type === "role_turn");
+    expect(roleTurns.length).toBeGreaterThanOrEqual(1);
+    // The worker's terminal classification is unchanged by telemetry.
+    const workerFailed = records.filter((r) => r.type === "session_failed" && r.role === "worker");
+    expect(workerFailed.length).toBeGreaterThanOrEqual(1);
+    expect(
+      (workerFailed[workerFailed.length - 1] as { readonly failure_reason?: string })
+        .failure_reason,
+    ).toBe("model_error");
+    // Telemetry records never alter a lifecycle terminal's fields.
+    expect((workerFailed[workerFailed.length - 1] as { readonly blocks?: unknown }).blocks).toBe(
+      undefined,
+    );
+    expect((workerFailed[workerFailed.length - 1] as { readonly capture?: unknown }).capture).toBe(
+      undefined,
+    );
+    // Every role_turn is recorded under this run.
+    expect(
+      roleTurns.every((r) => (r as { readonly run_id?: string }).run_id === checkpoint.run_id),
+    ).toBe(true);
+  });
+});

@@ -20,6 +20,7 @@
  *  - Delegation lite §7: `subagent_started` / `subagent_completed` /
  *    `subagent_failed` (host-owned child session observability records).
  *  - Issue #22: `file_mutation` (successful `write` / `edit` telemetry).
+ *  - Issue #68: `role_turn` (bounded readable assistant text / thinking).
  *
  * **`RecordLog`** is the host-side persistence contract. The pure core
  * ships the interface and an in-memory implementation for unit tests.
@@ -46,6 +47,7 @@ import type {
 } from "./child-completion.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import { materializePersistedRecord } from "./record-materialization.js";
+import type { RoleTurnRecord } from "./role-turn.js";
 import type {
   HandoffTransportSelectedRecord,
   ManifestSnapshotRecord,
@@ -65,6 +67,7 @@ export {
   assertWorkspaceGuarantee,
   WorkspaceGuaranteeError,
 } from "./record-materialization.js";
+export type { RoleTurnRecord } from "./role-turn.js";
 export type {
   ArtifactCollectedRecord,
   ArtifactDeliveryRecord,
@@ -323,7 +326,8 @@ export type PersistedRecord =
   | ManifestSnapshotRecord
   | HandoffTransportSelectedRecord
   | TrajectoryHandoffFailedRecord
-  | TrajectoryTargetSeedDeliveredRecord;
+  | TrajectoryTargetSeedDeliveredRecord
+  | RoleTurnRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
