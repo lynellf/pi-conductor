@@ -46,6 +46,25 @@ resume/recovery source of truth, and resume never emits another context record.
 No task summaries, routing summaries, raw model output, or hidden chain-of-thought
 may be inferred or included.
 
+### Role-turn telemetry (issue #68)
+
+A bounded, structured `role_turn` record is appended through `Host.persistRecord`
+at each eligible assistant `message_end`, in the shared SDK, isolated RPC, and stub
+role-session spawn paths (the three Issue #68 spawn paths). Subscribers receive it after the JSONL append,
+just as with every other persisted record (spec §5.5). The record carries a
+run-scoped, 1-based, gap-free `sequence`; the host logical `role_session_id`; the
+physical Pi `conversation_id`; the physical `session_file`; the host `role`;
+bounded ordered readable `text`/`thinking` blocks; and self-describing retention
+`limits`/`capture` metadata (see `docs/issue-68-role-turn-telemetry/spec.md` §3).
+
+`role_turn` is consumer observability data only: it is ignored by the reducer, the
+FSM, checkpoints, run-memory, lifecycle reconciliation, cost roll-ups, and
+trajectory selection. It retains only readable non-redacted assistant content;
+redacted thinking, provider error bodies, raw tool args/results/summaries, and
+transcript fragments are never emitted. The durable JSONL log remains the
+backstop for a consumer that misses a notification (§5.1). No default manifest,
+README, dependency, or raw-transcript retention setting is changed.
+
 ## §2 — Module-level design
 
 - **Process-global registry.** One `Set<Listener>` for the entire pi
@@ -168,6 +187,16 @@ crashed) are recoverable by walking the log directory.
 Consumer extensions own their watermark state; this spec makes no
 commitment on cross-process de-duplication.
 
+### §5.1 Durable role_turn watermark and backstop
+
+`role_turn` records are ordered by a run-scoped, 1-based, gap-free
+`sequence` (see `docs/issue-68-role-turn-telemetry/spec.md` §3.2 / §5.5).
+A consumer that misses notifications recovers by walking the run log and
+collapses duplicates with a watermark keyed on `(run_id, sequence)`, while
+retaining its existing record-type filtering for all other records. This
+key is the durable, append-order identity for the v1 role_turn stream; it is
+not a timestamp and is not derived from Pi's session JSONL.
+
 ## §6 — Out of scope
 
 The following are explicitly **not** part of this contract:
@@ -176,13 +205,14 @@ The following are explicitly **not** part of this contract:
 - Authentication, authorization, or API key management.
 - Retry, backoff, batching, or rate-limiting.
 - Cross-process coordination or distributed locks.
-- New telemetry record types unrelated to the documented `run_context`
-  and `file_mutation` producer contracts, or changes to the orchestrator loop.
+- New telemetry record types unrelated to the documented `run_context`,
+  `file_mutation`, and `role_turn` producer contracts, or changes to the
+  orchestrator loop.
 - Changes to the reducer, FSM, or checkpoint contract.
 
 ## §7 — Authoritative test cases
 
-The test file `tests/host/record-emitter.test.ts` exercises all ten
+The test file `tests/host/record-emitter.test.ts` exercises all eleven
 cases defined by the contract. Each case maps to one or more §4
 clauses:
 
@@ -198,6 +228,7 @@ clauses:
 | 8 | No listeners registered is a no-op | §4.7 |
 | 9 | Consumer-side `run_id` filter is correct | §4.1 (scoping, consumer responsibility) |
 | 10 | Delegated child start and sole terminal are delivered once, after durable append, in order | §4.1 (host persist seam), §4.2 |
+| 11 | A durable `role_turn` is delivered only after it is in the log, in run order, carrying run/role/logical/physical/sequence | §4.1 (host persist seam), §4.2, §5 (watermark) |
 
-These ten cases are the authoritative test surface. New cases require an
+These eleven cases are the authoritative test surface. New cases require an
 update to this mapping.

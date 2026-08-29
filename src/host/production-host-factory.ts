@@ -32,6 +32,7 @@
 
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
+import type { RoleTurnTelemetryOptions } from "../persistence/role-turn.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { LoadedManifest } from "./manifest.js";
 import { ProductionHost } from "./production-host.js";
@@ -84,6 +85,13 @@ export interface RunContextInputs {
    * directory (`PI_CODING_AGENT_DIR` or `~/.pi/agent`).
    */
   readonly agentDir?: string;
+  /**
+   * Issue #68: bounded role-turn telemetry options for the run-owned producer.
+   * Enabled by default; a partial `limits` overlays the v1 defaults before the
+   * host subscribes to each role session. Pinned on resume so a resumed host does
+   * not silently change the run's retention policy (spec §5.1 / §7.5).
+   */
+  readonly roleTurnTelemetry?: RoleTurnTelemetryOptions;
 }
 
 /**
@@ -126,5 +134,8 @@ export function createProductionHost(inputs: CreateProductionHostInputs): Produc
     runId: inputs.run.runId,
     ...(inputs.run.sessionDir !== undefined && { sessionDir: inputs.run.sessionDir }),
     ...(inputs.run.agentDir !== undefined && { agentDir: inputs.run.agentDir }),
+    ...(inputs.run.roleTurnTelemetry !== undefined && {
+      roleTurnTelemetry: inputs.run.roleTurnTelemetry,
+    }),
   });
 }

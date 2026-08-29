@@ -1,6 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import { assertRoleTurnRecord } from "./role-turn.js";
 import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
 /** Typed rejection of an unavailable workspace guarantee at the persistence boundary. */
@@ -41,6 +42,13 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   assertNoSandboxGuarantee(record);
 
   if (!isRecord(record)) return;
+
+  if (record.type === "role_turn") {
+    // Issue #68: strict v1 shape + limits check before the record is retained
+    // or read (spec §7.1). Rejects unknown keys, bad measures/arithmetic,
+    // out-of-order metadata arrays, and non-positive identities.
+    assertRoleTurnRecord(record);
+  }
 
   if (record.type === "manifest_snapshot") {
     verifyManifestSnapshot(record as unknown as ManifestSnapshotRecord);

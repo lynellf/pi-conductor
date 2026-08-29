@@ -36,6 +36,7 @@ import type {
   RunHandle,
   StartRunOptions,
 } from "../../src/index.js";
+import { InMemoryRecordLog } from "../../src/index.js";
 
 // ─── Test helpers ───────────────────────────────────────────────────────
 
@@ -423,7 +424,7 @@ describe("runCli delegation to startRun", () => {
       const fakeCtx = {
         runId: "fake",
         def: {} as HostFactoryContext["def"],
-        log: {} as HostFactoryContext["log"],
+        log: new InMemoryRecordLog(),
         loadedManifest: {} as LoadedManifest,
       };
       expect(() => opts.hostFactory(fakeCtx)).not.toThrow();
@@ -442,7 +443,7 @@ describe("runCli delegation to startRun", () => {
         const host = opts.hostFactory({
           runId: "fake",
           def: {} as HostFactoryContext["def"],
-          log: {} as HostFactoryContext["log"],
+          log: new InMemoryRecordLog(),
           loadedManifest: {} as LoadedManifest,
         });
         const uiContext = (
@@ -498,7 +499,7 @@ describe("runCli delegation to startRun", () => {
         const host = opts.hostFactory({
           runId: "fake",
           def: {} as HostFactoryContext["def"],
-          log: {} as HostFactoryContext["log"],
+          log: new InMemoryRecordLog(),
           loadedManifest: {} as LoadedManifest,
         });
         const uiContext = (
@@ -697,7 +698,7 @@ describe("runCli delegation to startRun", () => {
         const host = opts.hostFactory({
           runId: "fake",
           def: {} as HostFactoryContext["def"],
-          log: {} as HostFactoryContext["log"],
+          log: new InMemoryRecordLog(),
           loadedManifest: {} as LoadedManifest,
         });
         const uiContext = (

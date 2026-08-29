@@ -89,6 +89,7 @@ import {
   selectModelEntry,
 } from "./production-host-resolve.js";
 import { notifyListeners } from "./record-emitter.js";
+import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import {
   DelegateBridgeConfigError,
   type DelegateBridgeHandler,
@@ -164,6 +165,12 @@ export interface ProductionHostOptions {
   readonly agentDir?: string;
   /** Test seam for the otherwise direct isolated Node RPC role-session constructor. */
   readonly nodeRoleSessionFactory?: (options: NodeRoleSessionOptions) => Promise<NodeRoleSession>;
+  /**
+   * Issue #68: bounded role-turn telemetry options for the run-owned producer.
+   * Enabled by default; a partial `limits` overlays the v1 defaults before the
+   * host subscribes to each role session.
+   */
+  readonly roleTurnTelemetry?: RoleTurnTelemetryOptions;
 }
 
 /**
@@ -201,6 +208,8 @@ export class ProductionHost implements Host {
   readonly agentDir: string;
   /** Pi configuration inherited by isolated RPC children. */
   readonly isolatedAgentDir: string;
+  /** Issue #68: run-owned bounded role-turn telemetry producer/ledger. */
+  private readonly roleTurnProducer: RoleTurnProducer;
   private readonly nodeRoleSessionFactory: (
     options: NodeRoleSessionOptions,
   ) => Promise<NodeRoleSession>;
@@ -223,6 +232,11 @@ export class ProductionHost implements Host {
         ? join(this.cwd, ".pi-conductor", "agent")
         : resolve(opts.agentDir);
     this.isolatedAgentDir = opts.agentDir === undefined ? resolve(getAgentDir()) : this.agentDir;
+    this.roleTurnProducer = new RoleTurnProducer({
+      runId: this.runId,
+      log: this.log,
+      telemetry: opts.roleTurnTelemetry,
+    });
     this.nodeRoleSessionFactory = opts.nodeRoleSessionFactory ?? createNodeRoleSession;
     // The SessionManager writes JSONL files directly into `sessionDir`
     // without creating parent directories. Ensure the dir exists so
@@ -385,6 +399,7 @@ export class ProductionHost implements Host {
         persistRecord: (record) => this.persistRecord(record),
         sessionStates: this.sessionStates,
         agentsBySessionId: this.agentsBySessionId,
+        roleTurnProducer: this.roleTurnProducer,
         ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
       });
     }
@@ -422,6 +437,7 @@ export class ProductionHost implements Host {
       persistRecord: (record) => this.persistRecord(record),
       sessionStates: this.sessionStates,
       agentsBySessionId: this.agentsBySessionId,
+      roleTurnProducer: this.roleTurnProducer,
     });
   }
 
@@ -501,6 +517,7 @@ export class ProductionHost implements Host {
         persistRecord: (record) => this.persistRecord(record),
         sessionStates: this.sessionStates,
         agentsBySessionId: this.agentsBySessionId,
+        roleTurnProducer: this.roleTurnProducer,
       });
       const context = session.getTrajectoryContext?.();
       if (context === undefined) {

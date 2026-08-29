@@ -321,6 +321,85 @@ roles:
     }
   });
 
+  it("threads bounded role-turn telemetry through the isolated RPC spawn handler seam", async () => {
+    // The isolated RPC spawn wires a run-owned producer context into the shared
+    // `attachSessionEventHandler` (the same handler seam the shared SDK and stub
+    // paths use). Drive a real assistant `message_end` through the fake child's
+    // stdout to prove the producer builds a bounded role_turn via that actual
+    // seam, routing persist through `host.persistRecord` (Issue #68 / spec §6.2).
+    const runId = "rt-isolated-rpc-spawn";
+    const log = new InMemoryRecordLog();
+    let child: HostFakeRpcChild | undefined;
+    const host = new ProductionHost({
+      modelRegistry: makeModelRegistryWithStub(),
+      cwd: workdir,
+      log,
+      loadedManifest: loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    tools: [read, handoff, end]
+    workspace: { backend: worktree, source: snapshot }
+`),
+      runId,
+      nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
+        const current = new HostFakeRpcChild();
+        child = current;
+        const starting = createNodeRoleSession({ ...options, spawn: () => current });
+        current.stdin.onWrite = (write) => {
+          const command = JSON.parse(write) as Record<string, unknown>;
+          if (command.type === "abort") current.success(command);
+        };
+        current.success(current.command("get_state"), {
+          sessionId: "isolated-rt",
+          sessionFile: join(workdir, "isolated-rt.jsonl"),
+        });
+        return starting;
+      },
+    });
+
+    const session = await host.spawnRole("implementer", { visitIndex: 1 });
+    try {
+      // Fire a real assistant message_end through the handler seam (spec §6).
+      child?.event({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "isolated worker answer" }],
+          stopReason: "stop",
+          timestamp: 1,
+        } as unknown as AssistantMessage,
+      });
+
+      const roleTurns = log.records(runId).filter((record) => record.type === "role_turn");
+      expect(roleTurns).toHaveLength(1);
+      const turn = roleTurns[0] as unknown as {
+        readonly type: string;
+        readonly run_id: string;
+        readonly role: string;
+        readonly sequence: number;
+        readonly conversation_id: string;
+        readonly session_file: string;
+        readonly blocks: readonly { readonly kind: string; readonly text: string }[];
+      };
+      expect(turn.type).toBe("role_turn");
+      expect(turn.run_id).toBe(runId);
+      expect(turn.role).toBe("implementer");
+      expect(turn.sequence).toBe(1);
+      expect(turn.conversation_id.length).toBeGreaterThan(0);
+      expect(turn.session_file.length).toBeGreaterThan(0);
+      expect(turn.blocks).toHaveLength(1);
+      expect(turn.blocks[0]?.kind).toBe("text");
+      expect(turn.blocks[0]?.text).toBe("isolated worker answer");
+    } finally {
+      await session.dispose();
+    }
+  });
+
   it("relays an isolated parent's static delegate tool through the existing operation from its pinned workspace", async () => {
     const runId = "r4-isolated-delegate";
     const log = new InMemoryRecordLog();
