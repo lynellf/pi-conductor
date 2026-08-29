@@ -141,10 +141,29 @@ export type {
   CheckpointSnapshot,
   PersistedRecord,
   RecordLog,
+  RoleTurnRecord,
   RunContextRecord,
   RunSeededRecord,
 } from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
+
+// ─── Issue #68: bounded structured role-turn telemetry record + option ───
+// Additive `role_turn` persisted record and the host-only partial limits option.
+// Pure, host-agnostic; see docs/issue-68-role-turn-telemetry/spec.md.
+export type {
+  RoleTurnBlock,
+  RoleTurnCapture,
+  RoleTurnLimitScope,
+  RoleTurnMeasure,
+  RoleTurnSaturatedScope,
+  RoleTurnTelemetryLimits,
+  RoleTurnTelemetryOptions,
+} from "./persistence/role-turn.js";
+export {
+  RoleTurnConfigurationError,
+  RoleTurnRunMismatchError,
+  RoleTurnTelemetryLogError,
+} from "./persistence/role-turn.js";
 
 // ─── Run memory artifact (§8.4) ───────────────────────────────────────
 // Phase 3 Task 12. The orchestrator's externalized memory: a single

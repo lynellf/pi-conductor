@@ -39,6 +39,7 @@ import {
   InMemoryRecordLog,
   type MachineDefinition,
   ProductionHost,
+  type RoleTurnRecord,
   type SessionLifecycleEvent,
   type TransitionAccepted,
 } from "../../src/index.js";
@@ -226,6 +227,94 @@ describe("ProductionHost — full orch → worker → orch → end via runLoop (
     expect(started).toHaveLength(3);
     expect(started.map((ev) => ev.model_effort)).toEqual(["high", "medium", "high"]);
     expect(ended.map((ev) => ev.model_effort)).toEqual(["high", "medium", "high"]);
+  });
+});
+
+// ─── (1b) Production shared-SDK spawn threads role-turn telemetry ────
+
+describe("ProductionHost — shared-SDK spawn emits role_turn (Issue #68)", () => {
+  let workdir: string;
+
+  beforeEach(async () => {
+    workdir = await makeWorkdirAndPrompts();
+  });
+
+  afterEach(async () => {
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  it("routes assistant message_end text through the producer in the shared-SDK spawn path", async () => {
+    const initialCheckpoint: Checkpoint = createInitialCheckpoint(makeDef());
+    const log = new InMemoryRecordLog();
+    const host = new ProductionHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      loadedManifest: {
+        def: makeDef(),
+        manifest: {
+          version: 1,
+          roles: [
+            {
+              name: "orchestrator",
+              is_orchestrator: true,
+              models: [{ model: "stub:stub-model", effort: "high" }],
+              system_prompt: ".pi/roles/orchestrator.md",
+            },
+            {
+              name: "worker",
+              max_visits: 3,
+              models: [{ model: "stub:stub-model", effort: "medium" }],
+              system_prompt: ".pi/roles/worker.md",
+            },
+          ],
+        },
+        manifestDir: null,
+        manifestVersion: 1,
+        warnings: [],
+      },
+      modelRegistry: makeModelRegistryWithStub(
+        makeStubStream([
+          { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
+          // A real assistant message_end on the shared-SDK spawn path must reach the
+          // run-owned producer and persist a bounded role_turn (Issue #68 / spec §6).
+          { kind: "emit_text", text: "worker shared-sdk answer", usage: CANNED_USAGE },
+          { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
+          { kind: "emit_text", text: "orchestrator final", usage: CANNED_USAGE },
+          { kind: "emit_end", reason: "all done" },
+        ]),
+      ),
+      cwd: workdir,
+    });
+
+    const result = await runLoop({
+      def: makeDef(),
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    expect(result.exitReason).toBe("done");
+
+    const roleTurns = log
+      .records(initialCheckpoint.run_id)
+      .filter((r) => r.type === "role_turn") as RoleTurnRecord[];
+    // The two assistant message_ends (worker + orchestrator) produced at least one
+    // bounded role_turn each through the production shared-SDK spawn wiring, proving
+    // the producer context is threaded from ProductionHost.spawnRole (Issue #68 / §6).
+    expect(roleTurns.length).toBeGreaterThanOrEqual(2);
+    // The readable assistant text survives the raw-stream → bounded-record path.
+    const allText = roleTurns.flatMap((r) => r.blocks.map((b) => b.text)).join("|");
+    expect(allText).toContain("worker shared-sdk answer");
+    expect(allText).toContain("orchestrator final");
+    // Sequences are run-scoped and gap-free (1-based).
+    const sequences = roleTurns.map((r) => r.sequence).sort((a, b) => a - b);
+    expect(sequences).toEqual(sequences.map((_, i) => i + 1));
+    // Every record is bounded and self-describing (limits repeated per §5.1).
+    for (const turn of roleTurns) {
+      expect(turn.capture.limits).toEqual(expect.objectContaining({ max_block_utf8_bytes: 8192 }));
+      expect(turn.conversation_id.length).toBeGreaterThan(0);
+      expect(turn.session_file.length).toBeGreaterThan(0);
+    }
   });
 });
 

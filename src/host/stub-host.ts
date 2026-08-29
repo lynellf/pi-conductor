@@ -35,6 +35,8 @@
  * re-dispatch escalation.
  */
 
+import { randomUUID } from "node:crypto";
+
 import type { Usage } from "@earendil-works/pi-ai";
 import {
   type AgentSession,
@@ -70,6 +72,7 @@ import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
 import { createRoleSessionAdapter } from "./role-session.js";
+import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
 import { makeStubModel, makeStubStreamFunction, type StubStep } from "./stub-provider.js";
 
@@ -96,6 +99,8 @@ export interface StubHostOptions {
   readonly cwd?: string;
   /** Optional display sink used by delegated child sessions in tests. */
   readonly displaySink?: DisplaySink;
+  /** Issue #68: bounded role-turn telemetry options (enabled by default). */
+  readonly roleTurnTelemetry?: RoleTurnTelemetryOptions;
 }
 
 /**
@@ -109,7 +114,6 @@ export class StubHost implements Host {
   private readonly model = makeStubModel();
   private readonly sessionStates = new Map<string, SessionState>();
   private readonly agentsBySessionId = new Map<string, AgentSession>();
-  private stubSessionCounter = 0;
   private readonly runId: string;
   private readonly loadedManifestValue: LoadedManifest | undefined;
   /**
@@ -123,6 +127,8 @@ export class StubHost implements Host {
   private readonly delegationManager = new DelegationManager();
   private readonly cwd: string;
   private readonly displaySink: DisplaySink | undefined;
+  /** Issue #68: run-owned bounded role-turn telemetry producer/ledger. */
+  private readonly roleTurnProducer: RoleTurnProducer;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
@@ -143,6 +149,11 @@ export class StubHost implements Host {
     this.sessionManager = SessionManager.inMemory();
     this.cwd = opts.cwd ?? "/tmp/stub-cwd";
     this.displaySink = opts.displaySink;
+    this.roleTurnProducer = new RoleTurnProducer({
+      runId: this.runId,
+      log: this.log,
+      telemetry: opts.roleTurnTelemetry,
+    });
   }
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
@@ -333,10 +344,16 @@ export class StubHost implements Host {
     (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = effort;
     const { session } = await createAgentSession(createOpts);
 
-    this.stubSessionCounter += 1;
-    const stubId = `stub-session-${this.stubSessionCounter}`;
-    const sessionId = session.sessionId;
-    const sessionFile = session.sessionFile ?? `/tmp/${stubId}.jsonl`;
+    // Mint a distinct logical role_session_id per logical invocation (spec §3.2.6 /
+    // §7.5). A fresh id must not collide across recreated hosts on the same run/log,
+    // because a reused logical id carrying a changed physical conversation/file is
+    // rejected by the fail-closed producer (Issue #68 remediation). The native SDK
+    // session id is the physical conversation identity, kept as `conversationId`;
+    // minting a random logical id here keeps the two independent so a resume/recreate
+    // never reuses a prior logical identity and corrupts the durable sequence.
+    const sessionId = randomUUID();
+    const conversationId = session.sessionId;
+    const sessionFile = session.sessionFile ?? `/tmp/${sessionId}.jsonl`;
 
     // ── Task 17: per-session state. The host accumulates usage
     // here; `captureUsage` and `sessionTerminalReason` read from it.
@@ -358,6 +375,17 @@ export class StubHost implements Host {
         sessionId,
         sessionFile,
         persist: (record) => this.persistRecord(record),
+      },
+      roleTurn: {
+        producer: this.roleTurnProducer,
+        context: {
+          runId: this.runId,
+          role,
+          roleSessionId: sessionId,
+          conversationId,
+          sessionFile,
+          persist: (record) => this.persistRecord(record),
+        },
       },
     });
 

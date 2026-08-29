@@ -50,6 +50,7 @@ import {
   extractFileMutations,
 } from "./display-sink.js";
 import { loadWriteHunksForArgs } from "./hunk-diff.js";
+import type { RoleTurnTelemetryAttachment } from "./role-turn-producer.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
 
 const MAX_FAILURE_DETAIL_LENGTH = 4096;
@@ -94,6 +95,8 @@ export function attachSessionEventHandler(args: {
   /** Identity to preserve on display events from a delegated child. */
   origin?: ChildDisplayOrigin;
   fileMutation?: FileMutationTelemetry;
+  /** Issue #68: bounded role-turn telemetry for eligible assistant `message_end`. */
+  roleTurn?: RoleTurnTelemetryAttachment;
 }): () => void {
   // Per-session buffer: toolCallId → { summary, args, writeHunks }.
   // The args are needed at `tool_execution_end` to populate
@@ -118,6 +121,16 @@ export function attachSessionEventHandler(args: {
     }
   >();
 
+  // Issue #68: per-attachment re-fire guard (spec §6). An identity-only
+  // `WeakSet<object>` is closure-local to THIS attachment, so a provider abort's
+  // identical re-fired assistant `message_end` object collapses to one durable
+  // record within this subscription, while distinct objects (even with equal
+  // content/timestamp) and identical objects routed through a *different* live
+  // attachment each persist. Only the object reference is tracked — no message
+  // content, signature, timestamp, or measure is derived or retained here. It is
+  // GC-collected when no live subscription still references this context.
+  const seenMessages = new WeakSet<object>();
+
   return args.session.subscribe((event) =>
     onSessionEvent(
       args.session,
@@ -126,8 +139,10 @@ export function attachSessionEventHandler(args: {
       args.onDisplay,
       args.origin,
       args.fileMutation,
+      args.roleTurn,
       event,
       pending,
+      seenMessages,
     ),
   );
 }
@@ -195,6 +210,7 @@ function onSessionEvent(
   onDisplay: DisplaySink | undefined,
   origin: ChildDisplayOrigin | undefined,
   fileMutation: FileMutationTelemetry | undefined,
+  roleTurn: RoleTurnTelemetryAttachment | undefined,
   event: AgentSessionEvent,
   pending: Map<
     string,
@@ -204,6 +220,7 @@ function onSessionEvent(
       writeHunks?: ReadonlyArray<HunkLine> | undefined;
     }
   >,
+  seenMessages: WeakSet<object>,
 ): void {
   if (event.type === "tool_execution_start") {
     // Buffer the invocation summary and args; do NOT emit a tool_call
@@ -301,6 +318,19 @@ function onSessionEvent(
   const message = event.message as AssistantMessage;
 
   if (message?.role !== "assistant") return;
+
+  // Issue #68: capture bounded role-turn telemetry for the FIRST time this exact
+  // assistant `message_end` object is seen by THIS attachment (spec §6). The
+  // per-attachment re-fire guard collapses a provider abort's identical re-fired
+  // object to one record. Dedup-suppressed events still fall through to the usage
+  // / error / cap / display handling below, so telemetry never short-circuits the
+  // rest of the handler. Redacted thinking, raw tool results, and provider error
+  // bodies are never retained (spec §4). A durable-append failure propagates as
+  // the existing host persistence failure (spec §5.5).
+  if (!seenMessages.has(message)) {
+    roleTurn?.producer.capture(roleTurn.context, message);
+    seenMessages.add(message);
+  }
 
   if (message.usage) {
     // The SDK emits one message_end per message; this de-dup key also guards

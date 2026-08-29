@@ -21,6 +21,7 @@ import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
 import { buildToolsAllowlist } from "./production-host-resolve.js";
 import { createRoleSessionAdapter } from "./role-session.js";
+import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { SessionSeam } from "./seam.js";
 import {
   attachSessionEventHandler,
@@ -66,6 +67,8 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly sessionStates: Map<string, SessionState>;
   readonly agentsBySessionId: Map<string, SessionEventSource>;
+  /** Issue #68: run-owned producer shared across every logical invocation. */
+  readonly roleTurnProducer: RoleTurnProducer;
 }): Promise<RoleSession> {
   // The session retains one public extension hook for its lifetime. The host
   // changes this controller only while idle so trajectory roles replace, not
@@ -203,6 +206,17 @@ export async function spawnSharedSdkRoleSession(options: {
       sessionFile,
       persist: options.persistRecord,
     },
+    roleTurn: {
+      producer: options.roleTurnProducer,
+      context: {
+        runId: options.runId,
+        role: options.role,
+        roleSessionId: sessionId,
+        conversationId: nativeSessionId,
+        sessionFile,
+        persist: options.persistRecord,
+      },
+    },
     ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
   });
 
@@ -254,6 +268,17 @@ export async function spawnSharedSdkRoleSession(options: {
         sessionId: targetSessionId,
         sessionFile,
         persist: options.persistRecord,
+      },
+      roleTurn: {
+        producer: options.roleTurnProducer,
+        context: {
+          runId: options.runId,
+          role: target.role,
+          roleSessionId: targetSessionId,
+          conversationId: nativeSessionId,
+          sessionFile,
+          persist: options.persistRecord,
+        },
       },
       ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
     });

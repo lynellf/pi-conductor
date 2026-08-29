@@ -34,6 +34,9 @@ import {
   type LoadedManifest,
   loadManifestFromString,
   ProductionHost,
+  RoleTurnConfigurationError,
+  type RoleTurnTelemetryOptions,
+  StubHost,
 } from "../../src/index.js";
 
 const VALID_MANIFEST = `
@@ -178,6 +181,38 @@ describe("createProductionHost — Task 7A.5", () => {
     expect(host.agentDir).toBe(explicitDir);
     expect(host.isolatedAgentDir).toBe(explicitDir);
   });
+
+  it("forwards a valid `roleTurnTelemetry` config to the run-owned producer", () => {
+    // The factory threads roleTurnTelemetry into the producer's limit resolution
+    // (spec §5.1 / §7.5). A valid partial overlay constructs without error.
+    const host = createProductionHost({
+      extension: { modelRegistry: makeModelRegistry(), cwd: workdir },
+      run: {
+        log: makeLog(),
+        loadedManifest: makeLoadedManifest(),
+        runId: "test-run-rt",
+        roleTurnTelemetry: { limits: { max_block_utf8_bytes: 100 } },
+      },
+    });
+    expect(host).toBeInstanceOf(ProductionHost);
+  });
+
+  it("rejects an invalid `roleTurnTelemetry` config at construction (bounded-chain fails closed)", () => {
+    // The option must reach resolveRoleTurnLimits so a malformed config is a typed
+    // error before any role session is spawned or prompted (spec §5.1). A partial
+    // config that violates max_block_utf8_bytes <= max_turn_utf8_bytes is rejected.
+    expect(() =>
+      createProductionHost({
+        extension: { modelRegistry: makeModelRegistry(), cwd: workdir },
+        run: {
+          log: makeLog(),
+          loadedManifest: makeLoadedManifest(),
+          runId: "test-run-rt-bad",
+          roleTurnTelemetry: { limits: { max_block_utf8_bytes: 999_999 } },
+        },
+      }),
+    ).toThrow(RoleTurnConfigurationError);
+  });
 });
 
 describe("createProductionHost — extension-agnostic (Task 7A.5 acceptance)", () => {
@@ -200,5 +235,105 @@ describe("createProductionHost — extension-agnostic (Task 7A.5 acceptance)", (
     const imports = importLines.join("\n");
     expect(imports).not.toMatch(/ExtensionCommandContext/);
     expect(imports).not.toMatch(/from\s+["'].*extensions\//);
+  });
+});
+
+/** A non-plain-object class used to prove runtime class instances are rejected. */
+class FakeConfig {}
+
+/** ProductionHost built with every required field plus a (possibly malformed) option. */
+function makeProductionHostWithTelemetry(cwd: string, roleTurnTelemetry: unknown): ProductionHost {
+  return new ProductionHost({
+    modelRegistry: makeModelRegistry(),
+    cwd,
+    log: makeLog(),
+    loadedManifest: makeLoadedManifest(),
+    runId: "test-run-rt",
+    roleTurnTelemetry: roleTurnTelemetry as RoleTurnTelemetryOptions,
+  });
+}
+
+/** StubHost built with every required field plus a (possibly malformed) option. */
+function makeStubHostWithTelemetry(roleTurnTelemetry: unknown): StubHost {
+  return new StubHost({
+    runId: "test-run-rt",
+    log: makeLog(),
+    steps: [],
+    loadedManifest: makeLoadedManifest(),
+    roleTurnTelemetry: roleTurnTelemetry as RoleTurnTelemetryOptions,
+  });
+}
+
+/** Factory passthrough with a (possibly malformed) telemetry option. */
+function makeFactoryWithTelemetry(cwd: string, roleTurnTelemetry: unknown): ProductionHost {
+  return createProductionHost({
+    extension: { modelRegistry: makeModelRegistry(), cwd },
+    run: {
+      log: makeLog(),
+      loadedManifest: makeLoadedManifest(),
+      runId: "test-run-rt",
+      // The factory carries `undefined` only as the default; any other value (including
+      // a runtime `null`) is threaded through to the host's strict resolver.
+      ...(roleTurnTelemetry !== undefined && {
+        roleTurnTelemetry: roleTurnTelemetry as RoleTurnTelemetryOptions,
+      }),
+    },
+  });
+}
+
+describe("roleTurnTelemetry runtime rejection (spec §5.1)", () => {
+  let workdir: string;
+
+  beforeEach(async () => {
+    workdir = await mkdtemp(join(tmpdir(), "pi-conductor-prod-host-factory-rt-"));
+    // The production host constructor `mkdirSync`s `sessionDir`, which requires cwd
+    // to exist. (Only reached for the accepted boundary limit, not the rejected cases.)
+    await writeFile(join(workdir, ".gitkeep"), "", "utf8");
+  });
+
+  afterEach(async () => {
+    await rm(workdir, { recursive: true, force: true });
+  });
+
+  // Public host + factory paths must pass `undefined` only as the default and reject
+  // everything else (a `null` must never silently become the default-enabled /
+  // default-limits behavior). Each malformed value is rejected at construction before
+  // any role session is spawned or prompted (spec §5.1).
+  const malformed: readonly [string, unknown][] = [
+    ["null", null],
+    ["an array", []],
+    ["a Date instance", new Date()],
+    ["a class instance", new FakeConfig()],
+    ["an unknown top-level key", { bogus: true }],
+    ["a wrong-typed `enabled`", { enabled: "yes" }],
+    ["a wrong-typed `limits`", { limits: "nope" }],
+    ["an unknown limit key", { limits: { unknown_limit: 1 } }],
+    ["a nonpositive limit", { limits: { max_block_utf8_bytes: 0 } }],
+    ["a negative limit", { limits: { max_run_turns: -1 } }],
+    ["an unsafe (non-safe-integer) limit", { limits: { max_session_turns: 1e21 } }],
+    ["a max_block > max_turn relationship", { limits: { max_block_utf8_bytes: 999_999 } }],
+    [
+      "a max_session_turns > max_run_turns relationship",
+      { limits: { max_session_turns: 400, max_run_turns: 200 } },
+    ],
+  ];
+
+  it.each(
+    malformed,
+  )("rejects %s through ProductionHost, StubHost, and the factory", (_label, value) => {
+    expect(() => makeProductionHostWithTelemetry(workdir, value)).toThrow(
+      RoleTurnConfigurationError,
+    );
+    expect(() => makeStubHostWithTelemetry(value)).toThrow(RoleTurnConfigurationError);
+    expect(() => makeFactoryWithTelemetry(workdir, value)).toThrow(RoleTurnConfigurationError);
+  });
+
+  it("accepts a safe-integer boundary limit through all three paths", () => {
+    const boundary: RoleTurnTelemetryOptions = {
+      limits: { max_turn_blocks: Number.MAX_SAFE_INTEGER },
+    };
+    expect(() => makeProductionHostWithTelemetry(workdir, boundary)).not.toThrow();
+    expect(() => makeStubHostWithTelemetry(boundary)).not.toThrow();
+    expect(() => makeFactoryWithTelemetry(workdir, boundary)).not.toThrow();
   });
 });

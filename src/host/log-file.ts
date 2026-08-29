@@ -411,6 +411,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "subagent_completed",
   "subagent_failed",
   "file_mutation",
+  "role_turn",
   "snapshot_pinned",
   "workspace_provisioned",
   "artifact_collected",
