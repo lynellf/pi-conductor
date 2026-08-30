@@ -31,6 +31,7 @@ import { makeStubModel } from "../../src/host/stub-provider.js";
 import type { DelegationPolicy, SubagentProfile } from "../../src/manifest/types.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
 import { delegateArgsSchema } from "../../src/seam/schema.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 const profile: SubagentProfile = {
@@ -174,6 +175,9 @@ describe("child file tools (§6, issues #24, #26, and #57)", () => {
         worktreePath: worktree,
       }),
       tools: [...CHILD_FILE_TOOL_NAMES],
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-delegation-"),
     });
 
     try {

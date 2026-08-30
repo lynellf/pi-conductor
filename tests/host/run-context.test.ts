@@ -14,6 +14,7 @@ import {
   startRun,
   subscribeToRecords,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const MANIFEST = `
 version: 1
@@ -29,6 +30,8 @@ function hostFactory({ runId, log, loadedManifest }: HostFactoryContext): Host {
     log,
     loadedManifest,
     steps: [{ kind: "emit_end", reason: "test complete" }],
+    // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+    agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-run-context-"),
   });
 }
 

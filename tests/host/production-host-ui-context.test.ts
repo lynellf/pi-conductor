@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LoadedManifest } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const agentSessionMocks = {
   createAgentSession: vi.fn(),
@@ -103,6 +104,9 @@ describe("ProductionHost — uiContext bridge", () => {
       log: new InMemoryRecordLog(),
       loadedManifest: makeLoadedManifest(),
       runId: "run-ui-context-1",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await host.spawnRole("implementer");
@@ -128,6 +132,9 @@ describe("ProductionHost — uiContext bridge", () => {
       log: new InMemoryRecordLog(),
       loadedManifest: makeLoadedManifest(),
       runId: "run-ui-context-2",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await expect(host.spawnRole("implementer")).rejects.toBe(staleContextError);
@@ -147,6 +154,9 @@ describe("ProductionHost — uiContext bridge", () => {
       log: new InMemoryRecordLog(),
       loadedManifest: makeLoadedManifest(),
       runId: "run-ui-context-3",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await host.spawnRole("implementer");
@@ -171,6 +181,9 @@ describe("ProductionHost — uiContext bridge", () => {
       log: new InMemoryRecordLog(),
       loadedManifest: makeLoadedManifest(),
       runId: "run-ui-context-4",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await host.spawnRole("implementer", { modelIndex: 1 });
@@ -205,6 +218,9 @@ describe("ProductionHost — uiContext bridge", () => {
       log: new InMemoryRecordLog(),
       loadedManifest: makeLoadedManifest(),
       runId: "run-runtime-forward-1",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await host.spawnRole("implementer");

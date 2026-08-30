@@ -24,6 +24,7 @@ import {
   createAutomaticIsolatedRoleSessionFactory,
   HostFakeRpcChild,
 } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +75,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async () => {
         throw new Error("shared roles must not select the isolated RPC factory");
       },
@@ -217,6 +221,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
     });
     const spawned: RoleSession[] = [];
@@ -320,6 +327,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         isolatedAttempt += 1;
         const attempt = isolatedAttempt;

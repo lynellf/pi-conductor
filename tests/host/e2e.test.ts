@@ -44,6 +44,7 @@ import {
   type TransitionAccepted,
   type TransitionRejected,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 function makeDef(): MachineDefinition {
   return Object.freeze({
@@ -93,6 +94,9 @@ describe("stub provider — drives one createAgentSession turn (Task 16 acceptan
       tools: ["handoff", "end"],
       customTools: [handoffTool, endTool],
       sessionManager: SessionManager.inMemory(),
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-e2e-"),
     });
 
     const events: AgentSessionEvent[] = [];
@@ -157,6 +161,8 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-e2e-"),
     });
 
     const result = await runLoop({
@@ -197,6 +203,8 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
         totalTokens: 75,
         cost: { input: 0.0015, output: 0.0075, cacheRead: 0, cacheWrite: 0, total: 0.009 },
       },
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-e2e-"),
     });
 
     const result = await runLoop({
@@ -310,6 +318,8 @@ describe("stub provider — no_emission drives a §11.3 breach (no_emission)", (
       runId: initialCheckpoint.run_id,
       log,
       steps: [{ kind: "no_emission" }],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-e2e-"),
     });
 
     const result = await runLoop({
@@ -460,6 +470,9 @@ describe("stub provider — multi ask_user sequential E2E (run fceb3964 regressi
       tools: ["handoff", "end", "ask_user"],
       customTools: [handoffTool, endTool, askUser],
       sessionManager: SessionManager.inMemory(),
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-e2e-"),
     });
 
     await session.bindExtensions({ uiContext: serializing.ui, mode: "tui" });

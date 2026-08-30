@@ -22,6 +22,7 @@ import {
   isolatedRolesManifest,
 } from "./production-host-snapshot-fixture.js";
 import { createAutomaticIsolatedRoleSessionFactory } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 describe("ProductionHost.spawnRole — Issue #48 R2 pinned resume", () => {
   let workdir: string;
@@ -112,6 +113,9 @@ describe("ProductionHost.spawnRole — Issue #48 R2 pinned resume", () => {
             log: ctx.log,
             loadedManifest: ctx.loadedManifest,
             runId: ctx.runId,
+            // Issue #70: isolate from `~/.pi/agent` so user extensions never
+            // load into this test's extension runner.
+            agentDir: makeAndTrackIsolatedAgentDir(),
             nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
           }),
       });
@@ -172,6 +176,9 @@ describe("ProductionHost.spawnRole — Issue #48 R2 pinned resume", () => {
         log: ctx.log,
         loadedManifest: ctx.loadedManifest,
         runId: ctx.runId,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
         nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
       });
       const spawnRole = host.spawnRole.bind(host);

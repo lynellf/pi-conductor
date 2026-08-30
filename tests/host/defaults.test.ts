@@ -46,6 +46,7 @@ import {
   type TransitionAccepted,
   type TransitionRejected,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -152,6 +153,8 @@ describe("Default v1 bundle (§15.5) — linear orchestrator → worker → orch
         // [2] orchestrator visit 2 — end the run.
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-defaults-"),
     });
 
     const result = await runLoop({
@@ -227,6 +230,8 @@ describe("Default v1 bundle (§15.5) — remediation loop exhausts max_visits th
         { kind: "emit_handoff", target_role: "worker", reason: "attempt 4" },
         { kind: "emit_end", reason: "visit cap reached, ending run" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-defaults-"),
     });
 
     const result = await runLoop({

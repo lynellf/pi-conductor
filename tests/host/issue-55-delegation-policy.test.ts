@@ -189,6 +189,13 @@ describe("Issue #55 delegated projection policy", () => {
       sessionManager: SessionManager.inMemory(started.worktree_path),
       customTools: buildChildTools({ worktreePath: started.worktree_path }),
       tools: [...CHILD_FILE_TOOL_NAMES],
+      // Issue #70: the child session's `agentDir` is pinned to the fresh
+      // worktree created by `DelegationManager.start` (a freshly-cloned
+      // git worktree directory that contains no user extensions). The
+      // worktree is allocated per-test in `beforeEach` and cleaned up
+      // in the file-level `afterEach`, so it never contains user state
+      // from `~/.pi/agent`.
+      agentDir: started.worktree_path,
     });
     try {
       expect(session.getActiveToolNames()).toEqual(CHILD_FILE_TOOL_NAMES);

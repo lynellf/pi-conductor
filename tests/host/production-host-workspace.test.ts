@@ -16,6 +16,7 @@ import { buildConfinedTools } from "../../src/host/workspace/confine-tools.js";
 import { InMemoryRecordLog, loadManifestFromString, ProductionHost } from "../../src/index.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 import { createAutomaticIsolatedRoleSessionFactory } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -77,6 +78,9 @@ roles:
 `),
       runId,
       nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     const session = await host.spawnRole("implementer", { visitIndex: 1 });
@@ -151,6 +155,9 @@ roles:
 `),
       runId,
       nodeRoleSessionFactory,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await expect(host.spawnRole("implementer")).rejects.toMatchObject({

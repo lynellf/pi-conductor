@@ -1195,6 +1195,10 @@ async function spawnIsolatedReader(options: {
     ),
     runId: "issue-51-test-run",
     sessionDir: join(options.repository, "role-sessions"),
+    // Issue #70: `options.repository` is a fresh `mkdtemp` from
+    // `createRepository()` (per-test tmp under `os.tmpdir()`) and
+    // contains no user extensions. A sub-path is a safe isolated
+    // `agentDir`; it cannot leak `~/.pi/agent` extensions.
     agentDir: join(options.repository, "agent"),
     nodeRoleSessionFactory: async (nodeOptions) => {
       machineToolsConfigPath = nodeOptions.machineToolsConfigPath;
