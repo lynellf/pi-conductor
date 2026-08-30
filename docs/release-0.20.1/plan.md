@@ -23,6 +23,6 @@ Release the merged Issue #68 telemetry and Issue #70 test-isolation fixes.
 
 ### 3. Ship
 
-- [ ] Commit and push release metadata to `main`.
-- [ ] Create and push annotated tag `v0.20.1` at the release commit.
-- [ ] Create a Forgejo release from that tag.
+- [x] Commit and push release metadata to `main`.
+- [x] Create and push annotated tag `v0.20.1` at the release commit.
+- [x] Create a Forgejo release from that tag.
