@@ -40,6 +40,7 @@ import {
   subscribeToRecords,
   type TransitionAccepted,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -120,6 +121,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
             { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
             { kind: "emit_end", reason: "all done" },
           ],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
 
@@ -287,6 +290,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
             { kind: "emit_handoff", target_role: "orchestrator", reason: "worker resumed" },
             { kind: "emit_end", reason: "all done" },
           ],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         });
         const originalSpawn = host.spawnRole.bind(host);
         host.spawnRole = async (role, options) => {
@@ -348,6 +353,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
             { kind: "emit_handoff", target_role: "orchestrator" },
             { kind: "emit_end" },
           ],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
     const first = await handle.completion();
@@ -371,6 +378,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
           // 'done' the loop terminates immediately (no script
           // consumed).
           steps: [],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
     const result = await resumedHandle.completion();
@@ -411,7 +420,14 @@ describe("Task 13.5 — file-backed log + resume", () => {
     });
     try {
       const hostFactory = ({ runId, log: resumedLog, loadedManifest }: HostFactoryContext) =>
-        new StubHost({ runId, log: resumedLog, loadedManifest, steps: [] });
+        new StubHost({
+          runId,
+          log: resumedLog,
+          loadedManifest,
+          steps: [],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
+        });
       const first = await resumeRun(manifestPath, checkpoint.run_id, {
         goal: "",
         baseDir,
@@ -465,6 +481,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
           log: resumedLog,
           loadedManifest,
           steps: [{ kind: "emit_end", reason: "approved" }],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
     const result = await handle.completion();
@@ -491,6 +509,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
           runId,
           log,
           steps: [{ kind: "emit_end" }],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
     await handle1.completion();
@@ -507,6 +527,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
           runId,
           log,
           steps: [{ kind: "emit_end" }],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
     await handle2.completion();
@@ -526,6 +548,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
           runId,
           log,
           steps: [{ kind: "emit_end" }],
+          // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
         }),
     });
     const result = await handle.completion();
@@ -563,6 +587,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
       runId,
       log,
       steps: [{ kind: "emit_text", text: TEXT }],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
     });
     const sessionA = await hostA.spawnRole("worker");
     await sessionA.prompt("do work");
@@ -572,6 +598,8 @@ describe("Task 13.5 — file-backed log + resume", () => {
       runId,
       log,
       steps: [{ kind: "emit_text", text: "second durable turn" }],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-resume-"),
     });
     const sessionB = await hostB.spawnRole("worker");
     await sessionB.prompt("do work");

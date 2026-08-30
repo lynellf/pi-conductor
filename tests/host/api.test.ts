@@ -32,6 +32,7 @@ import {
   startRun,
 } from "../../src/index.js";
 import type { InMemoryRecordLog } from "../../src/persistence/log.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Fixtures ───────────────────────────────────────────────────────────
 
@@ -78,6 +79,8 @@ function stubHostFactory(ctx: HostFactoryContext): Host {
     runId: ctx.runId,
     log: ctx.log as InMemoryRecordLog,
     steps: [],
+    // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+    agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-api-"),
   });
 }
 
@@ -250,14 +253,25 @@ describe("Issue #48 — FileRecordLog lease release paths", () => {
       goal: "finish",
       baseDir,
       hostFactory: ({ runId, log }) =>
-        new StubHost({ runId, log, steps: [{ kind: "emit_end", reason: "finished" }] }),
+        new StubHost({
+          runId,
+          log,
+          steps: [{ kind: "emit_end", reason: "finished" }],
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-api-"),
+        }),
     });
     await first.completion();
 
     const second = await resumeRun(manifestPath, first.runId, {
       goal: "",
       baseDir,
-      hostFactory: ({ runId, log }) => new StubHost({ runId, log, steps: [] }),
+      hostFactory: ({ runId, log }) =>
+        new StubHost({
+          runId,
+          log,
+          steps: [],
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-api-"),
+        }),
     });
 
     await expect(second.completion()).resolves.toMatchObject({ exitReason: "done" });
@@ -280,6 +294,7 @@ describe("Issue #48 — FileRecordLog lease release paths", () => {
           runId,
           log,
           steps: [{ kind: "emit_end", reason: "finished" }],
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-api-"),
         });
         const spawnRole = host.spawnRole.bind(host);
         host.spawnRole = async (role, options) => {
@@ -357,6 +372,7 @@ describe("Issue #48 — FileRecordLog lease release paths", () => {
           runId: recoveredRunId,
           log: recoveredLog,
           steps: [{ kind: "emit_end", reason: "recovered" }],
+          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-api-"),
         }),
     });
 

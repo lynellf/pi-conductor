@@ -25,6 +25,7 @@ import {
 import type { ArtifactCollectedRecord } from "../../src/persistence/log.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 import { HostFakeRpcChild } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -162,6 +163,9 @@ async function runWorker(args: {
     log,
     loadedManifest: args.manifest,
     runId: args.runId,
+    // Issue #70: isolate from `~/.pi/agent` so user extensions never
+    // load into this test's extension runner.
+    agentDir: makeAndTrackIsolatedAgentDir(),
     nodeRoleSessionFactory: isolatedRoleFactory(args.turn),
   });
   const initial = {
@@ -295,6 +299,9 @@ describe("Issue #48 R4.b terminal collection", () => {
         artifacts: "    artifacts: { auto_patch: true }",
       }),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         process.env.GIT_DIR = join(options.cwd, "unavailable-git-dir");
         finishWithHandoff(child, command, handoff());
@@ -411,6 +418,9 @@ roles:
         log: ctx.log,
         loadedManifest: ctx.loadedManifest,
         runId: ctx.runId,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
         nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
           // This is the actual terminal Git command used by auto-patch collection;
           // set it only after snapshot pinning/workspace provision has completed.
@@ -539,6 +549,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         attempt += 1;
         if (attempt === 1) {
@@ -592,6 +605,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         await writeFile(join(options.cwd, "partial.txt"), "partial failed work\n", "utf8");
         finishWithModelFailure(child, command);
@@ -710,6 +726,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         copyReceivedArtifactCollection = options.artifactCollection !== undefined;
         await mkdir(join(options.cwd, "reports"));

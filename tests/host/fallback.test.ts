@@ -25,6 +25,7 @@ import {
   StubHost,
   type TransitionAccepted,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -114,6 +115,8 @@ describe("Model fallback (§8.2) — primary fails, fallback succeeds", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -205,6 +208,8 @@ describe("Fallback startup failure (§8.2 / issue #44)", () => {
         { kind: "emit_handoff", target_role: "worker", reason: "plan ready" },
         { kind: "fail", errorMessage: "primary model errored" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
     const originalSpawn = host.spawnRole.bind(host);
     let workerSpawnCount = 0;
@@ -257,6 +262,8 @@ describe("Same-model retry (§8.2 / issue #16)", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -305,6 +312,8 @@ describe("Same-model retry (§8.2 / issue #16)", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "fallback completed" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -357,6 +366,8 @@ describe("Same-model retry (§8.2 / issue #16)", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -403,6 +414,8 @@ describe("Same-model retry (§8.2 / issue #16)", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -447,6 +460,8 @@ describe("Same-model retry (§8.2 / issue #16)", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -491,6 +506,8 @@ describe("Model fallback (§9.4) — all models fail, hand to orchestrator once"
         { kind: "fail", errorMessage: "fallback model errored" },
         { kind: "emit_end", reason: "role unavailable, ending run" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
     const orchestratorPrompts: string[] = [];
     const originalSpawn = host.spawnRole.bind(host);
@@ -592,6 +609,8 @@ describe("Model-error diagnostics", () => {
         { kind: "fail", errorMessage: "x".repeat(4097) },
         { kind: "emit_end", reason: "worker unavailable" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     await runLoop({
@@ -628,6 +647,8 @@ describe("Model fallback (§9.4) — orchestrator exhaustion", () => {
         { kind: "fail", errorMessage: "local server canceled the primary request" },
         { kind: "fail", errorMessage: "local server canceled the fallback request" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     const result = await runLoop({
@@ -683,6 +704,8 @@ describe("Model fallback (§9.4) — orchestrator re-dispatching the same role e
         { kind: "fail", errorMessage: "primary model errored" },
         { kind: "emit_handoff", target_role: "worker", reason: "try again" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-fallback-"),
     });
 
     await expect(

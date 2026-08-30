@@ -32,6 +32,7 @@ import {
   type RoleSession,
 } from "../../../src/index.js";
 import { asFull, makeModelRegistryWithStub } from "../production-host-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "../test-agent-dir.js";
 import { HostFakeRpcChild } from "./host-rpc-fixture.js";
 
 const execFileAsync = promisify(execFile);
@@ -346,6 +347,9 @@ roles:
     workspace: { backend: worktree, source: snapshot }
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         const current = new HostFakeRpcChild();
         child = current;
@@ -448,6 +452,9 @@ subagents:
     system_prompt: delegate-child.md
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => child });
@@ -576,6 +583,9 @@ subagents:
     system_prompt: delegate-child.md
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => child });
@@ -681,7 +691,6 @@ subagents:
     const host = new ProductionHost({
       modelRegistry: blocking.registry,
       cwd: workdir,
-      agentDir: externalAgentDir,
       log,
       loadedManifest: loadManifestFromString(`
 version: 1
@@ -711,6 +720,7 @@ subagents:
     system_prompt: delegate-child.md
 `),
       runId,
+      agentDir: externalAgentDir,
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
@@ -877,6 +887,9 @@ subagents:
     system_prompt: delegate-child.md
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
@@ -1139,6 +1152,9 @@ subagents:
     system_prompt: delegate-child.md
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
@@ -1291,6 +1307,9 @@ subagents:
     system_prompt: delegate-child.md
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => parentChild });
@@ -1394,6 +1413,9 @@ subagents:
     system_prompt: .pi/roles/implementer.md
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         adapterOptions = options;
         const starting = createNodeRoleSession({ ...options, spawn: () => child });
@@ -1456,6 +1478,9 @@ roles:
     workspace: { backend: copy, source: snapshot }
 `),
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
         const starting = createNodeRoleSession({
           ...options,
@@ -1543,6 +1568,9 @@ roles:
     tools: [read, handoff, end]
 `),
       runId: "r3-shared-sdk-role",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async () => {
         throw new Error("shared role must not create an isolated Node RPC child");
       },
