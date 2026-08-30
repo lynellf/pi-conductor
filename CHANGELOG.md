@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.20.1] - 2026-08-30
+
+### Bug fixes
+
+- **Hermetic SDK-session tests** (Issue #70). Test-created production and stub
+  role sessions now use fresh, per-test agent directories, preventing locally
+  installed Pi extensions from influencing test behavior. Production defaults
+  remain unchanged, and test cleanup removes the temporary directories after
+  each test.
+
+### Enhancements
+
+- **Bounded structured role-turn telemetry** (Issue #68). Role turns now
+  produce strict, append-only `role_turn` records with bounded tool-call,
+  response, and usage metadata for durable analytics and library consumers.
+
 ## [0.20.0] - 2026-08-28
 
 ### Enhancements
