@@ -38,6 +38,7 @@ import {
   type RoleTurnTelemetryOptions,
   StubHost,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const VALID_MANIFEST = `
 version: 1
@@ -250,6 +251,10 @@ function makeProductionHostWithTelemetry(cwd: string, roleTurnTelemetry: unknown
     loadedManifest: makeLoadedManifest(),
     runId: "test-run-rt",
     roleTurnTelemetry: roleTurnTelemetry as RoleTurnTelemetryOptions,
+    // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+    // Patched for grep cleanliness even though this helper never invokes
+    // spawnRole (it only validates ctor-level option rejection).
+    agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-production-host-factory-"),
   });
 }
 
@@ -261,6 +266,10 @@ function makeStubHostWithTelemetry(roleTurnTelemetry: unknown): StubHost {
     steps: [],
     loadedManifest: makeLoadedManifest(),
     roleTurnTelemetry: roleTurnTelemetry as RoleTurnTelemetryOptions,
+    // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+    // Patched for grep cleanliness even though this helper never invokes
+    // spawnRole (it only validates ctor-level option rejection).
+    agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-production-host-factory-"),
   });
 }
 
@@ -277,6 +286,10 @@ function makeFactoryWithTelemetry(cwd: string, roleTurnTelemetry: unknown): Prod
       ...(roleTurnTelemetry !== undefined && {
         roleTurnTelemetry: roleTurnTelemetry as RoleTurnTelemetryOptions,
       }),
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      // Patched for grep cleanliness even though this helper never invokes
+      // spawnRole (it only validates ctor-level option rejection).
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-production-host-factory-"),
     },
   });
 }

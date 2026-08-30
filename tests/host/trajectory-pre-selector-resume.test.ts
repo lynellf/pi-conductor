@@ -14,6 +14,7 @@ import {
 } from "../../src/index.js";
 import { createManifestSnapshot } from "../../src/persistence/trajectory-records.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const MANIFEST = `
 version: 1
@@ -66,6 +67,9 @@ describe("Issue #63 pre-selector trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: initial.run_id,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       await source.prompt("SOURCE_TRAJECTORY_EXACT");
@@ -154,6 +158,9 @@ describe("Issue #63 pre-selector trajectory resume", () => {
               log: resumedLog,
               loadedManifest,
               runId,
+              // Issue #70: isolate from `~/.pi/agent` so user extensions never
+              // load into this test's extension runner.
+              agentDir: makeAndTrackIsolatedAgentDir(),
             });
           },
         });

@@ -50,6 +50,7 @@ import {
   createAutomaticIsolatedRoleSessionFactory,
   HostFakeRpcChild,
 } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -214,6 +215,8 @@ async function createStubHostFromYaml(
     steps,
     cwd,
     loadedManifest,
+    // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+    agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-e2e-workspaces-"),
   });
 }
 
@@ -318,6 +321,9 @@ roles:
           writable: false
 `),
         runId: "ac002-run",
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
         nodeRoleSessionFactory: async (options: NodeRoleSessionOptions) => {
           spawnOptions.push(options);
           return automaticFactory(options);
@@ -425,6 +431,9 @@ roles:
         log,
         loadedManifest: manifest,
         runId,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
         nodeRoleSessionFactory: createControlledIsolatedRoleSessionFactory(
           async (options, child, command) => {
             if (options.role !== "implementer") {
@@ -557,6 +566,9 @@ roles:
         log,
         loadedManifest: manifest,
         runId,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
         nodeRoleSessionFactory: createControlledIsolatedRoleSessionFactory(
           async (options, child, command) => {
             const configPath = options.machineToolsConfigPath;
@@ -706,6 +718,9 @@ describe("AC-005: concurrent read-only workers share one snapshot", () => {
         log,
         loadedManifest: loadManifestFromString(YAML_TWO_READ_ONLY),
         runId,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
         nodeRoleSessionFactory: async (options) => {
           spawnOptions.push(options);
           return automaticFactory(options);

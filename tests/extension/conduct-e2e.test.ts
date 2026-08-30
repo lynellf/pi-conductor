@@ -54,13 +54,46 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CONDUCT_STATUS_KEY } from "../../src/extension/status.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
 import { listRuns } from "../../src/index.js";
+import { makeIsolatedAgentDir, rmIsolatedAgentDir } from "../host/test-agent-dir.js";
 import { loadExtension, makeCtx, type NotifyCall, type StatusUpdate } from "./conduct-harness.js";
+
+// Issue #70: thread an isolated `agentDir` through every `createProductionHost`
+// call the production `/conduct` handler makes, without modifying
+// `src/extension/commands/start.ts`. The factory is intercepted here and the
+// run inputs are augmented with a per-test `mkdtemp` agent dir so the SDK
+// extension runner never loads the developer's real `~/.pi/agent` extensions
+// into this test's role sessions.
+//
+// `allocatedAgentDirs` is a module-scoped Set shared between the mock
+// factory and the test's `afterEach` cleanup. The factory closure captures
+// the Set by reference, so the test scope can drain it after each test.
+const allocatedAgentDirs = new Set<string>();
+
+vi.mock("../../src/host/production-host-factory.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/host/production-host-factory.js")>(
+    "../../src/host/production-host-factory.js",
+  );
+  return {
+    ...actual,
+    createProductionHost: (inputs: Parameters<typeof actual.createProductionHost>[0]) => {
+      const dir = makeIsolatedAgentDir("pi-conductor-conduct-e2e-");
+      allocatedAgentDirs.add(dir);
+      return actual.createProductionHost({
+        ...inputs,
+        run: {
+          ...inputs.run,
+          agentDir: dir,
+        },
+      });
+    },
+  };
+});
 
 describe("extension shell — Task 7B.4: stub-driven E2E", () => {
   let workdir: string;
@@ -138,6 +171,11 @@ roles:
 
   afterEach(async () => {
     await rm(workdir, { recursive: true, force: true });
+    // Issue #70: clean up the per-test isolated agent dirs allocated by
+    // the `vi.mock` factory above.
+    const dirs = [...allocatedAgentDirs];
+    allocatedAgentDirs.clear();
+    await Promise.all(dirs.map((dir) => rmIsolatedAgentDir(dir)));
     // Clear the active-run tracker between tests so
     // a crashed run doesn't leak into the next.
     const { setActiveRun } = await import("../../src/extension/active-run.js");

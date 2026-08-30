@@ -37,6 +37,7 @@ import {
   StubHost,
   type TransitionAccepted,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
@@ -268,6 +269,8 @@ describe("StubHost — usage capture on terminals (Task 17 §11.4)", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
 
     const result = await runLoop({
@@ -368,6 +371,8 @@ describe("Per-session cap (§11.7) — trip + session_failed(session_cost_cap_ex
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
 
     const result = await runLoop({
@@ -448,6 +453,8 @@ describe("Run cap (§11.7) — force end on run cap breach", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
 
     const result = await runLoop({
@@ -540,6 +547,8 @@ describe("Run cap (§11.7) — force end on run cap breach", () => {
         // The deferred-end branch above never reaches the
         // orchestrator's session — no third step is consumed.
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
 
     const result = await runLoop({
@@ -636,6 +645,8 @@ describe("Run cap (§11.7) — force end on run cap breach", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
     await runLoop({
       def: loaded.def,
@@ -703,6 +714,8 @@ describe("§11.6 rollup reconciles with persisted terminal usage", () => {
           },
         },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
     const result = await runLoop({
       def: loaded.def,
@@ -745,6 +758,8 @@ describe("§11.4 model field on lifecycle records (Task 17)", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-cost-"),
     });
     await runLoop({
       def: loaded.def,

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RoleSession } from "../../src/host/host.js";
 import { makeStubModel, makeStubStreamFunction } from "../../src/host/stub-provider.js";
 import { FileRecordLog, loadManifest, ProductionHost, startRun } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const MANIFEST = `
 version: 1
@@ -237,6 +238,9 @@ describe("Issue #63 trajectory environment", () => {
       log: new FileRecordLog({ baseDir: runs }),
       loadedManifest: await loadManifest(manifestPath),
       runId: "auto-compaction-test",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
     const trajectorySession = await trajectoryHost.spawnRole("planner");
     expect(autoCompactionEnabled(trajectorySession)).toBe(false);
@@ -253,6 +257,9 @@ describe("Issue #63 trajectory environment", () => {
       log: new FileRecordLog({ baseDir: runs }),
       loadedManifest: await loadManifest(freshManifestPath),
       runId: "fresh-after-trajectory",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
     const freshSession = await freshHost.spawnRole("planner");
     expect(autoCompactionEnabled(freshSession)).toBe(true);
@@ -272,6 +279,9 @@ describe("Issue #63 trajectory environment", () => {
           log,
           loadedManifest,
           runId,
+          // Issue #70: isolate from `~/.pi/agent` so user extensions never
+          // load into this test's extension runner.
+          agentDir: makeAndTrackIsolatedAgentDir(),
         }),
     });
 
@@ -345,6 +355,9 @@ describe("Issue #63 trajectory environment", () => {
           log,
           loadedManifest,
           runId,
+          // Issue #70: isolate from `~/.pi/agent` so user extensions never
+          // load into this test's extension runner.
+          agentDir: makeAndTrackIsolatedAgentDir(),
         }),
     });
 

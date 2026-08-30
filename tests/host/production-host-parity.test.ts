@@ -43,6 +43,7 @@ import {
   type SessionLifecycleEvent,
   type TransitionAccepted,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Test fixture ─────────────────────────────────────────────────────
 
@@ -163,6 +164,9 @@ describe("ProductionHost — full orch → worker → orch → end via runLoop (
         ]),
       ),
       cwd: workdir,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     const result = await runLoop({
@@ -284,6 +288,9 @@ describe("ProductionHost — shared-SDK spawn emits role_turn (Issue #68)", () =
         ]),
       ),
       cwd: workdir,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     const result = await runLoop({
@@ -356,6 +363,9 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
       },
       modelRegistry: makeModelRegistryWithStub(makeStubStream([])),
       cwd: workdir,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     // Pre-visit: nextVisitIndex = 1 for both roles.
@@ -421,6 +431,9 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
       },
       modelRegistry: makeModelRegistryWithStub(makeStubStream([])),
       cwd: workdir,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     expect(host.runCostSoFar()).toBe(0);
@@ -503,6 +516,9 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
       },
       modelRegistry: makeModelRegistryWithStub(makeStubStream([])),
       cwd: workdir,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     expect(host.getNextModel("worker", 0)).toBe("stub:fallback");
@@ -536,6 +552,9 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
       },
       modelRegistry: makeModelRegistryWithStub(makeStubStream([])),
       cwd: workdir,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     host.persistRecord({

@@ -27,6 +27,7 @@ import {
   type MachineDefinition,
   StubHost,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 function makeDef(): MachineDefinition {
   return Object.freeze({
@@ -96,6 +97,8 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-run-memory-"),
     });
     const spawned: Array<{ role: string; sessionFile: string; options: unknown }> = [];
     const prompts: Array<{ role: string; text: string }> = [];
@@ -160,6 +163,8 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
       runId: initialCheckpoint.run_id,
       log,
       steps: [{ kind: "emit_handoff", target_role: "worker", reason: "plan ready" }],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-run-memory-"),
     });
 
     // Spy on spawnRole by wrapping host.spawnRole to capture the
@@ -222,6 +227,8 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-run-memory-"),
     });
 
     const orchestratorPrompts: string[] = [];
@@ -282,6 +289,8 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-run-memory-"),
     });
 
     const workerPrompts: string[] = [];
@@ -333,6 +342,8 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
       runId: initialCheckpoint.run_id,
       log,
       steps: [{ kind: "emit_handoff", target_role: "worker" }],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-run-memory-"),
     });
 
     const orchestratorPrompts: string[] = [];

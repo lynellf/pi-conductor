@@ -46,6 +46,7 @@ import {
   SystemPromptNotFoundError,
   selectModelEntry,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 // ─── Test fixture ─────────────────────────────────────────────────────
 
@@ -84,6 +85,9 @@ function makeHost(): ProductionHost {
     log: makeLog(),
     loadedManifest: makeLoadedManifest(),
     runId: "test-run-1",
+    // Issue #70: isolate the SDK agent dir so the developer's real
+    // `~/.pi/agent` extensions never load into this test's extension runner.
+    agentDir: makeAndTrackIsolatedAgentDir(),
   });
 }
 
