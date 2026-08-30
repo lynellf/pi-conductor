@@ -23,6 +23,7 @@ import {
   TrajectoryResumeError,
 } from "../../src/persistence/trajectory-records.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 function lastUserText(request: unknown): string | null {
   if (typeof request !== "object" || request === null || !("messages" in request)) return null;
@@ -114,6 +115,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: checkpoint.run_id,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       await source.prompt("source trajectory");
@@ -184,6 +188,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: checkpoint.run_id,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const resumedTarget = await directResumeHost.spawnRole("implementer");
       expect(
@@ -212,6 +219,9 @@ describe("Issue #63 trajectory resume", () => {
             log: resumedLog,
             loadedManifest,
             runId,
+            // Issue #70: isolate from `~/.pi/agent` so user extensions never
+            // load into this test's extension runner.
+            agentDir: makeAndTrackIsolatedAgentDir(),
           }),
       });
       await expect(handle.completion()).resolves.toMatchObject({ exitReason: expect.any(String) });
@@ -255,6 +265,9 @@ describe("Issue #63 trajectory resume", () => {
         log: new FileRecordLog({ baseDir }),
         loadedManifest: loaded,
         runId: initial.run_id,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       await source.prompt("source trajectory");
@@ -370,6 +383,9 @@ describe("Issue #63 trajectory resume", () => {
             log: resumedLog,
             loadedManifest,
             runId,
+            // Issue #70: isolate from `~/.pi/agent` so user extensions never
+            // load into this test's extension runner.
+            agentDir: makeAndTrackIsolatedAgentDir(),
           }),
       });
       await expect(handle.completion()).resolves.toMatchObject({ exitReason: "done" });
@@ -428,6 +444,9 @@ describe("Issue #63 trajectory resume", () => {
       log,
       loadedManifest: loaded,
       runId: "invalid-trajectory-selector",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await expect(host.spawnRole("implementer")).rejects.toBeInstanceOf(TrajectoryResumeError);
@@ -454,6 +473,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: "clamped-trajectory-effort",
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       await source.prompt("source trajectory");
@@ -510,6 +532,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: "clamped-trajectory-effort",
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const requestCountBeforeTarget = requests.length;
       await expect(targetHost.spawnRole("implementer")).rejects.toBeInstanceOf(
@@ -547,6 +572,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: `readmit-${code}`,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       if (sourcePrompt !== null) await source.prompt(sourcePrompt);
@@ -615,6 +643,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: `readmit-${code}`,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       await expect(targetHost.spawnRole("implementer")).rejects.toMatchObject({ code });
       expect(requests).toHaveLength(0);
@@ -650,6 +681,9 @@ describe("Issue #63 trajectory resume", () => {
       log,
       loadedManifest: loaded,
       runId: "failed-trajectory",
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await expect(host.spawnRole("implementer")).rejects.toThrow("previously failed");
@@ -760,6 +794,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: initial.run_id,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       const sourceConversation = {
@@ -830,6 +867,9 @@ describe("Issue #63 trajectory resume", () => {
             log: resumedLog,
             loadedManifest,
             runId,
+            // Issue #70: isolate from `~/.pi/agent` so user extensions never
+            // load into this test's extension runner.
+            agentDir: makeAndTrackIsolatedAgentDir(),
           }),
       });
       await expect(first.completion()).rejects.toBeInstanceOf(TrajectoryResumeError);
@@ -855,6 +895,9 @@ describe("Issue #63 trajectory resume", () => {
             log: resumedLog,
             loadedManifest,
             runId,
+            // Issue #70: isolate from `~/.pi/agent` so user extensions never
+            // load into this test's extension runner.
+            agentDir: makeAndTrackIsolatedAgentDir(),
           }),
       });
       await expect(second.completion()).rejects.toBeInstanceOf(TrajectoryResumeError);
@@ -893,6 +936,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: await loadManifest(manifestPath),
         runId: "effort-preflight",
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await host.spawnRole("orchestrator");
       const setModel = vi.spyOn(AgentSession.prototype, "setModel");
@@ -953,6 +999,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: "duplicate-target-seed",
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const source = await sourceHost.spawnRole("orchestrator");
       const targetSeed = "[handoff → implementer]\\nTARGET_SEED_EXACT";
@@ -1009,6 +1058,9 @@ describe("Issue #63 trajectory resume", () => {
         log,
         loadedManifest: loaded,
         runId: "duplicate-target-seed",
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
       const requestsBeforeTarget = requests.length;
       await expect(targetHost.spawnRole("implementer")).rejects.toMatchObject({

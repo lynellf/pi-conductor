@@ -101,6 +101,15 @@ export interface StubHostOptions {
   readonly displaySink?: DisplaySink;
   /** Issue #68: bounded role-turn telemetry options (enabled by default). */
   readonly roleTurnTelemetry?: RoleTurnTelemetryOptions;
+  /**
+   * Issue #70: per-test isolated agent dir. When set, the SDK
+   * session spawned by {@link StubHost.spawnRole} runs against an
+   * empty `mkdtemp` instead of the developer's real `~/.pi/agent`,
+   * so user extensions (e.g. analytics plugins) cannot leak into
+   * the test process. Optional — when omitted, the SDK falls back
+   * to its default (`~/.pi/agent`) exactly as today.
+   */
+  readonly agentDir?: string;
 }
 
 /**
@@ -129,6 +138,8 @@ export class StubHost implements Host {
   private readonly displaySink: DisplaySink | undefined;
   /** Issue #68: run-owned bounded role-turn telemetry producer/ledger. */
   private readonly roleTurnProducer: RoleTurnProducer;
+  /** Issue #70: per-test isolated agent dir (test seam). */
+  private readonly agentDirValue: string | undefined;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
@@ -149,6 +160,7 @@ export class StubHost implements Host {
     this.sessionManager = SessionManager.inMemory();
     this.cwd = opts.cwd ?? "/tmp/stub-cwd";
     this.displaySink = opts.displaySink;
+    this.agentDirValue = opts.agentDir;
     this.roleTurnProducer = new RoleTurnProducer({
       runId: this.runId,
       log: this.log,
@@ -324,6 +336,7 @@ export class StubHost implements Host {
     const spawnCwd = isolatedWorkspacePath ?? this.cwd;
     const createOpts: Parameters<typeof createAgentSession>[0] = {
       cwd: spawnCwd,
+      ...(this.agentDirValue !== undefined && { agentDir: this.agentDirValue }),
       model: this.model,
       modelRegistry: this.modelRegistry,
       tools: [

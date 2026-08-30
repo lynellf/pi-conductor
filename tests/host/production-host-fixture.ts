@@ -8,6 +8,7 @@ import {
   ProductionHost,
   type RoleSession,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const STUB_MANIFEST = `
 version: 1
@@ -69,7 +70,18 @@ export function makeModelRegistryWithStub(
   return registry;
 }
 
-/** Build the ordinary v1 production-host fixture. */
+/**
+ * Build the ordinary v1 production-host fixture.
+ *
+ * **Issue #70**: defaults `agentDir` to a fresh per-call
+ * `mkdtemp` under `os.tmpdir()` so the SDK extension runner sees an
+ * empty agent dir instead of leaking the developer's real
+ * `~/.pi/agent`. Callers that intentionally pin the value (e.g.
+ * `production-host-rpc-spawn.test.ts`'s production-default
+ * assertions) can still pass `overrides.agentDir`; callers that need
+ * to clean up the allocated dir themselves should call
+ * `makeIsolatedAgentDir` directly and pass the result.
+ */
 export function makeHost(
   cwd: string,
   overrides: {
@@ -87,7 +99,9 @@ export function makeHost(
     loadedManifest: overrides.loadedManifest ?? loadManifestFromString(STUB_MANIFEST),
     runId: "test-run-1",
     ...(overrides.sessionDir !== undefined && { sessionDir: overrides.sessionDir }),
-    ...(overrides.agentDir !== undefined && { agentDir: overrides.agentDir }),
+    ...(overrides.agentDir !== undefined
+      ? { agentDir: overrides.agentDir }
+      : { agentDir: makeAndTrackIsolatedAgentDir() }),
   });
 }
 

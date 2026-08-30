@@ -45,6 +45,7 @@ import {
   StubHost,
   subscribeToRecords,
 } from "../../src/index.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 /** Minimal `MachineDefinition` shared across tests. */
 function makeDef(): MachineDefinition {
@@ -128,6 +129,8 @@ describe("Case 1 — listener fires on every persistRecord", () => {
         { kind: "emit_handoff", target_role: "orchestrator", reason: "worker done" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
     });
 
     const seen: PersistedRecord[] = [];
@@ -225,6 +228,8 @@ subagents:
           },
           { kind: "emit_end", reason: "delegation complete" },
         ],
+        // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+        agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
       });
       const seen: PersistedRecord[] = [];
       const durableAtNotify: boolean[] = [];
@@ -274,7 +279,13 @@ subagents:
 describe("file-mutation telemetry — issue #22", () => {
   it("fans out a durable file-mutation record to record subscribers", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "run-22", log, steps: [] });
+    const host = new StubHost({
+      runId: "run-22",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const record: FileMutationRecord = {
       type: "file_mutation",
       run_id: "run-22",
@@ -302,7 +313,13 @@ describe("file-mutation telemetry — issue #22", () => {
 describe("Case 2 — FIFO ordering", () => {
   it("fires listeners in subscription order", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "fifo", log, steps: [] });
+    const host = new StubHost({
+      runId: "fifo",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const order: string[] = [];
 
     const unsubA = subscribeToRecords(() => {
@@ -330,7 +347,13 @@ describe("Case 2 — FIFO ordering", () => {
 describe("Case 3 — sync throw isolation", () => {
   it("other listeners still fire and the engine continues", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "sync-throw", log, steps: [] });
+    const host = new StubHost({
+      runId: "sync-throw",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const fired: string[] = [];
 
     const unsubThrow = subscribeToRecords(() => {
@@ -357,7 +380,13 @@ describe("Case 3 — sync throw isolation", () => {
 describe("Case 4 — async rejection isolation", () => {
   it("other listeners still fire", async () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "async-reject", log, steps: [] });
+    const host = new StubHost({
+      runId: "async-reject",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const fired: string[] = [];
 
     const unsubReject = subscribeToRecords(async () => {
@@ -389,7 +418,13 @@ describe("Case 4 — async rejection isolation", () => {
 describe("Case 5 — re-entrant subscribe", () => {
   it("new listener does not see the current record but sees the next", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "reentrant-sub", log, steps: [] });
+    const host = new StubHost({
+      runId: "reentrant-sub",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const seenByLate: PersistedRecord[] = [];
     // TS CFA can't track closure-assigned mutability; use an indirect
     // container so TypeScript sees a stable non-nullable reference.
@@ -421,7 +456,13 @@ describe("Case 5 — re-entrant subscribe", () => {
 describe("Case 6 — re-entrant unsubscribe", () => {
   it("sibling still sees current record but not the next", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "reentrant-unsub", log, steps: [] });
+    const host = new StubHost({
+      runId: "reentrant-unsub",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const seenByB: PersistedRecord[] = [];
 
     // eslint-disable-next-line prefer-const
@@ -453,7 +494,13 @@ describe("Case 6 — re-entrant unsubscribe", () => {
 describe("Case 7 — idempotent unsubscribe", () => {
   it("calling the handle twice does not throw and does not change the set", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "idempotent", log, steps: [] });
+    const host = new StubHost({
+      runId: "idempotent",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
     const fired: string[] = [];
 
     const unsub = subscribeToRecords(() => {
@@ -477,7 +524,13 @@ describe("Case 7 — idempotent unsubscribe", () => {
 describe("Case 8 — empty set is a no-op", () => {
   it("persistRecord succeeds with no listeners registered", () => {
     const log = new InMemoryRecordLog();
-    const host = new StubHost({ runId: "noop", log, steps: [] });
+    const host = new StubHost({
+      runId: "noop",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
 
     // No listeners subscribed.  This must not throw.
     host.persistRecord(sessionStarted({ run_id: "noop" }));
@@ -491,8 +544,20 @@ describe("Case 8 — empty set is a no-op", () => {
 describe("Case 9 — consumer-side run_id filter", () => {
   it("consumer can filter records by run_id", () => {
     const log = new InMemoryRecordLog();
-    const hostA = new StubHost({ runId: "run-a", log, steps: [] });
-    const hostB = new StubHost({ runId: "run-b", log, steps: [] });
+    const hostA = new StubHost({
+      runId: "run-a",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
+    const hostB = new StubHost({
+      runId: "run-b",
+      log,
+      steps: [],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
+    });
 
     const seenByA: PersistedRecord[] = [];
     const seenByB: PersistedRecord[] = [];
@@ -543,6 +608,8 @@ describe("issue #68 — durable role_turn before notify (stub spawn path)", () =
         { kind: "emit_text", text: "orchestrator answer" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
     });
 
     const seen: PersistedRecord[] = [];
@@ -606,6 +673,8 @@ describe("issue #68 — disabled telemetry emits none (stub spawn path)", () => 
         { kind: "emit_text", text: "orchestrator answer" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
     });
 
     await runLoop({ def, initialCheckpoint: checkpoint, host, initialGoal: "do the thing" });
@@ -641,6 +710,8 @@ describe("issue #68 — model-error end through the stub spawn path", () => {
         { kind: "emit_handoff", target_role: "orchestrator" },
         { kind: "emit_end", reason: "all done" },
       ],
+      // Issue #70: keep the SDK extension runner out of the developer's real agent dir.
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-stub-host-record-emitter-"),
     });
 
     await runLoop({ def, initialCheckpoint: checkpoint, host, initialGoal: "do the thing" });

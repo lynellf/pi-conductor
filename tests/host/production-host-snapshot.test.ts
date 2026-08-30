@@ -16,6 +16,7 @@ import {
   isolatedRolesManifest,
 } from "./production-host-snapshot-fixture.js";
 import { createAutomaticIsolatedRoleSessionFactory } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -64,6 +65,9 @@ describe("ProductionHost.spawnRole — Issue #48 R2 immutable snapshot pin", () 
         loadedManifest: manifest,
         runId,
         nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
 
       const first = await host.spawnRole("implementer", { visitIndex: 1 });
@@ -84,6 +88,9 @@ describe("ProductionHost.spawnRole — Issue #48 R2 immutable snapshot pin", () 
         loadedManifest: manifest,
         runId,
         nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       }).spawnRole("auditor", { visitIndex: 1 });
       await resumed.dispose();
 
@@ -145,6 +152,9 @@ roles:
       loadedManifest: manifest,
       runId,
       nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     await (await host.spawnRole("implementer", { visitIndex: 1 })).dispose();
@@ -159,6 +169,9 @@ roles:
         loadedManifest: manifest,
         runId,
         nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       }).spawnRole("auditor", { visitIndex: 1 })
     ).dispose();
 
@@ -185,6 +198,9 @@ roles:
       loadedManifest: loadManifestFromString(isolatedRolesManifest("snapshot")),
       runId,
       nodeRoleSessionFactory: createAutomaticIsolatedRoleSessionFactory(),
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
     });
 
     const sessions = await Promise.all([
@@ -271,6 +287,9 @@ roles:
         log,
         loadedManifest: loadManifestFromString(isolatedRolesManifest("snapshot")),
         runId,
+        // Issue #70: isolate from `~/.pi/agent` so user extensions never
+        // load into this test's extension runner.
+        agentDir: makeAndTrackIsolatedAgentDir(),
       });
 
       await expect(host.spawnRole("implementer", { visitIndex: 1 })).rejects.toMatchObject({

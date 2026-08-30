@@ -19,6 +19,7 @@ import type { NodeRoleSessionOptions } from "../../src/host/rpc/protocol.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 import { HostFakeRpcChild } from "./rpc/host-rpc-fixture.js";
+import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -205,6 +206,9 @@ describe("Issue #48 R4.a accepted-handoff artifact routing", () => {
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         if (options.role === "implementer") {
           await mkdir(join(options.cwd, "reports", "nested"), { recursive: true });
@@ -283,6 +287,9 @@ describe("Issue #48 R4.a accepted-handoff artifact routing", () => {
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         if (options.role === "implementer") {
           await writeFile(join(options.cwd, "result.txt"), "collected then removed\n", "utf8");
@@ -351,6 +358,9 @@ describe("Issue #48 R4.a accepted-handoff artifact routing", () => {
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         if (options.role === "implementer") {
           await writeFile(join(options.cwd, "first.txt"), "first collected artifact\n", "utf8");
@@ -421,6 +431,9 @@ describe("Issue #48 R4.a accepted-handoff artifact routing", () => {
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         if (options.role === "implementer") {
           await writeFile(join(options.cwd, "first.txt"), "created during route\n", "utf8");
@@ -545,6 +558,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         if (options.role === "implementer") {
           await mkdir(join(options.cwd, "reports"));
@@ -616,6 +632,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         if (options.role !== "implementer") {
           throw new Error("the shared receiver must preserve the SDK path");
@@ -691,6 +710,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         await writeFile(join(options.cwd, "resume-report.txt"), "resume source bytes\n", "utf8");
         settleTurn(child, command, "handoff", handoff([{ path: "resume-report.txt" }]));
@@ -726,6 +748,9 @@ roles:
           log: ctx.log,
           loadedManifest: ctx.loadedManifest,
           runId: ctx.runId,
+          // Issue #70: isolate from `~/.pi/agent` so user extensions never
+          // load into this test's extension runner.
+          agentDir: makeAndTrackIsolatedAgentDir(),
         });
         const spawnRole = host.spawnRole.bind(host);
         host.spawnRole = async (role, options) => {
@@ -788,6 +813,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: async (options) => {
         if (options.role === "orchestrator") firstReceiverWorkspace = options.cwd;
         return initialRoleFactory(options);
@@ -848,6 +876,9 @@ roles:
           log: ctx.log,
           loadedManifest: ctx.loadedManifest,
           runId: ctx.runId,
+          // Issue #70: isolate from `~/.pi/agent` so user extensions never
+          // load into this test's extension runner.
+          agentDir: makeAndTrackIsolatedAgentDir(),
           nodeRoleSessionFactory: async (options) => {
             resumedReceiverWorkspace = options.cwd;
             return roleFactory(options);
@@ -886,6 +917,9 @@ roles:
       log,
       loadedManifest: manifest,
       runId,
+      // Issue #70: isolate from `~/.pi/agent` so user extensions never
+      // load into this test's extension runner.
+      agentDir: makeAndTrackIsolatedAgentDir(),
       nodeRoleSessionFactory: isolatedRoleFactory(async (options, child, command) => {
         await writeFile(
           join(options.cwd, "missing-after-collection.txt"),
@@ -943,6 +977,9 @@ roles:
           log: ctx.log,
           loadedManifest: ctx.loadedManifest,
           runId: ctx.runId,
+          // Issue #70: isolate from `~/.pi/agent` so user extensions never
+          // load into this test's extension runner.
+          agentDir: makeAndTrackIsolatedAgentDir(),
         });
         const route = host.routeAcceptedHandoffArtifacts.bind(host);
         host.routeAcceptedHandoffArtifacts = async (source, receiver) => {
