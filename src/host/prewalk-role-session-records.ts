@@ -7,12 +7,12 @@ import type {
   PrewalkSwitchSelectedRecord,
 } from "../persistence/prewalk-records.js";
 import { sha256Canonical } from "../persistence/trajectory-records.js";
+import type { PrewalkGitCheckpoint } from "./prewalk-git-checkpoint.js";
 import type {
   PrewalkExecutorEnvironment,
   PrewalkPhaseSession,
   PrewalkPreflightResult,
 } from "./prewalk-role-session.js";
-import type { PrewalkGitCheckpoint } from "./prewalk-git-checkpoint.js";
 
 export interface PrewalkProjectionResult {
   readonly prompt: string;

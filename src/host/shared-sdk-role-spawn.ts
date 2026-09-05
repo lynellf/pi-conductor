@@ -19,7 +19,9 @@ import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
-import { buildToolsAllowlist } from "./production-host-resolve.js";
+import { createPrewalkPhaseSessionAdapter } from "./prewalk-phase-session.js";
+import { createSdkPrewalkPhase, type SdkPrewalkPhase } from "./prewalk-sdk-phase.js";
+import { buildToolsAllowlist, resolveModel } from "./production-host-resolve.js";
 import { createRoleSessionAdapter } from "./role-session.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { SessionSeam } from "./seam.js";
@@ -69,6 +71,7 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly agentsBySessionId: Map<string, SessionEventSource>;
   /** Issue #68: run-owned producer shared across every logical invocation. */
   readonly roleTurnProducer: RoleTurnProducer;
+  readonly prewalk?: SdkPrewalkPhase;
 }): Promise<RoleSession> {
   // The session retains one public extension hook for its lifetime. The host
   // changes this controller only while idle so trajectory roles replace, not
@@ -122,6 +125,12 @@ export async function spawnSharedSdkRoleSession(options: {
   );
   const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
   const askUser = createAskUserTool() as ToolDefinition;
+  const prewalkPhase = createSdkPrewalkPhase(options.prewalk, {
+    workspaceRoot: options.cwd,
+    roleSessionId: options.roleSessionId ?? "",
+    ordinaryActiveToolNames: buildToolsAllowlist(options.roleConfig?.tools, false),
+  });
+  const checkpointTool = prewalkPhase.checkpointTool;
   // The parent registry owns the runtime that carries extension-registered
   // providers (e.g. antigravity via pi-antigravity). Local SDK types (0.80.6)
   // accept `modelRegistry` but declare no `modelRuntime`; global pi 0.84.3
@@ -146,12 +155,14 @@ export async function spawnSharedSdkRoleSession(options: {
       askUser,
       ...(handoffContext === null ? [] : [handoffContext]),
       ...(options.delegateTool === null ? [] : [options.delegateTool]),
+      ...(checkpointTool === null ? [] : [checkpointTool]),
     ],
     tools:
       options.activeToolNames === undefined
         ? [
             ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
             ...(options.delegateTool === null ? [] : ["delegate"]),
+            ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
           ]
         : [...options.activeToolNames],
   };
@@ -161,6 +172,9 @@ export async function spawnSharedSdkRoleSession(options: {
   (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = options.effort;
   const { session } = await createAgentSession(createOpts);
   try {
+    if (prewalkPhase.initialActiveToolNames !== null) {
+      session.setActiveToolsByName([...prewalkPhase.initialActiveToolNames]);
+    }
     assertExactResumedTrajectoryEnvironment(session, options);
     if (options.activeToolNames !== undefined) {
       const activeNames = session.getActiveToolNames();
@@ -311,7 +325,7 @@ export async function spawnSharedSdkRoleSession(options: {
     });
   };
 
-  return createRoleSessionAdapter({
+  const adapter = createRoleSessionAdapter({
     role: options.role,
     session,
     seam: activeSeam,
@@ -329,6 +343,18 @@ export async function spawnSharedSdkRoleSession(options: {
       options.sessionStates.delete(sessionId);
       options.agentsBySessionId.delete(sessionId);
     },
+  });
+  if (options.prewalk === undefined || options.logicalModel === null) return adapter;
+  return createPrewalkPhaseSessionAdapter({
+    adapter,
+    session,
+    initialLogicalModel: options.logicalModel,
+    getSystemPrompt: () => activeSystemPrompt ?? session.systemPrompt,
+    setSystemPrompt: (prompt) => {
+      activeSystemPrompt = prompt;
+    },
+    resolveModel: (logical) => resolveModel(options.role, logical, options.modelRegistry).model,
+    setExecutorPhase: prewalkPhase.setExecutorPhase,
   });
 }
 

@@ -93,6 +93,7 @@ import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
+import { resolvePrewalkManifestContext } from "./prewalk-manifest-context.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
@@ -186,7 +187,10 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   try {
     // A policy-bearing run pins normalized configuration before any role
     // session exists. No policy means no new record and the legacy fresh path.
-    if ((loaded.manifest.handoffs?.length ?? 0) > 0) {
+    if (
+      (loaded.manifest.handoffs?.length ?? 0) > 0 ||
+      loaded.manifest.roles.some((role) => role.prewalk !== undefined)
+    ) {
       log.append(
         createManifestSnapshot({
           runId,
@@ -291,13 +295,7 @@ export async function resumeRun(
             manifestPath,
             opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
           )))
-        : Object.freeze({
-            manifest: manifestSnapshot.normalized_manifest,
-            def: toMachineDefinition(manifestSnapshot.normalized_manifest),
-            warnings: Object.freeze([]),
-            manifestDir: dirname(manifestPath),
-            manifestVersion: manifestSnapshot.normalized_manifest.version,
-          });
+        : await loadPinnedManifest(manifestSnapshot, manifestPath, opts.modelRegistry);
     assertManifestWorkspaceBackendsSupported(loaded);
     const checkpoint = log.latestCheckpoint(runId);
     if (checkpoint === null) {
@@ -869,6 +867,28 @@ export function reconcileLostChildren(
     });
     terminalChildIds.add(record.child_id);
   }
+}
+
+async function loadPinnedManifest(
+  snapshot: ManifestSnapshotRecord,
+  manifestPath: string,
+  modelRegistry: ModelRegistry | undefined,
+): Promise<LoadedManifest> {
+  const manifestDir = dirname(manifestPath);
+  const context = await resolvePrewalkManifestContext({
+    manifest: snapshot.normalized_manifest,
+    modelRegistry,
+    workspaceCwd: manifestDir,
+    manifestDir,
+  });
+  return Object.freeze({
+    manifest: snapshot.normalized_manifest,
+    def: toMachineDefinition(snapshot.normalized_manifest, context),
+    warnings: Object.freeze([]),
+    manifestDir,
+    manifestVersion: snapshot.normalized_manifest.version,
+    ...(context !== undefined ? { prewalkValidationContext: context } : {}),
+  });
 }
 
 async function resolveBaseDir(baseDir: string | undefined): Promise<string> {

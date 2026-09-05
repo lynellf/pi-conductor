@@ -130,6 +130,8 @@ export interface ExecutionCheckpointToolOptions {
   readonly guidePhaseStartedAt: number;
   readonly roleSessionId: string;
   readonly mutations: () => readonly FileMutationRecord[];
+  /** Dynamic native-session switch; absent keeps the guide-only Slice 4 behavior. */
+  readonly executorPhase?: () => boolean;
 }
 
 /** Build the guide-phase terminating checkpoint tool. */
@@ -144,6 +146,14 @@ export function createExecutionCheckpointTool(
     parameters: executionCheckpointArgsSchema,
     executionMode: "sequential",
     execute: async (_id, params): Promise<AgentToolResult<ExecutionCheckpointToolDetails>> => {
+      if (options.executorPhase?.() === true) {
+        options.seam.recordGhostCall();
+        return {
+          content: [{ type: "text" as const, text: EXECUTOR_CHECKPOINT_CORRECTION }],
+          details: { ok: false, code: "executor_phase_inert" },
+          terminate: false,
+        };
+      }
       if (options.seam.read() !== null) return rejection("checkpoint_already_recorded");
       const code = validateCheckpoint(params, options);
       if (code !== null) return rejection(code);

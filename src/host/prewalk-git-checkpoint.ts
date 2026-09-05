@@ -1,11 +1,11 @@
 /** Recoverable Git exemplar checkpointing without touching HEAD, index, or user config (§R11). */
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { createHash } from "node:crypto";
 
 const execFileAsync = promisify(execFile);
 const SHA_PATTERN = /^[0-9a-f]{40,64}$/;
@@ -73,7 +73,9 @@ export async function createPrewalkGitCheckpoint(options: {
   readonly runGit?: PrewalkGitRunner;
 }): Promise<PrewalkGitCheckpoint> {
   if (!options.base.clean) {
-    throw new PrewalkGitCheckpointError("Prewalk requires a clean workspace before the guide starts");
+    throw new PrewalkGitCheckpointError(
+      "Prewalk requires a clean workspace before the guide starts",
+    );
   }
   assertSha(options.base.base_sha, "recorded base");
   const runGit = options.runGit ?? runGitProcess;

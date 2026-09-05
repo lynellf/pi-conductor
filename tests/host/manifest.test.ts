@@ -17,9 +17,11 @@
  * unchanged for the malformed-input case.
  */
 
+import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { promisify } from "node:util";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -30,6 +32,8 @@ import {
   loadManifest,
   loadManifestFromString,
 } from "../../src/host/index.js";
+
+const execFile = promisify(execFileCallback);
 
 // ─── Fixture ───────────────────────────────────────────────────────
 
@@ -149,6 +153,65 @@ describe("loadManifest — manifestDir is dirname(path) (Task 7D.2)", () => {
     expect(loaded.def.manifest_version).toBe("1");
     expect(loaded.manifest.roles).toHaveLength(1);
     expect(loaded.warnings).toEqual([]);
+  });
+
+  it("resolves runtime Prewalk context before validating a production manifest", async () => {
+    await execFile("git", ["init", "--quiet"], { cwd: workdir });
+    await writeFile(join(workdir, "README.md"), "base\n", "utf8");
+    await execFile("git", ["add", "README.md"], { cwd: workdir });
+    await execFile(
+      "git",
+      [
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--quiet",
+        "-m",
+        "base",
+      ],
+      { cwd: workdir },
+    );
+    await mkdir(join(workdir, ".pi", "roles"), { recursive: true });
+    await writeFile(join(workdir, ".pi", "roles", "worker.md"), "Worker base prompt.", "utf8");
+    await writeFile(
+      manifestPath,
+      `
+version: 2
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 2
+    max_session_cost_usd: 8
+    models:
+      - model: local:executor
+        effort: medium
+    system_prompt: roles/worker.md
+    tools: [read, write, handoff, end]
+    prewalk:
+      validation_allowlist: [pnpm, git]
+      guide:
+        model: openai:guide
+        effort: high
+        max_cost_usd: 2
+        max_turns: 4
+      executor:
+        max_turns: 20
+        max_wall_clock_s: 600
+`,
+      "utf8",
+    );
+    const registry = ModelRegistry.inMemory(AuthStorage.inMemory());
+    registry.find = (provider: string, id: string) =>
+      (provider === "local" && id === "executor") || (provider === "openai" && id === "guide")
+        ? ({ contextWindow: 32_768, maxTokens: 4_096 } as never)
+        : undefined;
+
+    const loaded = await loadManifest(manifestPath, { modelRegistry: registry } as never);
+
+    expect(loaded.manifest.roles[1]?.prewalk?.guide.model).toBe("openai:guide");
   });
 });
 

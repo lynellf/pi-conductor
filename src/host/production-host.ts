@@ -88,6 +88,7 @@ import {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
+import { spawnProductionHostPrewalk } from "./production-prewalk-spawn.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import {
@@ -253,6 +254,7 @@ export class ProductionHost implements Host {
   // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
   private readonly sessionStates: Map<string, SessionState> = new Map();
   private readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
+  private readonly prewalkUsageSessions = new WeakMap<RoleSession, string[]>();
   private snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   /**
@@ -357,6 +359,50 @@ export class ProductionHost implements Host {
       this.loadedManifest.manifestDir,
       this.loadedManifest.manifestVersion,
     );
+
+    const prewalkConfig = roleConfig?.prewalk;
+    const visitIndex = opts.visitIndex ?? 1;
+    if (
+      roleConfig !== undefined &&
+      prewalkConfig !== undefined &&
+      (prewalkConfig.visits === "all" || visitIndex === 1)
+    ) {
+      if (entry === null || model === undefined || logical === null || rolePrompt === null) {
+        throw new Error(`prewalk role '${role}' has no resolved executor environment`);
+      }
+      const validationContext = this.loadedManifest.prewalkValidationContext?.prewalk?.[role];
+      if (validationContext === undefined) {
+        throw new Error(`prewalk role '${role}' has no validated runtime context`);
+      }
+      const result = await spawnProductionHostPrewalk({
+        runId: this.runId,
+        role,
+        roleConfig: roleConfig as RoleConfig & { readonly prewalk: typeof prewalkConfig },
+        visitIndex,
+        executor: { model, logical },
+        baseSystemPrompt: rolePrompt,
+        validationContext,
+        modelRegistry: this.modelRegistry,
+        cwd: this.cwd,
+        agentDir: this.agentDir,
+        sessionDir: this.sessionDir,
+        roleSessionId: randomUUID(),
+        machineDefinition: this.loadedManifest.def,
+        ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
+        ...(this.isUiContextCurrent !== undefined && {
+          isUiContextCurrent: this.isUiContextCurrent,
+        }),
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+        records: () => this.log.records(this.runId),
+        usageFor: (sessionId) => this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE,
+        persist: (record) => this.persistRecord(record),
+        sessionStates: this.sessionStates,
+        agentsBySessionId: this.agentsBySessionId,
+        roleTurnProducer: this.roleTurnProducer,
+      });
+      this.prewalkUsageSessions.set(result.session, result.usageSessionIds);
+      return result.session;
+    }
 
     if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
       if (roleWorkspaceConfig === undefined) {
@@ -692,6 +738,14 @@ export class ProductionHost implements Host {
   }
 
   captureUsage(session: RoleSession): UsageRecord {
+    const prewalkSessions = this.prewalkUsageSessions.get(session);
+    if (prewalkSessions !== undefined) {
+      return prewalkSessions.reduce(
+        (total, sessionId) =>
+          addUsage(total, this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE),
+        ZERO_USAGE,
+      );
+    }
     // Read the session's cumulative §11.4 normalized usage from
     // the per-session `SessionState`. Returns zeros for a session
     // with no state (e.g., never registered, or already disposed).
@@ -702,6 +756,14 @@ export class ProductionHost implements Host {
   }
 
   sessionTerminalReason(session: RoleSession): SessionTerminalReason {
+    const prewalkSessions = this.prewalkUsageSessions.get(session);
+    if (prewalkSessions !== undefined) {
+      for (let index = prewalkSessions.length - 1; index >= 0; index -= 1) {
+        const reason = this.sessionStates.get(prewalkSessions[index] as string)?.terminalReason;
+        if (reason !== undefined && reason !== null) return reason;
+      }
+      return null;
+    }
     // Read the host-set terminal reason (cap exceeded, model
     // error, or null if the session ended normally). The loop
     // uses this to set `session_failed.failure_reason`.
@@ -1034,6 +1096,26 @@ export class ProductionHost implements Host {
       persistRecord: (record) => this.persistRecord(record),
     });
   }
+}
+
+const ZERO_USAGE: UsageRecord = Object.freeze({
+  input: 0,
+  output: 0,
+  cache_read: 0,
+  cache_write: 0,
+  tokens: 0,
+  cost: 0,
+});
+
+function addUsage(left: UsageRecord, right: UsageRecord): UsageRecord {
+  return {
+    input: left.input + right.input,
+    output: left.output + right.output,
+    cache_read: left.cache_read + right.cache_read,
+    cache_write: left.cache_write + right.cache_write,
+    tokens: left.tokens + right.tokens,
+    cost: left.cost + right.cost,
+  };
 }
 
 function adaptDelegateToolResult(result: {

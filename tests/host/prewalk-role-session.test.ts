@@ -1,16 +1,15 @@
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { RoleSession } from "../../src/host/host.js";
-import type {
-  PrewalkRecord,
-  PrewalkSwitchSelectedRecord,
-} from "../../src/persistence/prewalk-records.js";
 import {
   createPrewalkRoleSession,
   hashPrewalkExecutorEnvironment,
   type PrewalkPhaseSession,
 } from "../../src/host/prewalk-role-session.js";
 import { PrewalkSeam } from "../../src/host/prewalk-tool.js";
+import type {
+  PrewalkRecord,
+  PrewalkSwitchSelectedRecord,
+} from "../../src/persistence/prewalk-records.js";
 
 const usage = { input: 10, output: 2, cache_read: 1, cache_write: 0, tokens: 13, cost: 0.5 };
 const checkpoint = {
@@ -43,6 +42,16 @@ function phase(args: {
   let tools = [...(args.tools ?? ["read", "write", "execution_checkpoint"])];
   const captures: unknown[] = [];
   return {
+    role: "worker",
+    sessionId: args.conversationId,
+    get model() {
+      return model;
+    },
+    get effort() {
+      return effort;
+    },
+    retries: 0,
+    retryDelayMs: 0,
     conversationId: args.conversationId,
     sessionFile: `/sessions/${args.conversationId}.jsonl`,
     prompt: vi.fn(async (text: string) => {
@@ -78,15 +87,17 @@ function phase(args: {
   };
 }
 
-function setup(overrides: {
-  transfer?: "native" | "projection";
-  preflightOk?: boolean;
-  onFailure?: "project" | "fail";
-  transcriptFits?: boolean;
-  guide?: PrewalkPhaseSession;
-  executor?: PrewalkPhaseSession;
-  seamCheckpoint?: typeof checkpoint | { readonly outcome: "already_complete" | "blocked" };
-} = {}) {
+function setup(
+  overrides: {
+    transfer?: "native" | "projection";
+    preflightOk?: boolean;
+    onFailure?: "project" | "fail";
+    transcriptFits?: boolean;
+    guide?: PrewalkPhaseSession;
+    executor?: PrewalkPhaseSession;
+    seamCheckpoint?: typeof checkpoint | { readonly outcome: "already_complete" | "blocked" };
+  } = {},
+) {
   const log: string[] = [];
   const guide = overrides.guide ?? phase({ conversationId: "guide-conversation", log });
   const executor =
@@ -256,57 +267,57 @@ describe("composite Prewalk role session", () => {
     expect(subject.records[0]?.type).toBe("prewalk_switch_failed");
   });
 
-  it.each(["already_complete", "blocked"] as const)(
-    "%s stays on the guide and re-enables machine tools",
-    async (outcome) => {
-      const subject = setup();
-      const seam = new PrewalkSeam();
-      seam.record({
-        ...checkpoint,
-        outcome,
-        todos: checkpoint.todos.map((todo) => ({
-          ...todo,
-          status: outcome === "already_complete" ? ("done" as const) : todo.status,
-        })),
-        ...(outcome === "blocked" ? { blocked_reason: "needs user decision" } : {}),
-      });
-      const retained = createPrewalkRoleSession({
-        runId: "run-1",
-        role: "worker",
-        roleSessionId: "logical-role-session",
-        guide: subject.guide,
-        seam,
-        config: { transfer: "native", onPreflightFailure: "project" },
-        executorEnvironment: async () => subject.environment,
-        preflight: async () => {
-          throw new Error("must not preflight");
-        },
-        transcriptFits: () => true,
-        inspectGitBase: async () => ({ base_sha: "a".repeat(40), clean: true }),
-        createGitCheckpoint: async () => {
-          throw new Error("must not checkpoint");
-        },
-        buildProjection: () => {
-          throw new Error("must not project");
-        },
-        openProjectionSession: async () => {
-          throw new Error("must not spawn");
-        },
-        guideUsage: () => usage,
-        guideTurns: () => 1,
-        persist: (record) => {
-          subject.records.push(record);
-        },
-        now: () => 123,
-      });
+  it.each([
+    "already_complete",
+    "blocked",
+  ] as const)("%s stays on the guide and re-enables machine tools", async (outcome) => {
+    const subject = setup();
+    const seam = new PrewalkSeam();
+    seam.record({
+      ...checkpoint,
+      outcome,
+      todos: checkpoint.todos.map((todo) => ({
+        ...todo,
+        status: outcome === "already_complete" ? ("done" as const) : todo.status,
+      })),
+      ...(outcome === "blocked" ? { blocked_reason: "needs user decision" } : {}),
+    });
+    const retained = createPrewalkRoleSession({
+      runId: "run-1",
+      role: "worker",
+      roleSessionId: "logical-role-session",
+      guide: subject.guide,
+      seam,
+      config: { transfer: "native", onPreflightFailure: "project" },
+      executorEnvironment: async () => subject.environment,
+      preflight: async () => {
+        throw new Error("must not preflight");
+      },
+      transcriptFits: () => true,
+      inspectGitBase: async () => ({ base_sha: "a".repeat(40), clean: true }),
+      createGitCheckpoint: async () => {
+        throw new Error("must not checkpoint");
+      },
+      buildProjection: () => {
+        throw new Error("must not project");
+      },
+      openProjectionSession: async () => {
+        throw new Error("must not spawn");
+      },
+      guideUsage: () => usage,
+      guideTurns: () => 1,
+      persist: (record) => {
+        subject.records.push(record);
+      },
+      now: () => 123,
+    });
 
-      await retained.prompt("seed");
+    await retained.prompt("seed");
 
-      expect(subject.log).toContain("reenable");
-      expect(subject.records).toHaveLength(0);
-      expect(retained.conversationId).toBe("guide-conversation");
-    },
-  );
+    expect(subject.log).toContain("reenable");
+    expect(subject.records).toHaveLength(0);
+    expect(retained.conversationId).toBe("guide-conversation");
+  });
 
   it("persists the checkpoint SHA and never opens a fallback when apply drifts", async () => {
     const log: string[] = [];
@@ -325,9 +336,9 @@ describe("composite Prewalk role session", () => {
       git_checkpoint: { base_sha: "a".repeat(40), exemplar_sha: "b".repeat(40) },
     });
     expect(subject.log).not.toContain("open-projection");
-    expect(subject.records.some((record) => record.type === "prewalk_executor_seed_delivered")).toBe(
-      false,
-    );
+    expect(
+      subject.records.some((record) => record.type === "prewalk_executor_seed_delivered"),
+    ).toBe(false);
   });
 
   it("forwards only the eventual executor capture through the existing loop seam", async () => {

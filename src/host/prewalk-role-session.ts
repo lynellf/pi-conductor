@@ -1,6 +1,7 @@
 /** Composite guide→executor role-session driver (Prewalk spec §R1, §R3, §R12). */
 
 import { createHash } from "node:crypto";
+import type { Message, Model } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, UsageRecord } from "../core/types.js";
 import { selectTransferMode } from "../manifest/prewalk-transfer.js";
@@ -13,12 +14,17 @@ import type {
 import type { RoleSession } from "./host.js";
 import type { PrewalkGitBase, PrewalkGitCheckpoint } from "./prewalk-git-checkpoint.js";
 import {
+  normalizePrewalkRoleSessionFailure,
+  PrewalkRoleSessionError,
+} from "./prewalk-role-session-errors.js";
+import {
   buildPrewalkSwitchRecord,
   hashPrewalkExecutorEnvironment,
   type PrewalkProjectionResult,
 } from "./prewalk-role-session-records.js";
 import type { PrewalkSeam } from "./prewalk-tool.js";
 
+export { PrewalkRoleSessionError } from "./prewalk-role-session-errors.js";
 export { hashPrewalkExecutorEnvironment } from "./prewalk-role-session-records.js";
 
 /** Exact executor environment persisted before it is applied. */
@@ -30,10 +36,12 @@ export interface PrewalkExecutorEnvironment {
   readonly systemPrompt: string;
   readonly activeToolNames: readonly string[];
   readonly continuationSeed: string;
+  /** Runtime-only resolved SDK model; excluded from persistence and hashing. */
+  readonly resolvedModel?: Model<never>;
 }
 
 /** Observable physical session operations required by the composite driver. */
-export interface PrewalkPhaseSession {
+export interface PrewalkPhaseSession extends RoleSession {
   readonly conversationId: string;
   readonly sessionFile: string;
   prompt(text: string): Promise<void>;
@@ -55,6 +63,12 @@ export interface PrewalkPhaseSession {
   };
   applyEnvironment(environment: PrewalkExecutorEnvironment): Promise<void>;
   enableGuideMachineTools(activeToolNames: readonly string[]): Promise<void>;
+  preflightContext?(): {
+    readonly messages: readonly Message[];
+    readonly registeredTools: readonly { readonly name: string }[];
+    readonly contextTokens: number | null | undefined;
+    readonly hasCompaction: boolean;
+  };
   steer?(text: string): Promise<void>;
   clearQueue?(): { steering: string[]; followUp: string[] };
   isSealed?(): boolean;
@@ -81,6 +95,7 @@ export interface CreatePrewalkRoleSessionOptions {
   readonly inspectGitBase: () => Promise<PrewalkGitBase>;
   readonly createGitCheckpoint: (base: PrewalkGitBase) => Promise<PrewalkGitCheckpoint>;
   readonly buildProjection: (args: {
+    readonly seed: string;
     readonly exemplarSha: string;
     readonly environment: PrewalkExecutorEnvironment;
   }) => PrewalkProjectionResult;
@@ -97,18 +112,6 @@ export interface CreatePrewalkRoleSessionOptions {
   ) => PrewalkAdmission;
   readonly persist: (record: PrewalkRecord) => void;
   readonly now?: () => number;
-}
-
-/** Typed switch failure surfaced to the existing role-session failure path. */
-export class PrewalkRoleSessionError extends Error {
-  constructor(
-    readonly code: PrewalkFailureCode,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "PrewalkRoleSessionError";
-  }
 }
 
 /** Build one outer role session whose first prompt owns both physical phases. */
@@ -201,11 +204,7 @@ async function runFirstPrompt(
     return fail(options, base, null, "prewalk_checkpoint_missing", "guide produced no checkpoint");
   }
   const boundary = active.snapshot();
-  if (
-    !boundary.isIdle ||
-    !boundary.checkpointResultDurable ||
-    boundary.sideEffectAfterCheckpoint
-  ) {
+  if (!boundary.isIdle || !boundary.checkpointResultDurable || boundary.sideEffectAfterCheckpoint) {
     return fail(
       options,
       base,
@@ -249,6 +248,7 @@ async function runFirstPrompt(
     let executor = active;
     if (mode === "projection") {
       projection = options.buildProjection({
+        seed,
         exemplarSha: gitCheckpoint.exemplar_sha,
         environment: configuredEnvironment,
       });
@@ -301,8 +301,15 @@ async function runFirstPrompt(
     });
     return executor;
   } catch (error) {
-    const typed = normalizeFailure(error);
-    return fail(options, base, gitCheckpoint?.exemplar_sha ?? null, typed.code, typed.message, typed);
+    const typed = normalizePrewalkRoleSessionFailure(error);
+    return fail(
+      options,
+      base,
+      gitCheckpoint?.exemplar_sha ?? null,
+      typed.code,
+      typed.message,
+      typed,
+    );
   }
 }
 
@@ -343,37 +350,18 @@ function assertEnvironment(
   if (!actual.isIdle || actualHash !== expectedHash) {
     throw new PrewalkRoleSessionError(
       "prewalk_environment_apply_failed",
-      "executor environment does not match the persisted environment hash",
+      `executor environment does not match the persisted environment hash: expected ${expectedHash}, actual ${actualHash}; model=${actual.model}; effort=${actual.effort}; prompt=${JSON.stringify(actual.systemPrompt)}; tools=${JSON.stringify(actual.activeToolNames)}`,
     );
   }
 }
 
-function normalizeFailure(error: unknown): PrewalkRoleSessionError {
-  if (error instanceof PrewalkRoleSessionError) return error;
-  if (isErrorCode(error, "prewalk_transform_unsupported")) {
-    return new PrewalkRoleSessionError("prewalk_transform_unsupported", error.message, { cause: error });
-  }
-  if (isErrorCode(error, "prewalk_projection_too_large")) {
-    return new PrewalkRoleSessionError("prewalk_projection_too_large", error.message, { cause: error });
-  }
-  if (isErrorCode(error, "prewalk_git_checkpoint_failed")) {
-    return new PrewalkRoleSessionError("prewalk_git_checkpoint_failed", error.message, { cause: error });
-  }
-  return new PrewalkRoleSessionError(
-    "prewalk_environment_apply_failed",
-    error instanceof Error ? error.message : "Prewalk switch failed",
-    { cause: error },
-  );
-}
-
 function detachEnvironment(value: PrewalkExecutorEnvironment): PrewalkExecutorEnvironment {
-  return Object.freeze({ ...value, activeToolNames: Object.freeze([...value.activeToolNames]) });
+  return Object.freeze({
+    ...value,
+    activeToolNames: Object.freeze([...value.activeToolNames]),
+  });
 }
 
 function distinct(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
-}
-
-function isErrorCode(error: unknown, code: string): error is Error & { readonly code: string } {
-  return error instanceof Error && "code" in error && error.code === code;
 }
