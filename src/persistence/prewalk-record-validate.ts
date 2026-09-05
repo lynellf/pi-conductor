@@ -114,6 +114,7 @@ export function assertPrewalkRecord(record: unknown): asserts record is PrewalkR
         "role_session_id",
         "results",
         "false_done_count",
+        "false_done_rate",
         "ts",
       ]);
       validateValidationRun(value);
@@ -348,6 +349,19 @@ function validateValidationRun(value: Record<string, unknown>): void {
   }
   integer(value.false_done_count, "false_done_count");
   if (value.false_done_count !== falseDoneCount) fail("false_done_count arithmetic mismatch");
+  const falseDoneRate = number(value.false_done_rate);
+  const claimedDoneCount = value.results.filter(
+    (rawResult) => object(rawResult, "results item").claimed_done === true,
+  ).length;
+  const expectedRate = claimedDoneCount === 0 ? 0 : falseDoneCount / claimedDoneCount;
+  if (
+    !Number.isFinite(falseDoneRate) ||
+    falseDoneRate < 0 ||
+    falseDoneRate > 1 ||
+    falseDoneRate !== expectedRate
+  ) {
+    fail("false_done_rate arithmetic mismatch");
+  }
 }
 
 function validateFailure(value: Record<string, unknown>): void {

@@ -121,6 +121,8 @@ export interface PrewalkValidationRunRecord {
     readonly claimed_done: boolean;
   }[];
   readonly false_done_count: number;
+  /** Failed host validations divided by terminally claimed TODOs. */
+  readonly false_done_rate: number;
   readonly ts: number;
 }
 

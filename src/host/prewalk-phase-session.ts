@@ -19,6 +19,7 @@ export function createPrewalkPhaseSessionAdapter(opts: {
   return {
     ...opts.adapter,
     conversationId: opts.session.sessionId,
+    abort: () => opts.session.abort(),
     snapshot: () => {
       const boundary = checkpointBoundary(opts.session.messages);
       return {

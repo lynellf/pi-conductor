@@ -28,6 +28,7 @@ import { SessionSeam } from "./seam.js";
 import {
   attachSessionEventHandler,
   createCaptureRejector,
+  type SessionCostCapDeferral,
   type SessionEventSource,
 } from "./session-event-handler.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
@@ -72,6 +73,7 @@ export async function spawnSharedSdkRoleSession(options: {
   /** Issue #68: run-owned producer shared across every logical invocation. */
   readonly roleTurnProducer: RoleTurnProducer;
   readonly prewalk?: SdkPrewalkPhase;
+  readonly deferSessionCostCapAbort?: SessionCostCapDeferral;
 }): Promise<RoleSession> {
   // The session retains one public extension hook for its lifetime. The host
   // changes this controller only while idle so trajectory roles replace, not
@@ -117,19 +119,24 @@ export async function spawnSharedSdkRoleSession(options: {
     def: options.machineDefinition,
   };
   const rejector = createCaptureRejector();
-  const handoff = createHandoffTool(
-    () => activeSeam,
-    rejector.shouldRejectCapture,
-    () => activeHandoffContext,
-    options.disableAutoCompaction === true || options.isTrajectory === true,
-  );
-  const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
-  const askUser = createAskUserTool() as ToolDefinition;
   const prewalkPhase = createSdkPrewalkPhase(options.prewalk, {
     workspaceRoot: options.cwd,
     roleSessionId: options.roleSessionId ?? "",
     ordinaryActiveToolNames: buildToolsAllowlist(options.roleConfig?.tools, false),
   });
+  const handoff = createHandoffTool(
+    () => activeSeam,
+    rejector.shouldRejectCapture,
+    () => activeHandoffContext,
+    options.disableAutoCompaction === true || options.isTrajectory === true,
+    prewalkPhase.beforeMachineEmission,
+  );
+  const end = createEndTool(
+    () => activeSeam,
+    rejector.shouldRejectCapture,
+    prewalkPhase.beforeMachineEmission,
+  );
+  const askUser = createAskUserTool() as ToolDefinition;
   const checkpointTool = prewalkPhase.checkpointTool;
   // The parent registry owns the runtime that carries extension-registered
   // providers (e.g. antigravity via pi-antigravity). Local SDK types (0.80.6)
@@ -231,6 +238,9 @@ export async function spawnSharedSdkRoleSession(options: {
         persist: options.persistRecord,
       },
     },
+    ...(options.deferSessionCostCapAbort !== undefined
+      ? { deferSessionCostCapAbort: options.deferSessionCostCapAbort }
+      : {}),
     ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
   });
 

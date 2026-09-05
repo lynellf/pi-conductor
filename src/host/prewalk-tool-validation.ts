@@ -3,17 +3,26 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 
-/** Return a safe single command's executable basename, or null when shell syntax is unsafe. */
-export function checkpointExecutable(command: string): string | null {
-  if (command.trim() !== command || /[\r\n]/u.test(command)) return null;
+/** One shell-free executable invocation parsed from a checkpoint command line. */
+export interface CheckpointCommand {
+  readonly file: string;
+  readonly args: readonly string[];
+  readonly executable: string;
+}
+
+/** Parse the accepted command grammar into an `execFile` invocation without invoking a shell. */
+export function parseCheckpointCommand(command: string): CheckpointCommand | null {
+  if (command.length === 0 || command.trim() !== command || /[\r\n\0]/u.test(command)) return null;
   const words: string[] = [];
   let word = "";
+  let hasWord = false;
   let quote: "'" | '"' | null = null;
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] as string;
     const next = command[index + 1];
     if (quote === null && (char === "'" || char === '"')) {
       quote = char;
+      hasWord = true;
       continue;
     }
     if (quote === char) {
@@ -26,19 +35,32 @@ export function checkpointExecutable(command: string): string | null {
       index += 1;
       if (index >= command.length) return null;
       word += command[index];
+      hasWord = true;
       continue;
     }
     if (quote === null && /\s/u.test(char)) {
-      if (word.length > 0) words.push(word);
+      if (hasWord) words.push(word);
       word = "";
+      hasWord = false;
       continue;
     }
     word += char;
+    hasWord = true;
   }
   if (quote !== null) return null;
-  if (word.length > 0) words.push(word);
-  const executable = words[0];
-  return executable === undefined ? null : basename(executable.replaceAll("\\", "/"));
+  if (hasWord) words.push(word);
+  const file = words[0];
+  if (file === undefined || file.length === 0) return null;
+  return Object.freeze({
+    file,
+    args: Object.freeze(words.slice(1)),
+    executable: basename(file.replaceAll("\\", "/")),
+  });
+}
+
+/** Return a safe single command's executable basename, or null when shell syntax is unsafe. */
+export function checkpointExecutable(command: string): string | null {
+  return parseCheckpointCommand(command)?.executable ?? null;
 }
 
 /** Validate a normalized relative path, including symlink-aware containment of its nearest ancestor. */

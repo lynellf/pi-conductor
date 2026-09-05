@@ -147,13 +147,26 @@ roles:
     expect(session.conversationId === guideConversationId).toBe(transfer === "native");
     expect(session.readCaptureBuffer()).toHaveLength(1);
     expect(log.records("run-prewalk-production").map((record) => record.type)).toEqual(
-      expect.arrayContaining(["prewalk_switch_selected", "prewalk_executor_seed_delivered"]),
+      expect.arrayContaining([
+        "prewalk_switch_selected",
+        "prewalk_executor_seed_delivered",
+        "prewalk_validation_run",
+        "prewalk_phase_usage",
+      ]),
     );
     expect(requests).toHaveLength(3);
     const selected = log
       .records("run-prewalk-production")
       .find((record) => record.type === "prewalk_switch_selected");
     expect(selected).toMatchObject({ transfer_mode: transfer, role_session_id: logicalId });
+    expect(
+      log
+        .records("run-prewalk-production")
+        .find((record) => record.type === "prewalk_validation_run"),
+    ).toMatchObject({ false_done_count: 0, false_done_rate: 0 });
+    expect(
+      log.records("run-prewalk-production").find((record) => record.type === "prewalk_phase_usage"),
+    ).toMatchObject({ phase: "executor", model: "stub:executor" });
     await session.dispose();
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RoleSession } from "../../src/host/host.js";
 import {
+  type CreatePrewalkRoleSessionOptions,
   createPrewalkRoleSession,
   hashPrewalkExecutorEnvironment,
   type PrewalkPhaseSession,
@@ -35,12 +36,15 @@ function phase(args: {
   tools?: readonly string[];
   durable?: boolean;
   sideEffectAfter?: boolean;
+  turnsPerPrompt?: number;
+  afterPrompt?: (text: string) => void;
 }): PrewalkPhaseSession {
   let model = args.model ?? "openai:guide";
   let effort: "high" | "medium" = model === "local:executor" ? "medium" : "high";
   let systemPrompt = args.prompt ?? "BASE\nGUIDE_OVERLAY";
   let tools = [...(args.tools ?? ["read", "write", "execution_checkpoint"])];
   const captures: unknown[] = [];
+  const listeners = new Set<Parameters<PrewalkPhaseSession["subscribe"]>[0]>();
   return {
     role: "worker",
     sessionId: args.conversationId,
@@ -56,9 +60,19 @@ function phase(args: {
     sessionFile: `/sessions/${args.conversationId}.jsonl`,
     prompt: vi.fn(async (text: string) => {
       args.log.push(`prompt:${args.conversationId}:${text}`);
+      for (let index = 0; index < (args.turnsPerPrompt ?? 0); index += 1) {
+        for (const listener of listeners) {
+          listener({ type: "turn_end" } as Parameters<typeof listener>[0]);
+        }
+      }
+      args.afterPrompt?.(text);
     }),
-    subscribe: () => () => undefined,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     dispose: vi.fn(async () => undefined),
+    abort: vi.fn(async () => undefined),
     readCaptureBuffer: () => captures as ReturnType<RoleSession["readCaptureBuffer"]>,
     resetCaptureBuffer: () => captures.splice(0),
     snapshot: () => ({
@@ -96,10 +110,24 @@ function setup(
     guide?: PrewalkPhaseSession;
     executor?: PrewalkPhaseSession;
     seamCheckpoint?: typeof checkpoint | { readonly outcome: "already_complete" | "blocked" };
+    validationUnsatisfied?: boolean;
+    executorMaxTurns?: number;
   } = {},
 ) {
   const log: string[] = [];
-  const guide = overrides.guide ?? phase({ conversationId: "guide-conversation", log });
+  let onUnsatisfied: (() => void) | null = null;
+  const guide =
+    overrides.guide ??
+    phase({
+      conversationId: "guide-conversation",
+      log,
+      ...(overrides.executorMaxTurns !== undefined
+        ? { turnsPerPrompt: overrides.executorMaxTurns }
+        : {}),
+      afterPrompt: (text) => {
+        if (text.includes("[prewalk-provenance]")) onUnsatisfied?.();
+      },
+    });
   const executor =
     overrides.executor ??
     phase({
@@ -170,6 +198,41 @@ function setup(
     },
     guideUsage: () => usage,
     guideTurns: () => 2,
+    ...(overrides.validationUnsatisfied === true
+      ? {
+          prepareValidation: ({
+            onUnsatisfied: report,
+          }: Parameters<NonNullable<CreatePrewalkRoleSessionOptions["prepareValidation"]>>[0]) => {
+            onUnsatisfied = () =>
+              report({
+                results: [
+                  {
+                    task: "finish implementation",
+                    command: "pnpm test",
+                    exit_code: 1,
+                    claimed_done: true,
+                    output: "failed",
+                  },
+                ],
+                false_done_count: 1,
+                false_done_rate: 1,
+              });
+            return {
+              hasRun: false,
+              beforeMachineEmission: async () => ({ allow: true }),
+              allowPostBudgetContinuation: () => false,
+              ensureRecorded: async () => undefined,
+            };
+          },
+        }
+      : {}),
+    ...(overrides.executorMaxTurns !== undefined
+      ? {
+          executorLimits: { maxTurns: overrides.executorMaxTurns, maxWallClockMs: 60_000 },
+          sessionUsage: () => usage,
+          markTerminalFailure: (_sessionId: string, code: string) => log.push(`terminal:${code}`),
+        }
+      : {}),
     persist: (record) => {
       log.push(`persist:${record.type}`);
       records.push(record);
@@ -353,6 +416,39 @@ describe("composite Prewalk role session", () => {
 
     expect(subject.session.readCaptureBuffer()).toBe(executorCapture);
     expect(guideRead).toHaveBeenCalledTimes(0);
+  });
+
+  it("allows an unsatisfied terminal emission after retries while persisting the required failure", async () => {
+    const subject = setup({ validationUnsatisfied: true });
+
+    await subject.session.prompt("seed");
+
+    expect(subject.records.map((record) => record.type)).toEqual([
+      "prewalk_switch_selected",
+      "prewalk_switch_failed",
+      "prewalk_executor_seed_delivered",
+    ]);
+    expect(subject.records[1]).toMatchObject({
+      code: "prewalk_validation_unsatisfied",
+      git_checkpoint: { exemplar_sha: "b".repeat(40) },
+    });
+  });
+
+  it("persists and surfaces an executor turn-cap failure independently of cost", async () => {
+    const subject = setup({ executorMaxTurns: 2 });
+
+    await subject.session.prompt("seed");
+
+    expect(subject.log).toContain("terminal:prewalk_executor_turn_cap_exceeded");
+    expect(subject.records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "prewalk_switch_failed",
+          code: "prewalk_executor_turn_cap_exceeded",
+        }),
+        expect.objectContaining({ type: "prewalk_phase_usage", phase: "executor", turns: 2 }),
+      ]),
+    );
   });
 
   it("does not mutate configured inputs", async () => {

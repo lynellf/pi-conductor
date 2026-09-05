@@ -170,9 +170,32 @@ describe("Prewalk record validation and materialization", () => {
         },
       ],
       false_done_count: 0,
+      false_done_rate: 0,
       ts: 2,
     };
     expect(() => assertPrewalkRecord(record)).toThrow(/false_done_count/);
+  });
+
+  it("rejects a validation record with a false-done-rate arithmetic mismatch", () => {
+    expect(() =>
+      assertPrewalkRecord({
+        type: "prewalk_validation_run",
+        schema_version: 1,
+        run_id: "run-1",
+        role_session_id: "role-session-1",
+        results: [
+          {
+            task: "Finish parser",
+            command: "pnpm test -- manifest",
+            exit_code: 1,
+            claimed_done: true,
+          },
+        ],
+        false_done_count: 1,
+        false_done_rate: 0,
+        ts: 2,
+      }),
+    ).toThrow(/false_done_rate/);
   });
 
   it.each([
@@ -210,6 +233,7 @@ describe("Prewalk record validation and materialization", () => {
         },
       ],
       false_done_count: 0,
+      false_done_rate: 0,
       ts: 2,
     },
     {

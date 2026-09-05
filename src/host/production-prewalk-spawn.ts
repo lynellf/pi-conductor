@@ -83,8 +83,14 @@ export async function spawnProductionHostPrewalk(args: {
                   .filter(
                     (record): record is FileMutationRecord => record.type === "file_mutation",
                   ),
+              beforeMachineEmission: phase.beforeMachineEmission,
             }
-          : { phase: "executor", seam: phase.seam },
+          : {
+              phase: "executor",
+              seam: phase.seam,
+              beforeMachineEmission: phase.beforeMachineEmission,
+            },
+      deferSessionCostCapAbort: phase.deferSessionCostCapAbort,
       ...(args.uiContext !== undefined && { uiContext: args.uiContext }),
       ...(args.isUiContextCurrent !== undefined && {
         isUiContextCurrent: args.isUiContextCurrent,
@@ -111,6 +117,14 @@ export async function spawnProductionHostPrewalk(args: {
     spawnPhase,
     persist: args.persist,
     registerUsageSession: (sessionId) => usageSessionIds.push(sessionId),
+    markTerminalFailure: (sessionId, code, message) => {
+      const state = args.sessionStates.get(sessionId);
+      if (state === undefined) {
+        throw new Error(`Prewalk executor '${sessionId}' has no registered session state`);
+      }
+      state.markAborted();
+      state.setTerminalReason(code, message);
+    },
   });
   return { session, usageSessionIds };
 }

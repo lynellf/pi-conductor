@@ -7,22 +7,29 @@ import type { ModelEffort, Role, UsageRecord } from "../core/types.js";
 import { selectTransferMode } from "../manifest/prewalk-transfer.js";
 import type {
   PrewalkAdmission,
-  PrewalkFailureCode,
   PrewalkRecord,
   PrewalkSwitchSelectedRecord,
 } from "../persistence/prewalk-records.js";
 import type { RoleSession } from "./host.js";
+import {
+  persistPrewalkExecutorUsage,
+  startPrewalkExecutorCaps,
+} from "./prewalk-executor-lifecycle.js";
 import type { PrewalkGitBase, PrewalkGitCheckpoint } from "./prewalk-git-checkpoint.js";
 import {
   normalizePrewalkRoleSessionFailure,
   PrewalkRoleSessionError,
 } from "./prewalk-role-session-errors.js";
+import { failPrewalkRoleSession, persistPrewalkFailure } from "./prewalk-role-session-failure.js";
 import {
+  assertPrewalkExecutorEnvironment,
   buildPrewalkSwitchRecord,
+  detachPrewalkEnvironment,
   hashPrewalkExecutorEnvironment,
   type PrewalkProjectionResult,
 } from "./prewalk-role-session-records.js";
 import type { PrewalkSeam } from "./prewalk-tool.js";
+import type { PrewalkValidationGate, PrewalkValidationRun } from "./prewalk-validation.js";
 
 export { PrewalkRoleSessionError } from "./prewalk-role-session-errors.js";
 export { hashPrewalkExecutorEnvironment } from "./prewalk-role-session-records.js";
@@ -47,6 +54,7 @@ export interface PrewalkPhaseSession extends RoleSession {
   prompt(text: string): Promise<void>;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   dispose(): Promise<void>;
+  abort(): Promise<void>;
   readCaptureBuffer(): ReturnType<RoleSession["readCaptureBuffer"]>;
   resetCaptureBuffer(): void;
   snapshot(): {
@@ -104,6 +112,18 @@ export interface CreatePrewalkRoleSessionOptions {
   ) => Promise<PrewalkPhaseSession>;
   readonly guideUsage: () => UsageRecord;
   readonly guideTurns: () => number;
+  readonly prepareValidation?: (args: {
+    readonly checkpoint: NonNullable<ReturnType<PrewalkSeam["read"]>>;
+    readonly blockOnFailure: boolean;
+    readonly onUnsatisfied: (run: PrewalkValidationRun) => void;
+  }) => PrewalkValidationGate;
+  readonly executorLimits?: { readonly maxTurns: number; readonly maxWallClockMs: number };
+  readonly sessionUsage?: (sessionId: string) => UsageRecord;
+  readonly markTerminalFailure?: (
+    sessionId: string,
+    code: "prewalk_executor_turn_cap_exceeded" | "prewalk_executor_wall_clock_exceeded",
+    message: string,
+  ) => void;
   readonly admission?: (
     environment: PrewalkExecutorEnvironment,
     preflight: PrewalkPreflightResult,
@@ -201,38 +221,60 @@ async function runFirstPrompt(
   await active.prompt(seed);
   const checkpoint = options.seam.read();
   if (checkpoint === null) {
-    return fail(options, base, null, "prewalk_checkpoint_missing", "guide produced no checkpoint");
+    return failPrewalkRoleSession(options, {
+      baseSha: base.base_sha,
+      exemplarSha: null,
+      code: "prewalk_checkpoint_missing",
+      message: "guide produced no checkpoint",
+    });
   }
   const boundary = active.snapshot();
   if (!boundary.isIdle || !boundary.checkpointResultDurable || boundary.sideEffectAfterCheckpoint) {
-    return fail(
-      options,
-      base,
-      null,
-      "prewalk_checkpoint_invalid",
-      "checkpoint was not sealed as a sole, durable post-tool-result turn boundary",
-    );
+    return failPrewalkRoleSession(options, {
+      baseSha: base.base_sha,
+      exemplarSha: null,
+      code: "prewalk_checkpoint_invalid",
+      message: "checkpoint was not sealed as a sole, durable post-tool-result turn boundary",
+    });
   }
 
+  const checkpointGuideUsage = options.guideUsage();
+  let gitCheckpoint: PrewalkGitCheckpoint | null = null;
+  const validationGate = options.prepareValidation?.({
+    checkpoint,
+    blockOnFailure: checkpoint.outcome !== "blocked",
+    onUnsatisfied: () => {
+      persistPrewalkFailure(options, {
+        baseSha: base.base_sha,
+        exemplarSha: gitCheckpoint?.exemplar_sha ?? null,
+        code: "prewalk_validation_unsatisfied",
+        message: "executor validation remained unsatisfied after corrective retries",
+        guideUsage: checkpointGuideUsage,
+      });
+    },
+  });
+
   if (checkpoint.outcome !== "handoff_to_executor") {
-    const machineTools = distinct([
-      ...boundary.activeToolNames.filter((name) => name !== "execution_checkpoint"),
-      "handoff",
-      "end",
-      "ask_user",
-    ]);
+    const machineTools = Array.from(
+      new Set([
+        ...boundary.activeToolNames.filter((name) => name !== "execution_checkpoint"),
+        "handoff",
+        "end",
+        "ask_user",
+      ]),
+    );
     await active.enableGuideMachineTools(machineTools);
     await active.prompt(
       checkpoint.outcome === "blocked"
         ? "The switch is skipped. Emit the one appropriate machine handoff/end event with the recorded blocking reason."
         : "The switch is skipped. Emit the one appropriate machine handoff/end event for the completed task.",
     );
+    await validationGate?.ensureRecorded();
     return active;
   }
 
-  let gitCheckpoint: PrewalkGitCheckpoint | null = null;
   try {
-    const configuredEnvironment = detachEnvironment(await options.executorEnvironment());
+    const configuredEnvironment = detachPrewalkEnvironment(await options.executorEnvironment());
     const preflight = await options.preflight(configuredEnvironment);
     const mode = selectTransferMode(
       {
@@ -242,19 +284,20 @@ async function runFirstPrompt(
       preflight.summary,
       { transcript_fits: options.transcriptFits(preflight) },
     );
-    gitCheckpoint = await options.createGitCheckpoint(base);
+    const selectedGitCheckpoint = await options.createGitCheckpoint(base);
+    gitCheckpoint = selectedGitCheckpoint;
     let projection: PrewalkProjectionResult | undefined;
     let deliveredSeed = configuredEnvironment.continuationSeed;
     let executor = active;
     if (mode === "projection") {
       projection = options.buildProjection({
         seed,
-        exemplarSha: gitCheckpoint.exemplar_sha,
+        exemplarSha: selectedGitCheckpoint.exemplar_sha,
         environment: configuredEnvironment,
       });
       deliveredSeed = projection.prompt;
     }
-    const environment = detachEnvironment({
+    const environment = detachPrewalkEnvironment({
       ...configuredEnvironment,
       continuationSeed: deliveredSeed,
     });
@@ -269,12 +312,12 @@ async function runFirstPrompt(
       mode,
       environment,
       environmentHash,
-      gitCheckpoint,
+      gitCheckpoint: selectedGitCheckpoint,
       ...(projection !== undefined ? { projection } : {}),
       guide: boundary,
       guideConversation: { id: options.guide.conversationId, file: options.guide.sessionFile },
       guideTurns: options.guideTurns(),
-      guideUsage: options.guideUsage(),
+      guideUsage: checkpointGuideUsage,
       ...(options.admission !== undefined
         ? { admission: options.admission(environment, preflight, mode, projection) }
         : {}),
@@ -288,80 +331,66 @@ async function runFirstPrompt(
       executor = await options.openProjectionSession(environment);
       selectActive(executor);
     }
-    assertEnvironment(executor.snapshot(), environment, environmentHash);
-    await executor.prompt(deliveredSeed);
-    options.persist({
-      type: "prewalk_executor_seed_delivered",
-      schema_version: 1,
-      run_id: options.runId,
-      role_session_id: options.roleSessionId,
-      conversation_id: executor.conversationId,
-      continuation_seed_sha256: createHash("sha256").update(deliveredSeed).digest("hex"),
-      ts: now(),
-    });
+    assertPrewalkExecutorEnvironment(executor.snapshot(), environment, environmentHash);
+    const cap =
+      options.executorLimits === undefined
+        ? null
+        : startPrewalkExecutorCaps({
+            executor,
+            limits: options.executorLimits,
+            onExceeded: (code, message) => {
+              persistPrewalkFailure(options, {
+                baseSha: base.base_sha,
+                exemplarSha: selectedGitCheckpoint.exemplar_sha,
+                code,
+                message,
+                guideUsage: checkpointGuideUsage,
+              });
+              options.markTerminalFailure?.(executor.sessionId, code, message);
+            },
+          });
+    let executorPromptError: unknown = null;
+    try {
+      const executorPrompt = executor.prompt(deliveredSeed);
+      options.persist({
+        type: "prewalk_executor_seed_delivered",
+        schema_version: 1,
+        run_id: options.runId,
+        role_session_id: options.roleSessionId,
+        conversation_id: executor.conversationId,
+        continuation_seed_sha256: createHash("sha256").update(deliveredSeed).digest("hex"),
+        ts: now(),
+      });
+      await executorPrompt;
+    } catch (error) {
+      executorPromptError = error;
+    } finally {
+      cap?.stop();
+      await validationGate?.ensureRecorded();
+      persistPrewalkExecutorUsage({
+        runId: options.runId,
+        roleSessionId: options.roleSessionId,
+        guideSessionId: options.guide.sessionId,
+        executor,
+        guideUsage: checkpointGuideUsage,
+        turns: cap?.turns ?? 0,
+        ts: now(),
+        ...(options.sessionUsage !== undefined ? { sessionUsage: options.sessionUsage } : {}),
+        persist: options.persist,
+      });
+    }
+    if (executorPromptError !== null && (cap === null || cap.code === null)) {
+      throw executorPromptError;
+    }
     return executor;
   } catch (error) {
     const typed = normalizePrewalkRoleSessionFailure(error);
-    return fail(
-      options,
-      base,
-      gitCheckpoint?.exemplar_sha ?? null,
-      typed.code,
-      typed.message,
-      typed,
-    );
+    return failPrewalkRoleSession(options, {
+      baseSha: base.base_sha,
+      exemplarSha: gitCheckpoint?.exemplar_sha ?? null,
+      code: typed.code,
+      message: typed.message,
+      cause: typed,
+    });
   }
-}
-
-function fail(
-  options: CreatePrewalkRoleSessionOptions,
-  base: PrewalkGitBase,
-  exemplarSha: string | null,
-  code: PrewalkFailureCode,
-  message: string,
-  cause?: unknown,
-): never {
-  options.persist({
-    type: "prewalk_switch_failed",
-    schema_version: 1,
-    run_id: options.runId,
-    role_session_id: options.roleSessionId,
-    code,
-    message,
-    guide_usage: options.guideUsage(),
-    git_checkpoint: { base_sha: base.base_sha, exemplar_sha: exemplarSha },
-    ts: (options.now ?? Date.now)(),
-  });
-  throw new PrewalkRoleSessionError(code, message, cause === undefined ? undefined : { cause });
-}
-
-function assertEnvironment(
-  actual: ReturnType<PrewalkPhaseSession["snapshot"]>,
-  expected: PrewalkExecutorEnvironment,
-  expectedHash: string,
-): void {
-  const actualHash = hashPrewalkExecutorEnvironment({
-    ...expected,
-    model: actual.model,
-    effort: actual.effort,
-    systemPrompt: actual.systemPrompt,
-    activeToolNames: actual.activeToolNames,
-  });
-  if (!actual.isIdle || actualHash !== expectedHash) {
-    throw new PrewalkRoleSessionError(
-      "prewalk_environment_apply_failed",
-      `executor environment does not match the persisted environment hash: expected ${expectedHash}, actual ${actualHash}; model=${actual.model}; effort=${actual.effort}; prompt=${JSON.stringify(actual.systemPrompt)}; tools=${JSON.stringify(actual.activeToolNames)}`,
-    );
-  }
-}
-
-function detachEnvironment(value: PrewalkExecutorEnvironment): PrewalkExecutorEnvironment {
-  return Object.freeze({
-    ...value,
-    activeToolNames: Object.freeze([...value.activeToolNames]),
-  });
-}
-
-function distinct(values: readonly string[]): readonly string[] {
-  return [...new Set(values)];
 }

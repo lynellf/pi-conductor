@@ -13,6 +13,7 @@ import type {
   PrewalkPhaseSession,
   PrewalkPreflightResult,
 } from "./prewalk-role-session.js";
+import { PrewalkRoleSessionError } from "./prewalk-role-session-errors.js";
 
 export interface PrewalkProjectionResult {
   readonly prompt: string;
@@ -29,6 +30,37 @@ export function hashPrewalkExecutorEnvironment(environment: PrewalkExecutorEnvir
     active_tool_names: environment.activeToolNames,
     continuation_seed: environment.continuationSeed,
   });
+}
+
+/** Freeze the mutable collection boundary before hashing or applying an environment. */
+export function detachPrewalkEnvironment(
+  value: PrewalkExecutorEnvironment,
+): PrewalkExecutorEnvironment {
+  return Object.freeze({
+    ...value,
+    activeToolNames: Object.freeze([...value.activeToolNames]),
+  });
+}
+
+/** Assert the idle applied executor environment against its persisted hash. */
+export function assertPrewalkExecutorEnvironment(
+  actual: ReturnType<PrewalkPhaseSession["snapshot"]>,
+  expected: PrewalkExecutorEnvironment,
+  expectedHash: string,
+): void {
+  const actualHash = hashPrewalkExecutorEnvironment({
+    ...expected,
+    model: actual.model,
+    effort: actual.effort,
+    systemPrompt: actual.systemPrompt,
+    activeToolNames: actual.activeToolNames,
+  });
+  if (!actual.isIdle || actualHash !== expectedHash) {
+    throw new PrewalkRoleSessionError(
+      "prewalk_environment_apply_failed",
+      `executor environment does not match the persisted environment hash: expected ${expectedHash}, actual ${actualHash}; model=${actual.model}; effort=${actual.effort}; prompt=${JSON.stringify(actual.systemPrompt)}; tools=${JSON.stringify(actual.activeToolNames)}`,
+    );
+  }
 }
 
 /** Materialize the durable selection from already-validated switch facts. */

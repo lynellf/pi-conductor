@@ -19,6 +19,7 @@ import { runPrewalkTransformPreflight } from "./prewalk-preflight.js";
 import { buildPrewalkProjection } from "./prewalk-projection.js";
 import { createPrewalkRoleSession, type PrewalkPhaseSession } from "./prewalk-role-session.js";
 import { getPrewalkGuideActiveToolNames, PrewalkSeam } from "./prewalk-tool.js";
+import { createPrewalkValidationGate, type PrewalkValidationGate } from "./prewalk-validation.js";
 import { buildToolsAllowlist, loadSystemPrompt, resolveModel } from "./production-host-resolve.js";
 import { assertTrajectoryEffortSupported } from "./trajectory-admission.js";
 
@@ -159,6 +160,12 @@ export interface ProductionPrewalkPhaseSpawnOptions {
   readonly seam: PrewalkSeam;
   readonly kind: "guide" | "executor";
   readonly guideStartedAt: number;
+  readonly beforeMachineEmission: (
+    signal?: AbortSignal,
+  ) => ReturnType<PrewalkValidationGate["beforeMachineEmission"]>;
+  readonly deferSessionCostCapAbort: (
+    attempt: Parameters<PrewalkValidationGate["allowPostBudgetContinuation"]>[0],
+  ) => boolean;
 }
 
 /** Build the production composite while keeping SDK spawning behind one injected seam. */
@@ -178,6 +185,11 @@ export async function spawnProductionPrewalkRoleSession(args: {
   readonly spawnPhase: (phase: ProductionPrewalkPhaseSpawnOptions) => Promise<PrewalkPhaseSession>;
   readonly persist: (record: PersistedRecord) => void;
   readonly registerUsageSession: (sessionId: string) => void;
+  readonly markTerminalFailure: (
+    sessionId: string,
+    code: "prewalk_executor_turn_cap_exceeded" | "prewalk_executor_wall_clock_exceeded",
+    message: string,
+  ) => void;
 }): Promise<ReturnType<typeof createPrewalkRoleSession>> {
   const config = args.roleConfig.prewalk;
   const guide = resolveModel(args.role, config.guide.model, args.modelRegistry);
@@ -198,6 +210,12 @@ export async function spawnProductionPrewalkRoleSession(args: {
   );
   const continuationSeed = buildPrewalkContinuationSeed(executorTools);
   const seam = new PrewalkSeam();
+  let validationGate: PrewalkValidationGate | null = null;
+  const beforeMachineEmission = (signal?: AbortSignal) =>
+    validationGate?.beforeMachineEmission(signal) ?? Promise.resolve({ allow: true as const });
+  const deferSessionCostCapAbort = (
+    attempt: Parameters<PrewalkValidationGate["allowPostBudgetContinuation"]>[0],
+  ) => validationGate?.allowPostBudgetContinuation(attempt) ?? false;
   // Telemetry timestamps have millisecond precision; reserve the preceding tick as the boundary.
   const guideStartedAt = Date.now() - 1;
   const guidePrompt = buildPrewalkGuidePrompt({
@@ -214,6 +232,8 @@ export async function spawnProductionPrewalkRoleSession(args: {
     seam,
     kind: "guide",
     guideStartedAt,
+    beforeMachineEmission,
+    deferSessionCostCapAbort,
   });
   args.registerUsageSession(args.roleSessionId);
   const mutations = () =>
@@ -281,10 +301,31 @@ export async function spawnProductionPrewalkRoleSession(args: {
         seam,
         kind: "executor",
         guideStartedAt,
+        beforeMachineEmission,
+        deferSessionCostCapAbort,
       });
     },
     guideUsage: () => args.usageFor(args.roleSessionId),
     guideTurns: () => guideTurnCount(args.records(), args.roleSessionId),
+    prepareValidation: ({ checkpoint, blockOnFailure, onUnsatisfied }) => {
+      validationGate = createPrewalkValidationGate({
+        runId: args.runId,
+        roleSessionId: args.roleSessionId,
+        checkpoint,
+        validationRetries: config.validation_retries,
+        blockOnFailure,
+        cwd: args.cwd,
+        persist: args.persist,
+        onUnsatisfied,
+      });
+      return validationGate;
+    },
+    executorLimits: {
+      maxTurns: config.executor.max_turns,
+      maxWallClockMs: config.executor.max_wall_clock_s * 1_000,
+    },
+    sessionUsage: args.usageFor,
+    markTerminalFailure: args.markTerminalFailure,
     admission: (_environment, preflight, _mode, _projection) => ({
       schema_version: 1,
       target_model: args.seedModel.logical,

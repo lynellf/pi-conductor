@@ -9,16 +9,28 @@ import {
   type PrewalkSeam,
 } from "./prewalk-tool.js";
 
+type BeforePrewalkMachineEmission = (
+  signal?: AbortSignal,
+) => Promise<
+  | { readonly allow: true }
+  | { readonly allow: false; readonly terminate: false; readonly correction: string }
+>;
+
 export type SdkPrewalkPhase =
   | {
       readonly phase: "guide";
+      readonly beforeMachineEmission: BeforePrewalkMachineEmission;
       readonly seam: PrewalkSeam;
       readonly maxTodos: number;
       readonly validationAllowlist: readonly string[];
       readonly guidePhaseStartedAt: number;
       readonly mutations: () => readonly FileMutationRecord[];
     }
-  | { readonly phase: "executor"; readonly seam: PrewalkSeam };
+  | {
+      readonly phase: "executor";
+      readonly seam: PrewalkSeam;
+      readonly beforeMachineEmission: BeforePrewalkMachineEmission;
+    };
 
 export function createSdkPrewalkPhase(
   phase: SdkPrewalkPhase | undefined,
@@ -31,6 +43,7 @@ export function createSdkPrewalkPhase(
   readonly checkpointTool: ToolDefinition | null;
   readonly initialActiveToolNames: readonly string[] | null;
   readonly setExecutorPhase: () => void;
+  readonly beforeMachineEmission: BeforePrewalkMachineEmission | undefined;
 } {
   let executorPhase = phase?.phase === "executor";
   const checkpointTool = (
@@ -58,5 +71,6 @@ export function createSdkPrewalkPhase(
     setExecutorPhase: () => {
       executorPhase = true;
     },
+    beforeMachineEmission: phase?.beforeMachineEmission,
   };
 }
