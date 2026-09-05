@@ -88,7 +88,7 @@ import {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
-import { dispatchProductionPrewalk } from "./production-prewalk-dispatch.js";
+import { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import {
@@ -254,10 +254,7 @@ export class ProductionHost implements Host {
   // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
   private readonly sessionStates: Map<string, SessionState> = new Map();
   private readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
-  private readonly prewalkUsageSessions = new WeakMap<
-    RoleSession,
-    { readonly sessionIds: readonly string[]; readonly priorUsage: UsageRecord }
-  >();
+  private readonly prewalk = new ProductionPrewalkHost(this.sessionStates, this.agentsBySessionId);
   private snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   /**
@@ -363,8 +360,7 @@ export class ProductionHost implements Host {
       this.loadedManifest.manifestVersion,
     );
 
-    const prewalk = await dispatchProductionPrewalk({
-      runId: this.runId,
+    const prewalk = await this.prewalk.dispatch(this, {
       role,
       roleConfig,
       entry,
@@ -372,31 +368,9 @@ export class ProductionHost implements Host {
       executorLogical: logical,
       baseSystemPrompt: rolePrompt,
       visitIndex: opts.visitIndex ?? 1,
-      validationContext: this.loadedManifest.prewalkValidationContext?.prewalk?.[role],
-      modelRegistry: this.modelRegistry,
-      cwd: this.cwd,
-      agentDir: this.agentDir,
-      sessionDir: this.sessionDir,
-      machineDefinition: this.loadedManifest.def,
-      ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
-      ...(this.isUiContextCurrent !== undefined && {
-        isUiContextCurrent: this.isUiContextCurrent,
-      }),
-      ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-      records: () => this.log.records(this.runId),
-      usageFor: (sessionId) => this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE,
-      persist: (record) => this.persistRecord(record),
-      sessionStates: this.sessionStates,
-      agentsBySessionId: this.agentsBySessionId,
       roleTurnProducer: this.roleTurnProducer,
     });
-    if (prewalk !== null) {
-      this.prewalkUsageSessions.set(prewalk.session, {
-        sessionIds: prewalk.usageSessionIds,
-        priorUsage: prewalk.priorUsage ?? ZERO_USAGE,
-      });
-      return prewalk.session;
-    }
+    if (prewalk !== null) return prewalk;
 
     if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
       if (roleWorkspaceConfig === undefined) {
@@ -732,45 +706,15 @@ export class ProductionHost implements Host {
   }
 
   captureUsage(session: RoleSession): UsageRecord {
-    const prewalkSessions = this.prewalkUsageSessions.get(session);
-    if (prewalkSessions !== undefined) {
-      return prewalkSessions.sessionIds.reduce(
-        (total, sessionId) =>
-          addUsage(total, this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE),
-        prewalkSessions.priorUsage,
-      );
-    }
-    // Read the session's cumulative §11.4 normalized usage from
-    // the per-session `SessionState`. Returns zeros for a session
-    // with no state (e.g., never registered, or already disposed).
-    const state = this.sessionStates.get(session.sessionId);
-    return (
-      state?.usage() ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 }
-    );
+    return this.prewalk.captureUsage(session);
   }
 
   sessionTerminalReason(session: RoleSession): SessionTerminalReason {
-    const prewalkSessions = this.prewalkUsageSessions.get(session);
-    if (prewalkSessions !== undefined) {
-      for (let index = prewalkSessions.sessionIds.length - 1; index >= 0; index -= 1) {
-        const reason = this.sessionStates.get(
-          prewalkSessions.sessionIds[index] as string,
-        )?.terminalReason;
-        if (reason !== undefined && reason !== null) return reason;
-      }
-      return null;
-    }
-    // Read the host-set terminal reason (cap exceeded, model
-    // error, or null if the session ended normally). The loop
-    // uses this to set `session_failed.failure_reason`.
-    const state = this.sessionStates.get(session.sessionId);
-    return state?.terminalReason ?? null;
+    return this.prewalk.sessionTerminalReason(session);
   }
 
   sessionFailureDetail(session: RoleSession): string | null {
-    const prewalk = this.prewalkUsageSessions.get(session);
-    const sessionId = prewalk?.sessionIds.at(-1) ?? session.sessionId;
-    return this.sessionStates.get(sessionId)?.failureDetail ?? null;
+    return this.prewalk.sessionFailureDetail(session);
   }
 
   persistRecord(record: PersistedRecord): void {
@@ -998,15 +942,7 @@ export class ProductionHost implements Host {
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
     await this.delegationManager.abortAll();
-    const prewalk = this.prewalkUsageSessions.get(session);
-    const sessionId = prewalk?.sessionIds.at(-1) ?? session.sessionId;
-    const state = this.sessionStates.get(sessionId);
-    const agent = this.agentsBySessionId.get(sessionId);
-    if (state === undefined || agent === undefined) return;
-    if (state.terminalReason !== null) return;
-    state.markAborted();
-    state.setTerminalReason("user_aborted");
-    await agent.abort();
+    await this.prewalk.abort(session);
   }
 
   sealSession(_session: RoleSession): void {
@@ -1096,26 +1032,6 @@ export class ProductionHost implements Host {
       persistRecord: (record) => this.persistRecord(record),
     });
   }
-}
-
-const ZERO_USAGE: UsageRecord = Object.freeze({
-  input: 0,
-  output: 0,
-  cache_read: 0,
-  cache_write: 0,
-  tokens: 0,
-  cost: 0,
-});
-
-function addUsage(left: UsageRecord, right: UsageRecord): UsageRecord {
-  return {
-    input: left.input + right.input,
-    output: left.output + right.output,
-    cache_read: left.cache_read + right.cache_read,
-    cache_write: left.cache_write + right.cache_write,
-    tokens: left.tokens + right.tokens,
-    cost: left.cost + right.cost,
-  };
 }
 
 function adaptDelegateToolResult(result: {
