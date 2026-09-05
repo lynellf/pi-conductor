@@ -88,7 +88,7 @@ import {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
-import { spawnProductionHostPrewalk } from "./production-prewalk-spawn.js";
+import { dispatchProductionPrewalk } from "./production-prewalk-dispatch.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import {
@@ -254,7 +254,10 @@ export class ProductionHost implements Host {
   // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
   private readonly sessionStates: Map<string, SessionState> = new Map();
   private readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
-  private readonly prewalkUsageSessions = new WeakMap<RoleSession, string[]>();
+  private readonly prewalkUsageSessions = new WeakMap<
+    RoleSession,
+    { readonly sessionIds: readonly string[]; readonly priorUsage: UsageRecord }
+  >();
   private snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   /**
@@ -360,48 +363,39 @@ export class ProductionHost implements Host {
       this.loadedManifest.manifestVersion,
     );
 
-    const prewalkConfig = roleConfig?.prewalk;
-    const visitIndex = opts.visitIndex ?? 1;
-    if (
-      roleConfig !== undefined &&
-      prewalkConfig !== undefined &&
-      (prewalkConfig.visits === "all" || visitIndex === 1)
-    ) {
-      if (entry === null || model === undefined || logical === null || rolePrompt === null) {
-        throw new Error(`prewalk role '${role}' has no resolved executor environment`);
-      }
-      const validationContext = this.loadedManifest.prewalkValidationContext?.prewalk?.[role];
-      if (validationContext === undefined) {
-        throw new Error(`prewalk role '${role}' has no validated runtime context`);
-      }
-      const result = await spawnProductionHostPrewalk({
-        runId: this.runId,
-        role,
-        roleConfig: roleConfig as RoleConfig & { readonly prewalk: typeof prewalkConfig },
-        visitIndex,
-        executor: { model, logical },
-        baseSystemPrompt: rolePrompt,
-        validationContext,
-        modelRegistry: this.modelRegistry,
-        cwd: this.cwd,
-        agentDir: this.agentDir,
-        sessionDir: this.sessionDir,
-        roleSessionId: randomUUID(),
-        machineDefinition: this.loadedManifest.def,
-        ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
-        ...(this.isUiContextCurrent !== undefined && {
-          isUiContextCurrent: this.isUiContextCurrent,
-        }),
-        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-        records: () => this.log.records(this.runId),
-        usageFor: (sessionId) => this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE,
-        persist: (record) => this.persistRecord(record),
-        sessionStates: this.sessionStates,
-        agentsBySessionId: this.agentsBySessionId,
-        roleTurnProducer: this.roleTurnProducer,
+    const prewalk = await dispatchProductionPrewalk({
+      runId: this.runId,
+      role,
+      roleConfig,
+      entry,
+      executorModel: model,
+      executorLogical: logical,
+      baseSystemPrompt: rolePrompt,
+      visitIndex: opts.visitIndex ?? 1,
+      validationContext: this.loadedManifest.prewalkValidationContext?.prewalk?.[role],
+      modelRegistry: this.modelRegistry,
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      sessionDir: this.sessionDir,
+      machineDefinition: this.loadedManifest.def,
+      ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
+      ...(this.isUiContextCurrent !== undefined && {
+        isUiContextCurrent: this.isUiContextCurrent,
+      }),
+      ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+      records: () => this.log.records(this.runId),
+      usageFor: (sessionId) => this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE,
+      persist: (record) => this.persistRecord(record),
+      sessionStates: this.sessionStates,
+      agentsBySessionId: this.agentsBySessionId,
+      roleTurnProducer: this.roleTurnProducer,
+    });
+    if (prewalk !== null) {
+      this.prewalkUsageSessions.set(prewalk.session, {
+        sessionIds: prewalk.usageSessionIds,
+        priorUsage: prewalk.priorUsage ?? ZERO_USAGE,
       });
-      this.prewalkUsageSessions.set(result.session, result.usageSessionIds);
-      return result.session;
+      return prewalk.session;
     }
 
     if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
@@ -740,10 +734,10 @@ export class ProductionHost implements Host {
   captureUsage(session: RoleSession): UsageRecord {
     const prewalkSessions = this.prewalkUsageSessions.get(session);
     if (prewalkSessions !== undefined) {
-      return prewalkSessions.reduce(
+      return prewalkSessions.sessionIds.reduce(
         (total, sessionId) =>
           addUsage(total, this.sessionStates.get(sessionId)?.usage() ?? ZERO_USAGE),
-        ZERO_USAGE,
+        prewalkSessions.priorUsage,
       );
     }
     // Read the session's cumulative §11.4 normalized usage from
@@ -758,8 +752,10 @@ export class ProductionHost implements Host {
   sessionTerminalReason(session: RoleSession): SessionTerminalReason {
     const prewalkSessions = this.prewalkUsageSessions.get(session);
     if (prewalkSessions !== undefined) {
-      for (let index = prewalkSessions.length - 1; index >= 0; index -= 1) {
-        const reason = this.sessionStates.get(prewalkSessions[index] as string)?.terminalReason;
+      for (let index = prewalkSessions.sessionIds.length - 1; index >= 0; index -= 1) {
+        const reason = this.sessionStates.get(
+          prewalkSessions.sessionIds[index] as string,
+        )?.terminalReason;
         if (reason !== undefined && reason !== null) return reason;
       }
       return null;
@@ -772,7 +768,9 @@ export class ProductionHost implements Host {
   }
 
   sessionFailureDetail(session: RoleSession): string | null {
-    return this.sessionStates.get(session.sessionId)?.failureDetail ?? null;
+    const prewalk = this.prewalkUsageSessions.get(session);
+    const sessionId = prewalk?.sessionIds.at(-1) ?? session.sessionId;
+    return this.sessionStates.get(sessionId)?.failureDetail ?? null;
   }
 
   persistRecord(record: PersistedRecord): void {
@@ -1000,8 +998,10 @@ export class ProductionHost implements Host {
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
     await this.delegationManager.abortAll();
-    const state = this.sessionStates.get(session.sessionId);
-    const agent = this.agentsBySessionId.get(session.sessionId);
+    const prewalk = this.prewalkUsageSessions.get(session);
+    const sessionId = prewalk?.sessionIds.at(-1) ?? session.sessionId;
+    const state = this.sessionStates.get(sessionId);
+    const agent = this.agentsBySessionId.get(sessionId);
     if (state === undefined || agent === undefined) return;
     if (state.terminalReason !== null) return;
     state.markAborted();

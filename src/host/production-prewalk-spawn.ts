@@ -22,6 +22,8 @@ import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
 export interface ProductionPrewalkSpawnResult {
   readonly session: RoleSession;
   readonly usageSessionIds: string[];
+  /** Persisted phase usage no longer present in a re-opened session's live event state. */
+  readonly priorUsage?: UsageRecord;
 }
 
 /** Keep Prewalk's substantial composition logic out of the already-large ProductionHost class. */
