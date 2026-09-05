@@ -64,7 +64,26 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
 export { parseManifest } from "./manifest/parse.js";
-export type { Manifest, ModelConfig, RoleConfig, SubagentProfile } from "./manifest/types.js";
+export type { PrewalkManifestErrorCode } from "./manifest/prewalk.js";
+export { deriveGuideTranscriptBudget } from "./manifest/prewalk.js";
+export type {
+  PrewalkTransferBudget,
+  PrewalkTransferPreflight,
+  TransferMode,
+} from "./manifest/prewalk-transfer.js";
+export {
+  PrewalkTransformUnsupportedError,
+  selectTransferMode,
+} from "./manifest/prewalk-transfer.js";
+export type {
+  Manifest,
+  ModelConfig,
+  PrewalkConfig,
+  PrewalkExecutorConfig,
+  PrewalkGuideConfig,
+  RoleConfig,
+  SubagentProfile,
+} from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
 
 // ─── Manifest validation + derivation (§13, §12) ──────────────────────
@@ -77,8 +96,10 @@ export type {
   ManifestError,
   ManifestErrorCode,
   ManifestReport,
+  ManifestValidationContext,
   ManifestWarning,
   ManifestWarningCode,
+  PrewalkRoleValidationContext,
 } from "./manifest/validate.js";
 export { validateManifest } from "./manifest/validate.js";
 
@@ -146,6 +167,24 @@ export type {
   RunSeededRecord,
 } from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
+export type {
+  ExecutionCheckpointArgs,
+  ExecutionCheckpointTodo,
+  MaterializedPrewalkRecord,
+  PrewalkAdmission,
+  PrewalkExecutorSeedDeliveredRecord,
+  PrewalkFailureCode,
+  PrewalkPhaseUsageRecord,
+  PrewalkRecord,
+  PrewalkSwitchFailedRecord,
+  PrewalkSwitchSelectedRecord,
+  PrewalkValidationRunRecord,
+} from "./persistence/prewalk-records.js";
+export {
+  assertPrewalkRecord,
+  materializePrewalkRecord,
+  PrewalkRecordError,
+} from "./persistence/prewalk-records.js";
 
 // ─── Issue #68: bounded structured role-turn telemetry record + option ───
 // Additive `role_turn` persisted record and the host-only partial limits option.

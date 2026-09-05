@@ -19,8 +19,15 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+import {
+  type ManifestValidationContext,
+  type PrewalkManifestErrorCode,
+  validatePrewalkRole,
+} from "./prewalk.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
 import type { Manifest } from "./types.js";
+
+export type { ManifestValidationContext, PrewalkRoleValidationContext } from "./prewalk.js";
 
 // ─── Result types ─────────────────────────────────────────────────────
 
@@ -74,7 +81,9 @@ export type ManifestErrorCode =
   /** Issue #63: target trajectory environment requires a selected model. */
   | "trajectory-target-model-unresolved"
   /** Issue #63: target trajectory environment requires explicit instructions. */
-  | "trajectory-target-system-prompt-unresolved";
+  | "trajectory-target-system-prompt-unresolved"
+  /** Experimental Prewalk manifest and derived-admission failures. */
+  | PrewalkManifestErrorCode;
 
 export type ManifestWarningCode =
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
@@ -180,9 +189,12 @@ function isSafeProgressiveDisclosurePath(path: string): boolean {
  *
  * Returns a report with errors and warnings distinctly. The caller
  * decides what to do: `toMachineDefinition` throws if `errors.length > 0`;
- * warnings are surfaced to the user but do not block.
+ * warnings are surfaced to the user but do not block. A manifest containing
+ * `prewalk` requires runtime-resolved context facts; omission fails closed
+ * before guide spend because its derived budget and Git requirement cannot be
+ * proven from YAML alone (Prewalk spec §R6/§R11).
  */
-export function validateManifest(m: Manifest): ManifestReport {
+export function validateManifest(m: Manifest, context?: ManifestValidationContext): ManifestReport {
   const errors: ManifestError[] = [];
   const warnings: ManifestWarning[] = [];
 
@@ -278,6 +290,10 @@ export function validateManifest(m: Manifest): ManifestReport {
   }
 
   for (const role of m.roles) {
+    validatePrewalkRole(role, context, (code, message) => {
+      errors.push({ code, message, role: role.name });
+    });
+
     // §13: `max_run_cost_usd` only on the orchestrator.
     if (role.max_run_cost_usd !== undefined && !role.is_orchestrator) {
       errors.push({

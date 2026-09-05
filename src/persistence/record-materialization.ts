@@ -1,6 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import { assertPrewalkRecord } from "./prewalk-records.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
@@ -42,6 +43,10 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   assertNoSandboxGuarantee(record);
 
   if (!isRecord(record)) return;
+
+  if (typeof record.type === "string" && record.type.startsWith("prewalk_")) {
+    assertPrewalkRecord(record);
+  }
 
   if (record.type === "role_turn") {
     // Issue #68: strict v1 shape + limits check before the record is retained

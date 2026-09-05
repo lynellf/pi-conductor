@@ -17,19 +17,26 @@
  */
 
 import type { MachineDefinition, Role } from "../core/types.js";
+import type { ManifestValidationContext } from "./prewalk.js";
 import type { Manifest } from "./types.js";
 import { validateManifest } from "./validate.js";
 
 /**
  * Derive the pinned `MachineDefinition` snapshot from a validated manifest.
  *
+ * `context` is required when any role enables Prewalk so runtime-resolved
+ * executor metadata can be validated before deriving the pinned definition.
+ *
  * @throws if the manifest has any hard validation errors.
  */
-export function toMachineDefinition(m: Manifest): MachineDefinition {
+export function toMachineDefinition(
+  m: Manifest,
+  context?: ManifestValidationContext,
+): MachineDefinition {
   // Re-validate internally — caller should have validated, but if they
   // didn't (or did and ignored errors), don't silently produce a broken
   // definition. "No silent fallbacks" (AGENTS.md).
-  const report = validateManifest(m);
+  const report = validateManifest(m, context);
   if (report.errors.length > 0) {
     const codes = report.errors.map((e) => e.code).join(", ");
     throw new Error(

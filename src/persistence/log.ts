@@ -46,6 +46,7 @@ import type {
   ChildProjectionFingerprint,
 } from "./child-completion.js";
 import type { FileMutationRecord } from "./file-mutation.js";
+import type { PrewalkRecord } from "./prewalk-records.js";
 import { materializePersistedRecord } from "./record-materialization.js";
 import type { RoleTurnRecord } from "./role-turn.js";
 import type {
@@ -327,7 +328,8 @@ export type PersistedRecord =
   | HandoffTransportSelectedRecord
   | TrajectoryHandoffFailedRecord
   | TrajectoryTargetSeedDeliveredRecord
-  | RoleTurnRecord;
+  | RoleTurnRecord
+  | PrewalkRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
