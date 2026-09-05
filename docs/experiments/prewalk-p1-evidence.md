@@ -59,10 +59,10 @@ No pair had an observed unrepairable transform/template defect. This does **not*
 
 Provider transcript counts subtract a separately measured system/tool envelope from provider-reported input tokens while retaining base chat-template message framing. `getContextUsage` values are reconstructed exactly from the installed algorithm: last valid guide assistant usage plus `estimateTokens` for trailing source messages. Ten real transcript prefixes per executor family were measured.
 
-| Executor family | n | `estimateTokens` p95 absolute relative error | p95 margin needed to avoid undercount | selected committed margin | `getContextUsage` p95 relative error | Kill criterion |
+| Executor family | n | `estimateTokens` p95 absolute relative error | p95 margin needed to avoid undercount | selected committed margin | `getContextUsage` p95 relative error | Original rule result |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| Qwen3.8-27B | 10 | 20.13% | 25.20% | **26%** | 3,115.37% | **FAIL** (>15%): requires a real tokenizer/count source |
-| Tiel-Coder-35B | 10 | 20.52% | 25.81% | **26%** | 3,067.59% | **FAIL** (>15%): requires a real tokenizer/count source |
+| Qwen3.8-27B | 10 | 20.13% | 25.20% | **26%** | 3,115.37% | **FAIL under superseded >15% rule** |
+| Tiel-Coder-35B | 10 | 20.52% | 25.81% | **26%** | 3,067.59% | **FAIL under superseded >15% rule** |
 
 The oMLX service exposed no dedicated `/tokenize`, `/tokenization`, or `/tokens` endpoint (all returned 404). A `max_tokens: 1` generation returns authoritative provider usage and can validate/count at switch time, but it does not supply the cheap per-turn counter required for forward guide-budget enforcement. Therefore the 26% values are recorded calibration results, not authorization to ignore this kill criterion.
 
@@ -112,8 +112,20 @@ Checkpoint predicates:
 1. **Slice 0 produced no eliminating kill failure:** **FAIL** for token accounting, and independently **BLOCKED** on two mandatory real-fidelity rows.
 2. **Slice 1 showed the failure is not fully explained by a cheaper fix:** **UNKNOWN** because the valid live failure did not reproduce.
 
-# P1: BLOCKED
+# Original P1 result: BLOCKED under the pre-evidence rules
 
-Per the user's evidence rule, absent real-provider redacted/thought-signature rows keep P1 blocked. Even if those captures become available, both executor families currently need a real tokenizer/count facility before a hard forward budget can rely on them.
+The measurements above are unchanged. Their original adjudication blocked on three requirements that the acknowledged spec subsequently revised: real captures for fields the configured GPT route cannot emit, an automatic tokenizer requirement when absolute p95 error exceeded 15%, and reproduction of an unavailable historical failure.
 
-Exact next action: obtain authorized real-provider captures containing redacted thinking and `toolCall.thoughtSignature`, expose/install an exact tokenizer or count endpoint for both oMLX families, and supply a historical Issue #63 reproducer (task, prompts, exact model/effort IDs, and runtime version). Re-run only Slices 0 and 1; do not start Slice 2 while P1 remains blocked.
+## Post-evidence adjudication
+
+`docs/pi-conductor-prewalk-projection-spec.md` now makes evidence route-scoped, admits a calibrated one-sided undercount margin up to 35%, and treats a valid non-reproduction as uncertainty rather than proof. Under that contract:
+
+- all configured real guide fields and sealed/interrupted checkpoint behavior are covered;
+- redacted thinking and `toolCall.thoughtSignature` remain labeled synthetic SDK-branch coverage, not provider-fidelity evidence;
+- both 25.20% / 25.81% one-sided margins round up to an enforced 26%, below the 35% limit;
+- all six transform/live probes and both families' TTFT budgets pass; and
+- valid Issue #63 trials did not reproduce, so Prewalk is experimental and cannot be claimed as an Issue #63 fix.
+
+# Revised P1: PASS FOR EXPERIMENTAL IMPLEMENTATION
+
+Slice 2 may proceed under the revised spec. Slice 8 remains the binding decision on whether the mechanism provides enough value to ship.

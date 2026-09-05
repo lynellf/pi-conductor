@@ -1,9 +1,10 @@
 # pi-conductor: Bounded intra-role guide→executor phasing
 
-**Status:** Proposed alternative MVP. Acknowledged.
+**Status:** Experimental MVP. Acknowledged; revised after Checkpoint P1 evidence.
 **Target:** `pi-conductor` after Issue #63 / v0.20.1
 **Supersedes (as a proposal):** `docs/pi-conductor-prewalk-continuation-spec.md`
 **Rationale:** `docs/pi-conductor-prewalk-review.md`
+**P1 evidence:** `docs/experiments/prewalk-p1-evidence.md`
 
 **Primary decision:** Keep **cross-model native continuation as the primary transfer mode** — an expensive guide handing down to a cheap executor inside one conversation is the feature, and `transformMessages()` preserves everything that carries the hand-down (user messages, assistant prose, tool calls with arguments, all tool results) while stripping only vendor-opaque reasoning. Gate the switch on a **transform preflight** that proves the executor's first request is valid *before* anything is mutated. Provide a host-owned **projection** as an explicit fallback for executors the preflight rejects and for transcripts that exceed the executor's window. The host never claims fidelity the provider layer does not provide, and never mutates state it has not first proven admissible.
 
@@ -74,7 +75,7 @@ At request time the SDK applies `transformMessages(messages, model, normalizeToo
 
 **This is a reasoning-stripping transform that preserves the observable working record.** For a guide→executor hand-down that is close to the transform we would write by hand: vendor reasoning is provider continuation state that can never be portable, and it is also where abandoned hypotheses live. The executor inherits every file the guide read, every command it ran, its prose, and its checklist — which is the substance.
 
-The original spec's R2 claim of "exact native history" is therefore **overstated and must be reworded to this table**. It must not be used to justify skipping the preflight, and it must not be tested with a stub provider (a stub emits no signed or redacted thinking, so every row above is unexercised).
+The original spec's R2 claim of "exact native history" is therefore **overstated and must be reworded to this table**. It must not be used to justify skipping the preflight. Conformance evidence is route-scoped: captured real-provider transcripts establish fidelity for fields the configured guide→executor route actually emits; deterministic synthetic structural fixtures may exercise SDK branches that no configured provider emits, but must be labeled non-fidelity evidence and cannot establish that an upstream provider persists those fields correctly. Stub-provider transcripts establish host mechanics only.
 
 #### R2.2 Transform preflight — the actual guard
 
@@ -166,7 +167,7 @@ In **both** modes the host counts the messages the executor will actually receiv
 2. a real tokenizer for the executor model, when available locally;
 3. `estimateTokens` (`chars/4`) **plus a calibrated per-family margin** from the Slice 0 calibration table (§Build plan).
 
-`chars/4` alone must never underwrite a hard gate. The calibration table's measured p95 error is the margin; if no calibration exists for a family, the margin defaults to 35%.
+`chars/4` alone must never underwrite a hard gate. For a calibrated family, record both p95 absolute relative error and the one-sided p95 undercount margin `max(0, actual / estimate - 1)` over at least ten real transformed prefixes spanning every configured guide model. The enforced margin is that one-sided value rounded up to the next whole percentage point. A family remains admissible through this conservative path when the enforced margin is at most 35%; p95 absolute error above 15% is a warning that forbids unmarginized estimation, not an automatic family kill. If the required margin exceeds 35%, the sample is incomplete, or measurements are unstable across reruns, require a provider count endpoint or real tokenizer. If no calibration exists, the provisional margin is 35% and the role remains experimental until calibrated.
 
 What must **not** be used as the basis for the executor's budget: `session.getContextUsage()?.tokens`. That resolves to `calculateContextTokens()` over the **last assistant usage** — the guide's provider-reported accounting of the guide's own request, on the guide's tokenizer, measured pre-transform, and its fallback branch (`input + output + cacheRead + cacheWrite`) is not a context size at all. This is the defect in `src/host/trajectory-admission.ts:124` that must not be inherited.
 
@@ -283,11 +284,12 @@ A role without `prewalk` follows the current spawn/handoff path byte-for-byte. `
 - `prewalk.transfer: projection` forces projection even when the preflight would pass.
 
 **The transform contract is asserted, not assumed** (the original spec's blind spot)
-- A conformance test feeds a captured **real** guide transcript containing `redacted` thinking, signed thinking with empty visible text, a `thoughtSignature`, an errored assistant message, and an unresolved tool call through `transformMessages()` toward each supported executor family.
-- It asserts the **preserved** set survives verbatim: user messages, tool-result content, assistant text, and tool-call names and arguments (including the checkpoint checklist). This is the load-bearing property of `native` mode and must fail CI if an SDK bump changes it.
-- It asserts the **lost** set matches the §R2.1 table, so a silent SDK behavior change is caught in CI rather than production.
-- It asserts every `toolCall` is paired with a real result and `toolResult.toolCallId` remapping is consistent with `toolCallIdMap`.
-- Stub-provider tests are explicitly **not** accepted as evidence for any fidelity claim; a stub emits no signed or redacted thinking, so every row of the §R2.1 table is unexercised.
+- Conformance tests feed captured **real** transcripts from every configured guide model through `transformMessages()` toward each supported executor family. The captures must include every relevant field those guide providers actually emit, including signed empty-visible thinking, visible thinking, errored assistant turns, unresolved tool calls, and a real `execution_checkpoint` call with its durably appended result.
+- Deterministic synthetic structural fixtures cover `redacted` thinking, `toolCall.thoughtSignature`, or another documented SDK branch that no configured guide emits. Such fixtures are explicitly labeled non-fidelity evidence. If a provider that emits one of those fields is later admitted as a guide, its route requires a real capture before release.
+- Tests assert the **preserved** set survives verbatim: user messages, tool-result content, assistant text, and tool-call names and arguments (including the checkpoint checklist). This is the load-bearing property of `native` mode and must fail CI if an SDK bump changes it.
+- Tests assert the **lost** set matches the §R2.1 table, so a silent SDK behavior change is caught in CI rather than production.
+- Tests assert every retained `toolCall` is paired with a real result and `toolResult.toolCallId` remapping is consistent with `toolCallIdMap`; a deliberately interrupted real checkpoint capture must demonstrate the SDK's synthetic-result behavior.
+- Stub-provider tests are accepted only for host mechanics, never provider-transform fidelity.
 
 **Preflight**
 - A transcript containing a thinking-only assistant turn produces an empty-content message under the transform; the preflight detects it and the repair drops it.
@@ -631,13 +633,13 @@ Two modules will approach the 400-LOC ceiling (`prewalk-role-session.ts`, `produ
 
 No host code. Two harnesses under `tests/`, plus a committed calibration table.
 
-1. **Transform conformance and repair inventory.** Capture ~10 real guide transcripts (one per candidate guide model). For each candidate executor — including the actual local server — run `transformMessages()` and assert the output is a valid, renderable request. Record: the preserved set (must be verbatim), the loss table, and every structural defect found, classified **repairable** or **unrepairable**. The repairable set becomes the §R2.2 preflight repair list; the unrepairable set becomes the projection-fallback trigger list.
-2. **Tokenizer calibration.** For the same transcripts, compare `estimateTokens` / `getContextUsage()` against real per-model counts. Commit the per-family p95 relative error as the §R6.3 margin table.
+1. **Transform conformance and repair inventory.** Capture at least one real transcript from every configured guide model, plus enough real transformed prefixes to supply the calibration sample below. Include a real sealed and interrupted `execution_checkpoint`. For each candidate executor — including the actual local server — run `transformMessages()` and assert the output is a valid, renderable request. Record the preserved set, loss table, and every structural defect as **repairable** or **unrepairable**. Cover fields unavailable from the configured providers with labeled synthetic structural fixtures under the acceptance rule above; do not obtain unrelated paid-provider access merely to manufacture those fields.
+2. **Tokenizer calibration.** Measure at least ten real transformed prefixes per executor family across all configured guide models. Compare `estimateTokens` / `getContextUsage()` against real per-model counts. Commit p95 absolute error, one-sided p95 undercount, and the enforced §R6.3 margin.
 3. **Prefill cost curve.** Submit transformed transcripts of ~10k / 25k / 50k tokens to each candidate executor with `max_tokens: 1` and record TTFT and input token count. This is the switch's fixed cost and the break-even input.
 
 **Kill criteria:**
 - an unrepairable rejection for a pair ⇒ that pair is `projection`-only. If **every** candidate pair rejects, `native` mode is dropped — but note this is the outcome that would eliminate the feature's primary shape, so it must be measured against real providers, not assumed;
-- p95 estimation error above ~15% for a family ⇒ that family requires a real tokenizer or a provider count endpoint, not a heuristic;
+- a required one-sided p95 undercount margin above 35%, incomplete route coverage, or unstable reruns ⇒ that family requires a real tokenizer or provider count endpoint; absolute p95 error above 15% alone records a warning and forbids unmarginized `chars/4`, but does not eliminate a family whose calibrated enforced margin is at most 35%;
 - executor TTFT above the latency budget at realistic transcript sizes ⇒ `native` is not viable for that executor and it routes to `projection`, whose context is smaller.
 
 This slice is the cheapest possible answer to "is the cross-model swap mechanically sound", and it costs approximately nothing. Run it before writing host code.
@@ -646,17 +648,20 @@ Verification: `pnpm test -- prewalk-conformance prewalk-calibration`
 
 ### Slice 1 — Lock down the premature-ending failure
 
-Unchanged from the original spec, and still the right first step. A provider-stub regression test around the current Issue #63 chain proving the trajectory target inherits the terminal `handoff` result (`"the loop will end this session"`) and an intervening orchestrator turn. Classify the live failure: immediate `handoff` / immediate `end` / `no_emission` / provider stop / host error.
+A provider-stub regression test around the current Issue #63 chain must prove that the trajectory target inherits the terminal `handoff` result (`"the loop will end this session"`) and an intervening orchestrator turn. Attempt the same chain in a controlled disposable repository with exact models, prompts, tools, effort, SDK version, and task recorded. Classify any live failure as immediate `handoff` / immediate `end` / `no_emission` / provider stop / host error.
 
-If the observed failure is the inherited terminal text, a far smaller fix — neutral terminal tool-result text for trajectory handoffs — may resolve it, and this whole feature becomes optional. **Do not skip this slice.**
+If the live failure reproduces and neutral terminal text removes it, prefer that smaller fix and stop Prewalk. If valid current-runtime trials do not reproduce the historical failure, record the hypothesis as unconfirmed rather than demanding an unavailable historical artifact. Non-reproduction permits only **experimental** Prewalk implementation whose value must be decided by Slice 8; it cannot be described as an Issue #63 fix. **Do not skip this slice or convert non-reproduction into positive evidence.**
 
 Verification: `pnpm test -- trajectory-premature-ending`
 
 ### Checkpoint P1 — the mechanism is justified before it is built
 
-Both true before Slice 2:
-- Slice 0 produced no kill-criterion failure that eliminates the chosen mode; and
-- Slice 1 showed the premature-ending failure is *not* fully explained by a cause with a cheaper fix.
+All true before Slice 2:
+- real captures cover every field emitted by the configured guide route, while unavailable SDK-only branches are isolated and labeled synthetic;
+- Slice 0 produced no unrepairable pair rejection, required margin above 35%, unstable calibration, or TTFT failure that eliminates the chosen mode; and
+- Slice 1 either reproduced the premature-ending failure without identifying a cheaper sufficient fix, **or** completed valid controlled trials without reproduction and the acknowledged scope remains an experimental MVP whose value is deferred to Slice 8.
+
+The 2026-09-03 evidence in `docs/experiments/prewalk-p1-evidence.md` satisfies this revised checkpoint for the configured GPT-5.6 → Qwen3.8/Tiel matrix: all six live transform probes passed, the measured one-sided margins round to 26%, TTFT stayed within budget, real route fields and sealed/interrupted checkpoints were captured, SDK-only redacted/thought-signature paths are labeled synthetic, and controlled Issue #63 trials did not reproduce. **P1 passes for experimental implementation only.**
 
 ### Slice 2 — Manifest, mode selection, records
 
