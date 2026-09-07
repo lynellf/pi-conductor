@@ -495,8 +495,5 @@ export type SessionTerminalReason =
   | "session_cost_cap_exceeded"
   | "model_error"
   | "user_aborted"
-  | Extract<
-      PrewalkFailureCode,
-      "prewalk_executor_turn_cap_exceeded" | "prewalk_executor_wall_clock_exceeded"
-    >
+  | PrewalkFailureCode
   | null;

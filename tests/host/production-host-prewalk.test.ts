@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { StreamFunction } from "@earendil-works/pi-ai";
 import { AuthStorage, ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadManifestFromString } from "../../src/host/manifest.js";
@@ -14,19 +15,34 @@ import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
 
+// Pi forwards its aborted signal to the next stream call; the ordinary scripted
+// stub ignores that signal. Model provider cancellation here without further work.
+function abortAware(stream: StreamFunction): StreamFunction {
+  return (model, context, options) =>
+    options?.signal?.aborted
+      ? makeStubStreamFunction({ steps: [{ kind: "fail", errorMessage: "aborted" }] })(
+          model,
+          context,
+          options,
+        )
+      : stream(model, context, options);
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe("ProductionHost Prewalk integration", () => {
   it.each([
-    { transfer: "native", accepted: true },
-    { transfer: "projection", accepted: true },
-    { transfer: "native", accepted: false },
-    { transfer: "projection", accepted: false },
-  ] as const)("runs and recovers $transfer seed (durably accepted=$accepted)", async ({
+    { transfer: "native", accepted: true, guideMaxTurns: 1 },
+    { transfer: "native", accepted: true, guideMaxTurns: 4 },
+    { transfer: "projection", accepted: true, guideMaxTurns: 4 },
+    { transfer: "native", accepted: false, guideMaxTurns: 4 },
+    { transfer: "projection", accepted: false, guideMaxTurns: 4 },
+  ] as const)("runs and recovers $transfer seed (durably accepted=$accepted, guide cap=$guideMaxTurns)", async ({
     transfer,
     accepted,
+    guideMaxTurns,
   }) => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-conductor-production-prewalk-"));
     roots.push(cwd);
@@ -71,25 +87,27 @@ describe("ProductionHost Prewalk integration", () => {
       api: "openai-completions",
       apiKey: "stub-key",
       baseUrl: base.baseUrl,
-      streamSimple: makeStubStreamFunction({
-        steps: [
-          {
-            kind: "emit_tool_calls",
-            calls: [{ name: "write", arguments: { path: "example.txt", content: "guide\n" } }],
-          },
-          {
-            kind: "emit_tool_calls",
-            calls: [{ name: "execution_checkpoint", arguments: checkpoint }],
-          },
-          {
-            kind: "emit_handoff",
-            target_role: "orchestrator",
-            reason: "executor verified prior work",
-          },
-          { kind: "emit_handoff", target_role: "orchestrator", reason: "recovered executor" },
-        ],
-        onRequest: (request) => requests.push(request),
-      }),
+      streamSimple: abortAware(
+        makeStubStreamFunction({
+          steps: [
+            {
+              kind: "emit_tool_calls",
+              calls: [{ name: "write", arguments: { path: "example.txt", content: "guide\n" } }],
+            },
+            {
+              kind: "emit_tool_calls",
+              calls: [{ name: "execution_checkpoint", arguments: checkpoint }],
+            },
+            {
+              kind: "emit_handoff",
+              target_role: "orchestrator",
+              reason: "executor verified prior work",
+            },
+            { kind: "emit_handoff", target_role: "orchestrator", reason: "recovered executor" },
+          ],
+          onRequest: (request) => requests.push(request),
+        }),
+      ),
       models: ["guide", "executor"].map((id) => ({
         ...base,
         id,
@@ -117,7 +135,7 @@ roles:
         model: stub:guide
         effort: off
         max_cost_usd: 2
-        max_turns: 4
+        max_turns: ${guideMaxTurns}
       executor:
         max_turns: 20
         max_wall_clock_s: 600
@@ -147,6 +165,23 @@ roles:
     const session = await host.spawnRole("worker", { visitIndex: 1 });
     const logicalId = session.sessionId;
     const guideConversationId = session.conversationId;
+    if (guideMaxTurns === 1) {
+      await expect(session.prompt("ORIGINAL ROLE TASK")).rejects.toMatchObject({
+        code: "prewalk_guide_turn_cap_exceeded",
+      });
+      expect(requests).toHaveLength(1);
+      expect(host.sessionTerminalReason(session)).toBe("prewalk_guide_turn_cap_exceeded");
+      expect(
+        log
+          .records("run-prewalk-production")
+          .find((record) => record.type === "prewalk_switch_failed"),
+      ).toMatchObject({
+        code: "prewalk_guide_turn_cap_exceeded",
+        git_checkpoint: { exemplar_sha: expect.any(String) },
+      });
+      await session.dispose();
+      return;
+    }
     await session.prompt("ORIGINAL ROLE TASK");
 
     expect(session.sessionId).toBe(logicalId);

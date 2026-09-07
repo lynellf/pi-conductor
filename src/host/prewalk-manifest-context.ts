@@ -13,6 +13,7 @@ import type {
 import type { Manifest, PrewalkConfig, RoleConfig } from "../manifest/types.js";
 import type { FileMutationRecord } from "../persistence/file-mutation.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { PrewalkFailureCode } from "../persistence/prewalk-records.js";
 import { derivePrewalkForwardBudget, EVIDENCED_EXECUTOR_MARGIN_PERCENT } from "./prewalk-budget.js";
 import { createPrewalkGitCheckpoint, inspectPrewalkGitBase } from "./prewalk-git-checkpoint.js";
 import { runPrewalkTransformPreflight } from "./prewalk-preflight.js";
@@ -187,7 +188,7 @@ export async function spawnProductionPrewalkRoleSession(args: {
   readonly registerUsageSession: (sessionId: string) => void;
   readonly markTerminalFailure: (
     sessionId: string,
-    code: "prewalk_executor_turn_cap_exceeded" | "prewalk_executor_wall_clock_exceeded",
+    code: PrewalkFailureCode,
     message: string,
   ) => void;
 }): Promise<ReturnType<typeof createPrewalkRoleSession>> {
@@ -306,7 +307,15 @@ export async function spawnProductionPrewalkRoleSession(args: {
       });
     },
     guideUsage: () => args.usageFor(args.roleSessionId),
-    guideTurns: () => guideTurnCount(args.records(), args.roleSessionId),
+    guideTurns: () => 0, // The live guide controller supplies completed turn count.
+    guideControl: {
+      maxTurns: config.guide.max_turns,
+      maxCostUsd: config.guide.max_cost_usd,
+      budgetTokens: budget.guide_transcript_budget_tokens,
+      measureTokens: () =>
+        runProductionPreflight(guideSession, environment.resolvedModel, executorTools).summary
+          .transformed_tokens,
+    },
     prepareValidation: ({ checkpoint, blockOnFailure, onUnsatisfied }) => {
       validationGate = createPrewalkValidationGate({
         runId: args.runId,
@@ -387,10 +396,4 @@ function normalizeOpenAiCompletionId(id: string, model: Model<never>): string {
 
 function estimatePromptTokens(prompt: string): number {
   return estimateTokens({ role: "user", content: [{ type: "text", text: prompt }], timestamp: 0 });
-}
-
-function guideTurnCount(records: readonly PersistedRecord[], roleSessionId: string): number {
-  return records.filter(
-    (record) => record.type === "role_turn" && record.role_session_id === roleSessionId,
-  ).length;
 }
