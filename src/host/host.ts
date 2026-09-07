@@ -57,6 +57,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { PrewalkFailureCode } from "../persistence/prewalk-records.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
@@ -494,4 +495,5 @@ export type SessionTerminalReason =
   | "session_cost_cap_exceeded"
   | "model_error"
   | "user_aborted"
+  | PrewalkFailureCode
   | null;

@@ -1,0 +1,845 @@
+{
+  "schemaVersion": 1,
+  "scrubProcedure": "prewalk-structural-v1",
+  "fixtures": [
+    {
+      "id": "real-sol-capture",
+      "evidenceKind": "real-provider-scrubbed",
+      "provider": "openai-codex",
+      "api": "openai-codex-responses",
+      "model": "gpt-5.6-sol",
+      "captureDate": "2026-08-02",
+      "provenance": "private local Pi session; non-contiguous structural excerpt",
+      "sourceEntryIndexes": [3, 10, 11, 12, 13, 14, 55, 56, 201],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-user-text-1>"
+            }
+          ],
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-sol",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "<real-visible-thinking-1>",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "text",
+              "text": "<real-assistant-text-1>"
+            },
+            {
+              "type": "toolCall",
+              "id": "sol-real-call-1",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "sol-real-call-2",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "sol-real-call-3",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "sol-real-call-4",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            }
+          ],
+          "usage": {
+            "input": 19874,
+            "output": 476,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 20350,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "sol-real-call-1",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-1>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "sol-real-call-2",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-2>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "sol-real-call-3",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-3>"
+            }
+          ],
+          "isError": true,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "sol-real-call-4",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-4>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-sol",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "sol-real-call-5",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 120
+              }
+            }
+          ],
+          "usage": {
+            "input": 1155,
+            "output": 65,
+            "cacheRead": 97792,
+            "cacheWrite": 0,
+            "totalTokens": 99012,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "sol-real-call-5",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-5>"
+            }
+          ],
+          "isError": true,
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-sol",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "<real-visible-thinking-3>",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "sol-real-call-6",
+              "name": "edit",
+              "arguments": {
+                "path": "<scrubbed-string-1>",
+                "edits": [
+                  {
+                    "oldText": "<scrubbed-string-2>",
+                    "newText": "<scrubbed-string-3>"
+                  }
+                ]
+              }
+            }
+          ],
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "error",
+          "timestamp": 0,
+          "errorMessage": "<real-provider-error-text-removed>"
+        }
+      ]
+    },
+    {
+      "id": "real-terra-capture",
+      "evidenceKind": "real-provider-scrubbed",
+      "provider": "openai-codex",
+      "api": "openai-codex-responses",
+      "model": "gpt-5.6-terra",
+      "captureDate": "2026-08-26",
+      "provenance": "private local Pi session; non-contiguous structural excerpt",
+      "sourceEntryIndexes": [41, 42, 48, 49, 259],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-user-text-1>"
+            }
+          ],
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-terra",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "text",
+              "text": "<real-assistant-text-1>"
+            }
+          ],
+          "usage": {
+            "input": 1524,
+            "output": 37,
+            "cacheRead": 55808,
+            "cacheWrite": 0,
+            "totalTokens": 57369,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "stop",
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-terra",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "<real-visible-thinking-2>",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "terra-real-call-1",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            }
+          ],
+          "usage": {
+            "input": 1884,
+            "output": 210,
+            "cacheRead": 57856,
+            "cacheWrite": 0,
+            "totalTokens": 59950,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "terra-real-call-1",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-1>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-terra",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "<real-visible-thinking-3>",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "terra-real-call-2",
+              "name": "write",
+              "arguments": {
+                "path": "<scrubbed-string-1>",
+                "content": "<scrubbed-string-2>"
+              }
+            }
+          ],
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "error",
+          "timestamp": 0,
+          "errorMessage": "<real-provider-error-text-removed>"
+        }
+      ]
+    },
+    {
+      "id": "real-luna-capture",
+      "evidenceKind": "real-provider-scrubbed",
+      "provider": "openai-codex",
+      "api": "openai-codex-responses",
+      "model": "gpt-5.6-luna",
+      "captureDate": "2026-07-12",
+      "provenance": "private local Pi session; non-contiguous structural excerpt",
+      "sourceEntryIndexes": [3786, 3789, 3790, 3791, 3792, 3793, 3794, 3801, 3912, 3913],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-user-text-1>"
+            }
+          ],
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-luna",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "<real-visible-thinking-1>",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "luna-real-call-1",
+              "name": "read",
+              "arguments": {
+                "path": "<scrubbed-string-1>",
+                "offset": 1,
+                "limit": 400
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "luna-real-call-2",
+              "name": "read",
+              "arguments": {
+                "path": "<scrubbed-string-1>",
+                "offset": 1,
+                "limit": 500
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "luna-real-call-3",
+              "name": "read",
+              "arguments": {
+                "path": "<scrubbed-string-1>",
+                "offset": 1,
+                "limit": 400
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "luna-real-call-4",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            },
+            {
+              "type": "toolCall",
+              "id": "luna-real-call-5",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 30
+              }
+            }
+          ],
+          "usage": {
+            "input": 2249,
+            "output": 281,
+            "cacheRead": 358912,
+            "cacheWrite": 0,
+            "totalTokens": 361442,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "luna-real-call-1",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-1>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "luna-real-call-2",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-2>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "luna-real-call-3",
+          "toolName": "read",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-3>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "luna-real-call-4",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-4>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "luna-real-call-5",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-5>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-luna",
+          "content": [],
+          "usage": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 0,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "error",
+          "timestamp": 0,
+          "errorMessage": "<real-provider-error-text-removed>"
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-luna",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "luna-real-call-6",
+              "name": "bash",
+              "arguments": {
+                "command": "<scrubbed-string-1>",
+                "timeout": 180
+              }
+            }
+          ],
+          "usage": {
+            "input": 1724,
+            "output": 32,
+            "cacheRead": 160256,
+            "cacheWrite": 0,
+            "totalTokens": 162012,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "luna-real-call-6",
+          "toolName": "bash",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-6>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        }
+      ]
+    },
+    {
+      "id": "real-checkpoint-capture",
+      "evidenceKind": "real-provider-scrubbed",
+      "provider": "openai-codex",
+      "api": "openai-codex-responses",
+      "model": "gpt-5.6-terra",
+      "captureDate": "2026-09-03",
+      "provenance": "isolated execution_checkpoint harness",
+      "sourceEntryIndexes": [0, 1, 2],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-user-text-1>"
+            }
+          ],
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-terra",
+          "content": [
+            {
+              "type": "thinking",
+              "thinking": "<real-visible-thinking-1>",
+              "thinkingSignature": "<real-signature-present-payload-removed>"
+            },
+            {
+              "type": "toolCall",
+              "id": "checkpoint-real-call-1",
+              "name": "execution_checkpoint",
+              "arguments": {
+                "outcome": "<scrubbed-string-1>",
+                "approach": "<scrubbed-string-2>",
+                "rejected_approaches": ["<scrubbed-string-3>"],
+                "todos": [
+                  {
+                    "task": "<scrubbed-string-4>",
+                    "validation": "<scrubbed-string-5>",
+                    "allowed_paths": ["<scrubbed-string-6>"],
+                    "status": "<scrubbed-string-7>"
+                  }
+                ],
+                "first_edit_path": "<scrubbed-string-8>"
+              }
+            }
+          ],
+          "usage": {
+            "input": 216,
+            "output": 101,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 317,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        },
+        {
+          "role": "toolResult",
+          "toolCallId": "checkpoint-real-call-1",
+          "toolName": "execution_checkpoint",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-tool-result-1>"
+            }
+          ],
+          "isError": false,
+          "timestamp": 0
+        }
+      ]
+    },
+    {
+      "id": "real-unresolved-capture",
+      "evidenceKind": "real-provider-scrubbed",
+      "provider": "openai-codex",
+      "api": "openai-codex-responses",
+      "model": "gpt-5.6-sol",
+      "captureDate": "2026-09-03",
+      "provenance": "isolated interrupted real-provider harness",
+      "sourceEntryIndexes": [0, 1],
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "<real-user-text-1>"
+            }
+          ],
+          "timestamp": 0
+        },
+        {
+          "role": "assistant",
+          "api": "openai-codex-responses",
+          "provider": "openai-codex",
+          "model": "gpt-5.6-sol",
+          "content": [
+            {
+              "type": "toolCall",
+              "id": "unresolved-real-call-1",
+              "name": "execution_checkpoint",
+              "arguments": {}
+            }
+          ],
+          "usage": {
+            "input": 81,
+            "output": 14,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 95,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0,
+              "total": 0
+            }
+          },
+          "stopReason": "toolUse",
+          "timestamp": 0
+        }
+      ]
+    }
+  ],
+  "syntheticAugmentation": {
+    "id": "synthetic-missing-provider-shapes",
+    "evidenceKind": "synthetic-structural-only",
+    "reason": "No authorized real capture contained redacted thinking or toolCall.thoughtSignature.",
+    "messages": [
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "thinking",
+            "thinking": "",
+            "redacted": true
+          }
+        ],
+        "api": "openai-codex-responses",
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 0,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "stop",
+        "timestamp": 0
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "toolCall",
+            "id": "synthetic-call-1",
+            "name": "execution_checkpoint",
+            "arguments": {
+              "outcome": "handoff_to_executor"
+            },
+            "thoughtSignature": "<synthetic-signature>"
+          }
+        ],
+        "api": "openai-codex-responses",
+        "provider": "openai-codex",
+        "model": "gpt-5.6-sol",
+        "usage": {
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0,
+          "totalTokens": 0,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "total": 0
+          }
+        },
+        "stopReason": "toolUse",
+        "timestamp": 0
+      },
+      {
+        "role": "toolResult",
+        "toolCallId": "synthetic-call-1",
+        "toolName": "execution_checkpoint",
+        "content": [
+          {
+            "type": "text",
+            "text": "Execution checkpoint recorded."
+          }
+        ],
+        "isError": false,
+        "timestamp": 0
+      }
+    ]
+  }
+}

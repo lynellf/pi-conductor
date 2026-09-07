@@ -81,6 +81,33 @@ export interface ModelConfig {
   readonly retry_delay_ms?: number;
 }
 
+/** Prewalk's frontier guide phase limits (Prewalk spec Manifest contract). */
+export interface PrewalkGuideConfig {
+  readonly model: string;
+  readonly effort: ModelEffort;
+  readonly max_cost_usd: number;
+  readonly max_turns: number;
+}
+
+/** Prewalk's local/cheaper executor phase limits. */
+export interface PrewalkExecutorConfig {
+  readonly max_turns: number;
+  readonly max_wall_clock_s: number;
+}
+
+/** Normalized opt-in guide→executor configuration for one worker role. */
+export interface PrewalkConfig {
+  readonly transfer: "native" | "projection";
+  readonly on_preflight_failure: "project" | "fail";
+  readonly visits: "first" | "all";
+  readonly max_todos: number;
+  readonly executor_output_reservation: number;
+  readonly validation_retries: number;
+  readonly validation_allowlist: readonly string[];
+  readonly guide: PrewalkGuideConfig;
+  readonly executor: PrewalkExecutorConfig;
+}
+
 /**
  * §8 / §10 / delegation lite §3: raw manifest shape parsed from `.pi/conductor.yaml`.
  */
@@ -144,6 +171,8 @@ export interface RoleConfig {
   readonly workspace?: WorkspaceConfig;
   /** Issue #48 §4: optional artifact-handoff configuration. */
   readonly artifacts?: ArtifactConfig;
+  /** Experimental guide→executor phasing; absent roles keep the legacy path byte-compatible. */
+  readonly prewalk?: PrewalkConfig;
 }
 
 // ─── Issue #48: per-role workspace + artifact config ────────────────────

@@ -93,6 +93,7 @@ import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
+import { resolvePrewalkManifestContext } from "./prewalk-manifest-context.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
@@ -186,7 +187,10 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   try {
     // A policy-bearing run pins normalized configuration before any role
     // session exists. No policy means no new record and the legacy fresh path.
-    if ((loaded.manifest.handoffs?.length ?? 0) > 0) {
+    if (
+      (loaded.manifest.handoffs?.length ?? 0) > 0 ||
+      loaded.manifest.roles.some((role) => role.prewalk !== undefined)
+    ) {
       log.append(
         createManifestSnapshot({
           runId,
@@ -291,13 +295,7 @@ export async function resumeRun(
             manifestPath,
             opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
           )))
-        : Object.freeze({
-            manifest: manifestSnapshot.normalized_manifest,
-            def: toMachineDefinition(manifestSnapshot.normalized_manifest),
-            warnings: Object.freeze([]),
-            manifestDir: dirname(manifestPath),
-            manifestVersion: manifestSnapshot.normalized_manifest.version,
-          });
+        : await loadPinnedManifest(manifestSnapshot, manifestPath, opts.modelRegistry);
     assertManifestWorkspaceBackendsSupported(loaded);
     const checkpoint = log.latestCheckpoint(runId);
     if (checkpoint === null) {
@@ -696,7 +694,7 @@ function latestHandoffContextRef(
  * `session_failed("crashed")` + cleared checkpoint. Returns the
  * checkpoint the loop should resume from.
  */
-function reconcileCrash(
+export function reconcileCrash(
   runId: string,
   checkpoint: Checkpoint,
   def: MachineDefinition,
@@ -721,12 +719,18 @@ function reconcileCrash(
         readonly conversation_id?: string | null;
       })
     | null = null;
-  for (const r of records) {
-    if (r.type !== "session_started") continue;
+  let sessionStartedIndex = -1;
+  // A durable Prewalk executor recovery intentionally retains the logical role-session
+  // identity. Select the latest start so a second process crash cannot be mistaken for
+  // the terminal of its earlier guide attempt.
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const r = records[index];
+    if (r?.type !== "session_started") continue;
     const matchesLogical = r.role_session_id === active.id;
     const matchesLegacy = r.role_session_id === undefined && r.session_file === sessionFile;
     if (matchesLogical || matchesLegacy) {
       sessionStarted = r;
+      sessionStartedIndex = index;
       break;
     }
   }
@@ -737,7 +741,7 @@ function reconcileCrash(
 
   // Has a terminal lifecycle record already been written for this session?
   let hasTerminal = false;
-  for (const r of records) {
+  for (const r of records.slice(sessionStartedIndex + 1)) {
     if (
       (r.type === "session_ended" || r.type === "session_failed") &&
       (sessionStarted.role_session_id !== undefined
@@ -869,6 +873,28 @@ export function reconcileLostChildren(
     });
     terminalChildIds.add(record.child_id);
   }
+}
+
+async function loadPinnedManifest(
+  snapshot: ManifestSnapshotRecord,
+  manifestPath: string,
+  modelRegistry: ModelRegistry | undefined,
+): Promise<LoadedManifest> {
+  const manifestDir = dirname(manifestPath);
+  const context = await resolvePrewalkManifestContext({
+    manifest: snapshot.normalized_manifest,
+    modelRegistry,
+    workspaceCwd: manifestDir,
+    manifestDir,
+  });
+  return Object.freeze({
+    manifest: snapshot.normalized_manifest,
+    def: toMachineDefinition(snapshot.normalized_manifest, context),
+    warnings: Object.freeze([]),
+    manifestDir,
+    manifestVersion: snapshot.normalized_manifest.version,
+    ...(context !== undefined ? { prewalkValidationContext: context } : {}),
+  });
 }
 
 async function resolveBaseDir(baseDir: string | undefined): Promise<string> {

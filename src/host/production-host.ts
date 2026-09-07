@@ -88,6 +88,7 @@ import {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
+import { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import {
@@ -253,6 +254,7 @@ export class ProductionHost implements Host {
   // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
   private readonly sessionStates: Map<string, SessionState> = new Map();
   private readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
+  private readonly prewalk = new ProductionPrewalkHost(this.sessionStates, this.agentsBySessionId);
   private snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   /**
@@ -357,6 +359,18 @@ export class ProductionHost implements Host {
       this.loadedManifest.manifestDir,
       this.loadedManifest.manifestVersion,
     );
+
+    const prewalk = await this.prewalk.dispatch(this, {
+      role,
+      roleConfig,
+      entry,
+      executorModel: model,
+      executorLogical: logical,
+      baseSystemPrompt: rolePrompt,
+      visitIndex: opts.visitIndex ?? 1,
+      roleTurnProducer: this.roleTurnProducer,
+    });
+    if (prewalk !== null) return prewalk;
 
     if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
       if (roleWorkspaceConfig === undefined) {
@@ -692,25 +706,15 @@ export class ProductionHost implements Host {
   }
 
   captureUsage(session: RoleSession): UsageRecord {
-    // Read the session's cumulative §11.4 normalized usage from
-    // the per-session `SessionState`. Returns zeros for a session
-    // with no state (e.g., never registered, or already disposed).
-    const state = this.sessionStates.get(session.sessionId);
-    return (
-      state?.usage() ?? { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 }
-    );
+    return this.prewalk.captureUsage(session);
   }
 
   sessionTerminalReason(session: RoleSession): SessionTerminalReason {
-    // Read the host-set terminal reason (cap exceeded, model
-    // error, or null if the session ended normally). The loop
-    // uses this to set `session_failed.failure_reason`.
-    const state = this.sessionStates.get(session.sessionId);
-    return state?.terminalReason ?? null;
+    return this.prewalk.sessionTerminalReason(session);
   }
 
   sessionFailureDetail(session: RoleSession): string | null {
-    return this.sessionStates.get(session.sessionId)?.failureDetail ?? null;
+    return this.prewalk.sessionFailureDetail(session);
   }
 
   persistRecord(record: PersistedRecord): void {
@@ -938,13 +942,7 @@ export class ProductionHost implements Host {
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
     await this.delegationManager.abortAll();
-    const state = this.sessionStates.get(session.sessionId);
-    const agent = this.agentsBySessionId.get(session.sessionId);
-    if (state === undefined || agent === undefined) return;
-    if (state.terminalReason !== null) return;
-    state.markAborted();
-    state.setTerminalReason("user_aborted");
-    await agent.abort();
+    await this.prewalk.abort(session);
   }
 
   sealSession(_session: RoleSession): void {

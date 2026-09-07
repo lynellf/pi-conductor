@@ -26,6 +26,7 @@ import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
+import { parsePrewalkConfig } from "./prewalk.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
@@ -279,6 +280,9 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     }),
     ...(entry.artifacts !== undefined && {
       artifacts: parseArtifactConfig(entry.artifacts, index),
+    }),
+    ...(entry.prewalk !== undefined && {
+      prewalk: parsePrewalkConfig(entry.prewalk, `${path}.prewalk`),
     }),
   }) as RoleConfig;
 

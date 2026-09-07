@@ -19,6 +19,7 @@ import { describe, expect, it } from "vitest";
 import type { SessionLifecycleEvent, UsageRecord } from "../../src/core/types.js";
 import { rollup } from "../../src/cost/rollup.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
+import type { PrewalkSwitchSelectedRecord } from "../../src/persistence/prewalk-records.js";
 
 const RUN_A = "run-a";
 const RUN_B = "run-b";
@@ -97,6 +98,81 @@ function started(opts: { role: string; model: string | null }): SessionLifecycle
     session_file: `/sessions/${opts.role}.jsonl`,
     parent_session: null,
     ts: TS,
+  };
+}
+
+function prewalkSelected(options: {
+  readonly roleSessionId: string;
+  readonly guideModel: string;
+  readonly executorModel: string;
+  readonly guideUsage: UsageRecord;
+}): PrewalkSwitchSelectedRecord {
+  return {
+    type: "prewalk_switch_selected",
+    schema_version: 1,
+    run_id: RUN_A,
+    role: "implementer",
+    role_session_id: options.roleSessionId,
+    transfer_mode: "native",
+    guide: {
+      model: options.guideModel,
+      effort: "high",
+      provider: "guide-provider",
+      api: "openai-responses",
+      conversation: { id: "prewalk-conversation", file: "/sessions/prewalk.jsonl" },
+      turns: 2,
+    },
+    executor: {
+      model: options.executorModel,
+      effort: "off",
+      provider: "executor-provider",
+      api: "openai-completions",
+      system_prompt: "executor",
+      active_tool_names: ["handoff"],
+      continuation_seed: "continue",
+      environment_sha256: "a".repeat(64),
+      conversation: { id: "prewalk-conversation", file: "/sessions/prewalk.jsonl" },
+    },
+    checkpoint: {
+      outcome: "handoff_to_executor",
+      approach: "implement",
+      rejected_approaches: [],
+      todos: [
+        {
+          task: "finish",
+          validation: "pnpm test",
+          allowed_paths: ["src/file.ts"],
+          status: "pending",
+        },
+      ],
+      first_edit_path: "src/file.ts",
+    },
+    admission: {
+      schema_version: 1,
+      target_model: options.executorModel,
+      target_context_window: 100,
+      executor_output_reservation: 10,
+      executor_envelope_tokens: 10,
+      safety_margin_tokens: 10,
+      guide_transcript_budget_tokens: 70,
+      transformed_tokens: 50,
+      required_tokens: 80,
+    },
+    preflight: {
+      requested_mode: "native",
+      ok: true,
+      repairs: [],
+      rejections: [],
+      transformed_message_count: 2,
+      transformed_tokens: 50,
+      reasoning_blocks_dropped: 0,
+      thinking_blocks_downgraded: 0,
+      assistant_messages_skipped: 0,
+      live_probe: "passed",
+    },
+    guide_usage: options.guideUsage,
+    git_checkpoint: { base_sha: "b".repeat(40), exemplar_sha: "c".repeat(40) },
+    ts: TS - 1,
   };
 }
 
@@ -395,6 +471,63 @@ describe("rollup: child protocol cohort (Issue #57 §9.2)", () => {
     ];
     const result = rollup(records, RUN_A, "orchestrator");
     expect(result.perChildProtocol?.minimal.cost).toBe(0.5);
+  });
+});
+
+describe("rollup: Prewalk phase-aware model attribution", () => {
+  it("moves only guide usage to the guide model and leaves perRun/perRole byte-identical", () => {
+    const guideUsage = mkUsage(100, 20, 10, 0, 1);
+    const executorUsage = mkUsage(200, 40, 20, 0, 0.25);
+    const totalUsage = mkUsage(300, 60, 30, 0, 1.25);
+    const terminal = {
+      ...ended({ role: "implementer", model: "local:executor", usage: totalUsage }),
+      role_session_id: "prewalk-session",
+      conversation_id: "prewalk-conversation",
+    } satisfies PersistedRecord;
+    const selected = prewalkSelected({
+      roleSessionId: "prewalk-session",
+      guideModel: "openai:guide",
+      executorModel: "local:executor",
+      guideUsage,
+    });
+    const phaseUsage: PersistedRecord = {
+      type: "prewalk_phase_usage",
+      schema_version: 1,
+      run_id: RUN_A,
+      role_session_id: "prewalk-session",
+      phase: "executor",
+      model: "local:executor",
+      usage: executorUsage,
+      turns: 3,
+      ts: TS,
+    };
+
+    const uncorrected = rollup([terminal], RUN_A, "orchestrator");
+    const corrected = rollup([selected, phaseUsage, terminal], RUN_A, "orchestrator");
+
+    expect(JSON.stringify(corrected.perRun)).toBe(JSON.stringify(uncorrected.perRun));
+    expect(JSON.stringify(corrected.perRole)).toBe(JSON.stringify(uncorrected.perRole));
+    expect(corrected.perModel["openai:guide"]).toEqual({ ...guideUsage, sessions: 1 });
+    expect(corrected.perModel["local:executor"]).toEqual({ ...executorUsage, sessions: 1 });
+  });
+
+  it("does not split same-model Prewalk usage or duplicate its session count", () => {
+    const usage = mkUsage(10, 2, 0, 0, 0.1);
+    const selected = prewalkSelected({
+      roleSessionId: "same-model",
+      guideModel: "local:model",
+      executorModel: "local:model",
+      guideUsage: usage,
+    });
+    const terminal = {
+      ...ended({ role: "implementer", model: "local:model", usage }),
+      role_session_id: "same-model",
+    } satisfies PersistedRecord;
+
+    expect(rollup([selected, terminal], RUN_A, "orchestrator").perModel["local:model"]).toEqual({
+      ...usage,
+      sessions: 1,
+    });
   });
 });
 
