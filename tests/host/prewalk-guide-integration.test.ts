@@ -23,6 +23,7 @@ async function fixture(options: {
   maxTurns?: number;
   cost?: number;
   checkpoint?: boolean;
+  outcome?: "already_complete" | "blocked";
 }) {
   const cwd = await mkdtemp(join(tmpdir(), "prewalk-guide-control-"));
   onTestFinished(() => rm(cwd, { recursive: true, force: true }));
@@ -175,7 +176,8 @@ async function fixture(options: {
             completedTurns += 1;
             if (index === options.tokens.length - 1 && options.checkpoint !== false)
               phase.seam.record({
-                outcome: "handoff_to_executor",
+                outcome: options.outcome ?? "handoff_to_executor",
+                ...(options.outcome === "blocked" && { blocked_reason: "needs input" }),
                 approach: "Finish exemplar",
                 rejected_approaches: [],
                 first_edit_path: "example.txt",
@@ -184,7 +186,7 @@ async function fixture(options: {
                     task: "verify",
                     validation: "git diff --check",
                     allowed_paths: ["example.txt"],
-                    status: "pending",
+                    status: options.outcome === "already_complete" ? "done" : "pending",
                   },
                 ],
               });
@@ -209,6 +211,35 @@ async function fixture(options: {
 }
 
 describe("production-composed Prewalk guide limits", () => {
+  it.each([
+    "already_complete",
+    "blocked",
+  ] as const)("keeps cumulative guide caps active while %s emits its machine event", async (outcome) => {
+    const f = await fixture({ tokens: [50], maxTurns: 2, outcome });
+    await expect(f.session.prompt("TASK")).rejects.toMatchObject({
+      code: "prewalk_guide_turn_cap_exceeded",
+    });
+    expect(f.turns()).toBe(2);
+    expect(f.opened).toEqual(["guide"]);
+    expect(f.records.find((record) => record.type === "prewalk_switch_failed")).toMatchObject({
+      code: "prewalk_guide_turn_cap_exceeded",
+      git_checkpoint: { exemplar_sha: expect.any(String) },
+    });
+  });
+  it("does not repeat convergence steering during guide-only completion", async () => {
+    const f = await fixture({ tokens: [800], outcome: "blocked" });
+    await f.session.prompt("TASK");
+    expect(f.turns()).toBe(2);
+    expect(f.steers).toHaveLength(1);
+  });
+  it("fails closed when an exhausted guide has no executor handoff outcome", async () => {
+    const f = await fixture({ tokens: [1200], outcome: "already_complete" });
+    await expect(f.session.prompt("TASK")).rejects.toMatchObject({
+      code: "prewalk_checkpoint_missing",
+    });
+    expect(f.turns()).toBe(1);
+    expect(f.opened).toEqual(["guide"]);
+  });
   it("preserves work and fails explicitly if budget exhaustion precedes a valid checklist", async () => {
     const f = await fixture({ tokens: [1200], checkpoint: false });
     await expect(f.session.prompt("TASK")).rejects.toMatchObject({

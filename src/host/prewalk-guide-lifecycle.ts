@@ -14,17 +14,25 @@ export interface PrewalkGuideControl {
   readonly measureTokens: () => number;
 }
 
-/** Drive exactly the guide phase; no queued guide steer survives the switch. */
+/** Cumulative control state across checkpoint and guide-only machine-completion prompts. */
+export interface PrewalkGuideProgress {
+  readonly forceProjection: boolean;
+  readonly turns: number;
+  readonly warningIssued: boolean;
+}
+
+/** Drive a guide prompt; no queued guide steer survives a phase switch. */
 export async function runPrewalkGuide(
   options: CreatePrewalkRoleSessionOptions,
   seed: string,
   base: PrewalkGitBase,
-): Promise<{ readonly forceProjection: boolean; readonly turns: number }> {
+  prior?: PrewalkGuideProgress,
+): Promise<PrewalkGuideProgress> {
   const control = options.guideControl;
-  let turns = 0;
+  let turns = prior?.turns ?? 0;
   let forceProjection = false;
   let failure: { code: PrewalkFailureCode; message: string } | null = null;
-  let warningState = { warningIssued: false };
+  let warningState = { warningIssued: prior?.warningIssued ?? false };
   const pending: Promise<void>[] = [];
   const noteFailure = (error: unknown) => {
     const typed = normalizePrewalkRoleSessionFailure(error);
@@ -86,11 +94,15 @@ export async function runPrewalkGuide(
     options.guide.clearQueue?.();
   }
   if (failure === null && promptError !== null && !forceProjection) throw promptError;
-  if (failure === null && forceProjection && options.seam.read() === null) {
+  if (
+    failure === null &&
+    forceProjection &&
+    options.seam.read()?.outcome !== "handoff_to_executor"
+  ) {
     failure = {
       code: "prewalk_checkpoint_missing",
       message:
-        "guide exhausted its transcript budget before recording a valid checklist; exemplar preserved",
+        "guide exhausted its transcript budget without an executor handoff checklist; exemplar preserved",
     };
   }
   if (failure !== null) {
@@ -104,5 +116,9 @@ export async function runPrewalkGuide(
     options.markTerminalFailure?.(options.guide.sessionId, failed.code, failed.message);
     return failPrewalkRoleSession(options, { baseSha: base.base_sha, exemplarSha, ...failed });
   }
-  return { forceProjection, turns: control === undefined ? options.guideTurns() : turns };
+  return {
+    forceProjection,
+    turns: control === undefined ? options.guideTurns() : turns,
+    warningIssued: warningState.warningIssued,
+  };
 }

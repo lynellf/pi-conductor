@@ -166,10 +166,13 @@ async function runFirstPrompt(
       ]),
     );
     await active.enableGuideMachineTools(machineTools);
-    await active.prompt(
+    await runPrewalkGuide(
+      options,
       checkpoint.outcome === "blocked"
         ? "The switch is skipped. Emit the one appropriate machine handoff/end event with the recorded blocking reason."
         : "The switch is skipped. Emit the one appropriate machine handoff/end event for the completed task.",
+      base,
+      guideResult,
     );
     await validationGate?.ensureRecorded();
     return active;

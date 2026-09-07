@@ -70,7 +70,9 @@ function referencedPaths(call: ReadCall, text: string, cwd: string): readonly st
   // find.js and ls.js emit one path per line relative to the requested root.
   for (const line of text.split("\n")) {
     const target = call.name === "grep" ? /^(.*?)(?::\d+:|-\d+-) /u.exec(line)?.[1] : line;
-    if (!target || target.startsWith("[")) continue;
+    if (!target) continue;
+    // '[' is legal in a filename, not evidence that this is a tool notice.
+    // Keeping notice-shaped candidates is conservative; dropping real paths is unsafe.
     const path = workspacePath(cwd, resolve(cwd, call.path, target));
     if (path === null) return null;
     paths.add(path);

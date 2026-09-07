@@ -41,6 +41,9 @@ describe("durable guide retained-results collection", () => {
       paths: ["src", "src/a.ts", "src/sub/b.ts"],
     },
     { tool: "ls", path: "docs", text: "a.md\nsub/", paths: ["docs", "docs/a.md", "docs/sub"] },
+    { tool: "grep", path: "src", text: "[a.ts:3: old content", paths: ["src", "src/[a.ts"] },
+    { tool: "find", path: "src", text: "[a.ts", paths: ["src", "src/[a.ts"] },
+    { tool: "ls", path: "src", text: "[a.ts", paths: ["src", "src/[a.ts"] },
   ])("pairs whole $tool results with normalized workspace references", ({
     tool,
     path,
