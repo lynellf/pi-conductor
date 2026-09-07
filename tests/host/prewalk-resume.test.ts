@@ -128,6 +128,7 @@ function executor(log: string[]): PrewalkPhaseSession {
   let systemPrompt = "GUIDE SYSTEM";
   let tools = ["read", "write", "execution_checkpoint"];
   const captures: unknown[] = [];
+  const history: { id: string; message: unknown }[] = [];
   return {
     role: "worker",
     sessionId: "resumed-lifecycle-session",
@@ -143,7 +144,9 @@ function executor(log: string[]): PrewalkPhaseSession {
     retryDelayMs: 0,
     prompt: vi.fn(async (text: string) => {
       log.push(`prompt:${text}`);
+      history.push({ id: String(history.length), message: { role: "user", content: text } });
     }),
+    deliveryHistory: () => history,
     subscribe: () => () => undefined,
     dispose: vi.fn(async () => undefined),
     abort: vi.fn(async () => undefined),
@@ -173,6 +176,48 @@ function executor(log: string[]): PrewalkPhaseSession {
 }
 
 describe("Prewalk durable resume", () => {
+  it.each([
+    { mode: "native", accepted: true },
+    { mode: "projection", accepted: true },
+    { mode: "native", accepted: false },
+    { mode: "projection", accepted: false },
+  ] as const)("$mode reconciles intent without marker (durably accepted=$accepted)", async ({
+    mode,
+    accepted,
+  }) => {
+    const log: string[] = [];
+    const records: PrewalkRecord[] = [];
+    const phase = executor(log);
+    const intent = {
+      type: "prewalk_executor_seed_intent" as const,
+      schema_version: 1 as const,
+      run_id: selected.run_id,
+      role_session_id: selected.role_session_id,
+      conversation: { id: phase.conversationId, file: phase.sessionFile },
+      after_entry_id: null,
+      continuation_seed_sha256: createHash("sha256").update(seed).digest("hex"),
+      ts: 11,
+    };
+    const durable = [{ id: "accepted", message: { role: "user", content: seed } }];
+    if (accepted) Object.assign(phase, { deliveryHistory: () => durable });
+    const recovery = inspectPrewalkRecovery(
+      [{ ...selected, transfer_mode: mode }, intent],
+      "run-1",
+      "worker",
+    );
+    if (recovery === null) throw new Error("expected recovery");
+    const session = await createPrewalkResumeRoleSession({
+      recovery,
+      executor: phase,
+      environment,
+      persist: (record) => records.push(record),
+    });
+    await session.prompt("resume");
+    expect(log.filter((entry) => entry === `prompt:${seed}`)).toHaveLength(accepted ? 0 : 1);
+    expect(
+      records.filter((record) => record.type === "prewalk_executor_seed_delivered"),
+    ).toHaveLength(1);
+  });
   it("uses the ordinary crash retry before switch selection", () => {
     expect(inspectPrewalkRecovery([], "run-1", "worker")).toBeNull();
   });
@@ -264,6 +309,7 @@ describe("Prewalk durable resume", () => {
 
     expect(log).toEqual(["apply", `prompt:${seed}`]);
     expect(records).toEqual([
+      expect.objectContaining({ type: "prewalk_executor_seed_intent" }),
       expect.objectContaining({
         type: "prewalk_executor_seed_delivered",
         role_session_id: selected.role_session_id,
@@ -313,7 +359,7 @@ describe("Prewalk durable resume", () => {
 
     expect(session.sessionId).toBe(projected.role_session_id);
     expect(log).toEqual(["apply", `prompt:${seed}`]);
-    expect(records[0]).toMatchObject({
+    expect(records[1]).toMatchObject({
       type: "prewalk_executor_seed_delivered",
       conversation_id: "fresh-projection",
     });
@@ -324,9 +370,13 @@ describe("Prewalk durable resume", () => {
     const records: PrewalkRecord[] = [];
     const recovery = inspectPrewalkRecovery([selected, delivered()], "run-1", "worker");
     if (recovery === null) throw new Error("expected a delivered recovery");
+    const phase = executor(log);
+    Object.assign(phase, {
+      deliveryHistory: () => [{ id: "seed", message: { role: "user", content: seed } }],
+    });
     const session = await createPrewalkResumeRoleSession({
       recovery,
-      executor: executor(log),
+      executor: phase,
       environment,
       persist: (record) => records.push(record),
     });
@@ -338,7 +388,7 @@ describe("Prewalk durable resume", () => {
     expect(log.filter((entry) => entry === `prompt:${seed}`)).toHaveLength(0);
     expect(log[1]).toContain("prompt:[prewalk-resume]");
     expect(log[2]).toBe("prompt:ordinary correction");
-    expect(records).toHaveLength(0);
+    expect(records).toEqual([expect.objectContaining({ type: "prewalk_executor_seed_intent" })]);
   });
 
   it("persists and surfaces prewalk_resume_invalid when environment restoration fails", async () => {

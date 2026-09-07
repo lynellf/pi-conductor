@@ -1,7 +1,9 @@
 /** Production Pi SDK adapter for one physical phase of a logical Prewalk session. */
 
+import { existsSync } from "node:fs";
 import type { Message, Model } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { PrewalkExecutorEnvironment, PrewalkPhaseSession } from "./prewalk-role-session.js";
 import type { RoleSessionAdapter } from "./role-session.js";
 
@@ -20,6 +22,17 @@ export function createPrewalkPhaseSessionAdapter(opts: {
     ...opts.adapter,
     conversationId: opts.session.sessionId,
     abort: () => opts.session.abort(),
+    deliveryHistory: () => {
+      const file = opts.session.sessionFile;
+      if (file === undefined || !existsSync(file)) return [];
+      const durable = SessionManager.open(file);
+      if (durable.getSessionId() !== opts.session.sessionId)
+        throw new Error("Prewalk conversation identity changed on disk");
+      return durable.getBranch().map((entry) => ({
+        id: entry.id,
+        ...(entry.type === "message" ? { message: entry.message } : {}),
+      }));
+    },
     snapshot: () => {
       const boundary = checkpointBoundary(opts.session.messages);
       return {

@@ -1,6 +1,7 @@
 /** Fresh-or-resumed ProductionHost Prewalk dispatch kept outside the host policy class. */
 
 import { randomUUID } from "node:crypto";
+import { access, writeFile } from "node:fs/promises";
 import type { Model } from "@earendil-works/pi-ai";
 import {
   type ExtensionUIContext,
@@ -263,6 +264,27 @@ async function recoverySessionManager(
   if (recovery.selected.transfer_mode === "native") {
     const conversation = recovery.selected.executor.conversation;
     if (conversation === undefined) throw invalid("native switch has no persisted conversation");
+    return {
+      manager: SessionManager.open(conversation.file, args.sessionDir, args.cwd),
+      conversation,
+    };
+  }
+  if (recovery.seedIntent != null) {
+    const conversation = recovery.seedIntent.conversation;
+    try {
+      await access(conversation.file);
+    } catch (error) {
+      if (
+        !(error instanceof Error && "code" in error && error.code === "ENOENT") ||
+        recovery.seedIntent.after_entry_id !== null ||
+        recovery.seedDelivered !== null
+      )
+        throw error;
+      // Pi defers a fresh session file until its first assistant message. No durable
+      // seed exists in this crash window; recreate only the intended empty identity.
+      const header = SessionManager.inMemory(args.cwd, { id: conversation.id }).getHeader();
+      await writeFile(conversation.file, `${JSON.stringify(header)}\n`, { flag: "wx" });
+    }
     return {
       manager: SessionManager.open(conversation.file, args.sessionDir, args.cwd),
       conversation,

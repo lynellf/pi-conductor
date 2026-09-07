@@ -5,6 +5,7 @@ import type { Role, UsageRecord } from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type {
   PrewalkExecutorSeedDeliveredRecord,
+  PrewalkExecutorSeedIntentRecord,
   PrewalkRecord,
   PrewalkSwitchSelectedRecord,
 } from "../persistence/prewalk-records.js";
@@ -20,6 +21,11 @@ import {
   assertPrewalkExecutorEnvironment,
   hashPrewalkExecutorEnvironment,
 } from "./prewalk-role-session-records.js";
+import {
+  hasDurablePrewalkSeed,
+  preparePrewalkSeedDelivery,
+  recordPrewalkSeedDelivered,
+} from "./prewalk-seed-delivery.js";
 import type { PrewalkValidationGate } from "./prewalk-validation.js";
 
 const RESUME_PROMPT = [
@@ -33,6 +39,7 @@ const RESUME_PROMPT = [
 export interface PrewalkRecovery {
   readonly selected: PrewalkSwitchSelectedRecord;
   readonly seedDelivered: PrewalkExecutorSeedDeliveredRecord | null;
+  readonly seedIntent?: PrewalkExecutorSeedIntentRecord | null;
 }
 
 /** Find the latest still-active Prewalk switch and reject ambiguous replay state. */
@@ -104,7 +111,24 @@ export function inspectPrewalkRecovery(
       throw invalidResume("native executor seed-delivery marker targets another conversation");
     }
   }
-  return Object.freeze({ selected, seedDelivered: delivery });
+  const intents = later.filter(
+    (record): record is PrewalkExecutorSeedIntentRecord =>
+      record.type === "prewalk_executor_seed_intent" &&
+      record.run_id === runId &&
+      record.role_session_id === selected?.role_session_id,
+  );
+  if (intents.length > 1)
+    throw invalidResume("multiple executor seed intents make replay ambiguous");
+  const intent = intents[0] ?? null;
+  if (
+    intent !== null &&
+    (intent.continuation_seed_sha256 !== sha256(selected.executor.continuation_seed) ||
+      (delivery !== null && intent.conversation.id !== delivery.conversation_id) ||
+      (selected.transfer_mode === "native" &&
+        intent.conversation.id !== selected.executor.conversation?.id))
+  )
+    throw invalidResume("seed intent does not match the persisted selection or delivery");
+  return Object.freeze({ selected, seedDelivered: delivery, seedIntent: intent });
 }
 
 /** Restore the exact persisted environment and expose an idempotent executor-only RoleSession. */
@@ -128,6 +152,14 @@ export async function createPrewalkResumeRoleSession(options: {
   const { selected, seedDelivered } = options.recovery;
   try {
     assertEnvironmentMatchesSelection(options.environment, selected);
+    const intent = options.recovery.seedIntent;
+    if (
+      intent != null &&
+      (intent.conversation.id !== options.executor.conversationId ||
+        intent.conversation.file !== options.executor.sessionFile)
+    ) {
+      throw invalidResume("resumed executor conversation does not match its delivery intent");
+    }
     if (
       seedDelivered !== null &&
       options.executor.conversationId !== seedDelivered.conversation_id
@@ -188,7 +220,7 @@ export async function createPrewalkResumeRoleSession(options: {
     prompt: async (text) => {
       if (!firstPrompt) return options.executor.prompt(text);
       firstPrompt = false;
-      return runResumedExecutorPrompt(options, seedDelivered !== null);
+      return runResumedExecutorPrompt(options);
     },
     dispose: () => options.executor.dispose(),
   };
@@ -196,7 +228,6 @@ export async function createPrewalkResumeRoleSession(options: {
 
 async function runResumedExecutorPrompt(
   options: Parameters<typeof createPrewalkResumeRoleSession>[0],
-  seedWasDelivered: boolean,
 ): Promise<void> {
   const selected = options.recovery.selected;
   const cap =
@@ -227,21 +258,38 @@ async function runResumedExecutorPrompt(
         });
   let promptError: unknown = null;
   try {
-    const prompt = options.executor.prompt(
-      seedWasDelivered ? RESUME_PROMPT : selected.executor.continuation_seed,
-    );
-    if (!seedWasDelivered) {
-      options.persist({
-        type: "prewalk_executor_seed_delivered",
-        schema_version: 1,
-        run_id: selected.run_id,
-        role_session_id: selected.role_session_id,
-        conversation_id: options.executor.conversationId,
-        continuation_seed_sha256: sha256(selected.executor.continuation_seed),
-        ts: (options.now ?? Date.now)(),
+    const seed = selected.executor.continuation_seed;
+    const persistedIntent = options.recovery.seedIntent ?? null;
+    const seedWasDelivered = hasDurablePrewalkSeed(options.executor, seed, persistedIntent);
+    // Old markers were written before SDK acceptance. Reconcile history even for those records.
+    const intent =
+      persistedIntent ??
+      preparePrewalkSeedDelivery({
+        executor: options.executor,
+        seed,
+        runId: selected.run_id,
+        roleSessionId: selected.role_session_id,
+        ...(seedWasDelivered ? { afterEntryId: null } : {}),
+        persist: options.persist,
+        ...(options.now !== undefined ? { now: options.now } : {}),
+      });
+    if (seedWasDelivered && options.recovery.seedDelivered === null) {
+      recordPrewalkSeedDelivered({
+        executor: options.executor,
+        seed,
+        intent,
+        persist: options.persist,
       });
     }
-    await prompt;
+    await options.executor.prompt(seedWasDelivered ? RESUME_PROMPT : seed);
+    if (!seedWasDelivered && options.recovery.seedDelivered === null) {
+      recordPrewalkSeedDelivered({
+        executor: options.executor,
+        seed,
+        intent,
+        persist: options.persist,
+      });
+    }
   } catch (error) {
     promptError = error;
   } finally {

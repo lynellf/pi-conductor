@@ -1,9 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { AuthStorage, ModelRegistry, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadManifestFromString } from "../../src/host/manifest.js";
 import { ProductionHost } from "../../src/host/production-host.js";
@@ -20,9 +20,14 @@ afterEach(async () => {
 
 describe("ProductionHost Prewalk integration", () => {
   it.each([
-    "native",
-    "projection",
-  ] as const)("runs guide then %s executor through one logical RoleSession", async (transfer) => {
+    { transfer: "native", accepted: true },
+    { transfer: "projection", accepted: true },
+    { transfer: "native", accepted: false },
+    { transfer: "projection", accepted: false },
+  ] as const)("runs and recovers $transfer seed (durably accepted=$accepted)", async ({
+    transfer,
+    accepted,
+  }) => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-conductor-production-prewalk-"));
     roots.push(cwd);
     await execFile("git", ["init", "--quiet"], { cwd });
@@ -81,6 +86,7 @@ describe("ProductionHost Prewalk integration", () => {
             target_role: "orchestrator",
             reason: "executor verified prior work",
           },
+          { kind: "emit_handoff", target_role: "orchestrator", reason: "recovered executor" },
         ],
         onRequest: (request) => requests.push(request),
       }),
@@ -167,6 +173,57 @@ roles:
     expect(
       log.records("run-prewalk-production").find((record) => record.type === "prewalk_phase_usage"),
     ).toMatchObject({ phase: "executor", model: "stub:executor" });
+    const conversation = session.conversationId;
+    const file = session.sessionFile;
     await session.dispose();
+    if (selected?.type !== "prewalk_switch_selected" || file === undefined)
+      throw new Error("expected persisted selection");
+    if (!accepted) {
+      const intent = log
+        .records("run-prewalk-production")
+        .find((record) => record.type === "prewalk_executor_seed_intent");
+      if (intent?.type !== "prewalk_executor_seed_intent") throw new Error("expected intent");
+      if (transfer === "projection") await rm(file);
+      else {
+        const lines = (await readFile(file, "utf8")).trim().split("\n");
+        const boundary = lines.findIndex(
+          (line) => (JSON.parse(line) as { id: string }).id === intent.after_entry_id,
+        );
+        if (boundary < 0) throw new Error("expected durable guide boundary");
+        await writeFile(file, `${lines.slice(0, boundary + 1).join("\n")}\n`);
+      }
+    }
+    const recoveryLog = new InMemoryRecordLog();
+    for (const record of log.records("run-prewalk-production")) {
+      if (record.type !== "prewalk_executor_seed_delivered") recoveryLog.append(record);
+    }
+    const recoveredHost = new ProductionHost({
+      modelRegistry: registry,
+      cwd,
+      log: recoveryLog,
+      loadedManifest: loaded,
+      runId: "run-prewalk-production",
+      agentDir: makeAndTrackIsolatedAgentDir(),
+    });
+    const recovered = await recoveredHost.spawnRole("worker", { visitIndex: 1 });
+    await recovered.prompt("resume after the seed marker was lost");
+    expect(recovered.conversationId).toBe(conversation);
+    const users = SessionManager.open(file)
+      .getBranch()
+      .filter((entry) => entry.type === "message" && entry.message.role === "user");
+    const exactSeed = users.filter(
+      (entry) =>
+        entry.type === "message" &&
+        entry.message.role === "user" &&
+        JSON.stringify(entry.message.content) ===
+          JSON.stringify([{ type: "text", text: selected.executor.continuation_seed }]),
+    );
+    expect(exactSeed).toHaveLength(1);
+    expect(
+      recoveryLog
+        .records("run-prewalk-production")
+        .filter((record) => record.type === "prewalk_executor_seed_delivered"),
+    ).toHaveLength(1);
+    await recovered.dispose();
   });
 });

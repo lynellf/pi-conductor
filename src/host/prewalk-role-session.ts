@@ -1,6 +1,5 @@
 /** Composite guide→executor role-session driver (Prewalk spec §R1, §R3, §R12). */
 
-import { createHash } from "node:crypto";
 import type { Message, Model } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, UsageRecord } from "../core/types.js";
@@ -28,6 +27,11 @@ import {
   hashPrewalkExecutorEnvironment,
   type PrewalkProjectionResult,
 } from "./prewalk-role-session-records.js";
+import {
+  type PrewalkDeliveryEntry,
+  preparePrewalkSeedDelivery,
+  recordPrewalkSeedDelivered,
+} from "./prewalk-seed-delivery.js";
 import type { PrewalkSeam } from "./prewalk-tool.js";
 import type { PrewalkValidationGate, PrewalkValidationRun } from "./prewalk-validation.js";
 
@@ -51,6 +55,8 @@ export interface PrewalkExecutorEnvironment {
 export interface PrewalkPhaseSession extends RoleSession {
   readonly conversationId: string;
   readonly sessionFile: string;
+  /** Re-read persisted active-branch entries; never infer durability from in-memory messages. */
+  deliveryHistory(): readonly PrewalkDeliveryEntry[];
   prompt(text: string): Promise<void>;
   subscribe(listener: (event: AgentSessionEvent) => void): () => void;
   dispose(): Promise<void>;
@@ -351,17 +357,15 @@ async function runFirstPrompt(
           });
     let executorPromptError: unknown = null;
     try {
-      const executorPrompt = executor.prompt(deliveredSeed);
-      options.persist({
-        type: "prewalk_executor_seed_delivered",
-        schema_version: 1,
-        run_id: options.runId,
-        role_session_id: options.roleSessionId,
-        conversation_id: executor.conversationId,
-        continuation_seed_sha256: createHash("sha256").update(deliveredSeed).digest("hex"),
-        ts: now(),
+      const intent = preparePrewalkSeedDelivery({ ...options, executor, seed: deliveredSeed });
+      await executor.prompt(deliveredSeed);
+      recordPrewalkSeedDelivered({
+        executor,
+        seed: deliveredSeed,
+        intent,
+        persist: options.persist,
+        now,
       });
-      await executorPrompt;
     } catch (error) {
       executorPromptError = error;
     } finally {

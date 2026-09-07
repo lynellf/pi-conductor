@@ -84,6 +84,18 @@ export interface PrewalkSwitchSelectedRecord {
   readonly ts: number;
 }
 
+/** Delivery outbox bound to one physical conversation and its pre-delivery branch boundary. */
+export interface PrewalkExecutorSeedIntentRecord {
+  readonly type: "prewalk_executor_seed_intent";
+  readonly schema_version: 1;
+  readonly run_id: string;
+  readonly role_session_id: string;
+  readonly conversation: { readonly id: string; readonly file: string };
+  readonly after_entry_id: string | null;
+  readonly continuation_seed_sha256: string;
+  readonly ts: number;
+}
+
 /** Durable exactly-once marker for the executor continuation seed. */
 export interface PrewalkExecutorSeedDeliveredRecord {
   readonly type: "prewalk_executor_seed_delivered";
@@ -159,10 +171,11 @@ export interface PrewalkSwitchFailedRecord {
   readonly ts: number;
 }
 
-/** The five additive record variants introduced by Prewalk. */
+/** Additive record variants introduced by Prewalk. */
 export type PrewalkRecord =
   | PrewalkSwitchSelectedRecord
   | PrewalkExecutorSeedDeliveredRecord
+  | PrewalkExecutorSeedIntentRecord
   | PrewalkPhaseUsageRecord
   | PrewalkValidationRunRecord
   | PrewalkSwitchFailedRecord;

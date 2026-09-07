@@ -74,6 +74,22 @@ export function assertPrewalkRecord(record: unknown): asserts record is PrewalkR
       ]);
       validateSwitch(value);
       return;
+    case "prewalk_executor_seed_intent":
+      exactKeys(value, [
+        "type",
+        "schema_version",
+        "run_id",
+        "role_session_id",
+        "conversation",
+        "after_entry_id",
+        "continuation_seed_sha256",
+        "ts",
+      ]);
+      nonEmpty(value.role_session_id, "role_session_id");
+      conversation(value.conversation, "conversation");
+      if (value.after_entry_id !== null) nonEmpty(value.after_entry_id, "after_entry_id");
+      sha256(value.continuation_seed_sha256, "continuation_seed_sha256");
+      return;
     case "prewalk_executor_seed_delivered":
       exactKeys(value, [
         "type",

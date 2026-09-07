@@ -44,6 +44,7 @@ function phase(args: {
   let systemPrompt = args.prompt ?? "BASE\nGUIDE_OVERLAY";
   let tools = [...(args.tools ?? ["read", "write", "execution_checkpoint"])];
   const captures: unknown[] = [];
+  const history: { id: string; message: unknown }[] = [];
   const listeners = new Set<Parameters<PrewalkPhaseSession["subscribe"]>[0]>();
   return {
     role: "worker",
@@ -60,6 +61,7 @@ function phase(args: {
     sessionFile: `/sessions/${args.conversationId}.jsonl`,
     prompt: vi.fn(async (text: string) => {
       args.log.push(`prompt:${args.conversationId}:${text}`);
+      history.push({ id: String(history.length), message: { role: "user", content: text } });
       for (let index = 0; index < (args.turnsPerPrompt ?? 0); index += 1) {
         for (const listener of listeners) {
           listener({ type: "turn_end" } as Parameters<typeof listener>[0]);
@@ -67,6 +69,7 @@ function phase(args: {
       }
       args.afterPrompt?.(text);
     }),
+    deliveryHistory: () => history,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -257,6 +260,7 @@ describe("composite Prewalk role session", () => {
       "git-checkpoint",
       "persist:prewalk_switch_selected",
       "apply",
+      "persist:prewalk_executor_seed_intent",
       `prompt:guide-conversation:${subject.environment.continuationSeed}`,
       "persist:prewalk_executor_seed_delivered",
     ]);
@@ -425,10 +429,11 @@ describe("composite Prewalk role session", () => {
 
     expect(subject.records.map((record) => record.type)).toEqual([
       "prewalk_switch_selected",
+      "prewalk_executor_seed_intent",
       "prewalk_switch_failed",
       "prewalk_executor_seed_delivered",
     ]);
-    expect(subject.records[1]).toMatchObject({
+    expect(subject.records[2]).toMatchObject({
       code: "prewalk_validation_unsatisfied",
       git_checkpoint: { exemplar_sha: "b".repeat(40) },
     });
