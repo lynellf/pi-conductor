@@ -9,8 +9,11 @@ Scope: finish the acknowledged experimental MVP on `prewalk-projection`, not iss
 - [x] R7: collect paired read/search results from guide history, retain whole results deterministically, exclude modified paths; verify production projection and focused collector tests.
 - [x] Final-review safety: reject native replay when its authorization depends on conductor-only transcript drops that the live SDK will not apply; retain normal auto/projection fallback. Verify a red/green production-preflight regression plus the real-SDK integration cases.
 - [x] Independent-review follow-up: keep cumulative guide control active for `already_complete`/`blocked` machine-completion prompts and preserve bracket-prefixed search filenames. Reproduce five failures before fixes; verify 41 focused tests and typecheck.
-- [ ] Remove reported documentation whitespace; document SDK evidence, recovery compatibility and gate results.
-- [ ] Full P2: lint, typecheck, build, test, format check, audit, diff/protected-contract checks. Review fixes against failure windows and production wiring; commit, push and open PR with honest limitations.
+- [x] Remove reported documentation whitespace; document SDK evidence, recovery compatibility and gate results in [remediation review](prewalk-remediation-review.md).
+- [x] Execute lint, typecheck, build, test, format check, audit, diff/protected-contract checks. Source gates pass (134 files/1,782 tests); audit was reviewed but does not pass.
+- [x] Review fixes against failure windows and production wiring; fresh-context snapshot review findings reproduced, fixed and independently rechecked.
+- [ ] Full P2 approval: inherited audit has 7 high/6 moderate/1 low advisories in the unchanged dependency lockfile. Requires dependency remediation or an explicit policy decision; not waived by this PR.
+- [ ] Commit, push and open a normal PR with honest limitations.
 
 Dependencies: R12 before guide enforcement; retained-results collection uses the same phase adapter but is otherwise independent. Each fix gets regression evidence before implementation and its own verified commit.
 

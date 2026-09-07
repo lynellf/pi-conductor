@@ -1,7 +1,9 @@
 # pi-conductor: Intra-role Prewalk continuation
 
-**Status:** Proposed MVP  
-**Target:** `pi-conductor` after Issue #63 / v0.20.0  
+**Status:** Proposed MVP
+
+**Target:** `pi-conductor` after Issue #63 / v0.20.0
+
 **Primary decision:** Implement Prewalk as a model-phase change inside one worker role visit, not as a trajectory-preserving FSM handoff.
 
 ## Goal
