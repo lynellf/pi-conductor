@@ -10,7 +10,7 @@ const RETAINABLE_TOOL_NAMES = new Set(["read", "grep", "find", "ls"]);
 export interface PrewalkRetainedToolResult {
   readonly tool_call_id: string;
   readonly tool_name: "read" | "grep" | "find" | "ls";
-  /** Exact repository paths represented by this whole result. */
+  /** Workspace references used to invalidate the whole result; search roots are conservative. */
   readonly referenced_paths: readonly string[];
   readonly content: string;
   readonly ts: number;

@@ -47,10 +47,11 @@ describe("ProductionHost Prewalk integration", () => {
     const cwd = await mkdtemp(join(tmpdir(), "pi-conductor-production-prewalk-"));
     roots.push(cwd);
     await execFile("git", ["init", "--quiet"], { cwd });
-    await writeFile(join(cwd, "README.md"), "base\n", "utf8");
+    await writeFile(join(cwd, "README.md"), "UNCHANGED GUIDE READ\n", "utf8");
+    await writeFile(join(cwd, "example.txt"), "old exemplar\n", "utf8");
     await mkdir(join(cwd, ".pi", "roles"), { recursive: true });
     await writeFile(join(cwd, ".pi", "roles", "worker.md"), "WORKER BASE", "utf8");
-    await execFile("git", ["add", "README.md", ".pi/roles/worker.md"], { cwd });
+    await execFile("git", ["add", "README.md", "example.txt", ".pi/roles/worker.md"], { cwd });
     await execFile(
       "git",
       [
@@ -90,6 +91,13 @@ describe("ProductionHost Prewalk integration", () => {
       streamSimple: abortAware(
         makeStubStreamFunction({
           steps: [
+            {
+              kind: "emit_tool_calls",
+              calls: [
+                { name: "read", arguments: { path: "README.md" } },
+                { name: "read", arguments: { path: "example.txt" } },
+              ],
+            },
             {
               kind: "emit_tool_calls",
               calls: [{ name: "write", arguments: { path: "example.txt", content: "guide\n" } }],
@@ -195,11 +203,17 @@ roles:
         "prewalk_phase_usage",
       ]),
     );
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(4);
     const selected = log
       .records("run-prewalk-production")
       .find((record) => record.type === "prewalk_switch_selected");
     expect(selected).toMatchObject({ transfer_mode: transfer, role_session_id: logicalId });
+    if (transfer === "projection" && selected?.type === "prewalk_switch_selected") {
+      const projection = selected.executor.continuation_seed;
+      expect(projection.match(/\[guide-tool-result /g)).toHaveLength(1);
+      expect(projection).toContain('referenced_paths=["README.md"]');
+      expect(projection).toContain("UNCHANGED GUIDE READ");
+    }
     expect(
       log
         .records("run-prewalk-production")
