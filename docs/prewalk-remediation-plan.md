@@ -13,7 +13,7 @@ Scope: finish the acknowledged experimental MVP on `prewalk-projection`, not iss
 - [x] Execute lint, typecheck, build, test, format check, audit, diff/protected-contract checks. Source gates pass (134 files/1,782 tests); audit was reviewed but does not pass.
 - [x] Review fixes against failure windows and production wiring; fresh-context snapshot review findings reproduced, fixed and independently rechecked.
 - [ ] Full P2 approval: inherited audit has 7 high/6 moderate/1 low advisories in the unchanged dependency lockfile. Requires dependency remediation or an explicit policy decision; not waived by this PR.
-- [ ] Commit, push and open a normal PR with honest limitations.
+- [x] Commit, push and open a normal PR with honest limitations: PR #78, `prewalk-projection` → `main`. Pre-push lint/typecheck/1,782 tests passed. Audit remains explicitly blocked above.
 
 Dependencies: R12 before guide enforcement; retained-results collection uses the same phase adapter but is otherwise independent. Each fix gets regression evidence before implementation and its own verified commit.
 
