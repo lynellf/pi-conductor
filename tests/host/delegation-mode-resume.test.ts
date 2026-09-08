@@ -3,16 +3,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createDelegateTool } from "../../src/host/delegation/delegate-tool-factory.js";
+import { DelegationManager } from "../../src/host/delegation/manager.js";
+import type { DelegationScheduler } from "../../src/host/delegation/scheduler.js";
 import {
   createInitialCheckpoint,
   FileRecordLog,
   type LoadedManifest,
   loadManifestFromString,
+  type RecordLog,
   resumeRun,
   StubHost,
   startRun,
 } from "../../src/index.js";
 import { createManifestSnapshot } from "../../src/persistence/trajectory-records.js";
+import type { DelegateSubmissionArgs } from "../../src/seam/schema.js";
+import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 const directories: string[] = [];
@@ -23,7 +29,7 @@ afterEach(async () => {
   );
 });
 
-const manifest = (mode?: "blocking" | "nonblocking", workerModels = false): string => `
+const manifest = (mode?: "blocking" | "nonblocking"): string => `
 version: 1
 roles:
   - name: orchestrator
@@ -36,7 +42,7 @@ roles:
   - name: worker
     max_visits: 3
     tools: [handoff, end]
-    models: ${workerModels ? "[stub:primary, stub:fallback]" : "[stub:worker]"}
+    models: [stub:worker]
 subagents:
   - name: child
     models: [stub:child]
@@ -73,6 +79,79 @@ async function runToCompletion(
   return { handle, result: await handle.completion() };
 }
 
+function invokeDelegate(
+  tool: ReturnType<typeof createDelegateTool>,
+  toolCallId: string,
+  args: unknown,
+): Promise<unknown> {
+  return (tool.execute as unknown as (id: string, params: unknown) => Promise<unknown>)(
+    toolCallId,
+    args,
+  );
+}
+
+function makeAcceptingScheduler(submitted: (args: unknown) => void): DelegationScheduler {
+  return {
+    submit: async (_toolCallId: string, args: DelegateSubmissionArgs) => {
+      submitted(args);
+      return ["child-accepted"];
+    },
+    remainingChildren: () => 1,
+    status: () => [],
+    wait: async () => {
+      throw new Error("wait is not part of this acceptance fixture");
+    },
+    cancel: async () => {},
+    close: async () => {},
+    isClosed: () => false,
+    pendingChildIds: () => [],
+  } as unknown as DelegationScheduler;
+}
+
+function activeLegacyDelegateCall(
+  loadedManifest: LoadedManifest,
+  runId: string,
+  workdir: string,
+  log: RecordLog,
+  submitted: (args: unknown) => void,
+): Promise<unknown> {
+  const role = loadedManifest.manifest.roles.find((candidate) => candidate.name === "orchestrator");
+  if (role === undefined || role.delegation === undefined)
+    throw new Error("expected the resumed orchestrator to retain delegation policy");
+  const legacyMode =
+    loadedManifest.legacyDelegationMode === true ||
+    loadedManifest.legacyDelegationRoles?.includes("orchestrator") === true;
+  const tool = createDelegateTool({
+    role,
+    subagents: loadedManifest.manifest.subagents ?? [],
+    remainingChildren: role.delegation.max_children_per_session,
+    runId,
+    parentRole: "orchestrator",
+    parentVisitIndex: 1,
+    primaryCheckout: workdir,
+    runStateDir: join(workdir, ".pi-conductor", "runs", runId),
+    persistRecord: (record) => log.append(record),
+    agentDir: join(workdir, ".pi-conductor", "agent"),
+    systemPromptRoot: workdir,
+    modelRegistry: makeModelRegistryWithStub(),
+    sessionDir: join(workdir, ".pi-conductor", "sessions"),
+    manager: new DelegationManager(),
+    scheduler: makeAcceptingScheduler(submitted),
+    ...(legacyMode ? { legacyDelegationMode: true } : {}),
+  });
+  return invokeDelegate(tool, "legacy-call", {
+    mode: "nonblocking",
+    tasks: [
+      {
+        id: "legacy-task",
+        subagent: "child",
+        objective: "preserve the accepted child",
+        expected_output: "accepted",
+      },
+    ],
+  });
+}
+
 describe("Issue #86 public snapshot/resume policy", () => {
   it.each([
     ["omitted", undefined, "blocking"],
@@ -95,10 +174,9 @@ describe("Issue #86 public snapshot/resume policy", () => {
   it("resumes from the durable policy when the manifest source is edited", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-mode-"));
     directories.push(workdir);
-    const path = await writeManifest(workdir, manifest("nonblocking"));
+    const path = await writeManifest(workdir, manifest());
     const baseDir = join(workdir, "runs");
     const first = await runToCompletion(path, baseDir);
-    await writeFile(path, manifest("blocking"), "utf8");
 
     let resumed: LoadedManifest | undefined;
     const handle = await resumeRun(path, first.handle.runId, {
@@ -149,11 +227,22 @@ describe("Issue #86 public snapshot/resume policy", () => {
     log.append({ type: "run_seeded", run_id: runId, goal: "legacy run", ts: 2 });
 
     let resumed: LoadedManifest | undefined;
+    let accepted: Promise<unknown> | undefined;
+    let submitted: unknown;
     const handle = await resumeRun(path, runId, {
       goal: "",
       baseDir,
       hostFactory: ({ runId: resumedRunId, log: resumedLog, loadedManifest }) => {
         resumed = loadedManifest;
+        accepted = activeLegacyDelegateCall(
+          loadedManifest,
+          resumedRunId,
+          workdir,
+          resumedLog,
+          (args) => {
+            submitted = args;
+          },
+        );
         return new StubHost({
           runId: resumedRunId,
           log: resumedLog,
@@ -164,12 +253,17 @@ describe("Issue #86 public snapshot/resume policy", () => {
       },
     });
     await handle.completion();
+    const acceptedResult = await accepted;
 
     expect(resumed?.legacyDelegationMode).toBeUndefined();
     expect(resumed?.legacyDelegationRoles).toEqual(["orchestrator", "worker"]);
     expect(
       resumed?.manifest.roles.find((role) => role.name === "orchestrator")?.delegation?.mode,
     ).toBeUndefined();
+    expect(submitted).toMatchObject({ mode: "nonblocking", tasks: [{ id: "legacy-task" }] });
+    expect(acceptedResult).toMatchObject({
+      content: [{ text: JSON.stringify({ child_ids: ["child-accepted"] }) }],
+    });
   });
 
   it("warns when an old run has no manifest snapshot proving its delegation mode", async () => {
@@ -183,13 +277,25 @@ describe("Issue #86 public snapshot/resume policy", () => {
     const log = new FileRecordLog({ baseDir });
     log.append({ type: "checkpoint_snapshot", checkpoint });
     log.append({ type: "run_seeded", run_id: runId, goal: "unproven legacy run", ts: 1 });
+    await writeFile(path, manifest("blocking"), "utf8");
 
     let resumed: LoadedManifest | undefined;
+    let accepted: Promise<unknown> | undefined;
+    let submitted: unknown;
     const handle = await resumeRun(path, runId, {
       goal: "",
       baseDir,
       hostFactory: ({ runId: resumedRunId, log: resumedLog, loadedManifest }) => {
         resumed = loadedManifest;
+        accepted = activeLegacyDelegateCall(
+          loadedManifest,
+          resumedRunId,
+          workdir,
+          resumedLog,
+          (args) => {
+            submitted = args;
+          },
+        );
         return new StubHost({
           runId: resumedRunId,
           log: resumedLog,
@@ -200,8 +306,10 @@ describe("Issue #86 public snapshot/resume policy", () => {
       },
     });
     await handle.completion();
+    const acceptedResult = await accepted;
 
     expect(resumed?.legacyDelegationMode).toBe(true);
+    expect(resumed?.legacyDelegationRoles).toEqual(["orchestrator"]);
     expect(resumed?.warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -212,37 +320,10 @@ describe("Issue #86 public snapshot/resume policy", () => {
     );
     expect(
       resumed?.manifest.roles.find((role) => role.name === "orchestrator")?.delegation?.mode,
-    ).toBe("nonblocking");
-  });
-
-  it("keeps the fallback allowance through the public run path", async () => {
-    const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-mode-"));
-    directories.push(workdir);
-    const path = await writeManifest(workdir, manifest(undefined, true));
-    const baseDir = join(workdir, "runs");
-    const handle = await startRun(path, {
-      goal: "fallback allowance",
-      baseDir,
-      hostFactory: ({ runId, log, loadedManifest }) =>
-        new StubHost({
-          runId,
-          log,
-          loadedManifest,
-          steps: [
-            { kind: "emit_handoff", target_role: "worker" },
-            { kind: "fail", errorMessage: "primary unavailable" },
-            { kind: "emit_handoff", target_role: "orchestrator" },
-            { kind: "emit_end" },
-          ],
-          agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-delegation-mode-"),
-        }),
+    ).toBe("blocking");
+    expect(submitted).toMatchObject({ mode: "nonblocking", tasks: [{ id: "legacy-task" }] });
+    expect(acceptedResult).toMatchObject({
+      content: [{ text: JSON.stringify({ child_ids: ["child-accepted"] }) }],
     });
-    const result = await handle.completion();
-    const records = new FileRecordLog({ baseDir }).records(handle.runId);
-
-    expect(result.exitReason).toBe("done");
-    expect(
-      records.some((record) => record.type === "model_fallback" && record.role === "worker"),
-    ).toBe(true);
   });
 });

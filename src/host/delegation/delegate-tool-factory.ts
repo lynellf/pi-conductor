@@ -8,11 +8,7 @@ import type { ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-ag
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
 import type { Role } from "../../core/types.js";
-import {
-  assertDelegationMode,
-  delegateModeDescription,
-  resolveDelegationMode,
-} from "../../manifest/delegation-mode.js";
+import { delegateModeDescription, resolveDelegationMode } from "../../manifest/delegation-mode.js";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type { PersistedRecord } from "../../persistence/log.js";
 import {
@@ -128,7 +124,6 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
         finishExecution = resolve;
       });
       try {
-        if (configuredMode !== undefined) assertDelegationMode(configuredMode, args.mode);
         if (effectiveMode === "nonblocking" && opts.scheduler === undefined) {
           throw new Error("nonblocking delegation requires the shared scheduler");
         }

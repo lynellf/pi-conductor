@@ -340,7 +340,11 @@ export async function resumeRun(
     // data; legacy logs use the freshly parsed current manifest.
     const legacyDelegationRoles =
       manifestSnapshot === null
-        ? loaded.omittedDelegationModeRoles
+        ? Object.freeze(
+            loaded.manifest.roles
+              .filter((role) => role.delegation !== undefined)
+              .map((role) => role.name),
+          )
         : Object.freeze(
             manifestSnapshot.normalized_manifest.roles
               .filter((role) => role.delegation?.mode === undefined)
@@ -351,9 +355,7 @@ export async function resumeRun(
         ? {
             ...loaded,
             legacyDelegationMode: true,
-            ...(legacyDelegationRoles === undefined || legacyDelegationRoles.length === 0
-              ? {}
-              : { legacyDelegationRoles }),
+            legacyDelegationRoles,
             warnings: Object.freeze([
               ...loaded.warnings,
               {

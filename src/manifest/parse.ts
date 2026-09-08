@@ -24,7 +24,7 @@
 
 import { parse as parseYaml } from "yaml";
 
-import { DEFAULT_MODEL_EFFORT, type ModelEffort, type Role } from "../core/types.js";
+import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
@@ -49,7 +49,6 @@ import { ManifestParseError } from "./types.js";
 
 const MAX_MODEL_RETRY_DELAY_MS = 60_000;
 const MAX_MODEL_RETRIES = 10;
-const OMITTED_DELEGATION_MODES = new WeakMap<Manifest, readonly Role[]>();
 
 /**
  * Parse a raw `.pi/conductor.yaml` string into a `Manifest`.
@@ -112,25 +111,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
     ...(end_guard === undefined ? {} : { end_guard }),
   }) as Manifest;
-  OMITTED_DELEGATION_MODES.set(
-    manifest,
-    Object.freeze(
-      rolesRaw.flatMap((entry, index) => {
-        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return [];
-        const role = roles[index];
-        const delegation = (entry as Record<string, unknown>).delegation;
-        if (role === undefined || delegation === undefined || delegation === null) return [];
-        if (typeof delegation !== "object" || Array.isArray(delegation)) return [];
-        return Object.hasOwn(delegation, "mode") ? [] : [role.name];
-      }),
-    ),
-  );
   return manifest;
-}
-
-/** Return roles whose source manifest omitted delegation.mode before normalization. */
-export function omittedDelegationModeRoles(manifest: Manifest): readonly Role[] {
-  return OMITTED_DELEGATION_MODES.get(manifest) ?? [];
 }
 
 // ─── Issue #63 handoff policy parsing ───────────────────────────────────

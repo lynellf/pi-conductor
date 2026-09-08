@@ -48,7 +48,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import type { MachineDefinition, Role } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
-import { omittedDelegationModeRoles, parseManifest } from "../manifest/parse.js";
+import { parseManifest } from "../manifest/parse.js";
 import type { ManifestValidationContext } from "../manifest/prewalk.js";
 import type { Manifest } from "../manifest/types.js";
 import {
@@ -115,8 +115,6 @@ export interface LoadedManifest {
   readonly legacyDelegationMode?: boolean;
   /** Roles whose durable snapshot predates Issue #86 and has no mode field. */
   readonly legacyDelegationRoles?: readonly Role[];
-  /** Source-level mode omissions retained for historical resume decisions. */
-  readonly omittedDelegationModeRoles?: readonly Role[];
   /** Runtime facts used to admit opt-in Prewalk roles before guide spend. */
   readonly prewalkValidationContext?: ManifestValidationContext;
 }
@@ -279,7 +277,6 @@ function loadParsedManifest(
     warnings: Object.freeze(warnings),
     manifestDir,
     manifestVersion: manifest.version,
-    omittedDelegationModeRoles: Object.freeze([...omittedDelegationModeRoles(manifest)]),
     ...(validationContext !== undefined ? { prewalkValidationContext: validationContext } : {}),
   }) as LoadedManifest;
 }
