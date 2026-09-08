@@ -104,6 +104,7 @@ describe("aggregateUnsettledCompactionUsage", () => {
       [
         compaction({
           request_id: "unknown",
+          outcome: "failed",
           usage: null,
           diagnostic: "stream usage unavailable",
         }),
@@ -140,6 +141,18 @@ describe("aggregateUnsettledCompactionUsage", () => {
     expect(result.totalUsage.cost).toBe(1);
   });
 
+  it("does not suppress an orchestrator compaction for a same-ID worker terminal", () => {
+    const result = aggregateUnsettledCompactionUsage([compaction(), terminal({ role: "worker" })], {
+      runId: RUN,
+    });
+    expect(result.totalUsage.cost).toBe(1);
+  });
+
+  it("rejects malformed nonfinite compaction usage before accounting", () => {
+    const malformed = compaction({ usage: { ...usage(1), cost: Number.NaN } }) as PersistedRecord;
+    expect(() => aggregateUnsettledCompactionUsage([malformed], { runId: RUN })).toThrow();
+  });
+
   it("rejects duplicate compaction request IDs and exposes unknown usage", () => {
     expect(() =>
       aggregateUnsettledCompactionUsage([compaction(), compaction({ usage: usage(2) })], {
@@ -147,7 +160,10 @@ describe("aggregateUnsettledCompactionUsage", () => {
       }),
     ).toThrow(ContextCompactionAccountingError);
     expect(() =>
-      assertKnownCompactionUsage([compaction({ usage: null, diagnostic: "missing" })], RUN),
+      assertKnownCompactionUsage(
+        [compaction({ outcome: "failed", usage: null, diagnostic: "missing" })],
+        RUN,
+      ),
     ).toThrow("usage is unavailable");
   });
 });

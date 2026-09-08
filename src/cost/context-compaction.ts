@@ -2,6 +2,7 @@
 
 import type { UsageRecord } from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import { assertOrchestratorContextRecord } from "../persistence/orchestrator-context.js";
 
 /** An unavailable compaction charge that must remain visible to callers. */
 export interface UnknownCompactionUsage {
@@ -54,12 +55,13 @@ export function aggregateUnsettledCompactionUsage(
   for (const record of records) {
     if (!isTerminal(record) || record.run_id !== options.runId) continue;
     if (record.role_session_id !== undefined) {
-      terminalInvocationIds.add(record.role_session_id);
+      terminalInvocationIds.add(invocationKey(record.role, record.role_session_id));
     }
   }
 
   for (const record of records) {
     if (record.type !== "context_compaction" || record.run_id !== options.runId) continue;
+    assertOrchestratorContextRecord(record);
     if (seenRequests.has(record.request_id)) {
       throw new ContextCompactionAccountingError(
         `duplicate context_compaction request '${record.request_id}' in run '${options.runId}'`,
@@ -68,19 +70,24 @@ export function aggregateUnsettledCompactionUsage(
     seenRequests.add(record.request_id);
 
     if (record.usage === null) {
+      if (record.diagnostic === null) {
+        throw new ContextCompactionAccountingError(
+          `context compaction request '${record.request_id}' is missing its diagnostic`,
+        );
+      }
       unknown.push({
         run_id: record.run_id,
         role: record.role,
         epoch: record.epoch,
         role_session_id: record.role_session_id,
         request_id: record.request_id,
-        diagnostic: record.diagnostic ?? "context compaction usage unavailable",
+        diagnostic: record.diagnostic,
       });
       continue;
     }
 
     if (
-      terminalInvocationIds.has(record.role_session_id) ||
+      terminalInvocationIds.has(invocationKey(record.role, record.role_session_id)) ||
       options.excludedLiveInvocationIds?.has(record.role_session_id) === true
     ) {
       continue;
@@ -109,6 +116,10 @@ export function assertKnownCompactionUsage(
   throw new ContextCompactionAccountingError(
     `context compaction usage is unavailable for run '${runId}' (requests: ${requests})`,
   );
+}
+
+function invocationKey(role: string, roleSessionId: string): string {
+  return JSON.stringify([role, roleSessionId]);
 }
 
 function isTerminal(
