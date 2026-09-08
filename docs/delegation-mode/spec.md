@@ -99,21 +99,21 @@ Each slice requires focused tests and typecheck before the next one starts.
 
 - [x] Policy contract: manifest types/parser/validation and a focused mode helper.
   Test both enum values, omitted default, invalid values and programmatic input.
-- [ ] Pinned run policy: snapshot creation and historical resume distinction.
+- [x] Pinned run policy: snapshot creation and historical resume distinction.
   Test fresh defaults pinned explicitly, edited source ignored on resume,
   fallback stability, legacy snapshot behavior, and missing-snapshot diagnosis.
-- [ ] Shared tool: derive its schema/description and execution mode from policy.
+- [x] Shared tool: derive its schema/description and execution mode from policy.
   Test tasks-only blocking/nonblocking, matching compatibility values, conflicting
   values creating no admission, and unchanged raw identity fingerprints.
-- [ ] RPC configuration: carry trusted effective mode into the isolated process;
+- [x] RPC configuration: carry trusted effective mode into the isolated process;
   reject malformed configuration and do not trust role-provided policy fields.
-- [ ] RPC tool/bridge: enforce the same schema and response behavior; test wait
+- [x] RPC tool/bridge: enforce the same schema and response behavior; test wait
   deadline selection, actual tool-call identity, response loss/redelivery, and
   policy mismatch without child creation.
 - [ ] End-to-end regression: A/B/C coordination succeeds with mode configured
   only in the manifest and omitted from all submission arguments. Blocking
   returns ordered results; fallback/resume retain policy and spent allowance.
-- [ ] Update delegation/role configuration documentation, examples and changelog;
+- [x] Update delegation/role configuration documentation, examples and changelog;
   independently review source and run all gates before merging.
 
 Likely implementation areas: `src/manifest/`, `src/seam/schema.ts`,

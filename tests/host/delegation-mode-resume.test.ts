@@ -177,6 +177,7 @@ describe("Issue #86 public snapshot/resume policy", () => {
     const path = await writeManifest(workdir, manifest("nonblocking"));
     const baseDir = join(workdir, "runs");
     const first = await runToCompletion(path, baseDir);
+    await writeFile(path, manifest("blocking"), "utf8");
 
     let resumed: LoadedManifest | undefined;
     const handle = await resumeRun(path, first.handle.runId, {
@@ -269,9 +270,9 @@ describe("Issue #86 public snapshot/resume policy", () => {
   it("warns when an old run has no manifest snapshot proving its delegation mode", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-mode-"));
     directories.push(workdir);
-    const path = await writeManifest(workdir, manifest());
+    const path = await writeManifest(workdir, manifest("blocking"));
     const baseDir = join(workdir, "runs");
-    const loaded = loadManifestFromString(manifest());
+    const loaded = loadManifestFromString(manifest("nonblocking"));
     const checkpoint = { ...createInitialCheckpoint(loaded.def), current_role: "done" as const };
     const runId = checkpoint.run_id;
     const log = new FileRecordLog({ baseDir });
