@@ -27,11 +27,7 @@ import {
 import { reconcileDelegationChildren } from "./delegation/reconcile.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
-/**
- * Recover the latest host envelope before a resume. Older logs have no
- * `context_ref`, so derive it from the durable role/session fields; the
- * synthesized sentinel remains explicitly unreadable.
- */
+/** Find and validate the latest pinned manifest snapshot for a run. */
 export function latestManifestSnapshot(
   records: readonly PersistedRecord[],
   runId: string,
@@ -44,6 +40,7 @@ export function latestManifestSnapshot(
   return null;
 }
 
+/** Find the latest artifact delivery addressed to the resumed checkpoint. */
 export function latestArtifactDelivery(
   records: readonly PersistedRecord[],
   runId: string,
@@ -218,6 +215,7 @@ export function nextVisitIndexes(
   );
 }
 
+/** Recover the latest predecessor context reference for a resumed run. */
 export function latestHandoffContextRef(
   records: readonly PersistedRecord[],
   runId: string,

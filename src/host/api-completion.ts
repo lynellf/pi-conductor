@@ -9,6 +9,7 @@ import { runLoop } from "./loop.js";
 import type { LoadedManifest } from "./manifest.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
+/** Inputs for the run-loop and lease-release completion coordinator. */
 export interface RunWithCompletionArgs {
   readonly runId: string;
   readonly def: MachineDefinition;
@@ -31,6 +32,7 @@ export interface RunWithCompletionArgs {
   readonly lease: RunExecutionLease;
 }
 
+/** Run the orchestration loop and release its execution lease on completion. */
 export async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle> {
   const { runId, def, log, host, initialCheckpoint, goal, loadedManifest, lease } = args;
   // Task 19: shared mutable container for the live `configOverride`.

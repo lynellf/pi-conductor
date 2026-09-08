@@ -6,6 +6,7 @@ import type { ManifestSnapshotRecord } from "../persistence/trajectory-records.j
 import { checkModelProvidersRegistered, type LoadedManifest } from "./manifest.js";
 import { resolvePrewalkManifestContext } from "./prewalk-manifest-context.js";
 
+/** Rebuild the host manifest view from the immutable run snapshot. */
 export async function loadPinnedManifest(
   snapshot: ManifestSnapshotRecord,
   manifestPath: string,
