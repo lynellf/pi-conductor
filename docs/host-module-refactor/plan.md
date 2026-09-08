@@ -61,7 +61,7 @@ through explicit owner callbacks.
 2. **Production host boundary**
    - [x] Physical session construction, trajectory continuation, and accepted transport extracted into cohesive modules.
    - [x] Focused production-host snapshot/trajectory/preflight tests pass (16 tests); strict typecheck and Biome pass.
-   - [ ] Remaining host operations/state extraction is deferred to the same issue slice.
+   - [ ] Remaining host operations/state extraction is still required before this slice is complete.
 3. **Loop boundary**
    - [ ] Per-attempt and terminal coordination extracted with owner callbacks.
    - [ ] Focused loop/fallback/cap/abort/delegation/trajectory/artifact tests pass.

@@ -291,9 +291,13 @@ export class ProductionHost implements Host {
       createDelegateTool: (...args) => this.createDelegateTool(...args),
       persistRecord: (record) => this.persistRecord(record),
     };
-    const session = await spawnRoleInModule(context, role, opts);
-    this.unavailableRole = context.unavailableRole;
-    return session;
+    try {
+      return await spawnRoleInModule(context, role, opts);
+    } finally {
+      // Preserve fallback exhaustion and escalation consumption even when
+      // spawnRole rejects before returning a session.
+      this.unavailableRole = context.unavailableRole;
+    }
   }
 
   /** Return the last durable transport outcome targeting this receiver. */

@@ -53,6 +53,13 @@
  * record + checkpoint transition.
  */
 
+// This facade intentionally keeps start/resume lease admission together: both
+// entry points must acquire ownership before reading or mutating durable state,
+// and both hand the same prepared checkpoint contract to the live loop. The
+// implementation-specific reconstruction and completion concerns live in the
+// adjacent helpers; this public boundary remains below the repository's 500-line
+// exception ceiling so the ownership rule stays visible to reviewers.
+
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
