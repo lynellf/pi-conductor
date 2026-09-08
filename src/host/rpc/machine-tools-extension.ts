@@ -23,6 +23,7 @@ import {
 } from "../../seam/schema.js";
 import { buildConfinedTools } from "../workspace/confine-tools.js";
 import { requestDelegateBridge, requestFilesBridge } from "./delegate-bridge.js";
+import { requestExecutionBridge } from "./execution-bridge.js";
 import { loadMachineToolsConfig } from "./machine-tools-config.js";
 
 /** Register the static, config-gated tool surface for one isolated RPC role process. */
@@ -35,7 +36,19 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
     { workspaceRoot: config.workspaceRoot, mounts: config.mounts },
     config.declaredToolNames,
   );
-  for (const tool of confined.tools) pi.registerTool(tool);
+  for (const tool of confined.tools) {
+    if (config.executionBridge !== undefined && isExecutionTool(tool.name)) {
+      pi.registerTool(
+        createExecutionBridgeTool(
+          tool,
+          config.executionBridge.directory,
+          config.executionBridge.timeout_ms,
+        ),
+      );
+    } else {
+      pi.registerTool(tool);
+    }
+  }
   if (config.delegateBridge !== undefined && config.declaredToolNames.includes("delegate")) {
     pi.registerTool(createDelegateBridgeTool(config.delegateBridge.directory));
   }
@@ -45,6 +58,30 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
   ) {
     pi.registerTool(createRequestFilesBridgeTool(config.requestFilesBridge.directory));
   }
+}
+
+function isExecutionTool(name: string): name is "read" | "grep" | "find" | "ls" | "edit" | "write" {
+  return ["read", "grep", "find", "ls", "edit", "write"].includes(name);
+}
+
+function createExecutionBridgeTool(
+  tool: ToolDefinition,
+  directory: string,
+  timeoutMs: number,
+): ToolDefinition {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, _onUpdate, ctx) =>
+      (await requestExecutionBridge({
+        directory,
+        actualToolCallId: toolCallId,
+        toolName: tool.name as "read" | "grep" | "find" | "ls" | "edit" | "write",
+        params,
+        ...(ctx.model?.input === undefined ? {} : { modelInput: { input: [...ctx.model.input] } }),
+        ...(signal === undefined ? {} : { signal }),
+        timeoutMs,
+      })) as Awaited<ReturnType<ToolDefinition["execute"]>>,
+  };
 }
 
 function createDelegateBridgeTool(directory: string): ToolDefinition {

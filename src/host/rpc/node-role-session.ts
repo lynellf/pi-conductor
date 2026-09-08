@@ -20,6 +20,7 @@ import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
 import type { RoleSession } from "../host.js";
 
 import { DelegateBridgeHost } from "./delegate-bridge.js";
+import { ExecutionBridgeHost } from "./execution-bridge.js";
 import { loadMachineToolsConfig, MACHINE_TOOLS_CONFIG_ENV } from "./machine-tools-config.js";
 import { RpcChildTerminator } from "./node-role-process.js";
 import { RpcChildTransport } from "./node-role-transport.js";
@@ -90,6 +91,8 @@ export class NodeRoleSession implements RoleSession {
   private readonly terminator: RpcChildTerminator;
   private readonly transport: RpcChildTransport;
   private readonly delegateBridge: DelegateBridgeHost | null;
+  private readonly executionBridge: ExecutionBridgeHost | null;
+  private readonly executionBridgeCloseTimeoutMs: number | undefined;
   private readonly onDispose: (() => Promise<void> | void) | undefined;
   private readonly captures: EmissionCapture[] = [];
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
@@ -134,6 +137,9 @@ export class NodeRoleSession implements RoleSession {
       options.delegateBridge === undefined && options.requestFilesBridge === undefined
         ? null
         : createDelegateBridge(options);
+    this.executionBridge =
+      options.executionBridge === undefined ? null : createExecutionBridge(options);
+    this.executionBridgeCloseTimeoutMs = options.executionBridge?.closeTimeoutMs;
     this.onDispose = options.onDispose;
     this.transport = new RpcChildTransport(child, {
       onEvent: (value) => this.acceptEvent(value),
@@ -141,6 +147,9 @@ export class NodeRoleSession implements RoleSession {
       onExit: (code, signal, stderr) => {
         this.terminator.markExited();
         void this.delegateBridge?.close();
+        void this.executionBridge
+          ?.close(options.executionBridge?.closeTimeoutMs)
+          .catch((error) => this.fail(asRpcError(error)));
         this.fail(new RpcChildExitError(code, signal, stderr));
       },
       hasFailed: () => this.failure !== null,
@@ -207,6 +216,7 @@ export class NodeRoleSession implements RoleSession {
   /** Ask the RPC child to abort its current agent operation. */
   async abort(): Promise<void> {
     this.delegateBridge?.interruptPending();
+    this.executionBridge?.interruptPending();
     await this.request({ type: "abort" });
   }
 
@@ -263,9 +273,13 @@ export class NodeRoleSession implements RoleSession {
       this.fail(new RpcSessionDisposedError());
       await this.delegateBridge?.close();
       try {
-        await this.terminator.terminateAndWait();
+        await this.executionBridge?.close(this.executionBridgeCloseTimeoutMs);
       } finally {
-        await this.onDispose?.();
+        try {
+          await this.terminator.terminateAndWait();
+        } finally {
+          await this.onDispose?.();
+        }
       }
     }
     if (abortFailure !== null && !(abortFailure instanceof RpcChildExitError)) {
@@ -276,6 +290,7 @@ export class NodeRoleSession implements RoleSession {
   /** End the child process without waiting, used only after startup failure. */
   terminate(): void {
     void this.delegateBridge?.close();
+    void this.executionBridge?.close().catch((error) => this.fail(asRpcError(error)));
     this.terminator.terminate();
   }
 
@@ -408,6 +423,7 @@ export class NodeRoleSession implements RoleSession {
     if (this.failure !== null) return;
     this.failure = error;
     this.delegateBridge?.interruptPending();
+    this.executionBridge?.interruptPending();
     this.transport.rejectPending(error);
     if (this.pendingTurn !== null) {
       const turn = this.pendingTurn;
@@ -421,6 +437,36 @@ export class NodeRoleSession implements RoleSession {
     if (this.disposed || (this.disposing && !allowDisposing)) {
       throw new RpcSessionDisposedError();
     }
+  }
+}
+
+function createExecutionBridge(options: NodeRoleSessionOptions): ExecutionBridgeHost {
+  const bridge = options.executionBridge;
+  if (bridge === undefined || bridge.tools.length === 0) {
+    throw new RpcChildProcessError("RPC execution bridge requires host tool definitions");
+  }
+  try {
+    const config = loadMachineToolsConfig({
+      [MACHINE_TOOLS_CONFIG_ENV]: options.machineToolsConfigPath,
+    });
+    if (
+      config.executionBridge === undefined ||
+      realpathSync(bridge.directory) !== config.executionBridge.directory
+    ) {
+      throw new RpcChildProcessError(
+        "RPC execution bridge directory does not match the machine-tools configuration",
+      );
+    }
+    const declared = new Set(config.declaredToolNames);
+    if (bridge.tools.some((tool) => !declared.has(tool.name))) {
+      throw new RpcChildProcessError("RPC execution bridge tool is not declared for this role");
+    }
+    return new ExecutionBridgeHost(bridge);
+  } catch (error) {
+    if (error instanceof RpcChildProcessError) throw error;
+    throw new RpcChildProcessError(
+      `RPC execution bridge configuration is invalid: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
