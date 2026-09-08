@@ -11,6 +11,7 @@ import type { EndGuardConfig } from "./end-guard-runner.js";
 import type { ArtifactRouteSource, Host, RoleSession, SpawnRoleOptions } from "./host.js";
 import type { RunControl } from "./run-control.js";
 
+/** Abort bridge for the active role session. */
 export interface RunAbortControl {
   /** Register the session currently awaiting prompt() or cleanup. */
   setActiveSession(session: RoleSession | null): Promise<void>;
@@ -18,6 +19,7 @@ export interface RunAbortControl {
   requestAbort(reason: string): Promise<void>;
 }
 
+/** Configuration and host dependencies for the orchestration loop. */
 export interface RunLoopOptions {
   /** Pinned manifest snapshot the reducer consumes as `def` (§12). */
   readonly def: MachineDefinition;
@@ -44,11 +46,32 @@ export interface RunLoopOptions {
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Fresh executable invocation index per role for operator resume. */
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
-  /** Optional: per-role spawn overrides. */
+  /** Optional: per-role spawn overrides. Defaults to a minimal call
+   *  that lets the host derive model + system prompt + tools from the
+   *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
+   *  to skip real disk I/O. */
   readonly spawnDefaults?: Partial<SpawnRoleOptions>;
-  /** Optional dynamic run cost cap reader (§11.7). */
+  /**
+   * Optional: dynamic cap reader for `max_run_cost_usd` (§11.7, Task 17).
+   * Called on every terminal usage capture to evaluate the run cap.
+   * `null` = uncapped. The RunHandle's `runConfig()` override flows
+   * through this callback (api.ts wires `getRunCostCap` to read the
+   * override or the manifest orchestrator's `max_run_cost_usd`).
+   *
+   * If omitted, the run is treated as uncapped (the loop's
+   * Task-16.5 seed still uses the static `runCostCap` option).
+   */
   readonly getRunCostCap?: () => number | null;
-  /** Optional static run cost cap fallback (§11.7). */
+  /**
+   * Optional: static `max_run_cost_usd` (§11.7, Task 17). A fallback
+   * for callers that don't need `runConfig()` overrides (tests, CLI
+   * runs without a RunHandle). The loop reads `getRunCostCap()` first
+   * and falls back to this value. `null` / undefined = uncapped.
+   *
+   * Production: prefer `getRunCostCap` (wired to `RunHandle.runConfig`
+   * in api.ts). This static option exists so unit tests can pin the
+   * cap without constructing a RunHandle.
+   */
   readonly runCostCap?: number | null;
   /** Optional abort bridge used by `RunHandle.abort()` / Escape. */
   readonly abortControl?: RunAbortControl;
@@ -62,6 +85,7 @@ export interface RunLoopOptions {
   };
 }
 
+/** Result of `runLoop`. */
 export interface RunLoopResult {
   /** Final checkpoint (state may be `"done"` or the role that hit a breach). */
   readonly finalCheckpoint: Checkpoint;
@@ -69,6 +93,7 @@ export interface RunLoopResult {
   readonly exitReason: "done" | "session_failed" | "aborted";
 }
 
+/** Outcome of one settled session before outer visit handling. */
 export type InnerOutcome =
   | { readonly kind: "failed" }
   | { readonly kind: "done" }
@@ -81,6 +106,7 @@ export type RoleOutcome =
   | { readonly kind: "advance"; readonly nextSeed: string }
   | { readonly kind: "exhausted" };
 
+/** Durable artifact handoff route carried into the next receiver visit. */
 export interface PendingArtifactRoute extends ArtifactRouteSource {
   readonly status: "pending" | "materialized" | "unavailable";
   /** Persisted host section; undefined is tolerated only for older records. */
@@ -88,6 +114,7 @@ export interface PendingArtifactRoute extends ArtifactRouteSource {
   readonly failureReason?: string;
 }
 
+/** Zero usage record for synthetic lifecycle failures. */
 export const ZERO_USAGE: UsageRecord = Object.freeze({
   input: 0,
   output: 0,

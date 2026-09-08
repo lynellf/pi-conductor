@@ -26,8 +26,7 @@ import type {
 } from "./loop-types.js";
 import { ZERO_USAGE } from "./loop-types.js";
 
-const _SYNTHESIZED_SESSION_FILE = "<synthesized:end:run-cost-cap>";
-
+/** Explicit state and host dependencies for one role session lifecycle. */
 export interface SessionLoopContext {
   readonly opts: RunLoopOptions;
   readonly def: MachineDefinition;
@@ -50,6 +49,7 @@ export interface SessionLoopContext {
   nextSeed: string;
 }
 
+/** Result returned after lifecycle cleanup and child settlement. */
 export type SessionLoopResult =
   | {
       readonly kind: "settled";
@@ -73,6 +73,7 @@ export type SessionLoopResult =
       };
     };
 
+/** Runs one role session from start through settlement and disposal. */
 export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopResult> {
   const { opts, def, host, role, visitIndex, session, seed } = ctx;
   const state: SessionTurnState = {

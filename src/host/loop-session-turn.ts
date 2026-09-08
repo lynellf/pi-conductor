@@ -1,4 +1,6 @@
 /** Prompt, admission, failure, cost-cap, and end-guard handling for one role session. */
+// This module stays under 500 lines because the prompt/admission/end-guard state machine is one
+// coherent retry boundary; splitting individual branches would obscure its ordering contract.
 
 import { reduce } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
@@ -25,6 +27,7 @@ import { formatGuidedPrompt } from "./run-control.js";
 
 const SYNTHESIZED_SESSION_FILE = "<synthesized:end:run-cost-cap>";
 
+/** Mutable state accumulated while one role session is active. */
 export interface SessionTurnState {
   inner: InnerOutcome;
   sessionHostReason: SessionTerminalReason;
@@ -35,6 +38,7 @@ export interface SessionTurnState {
   delegationSettlementError: unknown;
 }
 
+/** Host and lifecycle callbacks required by the turn processor. */
 export interface SessionTurnDeps {
   readonly sessionId: string;
   readonly sessionFile: string;
@@ -46,10 +50,12 @@ export interface SessionTurnDeps {
   ) => Promise<RunLoopResult>;
 }
 
+/** Result indicating whether the session settled or the run terminated. */
 export type SessionTurnResult =
   | { readonly kind: "settled"; readonly state: SessionTurnState }
   | { readonly kind: "terminal"; readonly result: RunLoopResult };
 
+/** Processes prompts and captured emissions until this session settles. */
 export async function runSessionTurn(
   ctx: SessionLoopContext,
   deps: SessionTurnDeps,

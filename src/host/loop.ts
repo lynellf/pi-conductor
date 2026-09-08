@@ -60,134 +60,21 @@
  * records (`session_started` / `session_ended`) bracketing it. Plus a
  * checkpoint snapshot on accepted transitions. No double-reduce / double-
  * persist path is possible.
- *
- * ## What this module does NOT do
- *
- *   - Cost caps (§11.7): Task 17.
- *   - Run memory seeding for orchestrator sessions (§8.4): Task 16.5.
- *   - Model fallback on `model_error` (§8.2): Task 18.
- *   - Resume / crash reconciliation (§11.1): Task 13.5.
- *   - Post-emission tool wrapping (§12.1 sealing): Task 15.5.
- *
- * Host-agnostic: imports SDK types as type-only refs. The runtime I/O is
- * delegated to `Host` (which is the SDK-backed implementation in Task 15's
- * sibling module, or a `FakeHost` in tests).
  */
 
 import { createInitialCheckpoint, reduce } from "../core/reduce.js";
-import type {
-  Checkpoint,
-  HandoffContextRef,
-  MachineDefinition,
-  MachineEvent,
-  Role,
-  UsageRecord,
-} from "../core/types.js";
-import type {
-  ArtifactDeliveryRecord,
-  EndGuardRecord,
-  PersistedRecord,
-} from "../persistence/log.js";
+import type { Checkpoint, HandoffContextRef, MachineEvent, Role } from "../core/types.js";
+import type { PersistedRecord } from "../persistence/log.js";
 import { summarizePayload } from "../seam/payload-summary.js";
-import type { EndGuardConfig } from "./end-guard-runner.js";
-import { NoMoreModelsError } from "./errors.js";
-import type {
-  Host,
-  RoleSession,
-  SeedRunMemoryArgs,
-  SessionTerminalReason,
-  SpawnRoleOptions,
-} from "./host.js";
-import { formatRoleUnavailableSeed, waitForRetry } from "./loop-format.js";
-import { runSession } from "./loop-session.js";
-import type { InnerOutcome, PendingArtifactRoute, RoleOutcome } from "./loop-types.js";
-import { ZERO_USAGE } from "./loop-types.js";
-import type { RunControl } from "./run-control.js";
+import type { Host, RoleSession, SeedRunMemoryArgs } from "./host.js";
+import { runRoleVisit } from "./loop-fallback.js";
+import { formatRoleUnavailableSeed } from "./loop-format.js";
+import type { PendingArtifactRoute, RunLoopOptions, RunLoopResult } from "./loop-types.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 
 // ─── Public API ────────────────────────────────────────────────────────
 
-/** Options for `runLoop`. */
-export interface RunAbortControl {
-  /** Register the session currently awaiting prompt() or cleanup. */
-  setActiveSession(session: RoleSession | null): Promise<void>;
-  /** Request abort for the active session (if any). */
-  requestAbort(reason: string): Promise<void>;
-}
-
-export interface RunLoopOptions {
-  /** Pinned manifest snapshot the reducer consumes as `def` (§12). */
-  readonly def: MachineDefinition;
-  /** Initial checkpoint (from `createInitialCheckpoint(def)`). For Task 15
-   *  this is a fresh checkpoint; Task 13.5 reuses the run loop for resume
-   *  by passing a reconstructed snapshot's `Checkpoint`. */
-  readonly initialCheckpoint: Checkpoint;
-  /** Host the loop programs against (Task 13's seam). */
-  readonly host: Host;
-  /** Initial goal text seeded into the first orchestrator session. */
-  readonly initialGoal: string;
-  /**
-   * Latest persisted handoff reference when entering a run at a non-initial
-   * role (resume). Fresh runs leave this unset.
-   */
-  readonly initialHandoffContextRef?: HandoffContextRef | null;
-  /** Durable accepted-handoff delivery resumed before the receiver can prompt. */
-  readonly initialArtifactDelivery?: ArtifactDeliveryRecord | null;
-  /** Logical predecessor restored from a trajectory selector before a resumed target starts. */
-  readonly initialParentSessionId?: string | null;
-  /** Exact host-generated target prompt persisted by a selected trajectory handoff. */
-  readonly initialTrajectorySeed?: string | null;
-  /** Next visit index per role reconstructed from durable lifecycle starts on resume. */
-  readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
-  /** Fresh executable invocation index per role for operator resume. */
-  readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
-  /** Optional: per-role spawn overrides. Defaults to a minimal call
-   *  that lets the host derive model + system prompt + tools from the
-   *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
-   *  to skip real disk I/O. */
-  readonly spawnDefaults?: Partial<SpawnRoleOptions>;
-  /**
-   * Optional: dynamic cap reader for `max_run_cost_usd` (§11.7, Task 17).
-   * Called on every terminal usage capture to evaluate the run cap.
-   * `null` = uncapped. The RunHandle's `runConfig()` override flows
-   * through this callback (api.ts wires `getRunCostCap` to read the
-   * override or the manifest orchestrator's `max_run_cost_usd`).
-   *
-   * If omitted, the run is treated as uncapped (the loop's
-   * Task-16.5 seed still uses the static `runCostCap` option).
-   */
-  readonly getRunCostCap?: () => number | null;
-  /**
-   * Optional: static `max_run_cost_usd` (§11.7, Task 17). A fallback
-   * for callers that don't need `runConfig()` overrides (tests, CLI
-   * runs without a RunHandle). The loop reads `getRunCostCap()` first
-   * and falls back to this value. `null` / undefined = uncapped.
-   *
-   * Production: prefer `getRunCostCap` (wired to `RunHandle.runConfig`
-   * in api.ts). This static option exists so unit tests can pin the
-   * cap without constructing a RunHandle.
-   */
-  readonly runCostCap?: number | null;
-  /** Optional abort bridge used by `RunHandle.abort()` / Escape. */
-  readonly abortControl?: RunAbortControl;
-  /** Run-owned steering, follow-up mailbox, abort, and response state. */
-  readonly runControl?: RunControl;
-  /** Coherent pinned #75 guard capability; absent preserves legacy ending. */
-  readonly endGuard?: {
-    readonly config: EndGuardConfig;
-    readonly records: () => readonly EndGuardRecord[];
-    readonly requestId: (checkpoint: Checkpoint) => string;
-  };
-}
-
-/** Result of `runLoop`. */
-export interface RunLoopResult {
-  /** Final checkpoint (state may be `"done"` or the role that hit a breach). */
-  readonly finalCheckpoint: Checkpoint;
-  /** Why the loop returned. */
-  readonly exitReason: "done" | "session_failed" | "aborted";
-}
-
+/** Runs the guarded role orchestration loop. */
 export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const { def, host, initialCheckpoint, initialGoal } = opts;
   if (opts.endGuard !== undefined && host.runEndGuard === undefined) {
@@ -263,10 +150,6 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // Distinct from the run-cap sentinel so log consumers can tell the
   // two synthesized-event paths apart.
   const SYNTHESIZED_UNAVAILABLE_SESSION_FILE = "<synthesized:handoff:role-unavailable>";
-  // A fallback spawn can fail before it has a real session identity. This
-  // marker keeps that terminal visible without pretending a live session
-  // started (issue #44).
-  const SYNTHESIZED_FALLBACK_FAILURE_SESSION_FILE = "<synthesized:session-failed:fallback-start>";
 
   while (checkpoint.current_role !== "done") {
     // ── §11.7 deferred forced end (Task 17) ──────────────────
@@ -355,9 +238,6 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // the same role gets the next index.
     const visitIndex = visitIndexByRole.get(role) ?? 1;
     const executionVisitIndex = executionVisitIndexByRole.get(role) ?? visitIndex;
-    let modelIndex = 0;
-    let retryAttempt = 0;
-    let roleOutcome: RoleOutcome = { kind: "advance", nextSeed: seed };
     // This is scoped to one receiving visit, so every fresh process attempt
     // gets the same host-owned section while the host materializes only once.
     let artifactSeedForVisit: string | null =
@@ -365,180 +245,33 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         ? (pendingArtifactRoute.artifactSeed ?? null)
         : null;
 
-    while (true) {
-      // Spawn (may throw `NoMoreModelsError` when the list is
-      // exhausted, or `RoleEscalationError` when the orchestrator
-      // re-dispatches the same role after exhaustion). The former
-      // is caught here and converted to `roleOutcome = "exhausted"`;
-      // the latter propagates to abort the run per §9.4.
-      let session: RoleSession;
-      try {
-        if (pendingTrajectorySession !== null) {
-          session = pendingTrajectorySession;
-          pendingTrajectorySession = null;
-        } else {
-          // `spawnDefaults` is a test/host override surface, not a provenance
-          // surface. Remove any caller-supplied reference before adding the
-          // loop's trusted value so it cannot override or seed the envelope.
-          const spawnDefaults = { ...(opts.spawnDefaults ?? {}) };
-          delete spawnDefaults.handoffContextRef;
-          session = await host.spawnRole(role, {
-            ...spawnDefaults,
-            visitIndex,
-            executionVisitIndex,
-            modelIndex,
-            getRunCostCap: opts.getRunCostCap ?? (() => opts.runCostCap ?? null),
-            getCurrentParentUsage: () => host.captureUsage(session).cost,
-            ...(handoffContextRef !== null && { handoffContextRef }),
-          });
-        }
-      } catch (err) {
-        if (err instanceof NoMoreModelsError) {
-          roleOutcome = { kind: "exhausted" };
-          break;
-        }
-        if (modelIndex > 0) {
-          // A fallback spawn has no active lifecycle session to terminate:
-          // the primary already emitted `session_failed`, and this spawn
-          // failed before `session_started` could be reduced. Persist an
-          // explicit terminal lifecycle record with a synthetic identity so
-          // run projections cannot remain `running` after a fallback startup
-          // error (issue #44). The next model is the attempted fallback.
-          const attemptedModel = host.getNextModel(role, modelIndex - 1);
-          const failureMessage = err instanceof Error ? err.message : String(err);
-          host.persistRecord({
-            type: "session_failed",
-            run_id: checkpoint.run_id,
-            role,
-            visit_index: visitIndex,
-            state: checkpoint.current_role,
-            model: attemptedModel,
-            session_file: SYNTHESIZED_FALLBACK_FAILURE_SESSION_FILE,
-            parent_session: parentSessionId,
-            usage: ZERO_USAGE,
-            failure_reason: `fallback_start_failed: ${failureMessage}`,
-            ts: Date.now(),
-          });
-          roleOutcome = { kind: "failed" };
-          break;
-        }
-        // RoleEscalationError and other errors from the initial spawn
-        // propagate up to abort the run. A fallback startup error is
-        // handled above so it cannot leave the run nonterminal.
-        throw err;
-      }
-
-      let inner: InnerOutcome = { kind: "failed" };
-      let sessionHostReason: SessionTerminalReason = null;
-      let _capturedUsage: UsageRecord = ZERO_USAGE;
-      let _nextSeed = seed;
-      const sessionResult = await runSession({
-        opts,
-        def,
-        host,
-        role,
-        visitIndex,
-        executionVisitIndex,
-        session,
-        sessionParentId: parentSessionId,
-        seed,
-        artifactSeedForVisit,
-        checkpoint,
-        pendingArtifactRoute,
-        pendingForcedEnd,
-        parentSessionId,
-        handoffContextRef,
-        pendingTrajectorySession,
-        visitIndexByRole,
-        executionVisitIndexByRole,
-        nextSeed: seed,
-      });
-      if (sessionResult.kind === "terminal") return sessionResult.result;
-      checkpoint = sessionResult.checkpoint;
-      parentSessionId = sessionResult.parentSessionId;
-      handoffContextRef = sessionResult.handoffContextRef;
-      pendingTrajectorySession = sessionResult.pendingTrajectorySession;
-      pendingArtifactRoute = sessionResult.pendingArtifactRoute;
-      pendingForcedEnd = sessionResult.pendingForcedEnd;
-      artifactSeedForVisit = sessionResult.artifactSeedForVisit;
-      inner = sessionResult.inner;
-      sessionHostReason = sessionResult.sessionHostReason;
-      _capturedUsage = sessionResult.capturedUsage;
-      _nextSeed = sessionResult.nextSeed;
-
-      // ── Task 18: model_error → fallback to next model ──────────
-      // The session ended with `model_error`. Record `model_fallback`
-      // (per §11.5) only when the role has a next model in its
-      // `models[]` list — a transition to a non-existent model is
-      // not a real fallback, just exhaustion. Then `continue` to
-      // try the next model. If the list is exhausted, the next
-      // `spawnRole` call throws `NoMoreModelsError`, the host sets
-      // its `unavailableRole` marker, and the catch below sets
-      // `exhausted` and breaks. State is unchanged across model
-      // retries (same role, same `visitIndex` captured above).
-      if (
-        inner.kind === "failed" &&
-        sessionHostReason === "model_error" &&
-        session.isTrajectory !== true
-      ) {
-        // The failed terminal is already persisted before this branch. Do
-        // not start another session once the run budget is exhausted;
-        // retries and model fallback must not bypass the run cap (§11.7).
-        const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
-        if (runCap !== null && host.runCostSoFar() >= runCap) {
-          roleOutcome = { kind: "failed" };
-          break;
-        }
-
-        const maxRetries = session.retries ?? 0;
-        if (retryAttempt < maxRetries) {
-          const attempt = retryAttempt + 1;
-          const delayMs = session.retryDelayMs ?? 0;
-          host.persistRecord({
-            type: "model_retry",
-            run_id: checkpoint.run_id,
-            role,
-            model: session.model,
-            attempt,
-            max_retries: maxRetries,
-            reason: "model_error",
-            delay_ms: delayMs,
-            session_file: session.sessionFile,
-            ts: Date.now(),
-          });
-          retryAttempt = attempt;
-          await waitForRetry(delayMs);
-          continue;
-        }
-
-        retryAttempt = 0;
-        const nextModel = host.getNextModel(role, modelIndex);
-        if (nextModel !== null) {
-          host.persistRecord({
-            type: "model_fallback",
-            run_id: checkpoint.run_id,
-            role,
-            from_model: session.model,
-            to_model: nextModel,
-            reason: "model_error",
-            session_file: session.sessionFile,
-            ts: Date.now(),
-          });
-        }
-        modelIndex += 1;
-        continue; // try the next model (or hit NoMoreModelsError)
-      }
-
-      // Other outcomes — exit the fallback loop.
-      if (inner.kind === "done") {
-        roleOutcome = { kind: "done" };
-      } else if (inner.kind === "failed") {
-        roleOutcome = { kind: "failed" };
-      } else {
-        roleOutcome = { kind: "advance", nextSeed: inner.nextSeed };
-      }
-      break;
-    }
+    const visitResult = await runRoleVisit({
+      opts,
+      def,
+      host,
+      role,
+      visitIndex,
+      executionVisitIndex,
+      seed,
+      checkpoint,
+      parentSessionId,
+      handoffContextRef,
+      pendingArtifactRoute,
+      pendingForcedEnd,
+      pendingTrajectorySession,
+      artifactSeedForVisit,
+      visitIndexByRole,
+      executionVisitIndexByRole,
+    });
+    if (visitResult.kind === "terminal") return visitResult.result;
+    checkpoint = visitResult.checkpoint;
+    parentSessionId = visitResult.parentSessionId;
+    handoffContextRef = visitResult.handoffContextRef;
+    pendingTrajectorySession = visitResult.pendingTrajectorySession;
+    pendingArtifactRoute = visitResult.pendingArtifactRoute;
+    pendingForcedEnd = visitResult.pendingForcedEnd;
+    artifactSeedForVisit = visitResult.artifactSeedForVisit;
+    const { roleOutcome } = visitResult;
 
     // Handle role outcome (after fallback loop)
     if (roleOutcome.kind === "done") {
@@ -630,7 +363,14 @@ export {
   withRoleSessionIdentity,
 } from "./loop-format.js";
 
-export type { InnerOutcome, PendingArtifactRoute, RoleOutcome } from "./loop-types.js";
+export type {
+  InnerOutcome,
+  PendingArtifactRoute,
+  RoleOutcome,
+  RunAbortControl,
+  RunLoopOptions,
+  RunLoopResult,
+} from "./loop-types.js";
 
 // Type re-exports for downstream convenience.
 // Re-export the host types the run-lifecycle entry point (Task 13.5) needs.

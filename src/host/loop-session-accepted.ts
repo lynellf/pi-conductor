@@ -16,17 +16,20 @@ import type { InnerOutcome, PendingArtifactRoute } from "./loop-types.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 import { TrajectoryHandoffError } from "./trajectory-admission.js";
 
+/** Reducer output retained for accepted transition persistence. */
 export interface AcceptedReduction {
   readonly checkpoint: Checkpoint;
   readonly state: Role | "done";
   readonly record: PersistedRecord;
 }
 
+/** Validated emission metadata used by accepted transition handling. */
 export interface AcceptedEmission {
   readonly type: "handoff" | "end";
   readonly payload: unknown;
 }
 
+/** Inputs for persisting an accepted transition and routing its handoff. */
 export interface AcceptedTransitionArgs {
   readonly ctx: SessionLoopContext;
   readonly role: Role;
@@ -43,11 +46,13 @@ export interface AcceptedTransitionArgs {
   readonly settleDelegationBeforeLifecycle: (reason: string) => Promise<void>;
 }
 
+/** State changes produced after accepted transition persistence. */
 export interface AcceptedTransitionResult {
   readonly acceptedArtifactRoute: PendingArtifactRoute | null;
   readonly inner: InnerOutcome;
 }
 
+/** Persists an accepted transition before artifact and trajectory routing. */
 export async function persistAcceptedTransition(
   args: AcceptedTransitionArgs,
 ): Promise<AcceptedTransitionResult> {
