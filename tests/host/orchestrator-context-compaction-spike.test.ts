@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { AssistantMessageEventStream, Usage } from "@earendil-works/pi-ai";
 import {
   AuthStorage,
@@ -300,13 +301,89 @@ describe("orchestrator context compaction SDK spike", () => {
     session.dispose();
   });
 
-  it("reopens the durable tip without changing the restored branch", async () => {
-    const sessionDir = makeAndTrackIsolatedAgentDir("pi-context-durable-session-");
-    const manager = SessionManager.create(process.cwd(), sessionDir);
-    const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+  it("diagnoses a synchronous compaction failure as unknown usage and never falls back natively", async () => {
+    const auth = AuthStorage.inMemory();
+    const registry = ModelRegistry.inMemory(auth);
+    let nativeCalls = 0;
+    registry.registerProvider("stub", {
+      api: "anthropic-messages",
+      apiKey: "stub-key",
+      streamSimple: () => {
+        nativeCalls += 1;
+        throw new Error("native provider must not be used after hook failure");
+      },
+    });
+    let attempts = 0;
+    const synchronousFailure = () => {
+      attempts += 1;
+      throw new Error("provider failed before a stream existed");
+    };
+    let diagnostic: string | undefined;
+    const manager = SessionManager.inMemory();
+    const extension: InlineExtension = {
+      name: "unknown-usage-compact-spike",
+      factory: (pi) => {
+        pi.on("session_before_compact", async (event, context) => {
+          if (!context.model) throw new Error("hook did not receive the active model");
+          try {
+            await compact(
+              event.preparation,
+              context.model,
+              undefined,
+              undefined,
+              undefined,
+              event.signal,
+              undefined,
+              synchronousFailure,
+            );
+          } catch (_error: unknown) {
+            diagnostic = "unknown-usage";
+            return { cancel: true };
+          }
+          return { cancel: true };
+        });
+      },
+    };
+    const loader = new DefaultResourceLoader({
+      cwd: process.cwd(),
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-unknown-compact-"),
+      extensionFactories: [extension],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      model: makeStubModel(),
+      modelRegistry: registry,
+      sessionManager: manager,
+      resourceLoader: loader,
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-unknown-agent-"),
+      noTools: "all",
+    });
+    seedHistory(manager);
+
+    await expect(session.compact()).rejects.toThrow();
+    expect(attempts).toBe(1);
+    expect(diagnostic).toBe("unknown-usage");
+    expect(nativeCalls).toBe(0);
+    expect(manager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    session.dispose();
+  });
+
+  it("forks exactly at the saved tip and restores it with a model override", async () => {
+    const sourceDir = makeAndTrackIsolatedAgentDir("pi-context-source-session-");
+    const targetDir = makeAndTrackIsolatedAgentDir("pi-context-fork-session-");
+    const manager = SessionManager.create(process.cwd(), sourceDir);
+    const first = manager.appendMessage({
+      role: "user",
+      content: "history before saved tip",
+      timestamp: 1,
+    });
     manager.appendMessage({
       role: "assistant",
-      content: [{ type: "text", text: "first answer" }],
+      content: [{ type: "text", text: "history answer" }],
       api: "anthropic-messages",
       provider: "stub",
       model: "stub-model",
@@ -321,24 +398,60 @@ describe("orchestrator context compaction SDK spike", () => {
       stopReason: "stop",
       timestamp: 2,
     });
-    const tip = manager.appendMessage({ role: "user", content: "tip", timestamp: 3 });
+    const tip = manager.appendMessage({ role: "user", content: "saved tip", timestamp: 3 });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "uncommitted suffix" }],
+      api: "anthropic-messages",
+      provider: "stub",
+      model: "stub-model",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 4,
+    });
     const sessionFile = manager.getSessionFile();
     if (!sessionFile) throw new Error("expected durable session file");
-    const reopened = SessionManager.open(sessionFile);
+    const sourceBytesBefore = await readFile(sessionFile);
+    const reopened = SessionManager.open(sessionFile, targetDir, process.cwd());
+    const forkFile = reopened.createBranchedSession(tip);
+    if (!forkFile) throw new Error("expected fork session file");
+    const forked = SessionManager.open(forkFile, targetDir, process.cwd());
     expect(first).not.toBe(tip);
-    expect(reopened.getLeafId()).toBe(tip);
-    expect(reopened.getBranch().map((entry) => entry.id)).toContain(tip);
+    expect(forked.getLeafId()).toBe(tip);
+    expect(forked.getBranch().map((entry) => entry.id)).not.toContain(manager.getLeafId());
+    expect(
+      forked
+        .buildSessionContext()
+        .messages.some(
+          (message) => message.role === "user" && message.content === "history before saved tip",
+        ),
+    ).toBe(true);
+    expect(
+      forked
+        .buildSessionContext()
+        .messages.some(
+          (message) =>
+            message.role === "assistant" &&
+            message.content[0]?.type === "text" &&
+            message.content[0].text === "uncommitted suffix",
+        ),
+    ).toBe(false);
     const { session } = await createAgentSession({
       model: { ...makeStubModel(), id: "override-model", name: "Override Model" },
-      sessionManager: reopened,
+      sessionManager: forked,
       agentDir: makeAndTrackIsolatedAgentDir("pi-context-restored-model-"),
       noTools: "all",
     });
     expect(session.model?.id).toBe("override-model");
-    const modelOverrideTip = reopened.getLeafId();
-    expect(modelOverrideTip).not.toBe(tip);
-    const restoredBranch = reopened.getBranch();
-    expect(restoredBranch.map((entry) => entry.id)).toContain(tip);
+    forked.appendMessage({ role: "user", content: "new fork prompt", timestamp: 5 });
+    expect((await readFile(sessionFile)).equals(sourceBytesBefore)).toBe(true);
     session.dispose();
   });
 });
