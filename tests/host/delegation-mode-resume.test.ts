@@ -174,7 +174,7 @@ describe("Issue #86 public snapshot/resume policy", () => {
   it("resumes from the durable policy when the manifest source is edited", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-mode-"));
     directories.push(workdir);
-    const path = await writeManifest(workdir, manifest());
+    const path = await writeManifest(workdir, manifest("nonblocking"));
     const baseDir = join(workdir, "runs");
     const first = await runToCompletion(path, baseDir);
 
@@ -203,7 +203,7 @@ describe("Issue #86 public snapshot/resume policy", () => {
   it("derives legacy per-call provenance from a durable snapshot without mode", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-mode-"));
     directories.push(workdir);
-    const path = await writeManifest(workdir, manifest("nonblocking"));
+    const path = await writeManifest(workdir, manifest());
     const baseDir = join(workdir, "runs");
     const loaded = loadManifestFromString(manifest("nonblocking"));
     const legacyManifest = {
@@ -269,15 +269,14 @@ describe("Issue #86 public snapshot/resume policy", () => {
   it("warns when an old run has no manifest snapshot proving its delegation mode", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-mode-"));
     directories.push(workdir);
-    const path = await writeManifest(workdir, manifest("nonblocking"));
+    const path = await writeManifest(workdir, manifest());
     const baseDir = join(workdir, "runs");
-    const loaded = loadManifestFromString(manifest("nonblocking"));
+    const loaded = loadManifestFromString(manifest());
     const checkpoint = { ...createInitialCheckpoint(loaded.def), current_role: "done" as const };
     const runId = checkpoint.run_id;
     const log = new FileRecordLog({ baseDir });
     log.append({ type: "checkpoint_snapshot", checkpoint });
     log.append({ type: "run_seeded", run_id: runId, goal: "unproven legacy run", ts: 1 });
-    await writeFile(path, manifest("blocking"), "utf8");
 
     let resumed: LoadedManifest | undefined;
     let accepted: Promise<unknown> | undefined;
