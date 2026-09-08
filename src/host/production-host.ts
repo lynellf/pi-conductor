@@ -43,7 +43,6 @@ import type {
   SessionTerminalReason,
   SpawnRoleOptions,
 } from "./host.js";
-import type { LoadedManifest } from "./manifest.js";
 import {
   type ArtifactHostContext,
   collectTerminalArtifacts as collectTerminalArtifactsInModule,
@@ -112,9 +111,6 @@ export class ProductionHost extends ProductionHostContext implements Host {
   private readonly inactiveDelegationSessions = new Set<string>();
 
   // ─── Host methods ──────────────────────────────────────────────────
-  // `spawnRole` is wired (7A.3). The remaining methods throw a
-  // phase-tagged "not yet implemented" error so 7A.4 fills them
-  // in (one task at a time, per the plan's slice structure).
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
     const context: SpawnRoleContext = {
@@ -441,18 +437,4 @@ function adaptDelegateToolResult(result: {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function _hasDelegateConfiguration(
-  roleConfig: RoleConfig | undefined,
-): roleConfig is RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> } {
-  return roleConfig?.delegation !== undefined && roleConfig.tools?.includes("delegate") === true;
-}
-
-function _delegationPromptRoot(loaded: LoadedManifest, cwd: string): string {
-  if (loaded.manifestVersion < 2) return cwd;
-  if (loaded.manifestDir === null) {
-    throw new Error("delegation requires a manifest directory for v2 profile system prompts");
-  }
-  return loaded.manifestDir;
 }
