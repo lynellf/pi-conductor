@@ -44,6 +44,7 @@ import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "
 import { startStatusPoller, trackStatusPoller } from "../status.js";
 import { formatTerminalReason } from "../terminal-diagnostic.js";
 import { installConductEscapeAbortListener, notifyEscapeAbortResult } from "./abort-active-run.js";
+import { parseResumeCommandArgs } from "./resume-args.js";
 import { ensureRunBaseDir, type HandleDeps } from "./start.js";
 
 export async function handleResume(
@@ -55,11 +56,14 @@ export async function handleResume(
   const notify = (message: string, type: "info" | "warning" | "error"): void => {
     if (isContextCurrent()) ctx.ui.notify(message, type);
   };
-  const runId = args.trim();
-  if (runId.length === 0) {
-    notify("Usage: /conduct:resume <run_id>", "warning");
+  let parsedArgs: ReturnType<typeof parseResumeCommandArgs>;
+  try {
+    parsedArgs = parseResumeCommandArgs(args);
+  } catch (error) {
+    notify(error instanceof Error ? error.message : String(error), "warning");
     return;
   }
+  const { runId, resetOrchestratorContext } = parsedArgs;
 
   const flagValue = deps.getFlag("conduct-manifest");
   const manifestPath = resolveManifestPath(
@@ -117,6 +121,7 @@ export async function handleResume(
       hostFactory,
       baseDir,
       modelRegistry,
+      resetOrchestratorContext,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -132,7 +137,9 @@ export async function handleResume(
     (w) => w.code === "unregistered-provider",
   );
   const compatibilityWarnings = handle.loadedManifest.warnings.filter(
-    (w) => w.code === "legacy-delegation-mode-unproven",
+    (w) =>
+      w.code === "legacy-delegation-mode-unproven" ||
+      w.code === "legacy-context-retention-unproven",
   );
   if (unregisteredWarnings.length > 0 || compatibilityWarnings.length > 0) {
     const entries = [...unregisteredWarnings, ...compatibilityWarnings]

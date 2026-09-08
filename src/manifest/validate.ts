@@ -103,6 +103,8 @@ export type ManifestErrorCode =
   | PrewalkManifestErrorCode;
 
 export type ManifestWarningCode =
+  /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
+  | "legacy-context-retention-unproven"
   /** Issue #86: legacy resume has no durable manifest snapshot proving mode. */
   | "legacy-delegation-mode-unproven"
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
