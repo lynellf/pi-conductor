@@ -29,9 +29,9 @@ for the complete metering proof.
 
 - [x] Define append-only context policy/epoch, selection/delivery, boundary and
   compaction records with pure validation and explicit run/role identities.
-- [ ] Define restoration queries that distinguish a durable empty epoch from
+- [x] Define restoration queries that distinguish a durable empty epoch from
   missing, corrupt, mismatched or ambiguously committed history.
-- [ ] Test record round trips, run isolation, reset epochs, duplicate delivery and
+- [x] Test record round trips, run isolation, reset epochs, duplicate delivery and
   crash ordering. Register records in the existing persistence union/parser.
 
 Keep schemas/queries independent of Pi; host-only helpers own filesystem checks.
