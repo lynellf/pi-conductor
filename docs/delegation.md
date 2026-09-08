@@ -110,9 +110,8 @@ checkout (`git status --porcelain=v1 --untracked-files=all`) and a resolvable
 `HEAD`; commit or stash ordinary and untracked changes first.
 
 The configured blocking mode waits for all children and returns results in input
-order. Each result
-contains its authoritative status, branch, worktree path, base/head commits,
-session file, usage, summary, and any failure reason. `completed` requires
+order. Each result contains its authoritative status, branch, worktree path,
+base/head commits, session file, usage, summary, and any failure reason. `completed` requires
 verified uncommitted changes in the child worktree; `no_changes` requires a
 clean worktree at the batch base. A `completed` report without changes becomes
 `no_changes`; an unexpected commit or invalid Git state becomes `failed`.
@@ -120,12 +119,10 @@ clean worktree at the batch base. A `completed` report without changes becomes
 ### Nonblocking tasks and controls
 
 Configure `mode: nonblocking` in the parent role policy to return after the
-whole batch has been durably accepted. A compatibility `mode` argument may
-repeat that value:
+whole batch has been durably accepted. Submit tasks without a mode argument:
 
 ```json
 {
-  "mode": "nonblocking",
   "tasks": [{
     "id": "parser",
     "subagent": "api-implementer",
@@ -134,6 +131,9 @@ repeat that value:
   }]
 }
 ```
+
+For compatibility, a `mode` argument may repeat the configured value; a
+contradictory value is rejected.
 
 The response is `{"child_ids":["<stable-child-id>"]}` in input order. Use these
 host-issued handles, rather than the task's `id`, for subsequent controls on the
