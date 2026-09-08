@@ -20,6 +20,7 @@ export const contextUsageSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** TypeBox-derived usage charged to one compaction request. */
 export type ContextUsage = Static<typeof contextUsageSchema>;
 
 /** Exact committed history identity authorized for a later restoration. */
@@ -33,6 +34,7 @@ export const contextBoundaryReferenceSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** TypeBox-derived exact history identity authorized for restoration. */
 export type ContextBoundaryReference = Static<typeof contextBoundaryReferenceSchema>;
 
 /** Durable context epoch creation/reset marker. */
@@ -57,6 +59,7 @@ export const contextEpochStartedSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Durable context epoch creation or reset marker. */
 export type ContextEpochStartedRecord = Static<typeof contextEpochStartedSchema>;
 
 /** Durable selection of one physical conversation for a logical invocation. */
@@ -76,6 +79,7 @@ export const contextInvocationStartedSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Durable selection of one physical conversation for a logical invocation. */
 export type ContextInvocationStartedRecord = Static<typeof contextInvocationStartedSchema>;
 
 /** Durable proof that the current run-memory seed reached the selected history tip. */
@@ -96,6 +100,7 @@ export const contextDeliveryCommittedSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Durable proof that the current run-memory seed reached the selected history tip. */
 export type ContextDeliveryCommittedRecord = Static<typeof contextDeliveryCommittedSchema>;
 
 /** Durable exact history boundary that authorizes restoration. */
@@ -115,6 +120,7 @@ export const contextBoundaryCommittedSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Durable exact history boundary that authorizes restoration. */
 export type ContextBoundaryCommittedRecord = Static<typeof contextBoundaryCommittedSchema>;
 
 /** Durable intent marker written before a compaction request begins. */
@@ -132,6 +138,7 @@ export const contextCompactionStartedSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Durable intent marker written before a compaction request begins. */
 export type ContextCompactionStartedRecord = Static<typeof contextCompactionStartedSchema>;
 
 /** Compaction outcome and its explicitly known or unavailable usage. */
@@ -153,6 +160,7 @@ export const contextCompactionSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Compaction outcome and its explicitly known or unavailable usage. */
 export type ContextCompactionRecord = Static<typeof contextCompactionSchema>;
 
 /** Union of all strict v1 orchestrator context records. */

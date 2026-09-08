@@ -117,6 +117,35 @@ describe("formatConductStatus", () => {
     );
   });
 
+  it("adds a bounded context status only when retention is configured", () => {
+    const line = formatConductStatus(
+      makeStats({
+        context: {
+          status: "pending_compaction",
+          epoch: 1,
+          epochReason: "start",
+          committedBoundary: null,
+          activeInvocation: null,
+          pendingCompactions: [],
+          lastCompaction: null,
+          unknownCompactions: [],
+        },
+      }),
+    );
+    expect(line).toContain("context=pending_compaction");
+  });
+
+  it("labels an incomplete compaction rollup as a known subtotal", () => {
+    const stats = makeStats({
+      costRollup: {
+        ...makeStats().costRollup,
+        contextCompactionUsageComplete: false,
+        unknownContextCompactionUsage: [],
+      },
+    });
+    expect(formatConductStatus(stats)).toContain("$0.000 + unknown");
+  });
+
   it("renders the active tool and elapsed time from the durable start timestamp", () => {
     const stats = makeStats({
       toolExecution: {

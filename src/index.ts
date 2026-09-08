@@ -224,6 +224,16 @@ export type {
 } from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
 export type {
+  OrchestratorContextBoundaryInspection,
+  OrchestratorContextCompactionInspection,
+  OrchestratorContextInspection,
+  OrchestratorContextInspectionStatus,
+  OrchestratorContextInvocationInspection,
+  OrchestratorContextPendingCompactionInspection,
+  OrchestratorContextUnknownCompactionInspection,
+} from "./persistence/orchestrator-context-inspection.js";
+export { inspectOrchestratorContext } from "./persistence/orchestrator-context-inspection.js";
+export type {
   ExecutionCheckpointArgs,
   ExecutionCheckpointTodo,
   MaterializedPrewalkRecord,
