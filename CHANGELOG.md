@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug fixes
+
+- Enforce cumulative role-turn telemetry byte limits across all blocks in a
+  completed message, and retain correct truncation causes so valid bounded logs
+  reopen successfully (Issue #68).
+- Allow up to three no-emission recovery prompts per role invocation and record
+  the exhausted recovery count. Start/resume notifications show the durable
+  failure reason and bounded detail, including trajectory failures (Issue #73).
+- Reject trajectory manifests on an unsupported Pi SDK before role-session work,
+  naming the required and detected versions (Issue #71).
+
+### Security
+
+- Patch vulnerable transitive dependencies in the development SDK/test graph.
+  Keep Pi at 0.80.6 with a temporary, package-scoped Undici 8.9.0 override while
+  the public-runtime migration remains blocked (Issue #67).
+
+### Documentation
+
+- Move role, tool, delegation, workspace, library, record-stream and architecture
+  reference material into linked pages, with a shorter README and contributor
+  guide (Issue #74).
+
 ## [0.20.1] - 2026-08-30
 
 ### Bug fixes
@@ -13,8 +38,10 @@
 ### Enhancements
 
 - **Bounded structured role-turn telemetry** (Issue #68). Role turns now
-  produce strict, append-only `role_turn` records with bounded tool-call,
-  response, and usage metadata for durable analytics and library consumers.
+  produce strict, append-only `role_turn` records with bounded readable text and
+  non-redacted thinking blocks, invocation/conversation identity, and explicit
+  capture limits for durable analytics and library consumers. Raw tool calls
+  and results are excluded.
 
 ## [0.20.0] - 2026-08-28
 
