@@ -1,6 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import { assertEndGuardRecord } from "./end-guard.js";
 import { assertPrewalkRecord } from "./prewalk-records.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { assertToolExecutionRecord } from "./tool-execution.js";
@@ -81,6 +82,13 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
 
   if (record.type === "tool_execution_started" || record.type === "tool_execution_finished") {
     assertToolExecutionRecord(record);
+  }
+  if (
+    record.type === "end_guard_started" ||
+    record.type === "end_guard_finished" ||
+    record.type === "end_guard_budget_reset"
+  ) {
+    assertEndGuardRecord(record);
   }
 }
 

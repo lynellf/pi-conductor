@@ -52,6 +52,11 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { join } from "node:path";
 
 import type { Checkpoint } from "../core/types.js";
+import {
+  assertEndGuardAppend,
+  type EndGuardRecord,
+  unfinishedEndGuardAttempts,
+} from "../persistence/end-guard.js";
 import { normalizeCheckpoint, type PersistedRecord, type RecordLog } from "../persistence/log.js";
 import {
   assertPersistedRecordGuarantees,
@@ -128,6 +133,10 @@ export class FileRecordLog implements RecordLog {
   append(record: PersistedRecord): void {
     const materialized = materializePersistedRecord(record);
     const runId = runIdOf(materialized.record);
+    if (isEndGuardRecord(materialized.record)) {
+      const prior = this.records(runId).filter(isEndGuardRecord);
+      assertEndGuardAppend(prior, materialized.record);
+    }
     appendFileSync(this.filePath(runId), `${materialized.json}\n`, "utf8");
   }
 
@@ -236,6 +245,8 @@ export class FileRecordLog implements RecordLog {
       }
       records.push(parsePersistedRecord(parsed, runId, lineNumber));
     }
+    const endGuardRecords = records.filter(isEndGuardRecord);
+    unfinishedEndGuardAttempts(endGuardRecords);
     return Object.freeze(records);
   }
 
@@ -257,6 +268,14 @@ export class FileRecordLog implements RecordLog {
   private leaseDigest(runId: string): Buffer {
     return createHash("sha256").update(this.baseDir).update("\0").update(runId).digest();
   }
+}
+
+function isEndGuardRecord(record: PersistedRecord): record is EndGuardRecord {
+  return (
+    record.type === "end_guard_started" ||
+    record.type === "end_guard_finished" ||
+    record.type === "end_guard_budget_reset"
+  );
 }
 
 const LEASE_HOST = "127.0.0.1";
@@ -423,6 +442,9 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "trajectory_target_seed_delivered",
   "tool_execution_started",
   "tool_execution_finished",
+  "end_guard_started",
+  "end_guard_finished",
+  "end_guard_budget_reset",
 ]);
 
 /** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */

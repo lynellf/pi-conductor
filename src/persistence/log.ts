@@ -45,9 +45,10 @@ import type {
   ChildCompletionProtocol,
   ChildProjectionFingerprint,
 } from "./child-completion.js";
+import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { PrewalkRecord } from "./prewalk-records.js";
-import { materializePersistedRecord } from "./record-materialization.js";
+
 import type { RoleTurnRecord } from "./role-turn.js";
 import type { ToolExecutionFinishedRecord, ToolExecutionStartedRecord } from "./tool-execution.js";
 import type {
@@ -64,6 +65,13 @@ import type {
   WorkspaceProvisionedRecord,
 } from "./workspace-artifact-records.js";
 
+export type {
+  EndGuardBudgetResetRecord,
+  EndGuardBudgetState,
+  EndGuardFinishedRecord,
+  EndGuardRecord,
+  EndGuardStartedRecord,
+} from "./end-guard.js";
 export {
   assertPersistedRecordGuarantees,
   assertWorkspaceGuarantee,
@@ -346,7 +354,8 @@ export type PersistedRecord =
   | RoleTurnRecord
   | ToolExecutionStartedRecord
   | ToolExecutionFinishedRecord
-  | PrewalkRecord;
+  | PrewalkRecord
+  | EndGuardRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
@@ -404,89 +413,4 @@ export interface RecordLog {
   close(): void;
 }
 
-// ─── InMemoryRecordLog ──────────────────────────────────────────────────
-
-/**
- * Pure, in-memory `RecordLog` for unit tests. The Phase 4 host owns
- * the real file-backed implementation; this one is the test double
- * (and the model the host impl should match — same semantics, same
- * interface).
- *
- * Append-only: `append` only adds; `records` returns a frozen view.
- * `latestCheckpoint` walks `records` in reverse to find the last
- * `CheckpointSnapshot` for the run. This is the host-side pattern,
- * not a violation of the "no event-sourced replay" rule (replay
- * reconstructs from events without snapshots; here we have snapshots
- * and just want the last one).
- */
-export class InMemoryRecordLog implements RecordLog {
-  // Maps run_id -> canonical JSON records (in append order). Keeping JSON
-  // instead of caller-owned objects ensures post-append mutation cannot alter
-  // the retained record or bypass its validated representation.
-  private byRun: Map<string, string[]> = new Map();
-
-  append(record: PersistedRecord): void {
-    const materialized = materializePersistedRecord(record);
-    const snapshot = materialized.record;
-
-    // RunSeededRecord carries its own `run_id` directly.
-    // CheckpointSnapshot does not carry its own `run_id` field — the
-    // wrapped Checkpoint is the source of truth for which run the
-    // snapshot belongs to. Every other record shape carries `run_id`
-    // directly. Routing both through one branch keeps the persistence
-    // contract uniform: a snapshot is appended under its checkpoint's
-    // run_id.
-    const runId =
-      snapshot.type === "checkpoint_snapshot" ? snapshot.checkpoint.run_id : snapshot.run_id;
-    const list = this.byRun.get(runId);
-    const next = list === undefined ? [materialized.json] : [...list, materialized.json];
-    this.byRun.set(runId, next);
-  }
-
-  latestCheckpoint(runId: string): Checkpoint | null {
-    const list = this.records(runId);
-    // Walk in reverse: most recent snapshot first.
-    for (let i = list.length - 1; i >= 0; i--) {
-      const record = list[i];
-      if (record && record.type === "checkpoint_snapshot") {
-        return normalizeCheckpoint(record.checkpoint);
-      }
-    }
-    return null;
-  }
-
-  latestRunSeed(runId: string): string | null {
-    const list = this.records(runId);
-    // Walk in reverse: most recent seed first.
-    for (let i = list.length - 1; i >= 0; i--) {
-      const record = list[i];
-      if (record && record.type === "run_seeded") {
-        return record.goal;
-      }
-    }
-    return null;
-  }
-
-  records(runId: string): readonly PersistedRecord[] {
-    const list = this.byRun.get(runId);
-    if (list === undefined) return Object.freeze([]);
-    return Object.freeze(list.map((json) => JSON.parse(json) as PersistedRecord));
-  }
-
-  listRunIds(): readonly string[] {
-    return Object.freeze([...this.byRun.keys()]);
-  }
-
-  close(): void {
-    // No-op for in-memory. Phase 4 file-backed impl closes its FD here.
-    this.byRun = new Map();
-  }
-}
-
-/** Normalize checkpoint fields added after older snapshots were persisted. */
-export function normalizeCheckpoint(checkpoint: Checkpoint): Checkpoint {
-  return Object.freeze({
-    ...checkpoint,
-    end_request: checkpoint.end_request ?? null,
-  }) as Checkpoint;
-}
+export { InMemoryRecordLog, normalizeCheckpoint } from "./in-memory-log.js";
