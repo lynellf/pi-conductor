@@ -18,6 +18,7 @@
 
 import type { ModelEffort, Role } from "../core/types.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
+import type { EndGuardConfig } from "./end-guard.js";
 import type { ToolExecutionPolicy } from "./execution-policy.js";
 
 // ─── Subagent profile types (delegation lite §3) ───────────────────────
@@ -134,6 +135,8 @@ export interface Manifest {
   readonly roles: readonly RoleConfig[];
   /** Delegation lite §3: optional subagent profile declarations. */
   readonly subagents?: readonly SubagentProfile[];
+  /** Approved #75: optional command guard immediately before a legal end. */
+  readonly end_guard?: EndGuardConfig;
 }
 
 /**
