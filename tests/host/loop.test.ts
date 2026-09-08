@@ -497,6 +497,46 @@ describe("runLoop — happy path", () => {
     });
   });
 
+  it("does not reset an exhausted no-emission budget after deferring an end", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    const orchestrator = new FakeSession("orchestrator", "sess-1", [
+      { kind: "no_emission" },
+      { kind: "no_emission" },
+      { kind: "no_emission" },
+      { kind: "emit_end", reason: "initial answer" },
+      { kind: "no_emission" },
+    ]);
+    host.enqueue(orchestrator);
+    const control = new RunControl({
+      runId: initialCheckpoint.run_id,
+      abortSession: (session, reason) => host.abortSession(session, reason),
+    });
+    orchestrator.afterPrompt = async () => {
+      if (orchestrator.prompts.length === 4) {
+        orchestrator.afterPrompt = null;
+        await control.followUp("include the missing caveat");
+      }
+    };
+
+    const result = await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+      runControl: control,
+    });
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(orchestrator.prompts).toHaveLength(5);
+    const failed = log
+      .records(initialCheckpoint.run_id)
+      .find((record): record is SessionLifecycleEvent => record.type === "session_failed");
+    expect(failed?.failure_detail).toBe("3 recovery prompts attempted");
+  });
+
   it("carries an authorized worker end request into the next orchestrator end", async () => {
     const def: MachineDefinition = {
       manifest_version: "1",
@@ -698,7 +738,8 @@ describe("runLoop — contract breach (§11.3)", () => {
     expect(failed).toBeDefined();
     expect(failed?.failure_reason).toBe("no_emission");
     expect(failed?.role).toBe("orchestrator");
-    expect(sess.prompts).toHaveLength(2);
+    expect(failed?.failure_detail).toBe("3 recovery prompts attempted");
+    expect(sess.prompts).toHaveLength(4);
 
     // CRITICAL: no transition_rejected record and no checkpoint_snapshot
     // for this session (the reducer was never called).
@@ -859,6 +900,34 @@ describe("runLoop — reducer rejection (§11.3 retry path)", () => {
     );
     const failed = records.find((r): r is SessionLifecycleEvent => r.type === "session_failed");
     expect(failed?.failure_reason).toBe("no_emission");
+  });
+
+  it("does not reset an exhausted no-emission budget after a rejected emission", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+
+    const sess1 = new FakeSession("orchestrator", "sess-1", [
+      { kind: "no_emission" },
+      { kind: "no_emission" },
+      { kind: "no_emission" },
+      { kind: "emit_illegal_handoff", target_role: "undeclared-role" },
+      { kind: "no_emission" },
+    ]);
+    host.enqueue(sess1);
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(sess1.prompts).toHaveLength(5);
+    const records = log.records(initialCheckpoint.run_id);
+    expect(
+      records.some((record): record is TransitionRejected => record.type === "transition_rejected"),
+    ).toBe(true);
+    const failed = records.find(
+      (record): record is SessionLifecycleEvent => record.type === "session_failed",
+    );
+    expect(failed?.failure_detail).toBe("3 recovery prompts attempted");
   });
 
   it("a reducer-rejected transition does NOT fire session_ended (session continues)", async () => {

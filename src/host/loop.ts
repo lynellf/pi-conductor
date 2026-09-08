@@ -17,8 +17,8 @@
  *      yields one of: `ok`, `breach: no_emission`,
  *      `breach: extra_emission`, `breach: schema_invalid`.
  *
- *   6. On `breach`: `no_emission` gets one in-session recovery prompt.
- *      If recovery also breaches, or if the first breach is
+ *   6. On `breach`: `no_emission` gets up to three in-session recovery
+ *      prompts. If recovery still breaches, or if the first breach is
  *      `extra_emission` / `schema_invalid`, fires
  *      `reduceLifecycle(session_failed)` with the breach reason,
  *      persists exactly one `session_failed` record, and **does not
@@ -109,6 +109,8 @@ import { RpcChildExitError } from "./rpc/protocol.js";
 import { formatGuidedPrompt, type RunControl } from "./run-control.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 import { TrajectoryHandoffError } from "./trajectory-admission.js";
+
+const MAX_NO_EMISSION_RECOVERY_PROMPTS = 3;
 
 // ─── Public API ────────────────────────────────────────────────────────
 
@@ -438,7 +440,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         artifactSeedForVisit === null
           ? seed
           : appendArtifactSeedSection(seed, artifactSeedForVisit);
-      let recoveringFromNoEmission = false;
+      let noEmissionRecoveryPrompts = 0;
       let trajectorySeedDeliveryRecorded = false;
 
       try {
@@ -662,15 +664,21 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               hostReason === null &&
               promptFailureReason === null &&
               validated.reason === "no_emission" &&
-              !recoveringFromNoEmission
+              noEmissionRecoveryPrompts < MAX_NO_EMISSION_RECOVERY_PROMPTS
             ) {
-              recoveringFromNoEmission = true;
+              noEmissionRecoveryPrompts += 1;
               nextSeed = formatNoEmissionRecovery(role, def);
               continue;
             }
             const failureReason: string = hostReason ?? promptFailureReason ?? validated.reason;
             const failureDetail =
-              hostReason === "model_error" ? (host.sessionFailureDetail?.(session) ?? null) : null;
+              hostReason === "model_error"
+                ? (host.sessionFailureDetail?.(session) ?? null)
+                : hostReason === null &&
+                    promptFailureReason === null &&
+                    validated.reason === "no_emission"
+                  ? `${noEmissionRecoveryPrompts} recovery prompts attempted`
+                  : null;
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
               sessionId,
@@ -819,7 +827,6 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             session.resetCaptureBuffer();
             opts.runControl.reopenActiveSession(session);
             nextSeed = formatDeferredEndPrompt();
-            recoveringFromNoEmission = false;
             continue;
           }
 
@@ -857,7 +864,6 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             // capture must become the sole seam candidate.
             session.resetCaptureBuffer();
             nextSeed = formatRejectionMessage(reduceResult);
-            recoveringFromNoEmission = false;
             continue;
           }
 
