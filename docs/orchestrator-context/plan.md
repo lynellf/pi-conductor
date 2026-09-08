@@ -9,9 +9,9 @@ the coordinating agent owns integration and independent review. Work only in
 
 ### 1. Policy and SDK feasibility (independent work)
 
-- [ ] Parse and validate `context_retention: none | run`, defaulting new manifests
+- [x] Parse and validate `context_retention: none | run`, defaulting new manifests
   to explicit `none`; historical absence means `none`.
-- [ ] Reject worker retention, invalid values, trajectory combinations and Prewalk
+- [x] Reject worker retention, invalid values, trajectory combinations and Prewalk
   orchestrator retention; permit Prewalk workers.
 - [ ] Demonstrate public Pi 0.80.6 compaction metering using deterministic providers,
   including failure usage and exclusion of imported historical usage, in SDK/RPC.
