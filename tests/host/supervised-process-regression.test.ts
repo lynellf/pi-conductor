@@ -72,20 +72,47 @@ describe("runSupervisedProcess regression gates", () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-conductor-supervised-regression-"));
     directories.push(directory);
     const marker = join(directory, "late-write");
-    await expect(
-      runSupervisedProcess({
-        executionId: "regression-late-write",
-        command: `${shellNode(`setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "late"), 100); setInterval(() => {}, 1000)`)} | cat`,
-        cwd: directory,
-        timeoutMs: 60,
-        graceMs: 200,
-        onStart: () => undefined,
-        onSpawn: async () => {
-          await wait(150);
-        },
-      }),
-    ).rejects.toMatchObject({ code: "supervised-process-timeout" });
-    await wait(150);
+    let releaseSpawn!: () => void;
+    let spawnEntered!: () => void;
+    const spawnGate = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const spawnStarted = new Promise<void>((resolve) => {
+      spawnEntered = resolve;
+    });
+    const execution = runSupervisedProcess({
+      executionId: "regression-late-write",
+      command: `${shellNode(`setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "late"), 300); setInterval(() => {}, 1000)`)} | cat`,
+      cwd: directory,
+      timeoutMs: 60,
+      graceMs: 200,
+      onStart: () => undefined,
+      onSpawn: async () => {
+        spawnEntered();
+        await spawnGate;
+      },
+    });
+    const settlement = execution.then(
+      () => "resolved" as const,
+      () => "rejected" as const,
+    );
+    try {
+      const entered = await Promise.race([
+        spawnStarted.then(() => true as const),
+        settlement.then(() => false as const),
+      ]);
+      expect(entered).toBe(true);
+      await expect(
+        Promise.race([settlement, wait(500).then(() => "deadline" as const)]),
+      ).resolves.toBe("rejected");
+    } finally {
+      releaseSpawn();
+    }
+    await expect(execution).rejects.toMatchObject({
+      code: "supervised-process-timeout",
+      cleanup: "confirmed",
+    });
+    await wait(350);
     await expect(access(marker)).rejects.toThrow();
   });
 

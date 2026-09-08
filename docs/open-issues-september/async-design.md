@@ -131,3 +131,12 @@ Independent review approved the final source after the RPC abort and worker
 budget regressions passed. The full dependency graph retains one low esbuild
 advisory with no moderate/high/critical findings. No paid provider or deployment
 trial was performed.
+
+
+The first pre-push run exposed a timing-sensitive existing process regression:
+a 60 ms timeout and 100 ms delayed write left only 40 ms for ownership checks
+under load. The test now holds `onSpawn` behind an explicit gate, asserts bounded
+timeout settlement while that gate remains closed, requires confirmed cleanup,
+and retains the no-delayed-write assertion. Repeated focused runs and the complete
+seven-case process regression suite passed; process supervision source is unchanged.
+The hook remains mandatory and is rerun before publishing the branch.
