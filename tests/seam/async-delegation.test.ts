@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
   delegateControlArgsSchema,
   delegateModeDescription,
   delegateSubmissionArgsSchema,
@@ -30,6 +31,16 @@ describe("async delegation seam", () => {
       }),
     ).toBe(false);
     expect(Value.Check(delegateArgsSchema, { tasks: [task], mode: "invalid" })).toBe(false);
+  });
+
+  it("exposes only the configured compatibility literal", () => {
+    expect(Value.Check(delegateArgsSchemaForMode("nonblocking"), { tasks: [task] })).toBe(true);
+    expect(
+      Value.Check(delegateArgsSchemaForMode("nonblocking"), {
+        tasks: [task],
+        mode: "blocking",
+      }),
+    ).toBe(false);
   });
 
   it("accepts strict controls with one or more child IDs", () => {

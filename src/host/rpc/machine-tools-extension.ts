@@ -12,10 +12,12 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import { delegateModeDescription } from "../../manifest/delegation-mode.js";
 
 import {
   type DelegateArgs,
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
   endArgsSchema,
   handoffArgsSchema,
   type RequestFilesArgs,
@@ -98,8 +100,12 @@ function createDelegateBridgeTool(
   return defineTool({
     name: "delegate",
     label: "delegate",
-    description: "Request bounded delegated work from the conductor host.",
-    parameters: delegateArgsSchema,
+    description:
+      configuredMode === undefined
+        ? "Request bounded delegated work from the conductor host."
+        : `Request bounded delegated work from the conductor host. ${delegateModeDescription(configuredMode)}`,
+    parameters:
+      configuredMode === undefined ? delegateArgsSchema : delegateArgsSchemaForMode(configuredMode),
     async execute(toolCallId, args: DelegateArgs, signal) {
       try {
         return await requestDelegateBridge({

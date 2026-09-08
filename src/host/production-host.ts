@@ -479,7 +479,8 @@ export class ProductionHost implements Host {
                 ),
             }
           : {}),
-        ...(this.loadedManifest.legacyDelegationMode === true
+        ...(this.loadedManifest.legacyDelegationMode === true ||
+        this.loadedManifest.legacyDelegationRoles?.includes(role) === true
           ? { legacyDelegationMode: true }
           : {}),
         visitIndex: opts.visitIndex,

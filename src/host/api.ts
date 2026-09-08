@@ -338,6 +338,14 @@ export async function resumeRun(
 
     // Snapshot-era runs take their roles and policy from durable normalized
     // data; legacy logs use the freshly parsed current manifest.
+    const legacyDelegationRoles =
+      manifestSnapshot === null
+        ? undefined
+        : Object.freeze(
+            manifestSnapshot.normalized_manifest.roles
+              .filter((role) => role.delegation?.mode === undefined)
+              .map((role) => role.name),
+          );
     const resumedLoaded: LoadedManifest =
       manifestSnapshot === null
         ? {
@@ -352,7 +360,9 @@ export async function resumeRun(
               },
             ]),
           }
-        : loaded;
+        : legacyDelegationRoles !== undefined && legacyDelegationRoles.length > 0
+          ? { ...loaded, legacyDelegationRoles }
+          : loaded;
     if (resumedLoaded.def.manifest_version !== checkpoint.manifest_version) {
       throw new Error(
         `resumeRun: manifest_version mismatch — snapshot pinned '${checkpoint.manifest_version}', manifest at '${manifestPath}' is '${resumedLoaded.def.manifest_version}' (§10)`,

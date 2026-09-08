@@ -143,6 +143,7 @@ export type {
 } from "./seam/schema.js";
 export {
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
   delegateControlArgsSchema,
   delegateSubmissionArgsSchema,
   endArgsSchema,

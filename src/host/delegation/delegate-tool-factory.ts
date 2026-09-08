@@ -20,6 +20,7 @@ import {
   type DelegateControlArgs,
   type DelegateSubmissionArgs,
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
 } from "../../seam/schema.js";
 import type { DisplaySink } from "../display-sink.js";
 import { mapPoolResult } from "./child-result-mapping.js";
@@ -65,9 +66,11 @@ export interface DelegateToolFactoryOptions {
 export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefinition {
   const policy = delegationPolicy(opts.role);
   const configuredMode =
-    opts.legacyDelegationMode === true
+    opts.legacyDelegationMode === true && policy.mode === undefined
       ? undefined
       : (opts.delegationMode ?? resolveDelegationMode(policy));
+  const parameters =
+    configuredMode === undefined ? delegateArgsSchema : delegateArgsSchemaForMode(configuredMode);
   let remaining = Math.min(opts.remainingChildren, policy.max_children_per_session);
   let executionTail = Promise.resolve();
 
@@ -78,7 +81,7 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
       configuredMode === undefined
         ? "Submit independent coding tasks in isolated Git worktrees. Use blocking or nonblocking mode; controls retrieve or cancel accepted child handles."
         : `Submit independent coding tasks in isolated Git worktrees. ${delegateModeDescription(configuredMode)} Controls retrieve or cancel accepted child handles.`,
-    parameters: delegateArgsSchema,
+    parameters: parameters as typeof delegateArgsSchema,
     async execute(_toolCallId, args, signal) {
       if (!isSubmission(args)) {
         if (opts.scheduler === undefined) throw new Error("delegation controls are unavailable");

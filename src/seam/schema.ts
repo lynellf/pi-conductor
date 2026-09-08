@@ -303,6 +303,11 @@ export const delegateArgsSchema = Type.Union([
   delegateControlArgsSchema,
 ]);
 
+/** Build the model-visible delegate union for one trusted configured mode. */
+export function delegateArgsSchemaForMode(mode: "blocking" | "nonblocking") {
+  return Type.Union([delegateSubmissionArgsSchemaForMode(mode), delegateControlArgsSchema]);
+}
+
 /** Typed view of a delegate submission or control request. */
 export type DelegateArgs = Static<typeof delegateArgsSchema>;
 
