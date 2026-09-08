@@ -28,7 +28,7 @@
  * untouched and remains host-agnostic.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -38,7 +38,6 @@ import {
   type ExtensionUIContext,
   getAgentDir,
   type ModelRegistry,
-  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
@@ -67,7 +66,6 @@ import {
   type HandoffTransportSelectedRecord,
   sha256Canonical,
   TrajectoryResumeError,
-  validateTrajectorySelector,
 } from "../persistence/trajectory-records.js";
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
@@ -98,6 +96,7 @@ import {
   resolveModel,
   selectModelEntry,
 } from "./production-host-resolve.js";
+import { resumeTrajectoryRole as resumeTrajectoryRoleInModule } from "./production-host-trajectory.js";
 import { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
@@ -617,136 +616,28 @@ export class ProductionHost implements Host {
     selected: HandoffTransportSelectedRecord,
     executionVisitIndex: number,
   ): Promise<RoleSession> {
-    const persisted = validateTrajectorySelector(selected);
-    let session: RoleSession | null = null;
-    try {
-      assertTrajectorySdkSupported();
-      const resolved = resolveModel(role, persisted.target.model, this.modelRegistry);
-      assertTrajectoryEffortSupported(resolved.model, persisted.target.requested_effort);
-      session = await spawnSharedSdkRoleSession({
-        role,
-        roleConfig,
-        model: resolved.model,
-        logicalModel: persisted.target.model,
-        effort: persisted.target.requested_effort,
-        retries: 0,
-        retryDelayMs: 0,
-        systemPrompt: persisted.target.system_prompt,
-        activeToolNames: persisted.target.active_tool_names,
+    return resumeTrajectoryRoleInModule(
+      {
         modelRegistry: this.modelRegistry,
         cwd: this.cwd,
         agentDir: this.agentDir,
         sessionDir: this.sessionDir,
-        sessionManager: SessionManager.open(
-          persisted.source_conversation.file,
-          this.sessionDir,
-          this.cwd,
-        ),
-        roleSessionId: randomUUID(),
-        isTrajectory: true,
-        expectedTrajectoryConversation: persisted.source_conversation,
-        // A reopened target may receive its next prompt before it becomes an
-        // outgoing source, so exact resume needs the same isolated setting.
-        disableAutoCompaction: true,
         runId: this.runId,
-        visitIndex: 1,
-        executionVisitIndex,
-        priorToolExecutionRecords: this.log
-          .records(this.runId)
-          .filter(
-            (record): record is ToolExecutionRecord =>
-              record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-          ),
-        machineDefinition: this.loadedManifest.def,
-        delegateTool: null,
-        ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
-        ...(this.isUiContextCurrent !== undefined && {
-          isUiContextCurrent: this.isUiContextCurrent,
-        }),
-        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-        persistRecord: (record) => this.persistRecord(record),
+        loadedManifest: this.loadedManifest,
+        log: this.log,
+        uiContext: this.uiContext,
+        isUiContextCurrent: this.isUiContextCurrent,
+        displaySink: this.displaySink,
         sessionStates: this.sessionStates,
         agentsBySessionId: this.agentsBySessionId,
         roleTurnProducer: this.roleTurnProducer,
-      });
-      const context = session.getTrajectoryContext?.();
-      if (context === undefined) {
-        throw new TrajectoryResumeError("resumed trajectory session cannot inspect target tools");
-      }
-      const activeToolDefinitions = serializeActiveToolDefinitions(
-        persisted.target.active_tool_names.map((name) => {
-          const definition = context.toolDefinitions[name];
-          if (definition === undefined) {
-            throw new TrajectoryResumeError(
-              "trajectory selector references unavailable target tools",
-            );
-          }
-          return definition;
-        }),
-      );
-      if (context.userMessageTexts.includes(persisted.target.seed)) {
-        throw new TrajectoryResumeError(
-          "trajectory target seed is already present without an accepted target transition; refusing to duplicate an ambiguous generation",
-          "trajectory_target_seed_ambiguous",
-        );
-      }
-      const environmentSha = sha256Canonical({
-        system_prompt: persisted.target.system_prompt,
-        model: persisted.target.model,
-        effort: persisted.target.requested_effort,
-        active_tool_names: persisted.target.active_tool_names,
-        active_tool_definitions: activeToolDefinitions,
-      });
-      if (environmentSha !== persisted.target.environment_sha256) {
-        throw new TrajectoryResumeError(
-          "trajectory selector target environment hash does not match",
-        );
-      }
-      admitTrajectory({
-        source: context,
-        targetModel: resolved.model,
-        targetModelName: persisted.target.model,
-        systemPrompt: persisted.target.system_prompt,
-        activeToolNames: persisted.target.active_tool_names,
-        activeToolDefinitions,
-        targetSeed: persisted.target.seed,
-      });
-      return session;
-    } catch (error) {
-      try {
-        await session?.dispose();
-      } catch {
-        // The rehydration failure must remain durable even if cleanup fails.
-      }
-      if (
-        error instanceof TrajectoryResumeError &&
-        error.code !== "trajectory_target_seed_ambiguous"
-      ) {
-        throw error;
-      }
-      const code =
-        error instanceof TrajectoryHandoffError
-          ? error.code
-          : error instanceof TrajectoryResumeError
-            ? (error.code ?? "trajectory_environment_unsupported")
-            : "trajectory_environment_unsupported";
-      const message =
-        error instanceof Error
-          ? error.message
-          : "trajectory target environment could not be restored";
-      this.persistRecord({
-        type: "trajectory_handoff_failed",
-        schema_version: 1,
-        run_id: this.runId,
-        from: persisted.from,
-        to: persisted.to,
-        source_conversation: persisted.source_conversation,
-        code,
-        message,
-        ts: Date.now(),
-      });
-      throw new TrajectoryResumeError(message, code);
-    }
+        persistRecord: (record) => this.persistRecord(record),
+      },
+      role,
+      roleConfig,
+      selected,
+      executionVisitIndex,
+    );
   }
 
   /** Build the existing delegation operation with the caller's constrained Git base. */
