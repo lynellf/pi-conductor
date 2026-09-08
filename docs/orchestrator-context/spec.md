@@ -108,7 +108,7 @@ are not imported into the orchestrator.
 
 Implementation uses Luna in dependency-ordered, reviewable increments.
 
-- [ ] Manifest contract: parse/validate both policies, orchestrator-only restriction,
+- [x] Manifest contract: parse/validate both policies, orchestrator-only restriction,
   explicit new-run pinning and historical default. Test invalid/programmatic input.
 - [ ] Durable context boundaries and epochs: define records and restoration queries;
   test round trips, run/role isolation, missing/corrupt history, crash boundaries,

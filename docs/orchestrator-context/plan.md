@@ -9,9 +9,9 @@ the coordinating agent owns integration and independent review. Work only in
 
 ### 1. Policy and SDK feasibility (independent work)
 
-- [ ] Parse and validate `context_retention: none | run`, defaulting new manifests
+- [x] Parse and validate `context_retention: none | run`, defaulting new manifests
   to explicit `none`; historical absence means `none`.
-- [ ] Reject worker retention, invalid values, trajectory combinations and Prewalk
+- [x] Reject worker retention, invalid values, trajectory combinations and Prewalk
   orchestrator retention; permit Prewalk workers.
 - [ ] Demonstrate public Pi 0.80.6 compaction metering using deterministic providers,
   including failure usage and exclusion of imported historical usage, in SDK/RPC.
@@ -23,7 +23,9 @@ Biome, build. No lifecycle integration until the metering proof passes.
 
 ### 2. Durable context contract
 
-Depends on increment 1 and review of exact SDK history semantics.
+Depends on the verified manifest contract and reviewed lifecycle ordering. Pure
+records can proceed alongside the SDK/RPC spike; adapter integration still waits
+for the complete metering proof.
 
 - [ ] Define append-only context policy/epoch, selection/delivery, boundary and
   compaction records with pure validation and explicit run/role identities.
