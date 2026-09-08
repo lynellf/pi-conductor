@@ -1,6 +1,6 @@
-# September execution controls — proposed specification
+# September execution controls — approved specification
 
-Status: awaiting overseer acknowledgment for new features #75–#77.
+Status: acknowledged by the overseer on 2026-09-08 for implementation of #75–#77.
 Existing fixes #71/#73, documentation move #74, and verification of the already
 merged #68 proceed under their issue requirements and existing specifications.
 
