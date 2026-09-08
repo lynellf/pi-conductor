@@ -268,6 +268,110 @@ describe("RoleTurnProducer — record-count suppression (spec §5.4)", () => {
   });
 });
 
+describe("RoleTurnProducer — bounded bytes within one assistant message (issue #68)", () => {
+  it("persists turn truncation using the remaining turn allowance", () => {
+    const log = new InMemoryRecordLog();
+    const limits: RoleTurnTelemetryLimits = {
+      ...DEFAULT_ROLE_TURN_LIMITS,
+      max_block_utf8_bytes: 8,
+      max_turn_utf8_bytes: 10,
+      max_session_utf8_bytes: 20,
+      max_run_utf8_bytes: 20,
+    };
+    const producer = new RoleTurnProducer({
+      runId: "run-turn-bounds",
+      log,
+      telemetry: { limits },
+    });
+    const context = {
+      runId: "run-turn-bounds",
+      role: "worker" as const,
+      roleSessionId: "logical-1",
+      conversationId: "physical-1",
+      sessionFile: "/tmp/physical-1.jsonl",
+      persist: (record: RoleTurnRecord) => log.append(record as PersistedRecord),
+    };
+
+    producer.capture(context, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "12345678" },
+        { type: "text", text: "abcd" },
+      ],
+      stopReason: "stop",
+      timestamp: 1,
+    } as unknown as AssistantMessage);
+
+    const turns = log.records("run-turn-bounds").filter((record) => record.type === "role_turn");
+    expect(turns).toHaveLength(1);
+    const turn = turns[0];
+    if (turn === undefined) throw new Error("expected one role_turn record");
+    expect(turn.blocks.map((block) => block.text)).toEqual(["12345678", "ab"]);
+    expect(turn.blocks[1]?.truncated_by).toEqual(["turn"]);
+    expect(turn.capture.captured.utf8_bytes).toBe(10);
+    expect(turn.capture.limit_causes).toEqual(["turn"]);
+    expect(
+      () => new RoleTurnProducer({ runId: "run-turn-bounds", log, telemetry: { limits } }),
+    ).not.toThrow();
+  });
+
+  it("does not persist more than the session/run byte budgets across message blocks", () => {
+    const log = new InMemoryRecordLog();
+    const limits: RoleTurnTelemetryLimits = {
+      ...DEFAULT_ROLE_TURN_LIMITS,
+      max_block_utf8_bytes: 8,
+      max_turn_utf8_bytes: 10,
+      max_session_utf8_bytes: 20,
+      max_run_utf8_bytes: 20,
+    };
+    const producer = new RoleTurnProducer({
+      runId: "run-byte-bounds",
+      log,
+      telemetry: { limits },
+    });
+    const context = {
+      runId: "run-byte-bounds",
+      role: "worker" as const,
+      roleSessionId: "logical-1",
+      conversationId: "physical-1",
+      sessionFile: "/tmp/physical-1.jsonl",
+      persist: (record: RoleTurnRecord) => log.append(record as PersistedRecord),
+    };
+
+    producer.capture(context, {
+      role: "assistant",
+      content: [{ type: "text", text: "12345678" }],
+      stopReason: "stop",
+      timestamp: 1,
+    } as unknown as AssistantMessage);
+    producer.capture(context, {
+      role: "assistant",
+      content: [{ type: "text", text: "1234567" }],
+      stopReason: "stop",
+      timestamp: 2,
+    } as unknown as AssistantMessage);
+    producer.capture(context, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "12345" },
+        { type: "text", text: "12345" },
+      ],
+      stopReason: "stop",
+      timestamp: 3,
+    } as unknown as AssistantMessage);
+
+    const turns = log.records("run-byte-bounds").filter((record) => record.type === "role_turn");
+    expect(turns).toHaveLength(3);
+    expect(turns.reduce((sum, turn) => sum + turn.capture.captured.utf8_bytes, 0)).toBe(20);
+    const finalTurn = turns[2];
+    expect(finalTurn?.blocks).toHaveLength(1);
+    expect(finalTurn?.capture.limit_causes).toEqual(["session", "run"]);
+    expect(
+      () => new RoleTurnProducer({ runId: "run-byte-bounds", log, telemetry: { limits } }),
+    ).not.toThrow();
+  });
+});
+
 describe("RoleTurnProducer — trajectory continuation identity (spec §3.2.6 / §5.4)", () => {
   // Mirrors the production/shared-host `continueTrajectory` contract: a single
   // run-owned producer serves the source context, then (after detaching the

@@ -42,6 +42,7 @@ import { setCurrentOrchestratorRole } from "../current-orchestrator.js";
 import { formatHandoffNotify } from "../handoff-view.js";
 import { DEFAULT_MANIFEST_PATH, HOME_MANIFEST_PATH, resolveManifestPath } from "../manifest.js";
 import { startStatusPoller, trackStatusPoller } from "../status.js";
+import { formatTerminalReason } from "../terminal-diagnostic.js";
 import { installConductEscapeAbortListener, notifyEscapeAbortResult } from "./abort-active-run.js";
 import { ensureRunBaseDir, type HandleDeps } from "./start.js";
 
@@ -176,8 +177,9 @@ export async function handleResume(
 
   try {
     const { finalCheckpoint, exitReason } = await handle.completion();
+    const terminalReason = formatTerminalReason(exitReason, handle.log.records(handle.runId));
     notify(
-      `pi-conductor run_id=${handle.runId} reached terminal state=${finalCheckpoint.current_role} reason=${exitReason}`,
+      `pi-conductor run_id=${handle.runId} reached terminal state=${finalCheckpoint.current_role} reason=${terminalReason}`,
       "info",
     );
   } catch (err) {

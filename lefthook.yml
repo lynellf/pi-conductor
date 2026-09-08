@@ -17,4 +17,9 @@ pre-push:
       run: pnpm typecheck
     unit-tests:
       tags: test
-      run: pnpm test
+      run: |
+        # Git hooks can inherit repository-local variables from a parent Git
+        # process (for example GIT_DIR from a linked worktree). Clear only
+        # Git's local environment so tests resolve their own repository.
+        unset $(git rev-parse --local-env-vars)
+        pnpm test

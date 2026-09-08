@@ -305,6 +305,30 @@ describe("buildRoleTurnCapture (§5.3)", () => {
     expect(result.omitted.blocks).toBe(1);
     expect(result.limit_causes).toEqual(["turn"]);
   });
+
+  it("subtracts bytes retained earlier in the same turn from session and run allowances", () => {
+    const limits: RoleTurnTelemetryLimits = {
+      ...DEFAULT_LIMITS,
+      max_block_utf8_bytes: 8,
+      max_turn_utf8_bytes: 10,
+      max_session_utf8_bytes: 20,
+      max_run_utf8_bytes: 20,
+    };
+
+    const result = capture(
+      [
+        { kind: "text", text: "12345" },
+        { kind: "text", text: "12345" },
+      ],
+      { sessionBytes: 15, runBytes: 15 },
+      limits,
+    );
+
+    expect(result.blocks).toHaveLength(1);
+    expect(result.captured.utf8_bytes).toBe(5);
+    expect(result.omitted.blocks).toBe(1);
+    expect(result.limit_causes).toEqual(["session", "run"]);
+  });
 });
 
 // ─── §5.3 saturated boundaries ─────────────────────────────────────────

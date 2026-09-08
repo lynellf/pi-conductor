@@ -37,3 +37,8 @@ onlyBuiltDependencies:
   - lefthook
   - '@google/genai'
   - protobufjs
+
+# Temporary targeted transport security fix; remove after the public-runtime SDK
+# migration in issue #67. Keep Pi pinned at 0.80.6.
+overrides:
+  '@earendil-works/pi-coding-agent@0.80.6>undici': 8.9.0

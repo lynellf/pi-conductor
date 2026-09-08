@@ -118,8 +118,9 @@ export function buildRoleTurnCapture(
     // §5.3: effective allowance is the min of the four byte scopes.
     const blockAllowance = limits.max_block_utf8_bytes;
     const turnAllowance = limits.max_turn_utf8_bytes - turnCapturedBytes;
-    const sessionAllowance = limits.max_session_utf8_bytes - counters.sessionBytes;
-    const runAllowance = limits.max_run_utf8_bytes - counters.runBytes;
+    const sessionAllowance =
+      limits.max_session_utf8_bytes - counters.sessionBytes - turnCapturedBytes;
+    const runAllowance = limits.max_run_utf8_bytes - counters.runBytes - turnCapturedBytes;
     const effective = Math.min(blockAllowance, turnAllowance, sessionAllowance, runAllowance);
 
     if (candidateBytes <= effective) {
@@ -140,7 +141,7 @@ export function buildRoleTurnCapture(
     }
 
     // §5.3 step 3 / 4: a non-empty candidate exceeds the effective allowance.
-    const responsible = responsibleScopes(effective, limits, counters);
+    const responsible = responsibleScopes(effective, limits, counters, turnCapturedBytes);
     const prefix = roleTurnPrefixWithinBytes(candidate.text, effective);
     if (prefix.length > 0) {
       // At least one complete code point fits: retain the longest fitting prefix.
@@ -194,12 +195,13 @@ function responsibleScopes(
   effective: number,
   limits: RoleTurnTelemetryLimits,
   counters: RoleTurnCaptureCounters,
+  turnCapturedBytes: number,
 ): RoleTurnLimitScope[] {
   const allowances: readonly [RoleTurnLimitScope, number][] = [
     ["block", limits.max_block_utf8_bytes],
-    ["turn", limits.max_turn_utf8_bytes],
-    ["session", limits.max_session_utf8_bytes - counters.sessionBytes],
-    ["run", limits.max_run_utf8_bytes - counters.runBytes],
+    ["turn", limits.max_turn_utf8_bytes - turnCapturedBytes],
+    ["session", limits.max_session_utf8_bytes - counters.sessionBytes - turnCapturedBytes],
+    ["run", limits.max_run_utf8_bytes - counters.runBytes - turnCapturedBytes],
   ];
   return allowances.filter(([, allowance]) => allowance === effective).map(([scope]) => scope);
 }
