@@ -63,6 +63,13 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // parser + the typed error so consumers can `import { parseManifest }`
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
+export type { ToolExecutionPolicy } from "./manifest/execution-policy.js";
+export {
+  DEFAULT_TOOL_EXECUTION_POLICY,
+  parseToolExecutionPolicy,
+  resolveToolExecutionPolicy,
+  validateToolExecutionPolicy,
+} from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
 export type { PrewalkManifestErrorCode } from "./manifest/prewalk.js";
 export { deriveGuideTranscriptBudget } from "./manifest/prewalk.js";

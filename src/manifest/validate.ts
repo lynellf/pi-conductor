@@ -19,6 +19,7 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+import { validateToolExecutionPolicy } from "./execution-policy.js";
 import {
   type ManifestValidationContext,
   type PrewalkManifestErrorCode,
@@ -82,6 +83,8 @@ export type ManifestErrorCode =
   | "trajectory-target-model-unresolved"
   /** Issue #63: target trajectory environment requires explicit instructions. */
   | "trajectory-target-system-prompt-unresolved"
+  /** Issue #76: executable tool policy contains malformed values or keys. */
+  | "invalid-tool-execution-policy"
   /** Experimental Prewalk manifest and derived-admission failures. */
   | PrewalkManifestErrorCode;
 
@@ -290,6 +293,12 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
   }
 
   for (const role of m.roles) {
+    for (const message of validateToolExecutionPolicy(
+      role.tool_execution,
+      `role '${role.name}'.tool_execution`,
+    )) {
+      errors.push({ code: "invalid-tool-execution-policy", message, role: role.name });
+    }
     validatePrewalkRole(role, context, (code, message) => {
       errors.push({ code, message, role: role.name });
     });
@@ -533,6 +542,15 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
           });
         }
       }
+    }
+  }
+
+  for (const profile of m.subagents ?? []) {
+    for (const message of validateToolExecutionPolicy(
+      profile.tool_execution,
+      `subagent '${profile.name}'.tool_execution`,
+    )) {
+      errors.push({ code: "invalid-tool-execution-policy", message });
     }
   }
 

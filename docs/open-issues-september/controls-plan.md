@@ -27,9 +27,9 @@ concurrent edits in the original checkout remain preserved.
      normal exit and abort races. Focused tests and typecheck pass.
    - Files: new `src/host/execution/supervised-process*.ts` and focused tests.
 2. Pinned policy contract (independent of subprocess foundation).
-   - [ ] Parse/validate/freeze role and subagent policy; omitted defaults and
+   - [x] Parse/validate/freeze role and subagent policy; omitted defaults and
      positive finite integer limits; programmatic invalid values rejected.
-   - [ ] Table-driven manifest tests and typecheck pass.
+   - [x] Table-driven manifest tests and typecheck pass (60 focused tests).
    - Files: manifest policy module, types, parser, validator and focused test.
 3. Durable execution lifecycle (depends on 1–2).
    - [ ] Typed start/result identities, one terminal result, recovery accounting

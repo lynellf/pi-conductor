@@ -26,6 +26,7 @@ import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
+import { parseToolExecutionPolicy } from "./execution-policy.js";
 import { parsePrewalkConfig } from "./prewalk.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
@@ -177,6 +178,10 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     entry.completion_protocol,
     `${path}.completion_protocol`,
   );
+  const tool_execution =
+    entry.tool_execution === undefined
+      ? undefined
+      : parseToolExecutionPolicy(entry.tool_execution, `${path}.tool_execution`);
   const workspace =
     entry.workspace === undefined
       ? undefined
@@ -188,6 +193,7 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     max_session_cost_usd,
     system_prompt,
     completion_protocol,
+    ...(tool_execution === undefined ? {} : { tool_execution }),
     ...(workspace === undefined ? {} : { workspace }),
   }) as SubagentProfile;
 }
@@ -274,6 +280,9 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     }),
     ...(entry.delegation !== undefined && {
       delegation: parseDelegationPolicy(entry.delegation, index),
+    }),
+    ...(entry.tool_execution !== undefined && {
+      tool_execution: parseToolExecutionPolicy(entry.tool_execution, `${path}.tool_execution`),
     }),
     ...(entry.workspace !== undefined && {
       workspace: parseWorkspaceConfig(entry.workspace, index),
