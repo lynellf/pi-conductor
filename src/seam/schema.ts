@@ -267,9 +267,7 @@ export const delegateSubmissionArgsSchema = Type.Object(
 export type DelegateSubmissionArgs = Static<typeof delegateSubmissionArgsSchema>;
 
 /** Build the model-visible submission schema constrained to trusted policy mode (Issue #86). */
-export function delegateSubmissionArgsSchemaForMode(
-  mode: "blocking" | "nonblocking",
-) {
+export function delegateSubmissionArgsSchemaForMode(mode: "blocking" | "nonblocking") {
   return Type.Object(
     {
       tasks: Type.Array(delegateTaskSchema, { minItems: 1 }),
@@ -280,11 +278,7 @@ export function delegateSubmissionArgsSchemaForMode(
 }
 
 /** Describe the effective behavior selected by the pinned parent policy. */
-export function delegateModeDescription(mode: "blocking" | "nonblocking"): string {
-  return mode === "blocking"
-    ? "Submissions wait for all accepted children and return ordered results."
-    : "Submissions return stable child handles after durable acceptance; use wait for results.";
-}
+export { delegateModeDescription } from "../manifest/delegation-mode.js";
 
 /** Strict control operation over already accepted delegated children. */
 export const delegateControlArgsSchema = Type.Object(

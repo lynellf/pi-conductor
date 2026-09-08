@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertDelegationMode,
   DEFAULT_DELEGATION_MODE,
   resolveDelegationMode,
 } from "../../src/manifest/delegation-mode.js";
 import { parseManifest } from "../../src/manifest/parse.js";
-import { validateManifest } from "../../src/manifest/validate.js";
 import type { DelegationPolicy, Manifest } from "../../src/manifest/types.js";
+import { validateManifest } from "../../src/manifest/validate.js";
 
 const policy = (mode?: DelegationPolicy["mode"]): DelegationPolicy => ({
   ...(mode === undefined ? {} : { mode }),
@@ -22,6 +23,17 @@ describe("manifest delegation mode (Issue #86)", () => {
 
   it("defaults omitted programmatic policy to blocking", () => {
     expect(resolveDelegationMode(policy())).toBe(DEFAULT_DELEGATION_MODE);
+  });
+
+  it("allows omitted or matching compatibility mode", () => {
+    expect(() => assertDelegationMode("blocking", undefined)).not.toThrow();
+    expect(() => assertDelegationMode("nonblocking", "nonblocking")).not.toThrow();
+  });
+
+  it("rejects conflicting compatibility mode before admission", () => {
+    expect(() => assertDelegationMode("blocking", "nonblocking")).toThrow(
+      "manifest configures blocking",
+    );
   });
 
   it("normalizes omitted YAML mode to blocking", () => {
@@ -68,6 +80,12 @@ roles:
     (manifest.roles[0]?.delegation as { mode?: unknown }).mode = "sometimes";
     expect(validateManifest(manifest).errors.map((error) => error.code)).toContain(
       "invalid-delegation-mode",
+    );
+  });
+
+  it("does not silently default a null programmatic mode", () => {
+    expect(() => resolveDelegationMode({ ...policy(), mode: null as never })).toThrow(
+      "delegation.mode must be",
     );
   });
 });
