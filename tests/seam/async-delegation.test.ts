@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   delegateArgsSchema,
-  delegateModeDescription,
-  delegateSubmissionArgsSchemaForMode,
   delegateControlArgsSchema,
+  delegateModeDescription,
   delegateSubmissionArgsSchema,
+  delegateSubmissionArgsSchemaForMode,
 } from "../../src/seam/schema.js";
 
 const task = {

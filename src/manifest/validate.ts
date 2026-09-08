@@ -379,7 +379,11 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
     if (role.delegation) {
       const policy = role.delegation;
 
-      if (policy.mode !== undefined && policy.mode !== "blocking" && policy.mode !== "nonblocking") {
+      if (
+        policy.mode !== undefined &&
+        policy.mode !== "blocking" &&
+        policy.mode !== "nonblocking"
+      ) {
         errors.push({
           code: "invalid-delegation-mode",
           message: `role '${role.name}' has invalid \`delegation.mode\`; expected "blocking" or "nonblocking"`,
