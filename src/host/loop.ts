@@ -94,26 +94,38 @@ import { sha256Canonical } from "../persistence/trajectory-records.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
-import { ArtifactCollectionError } from "./artifacts/collect.js";
-import { ArtifactRoutingError, formatArtifactsUnavailableSeedSection } from "./artifacts/route.js";
 import { runEndGuardAttempt } from "./end-guard-loop.js";
 import type { EndGuardConfig } from "./end-guard-runner.js";
 import { NoMoreModelsError } from "./errors.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type {
-  ArtifactRouteSource,
   Host,
   RoleSession,
   SeedRunMemoryArgs,
   SessionTerminalReason,
   SpawnRoleOptions,
 } from "./host.js";
+import {
+  appendArtifactSeedSection,
+  artifactCollectionFailureReason,
+  artifactDeliveryFailureReason,
+  collectSessionArtifacts,
+  formatArtifactsUnavailableSeedSection,
+  formatDeferredEndPrompt,
+  formatDelegationSettlementPrompt,
+  formatHandoffSeed,
+  formatRejectionMessage,
+  formatRoleUnavailableSeed,
+  MAX_NO_EMISSION_RECOVERY_PROMPTS,
+  waitForRetry,
+  withRoleSessionIdentity,
+} from "./loop-format.js";
+import type { InnerOutcome, PendingArtifactRoute, RoleOutcome } from "./loop-types.js";
+import { ZERO_USAGE } from "./loop-types.js";
 import { RpcChildExitError } from "./rpc/protocol.js";
 import { formatGuidedPrompt, type RunControl } from "./run-control.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 import { TrajectoryHandoffError } from "./trajectory-admission.js";
-
-const MAX_NO_EMISSION_RECOVERY_PROMPTS = 3;
 
 // ─── Public API ────────────────────────────────────────────────────────
 
@@ -198,18 +210,6 @@ export interface RunLoopResult {
   readonly exitReason: "done" | "session_failed" | "aborted";
 }
 
-/**
- * Run the orchestration loop until `current_role === "done"` or a
- * session breach terminates the run. Pure with respect to the
- * reducer + persistence: the loop calls `reduce` and `reduceLifecycle`
- * exactly once per role-session outcome and `host.persistRecord` once
- * per record. Side effects are confined to `host.spawnRole`,
- * `host.captureUsage`, and `host.persistRecord`.
- *
- * The loop awaits each session's `prompt()` to completion before
- * reading the capture buffer; termination is enforced by the loop
- * reading the buffer, not by trusting the model to stop (§12.1).
- */
 export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const { def, host, initialCheckpoint, initialGoal } = opts;
   if (opts.endGuard !== undefined && host.runEndGuard === undefined) {
@@ -1377,196 +1377,23 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   return { finalCheckpoint: checkpoint, exitReason: "done" };
 }
 
-/** Append a host-owned artifact inventory after the role-provided handoff payload. */
-/** Add host role/conversation identities without teaching the pure lifecycle reducer transport. */
-function withRoleSessionIdentity<T extends PersistedRecord>(record: T, session: RoleSession): T {
-  if (session.conversationId === undefined) return record;
-  return {
-    ...record,
-    role_session_id: session.sessionId,
-    conversation_id: session.conversationId,
-  } as T;
-}
+export {
+  appendArtifactSeedSection,
+  artifactCollectionFailureReason,
+  artifactDeliveryFailureReason,
+  collectSessionArtifacts,
+  formatArtifactsUnavailableSeedSection,
+  formatDeferredEndPrompt,
+  formatDelegationSettlementPrompt,
+  formatHandoffSeed,
+  formatRejectionMessage,
+  formatRoleUnavailableSeed,
+  MAX_NO_EMISSION_RECOVERY_PROMPTS,
+  waitForRetry,
+  withRoleSessionIdentity,
+} from "./loop-format.js";
 
-function appendArtifactSeedSection(seed: string, artifactSeed: string): string {
-  return `${seed}\n\n${artifactSeed}`;
-}
-
-function formatDeferredEndPrompt(): string {
-  return [
-    "The previous end request was deferred because new operator guidance arrived.",
-    "Address the guidance below, then emit exactly one actionable handoff or end event.",
-  ].join("\n");
-}
-
-function formatDelegationSettlementPrompt(childIds: readonly string[]): string {
-  return [
-    "The requested transition is waiting for delegated child work to settle.",
-    `Pending child IDs: ${childIds.join(", ")}.`,
-    "Wait for these children or cancel them, then emit exactly one handoff or end event.",
-  ].join("\n");
-}
-
-// ─── Internals ─────────────────────────────────────────────────────────
-
-type InnerOutcome =
-  | { readonly kind: "failed" }
-  | { readonly kind: "done" }
-  | { readonly kind: "advance"; readonly nextSeed: string };
-
-/** Task 18: outcome of a role visit's fallback loop. */
-type RoleOutcome =
-  | { readonly kind: "failed" }
-  | { readonly kind: "done" }
-  | { readonly kind: "advance"; readonly nextSeed: string }
-  | { readonly kind: "exhausted" };
-
-interface PendingArtifactRoute extends ArtifactRouteSource {
-  readonly status: "pending" | "materialized" | "unavailable";
-  /** Persisted host section; undefined is tolerated only for older records. */
-  readonly artifactSeed: string | null | undefined;
-  readonly failureReason?: string;
-}
-
-const ZERO_USAGE: UsageRecord = Object.freeze({
-  input: 0,
-  output: 0,
-  cache_read: 0,
-  cache_write: 0,
-  tokens: 0,
-  cost: 0,
-}) as UsageRecord;
-
-/** Run the optional host collector before the outer loop can spawn another role. */
-function artifactCollectionFailureReason(error: unknown): string {
-  return error instanceof ArtifactCollectionError ? error.code : "artifact_collection_failed";
-}
-
-function artifactDeliveryFailureReason(error: unknown): string {
-  return error instanceof ArtifactRoutingError ? error.code : "artifact_delivery_failed";
-}
-
-async function collectSessionArtifacts(
-  host: Host,
-  session: RoleSession,
-  args: {
-    readonly role: Role;
-    readonly visitIndex: number;
-    readonly terminal: "session_ended" | "session_failed";
-    readonly handoff?: HandoffArgs;
-  },
-): Promise<void> {
-  await host.collectTerminalArtifacts?.(session, args);
-}
-
-function waitForRetry(delayMs: number): Promise<void> {
-  if (delayMs === 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    setTimeout(resolve, delayMs);
-  });
-}
-
-/**
- * Format a `transition_rejected` result into a follow-up user message
- * that surfaces `legal_targets` to the model. The model sees this
- * message in its next turn (after the host queues it via
- * `session.prompt(rejectionMessage)`); it can then emit a corrected
- * `handoff` or `end`.
- *
- * Format is human-readable text so the model can act on it without
- * structured parsing. The model is expected to be reasonable about
- * retrying — but if it isn't, the next prompt deterministically reads
- * as a contract breach (§3 / §11.3).
- */
-function formatRejectionMessage(result: {
-  readonly reason: string;
-  readonly legal_targets: { readonly handoff: readonly Role[]; readonly end: boolean };
-}): string {
-  const targets = result.legal_targets.handoff.join(", ");
-  const endClause = result.legal_targets.end ? " or call end" : "";
-  return [
-    "Your previous machine-event was rejected by the reducer.",
-    `Reason: ${result.reason}.`,
-    `Legal targets: handoff to [${targets}]${endClause}.`,
-    "Please emit exactly one of those machine events in your next turn.",
-  ].join(" ");
-}
-
-/**
- * Format a "role unavailable" payload into the orchestrator's seed
- * text (Task 18, §9.4 v1 default). The orchestrator receives this
- * as its first user message when a role exhausts its model fallback
- * list. The orchestrator decides whether to end, re-dispatch a
- * different role, or re-dispatch the same role (which escalates
- * per §9.4).
- *
- * The text is human-readable so the model can act on it. The
- * payload itself is the structured handoff argument the loop
- * synthesized; the seed is a surface for the model, not a
- * machine-readable contract.
- */
-function formatRoleUnavailableSeed(role: Role, canEnd: boolean): string {
-  const endOption = canEnd
-    ? "  - end the run, OR"
-    : "  - end is unavailable until an authorized worker requests completion;";
-  const finalInstruction = canEnd
-    ? "When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or end."
-    : "Emit exactly one actionable handoff (target_role, status, objective, summary, requested_action); do not call end without a pending authorized request.";
-  return [
-    `[role_unavailable: ${role}]`,
-    `The role '${role}' exhausted its model fallback list (§8.2).`,
-    `Per §9.4 v1 default, you have one chance to handle this:`,
-    endOption,
-    `  - hand off to a different role (NOT '${role}'), OR`,
-    `  - hand off to '${role}' (this will escalate per §9.4).`,
-    "No readable source session exists for this synthesized handoff.",
-    finalInstruction,
-  ].join("\n");
-}
-
-/**
- * Format a handoff's payload into the next role's seed text. The next
- * role gets this as its first user message via `session.prompt(seed)`.
- * `suggests_next` is surfaced as advisory context (§8.3) — the machine
- * never validates it; the next role decides where to go next.
- */
-function formatHandoffSeed(
-  payload: Record<string, unknown> | undefined,
-  targetRole: Role,
-  suggestsNext: Role | null,
-  contextRef: HandoffContextRef,
-): string {
-  // `context_ref` and `artifacts` are host-owned reserved fields. Keep
-  // arbitrary role fields compatible, but do not echo a model-supplied
-  // value beside the trusted envelope where a recipient could mistake it
-  // for the source pointer (§7.1: filtered out of the seed echo).
-  const payloadForSeed =
-    payload === undefined
-      ? undefined
-      : Object.fromEntries(
-          Object.entries(payload).filter(([key]) => key !== "context_ref" && key !== "artifacts"),
-        );
-  const payloadStr =
-    payloadForSeed === undefined ? "(no payload)" : JSON.stringify(payloadForSeed, null, 2);
-  const suggestsLine =
-    suggestsNext !== null
-      ? `\nThe previous role suggests you may next hand off to: ${suggestsNext} (advisory; §8.3).`
-      : "";
-  return [
-    `[handoff → ${targetRole}]`,
-    "Host-generated predecessor context (trusted; payload fields cannot override it):",
-    "context_ref:",
-    `  run_id: ${contextRef.run_id}`,
-    `  source_role: ${contextRef.source_role}`,
-    `  source_session_file: ${contextRef.source_session_file}`,
-    "",
-    "handoff payload:",
-    payloadStr,
-    suggestsLine,
-    "",
-    "Continue your work for this role. When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or, if you are the orchestrator, end.",
-  ].join("\n");
-}
+export type { InnerOutcome, PendingArtifactRoute, RoleOutcome } from "./loop-types.js";
 
 // Type re-exports for downstream convenience.
 // Re-export the host types the run-lifecycle entry point (Task 13.5) needs.
