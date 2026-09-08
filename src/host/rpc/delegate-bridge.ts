@@ -16,6 +16,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
+import { assertDelegationMode } from "../../manifest/delegation-mode.js";
+import type { DelegationMode } from "../../manifest/types.js";
 import {
   type DelegateArgs,
   delegateArgsSchema,
@@ -137,6 +139,10 @@ export async function requestDelegateBridge(options: {
   readonly directory: string;
   readonly args: DelegateArgs;
   readonly actualToolCallId: string;
+  /** Trusted mode from the host-written RPC configuration. */
+  readonly configuredMode?: DelegationMode;
+  /** Trusted historical provenance for legacy per-call mode semantics. */
+  readonly legacyDelegationMode?: boolean;
   readonly signal?: AbortSignal;
   /** Test-only bound; production uses a five-minute operation deadline. */
   readonly timeoutMs?: number;
@@ -169,6 +175,8 @@ async function requestMachineToolBridge(options: {
   readonly argsSchema: typeof delegateArgsSchema | typeof requestFilesArgsSchema;
   readonly toolName: "delegate" | "request_files";
   readonly actualToolCallId?: string;
+  readonly configuredMode?: DelegationMode;
+  readonly legacyDelegationMode?: boolean;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
 }): Promise<MachineToolBridgeResult> {
@@ -178,6 +186,14 @@ async function requestMachineToolBridge(options: {
       `${options.toolName} bridge request arguments are invalid`,
     );
   }
+  if (
+    options.toolName === "delegate" &&
+    options.configuredMode !== undefined &&
+    options.legacyDelegationMode !== true &&
+    "tasks" in options.args
+  ) {
+    assertDelegationMode(options.configuredMode, options.args.mode);
+  }
   if (options.signal?.aborted === true) {
     throw new DelegateBridgeInterruptedError(`${options.toolName} bridge request was interrupted`);
   }
@@ -185,7 +201,10 @@ async function requestMachineToolBridge(options: {
     options.timeoutMs ??
     (options.toolName === "delegate" &&
     Value.Check(delegateArgsSchema, options.args) &&
-    hasUnboundedWait(options.args)
+    hasUnboundedWait(
+      options.args,
+      options.legacyDelegationMode === true ? undefined : (options.configuredMode ?? "blocking"),
+    )
       ? undefined
       : DEFAULT_RESPONSE_TIMEOUT_MS);
   if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)) {
@@ -221,9 +240,9 @@ async function requestMachineToolBridge(options: {
   }
 }
 
-function hasUnboundedWait(args: DelegateArgs): boolean {
+function hasUnboundedWait(args: DelegateArgs, configuredMode?: DelegationMode): boolean {
   if ("operation" in args) return args.operation === "wait";
-  return args.mode === undefined || args.mode === "blocking";
+  return (configuredMode ?? args.mode ?? "blocking") === "blocking";
 }
 
 /** Host-side owner for one canonical per-session bridge directory. */

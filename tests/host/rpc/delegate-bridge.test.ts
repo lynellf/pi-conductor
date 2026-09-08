@@ -177,6 +177,7 @@ describe("isolated delegate bridge", () => {
       directory: bridgeDirectory,
       args: delegateArgs,
       actualToolCallId: "blocking-call",
+      configuredMode: "blocking",
       signal: blockingAbort.signal,
     });
     await waitForRequest(bridgeDirectory);
@@ -189,6 +190,7 @@ describe("isolated delegate bridge", () => {
       directory: bridgeDirectory,
       args: { ...delegateArgs, mode: "nonblocking" },
       actualToolCallId: "nonblocking-call",
+      configuredMode: "nonblocking",
       signal: nonblockingAbort.signal,
     });
     await waitForRequest(bridgeDirectory);

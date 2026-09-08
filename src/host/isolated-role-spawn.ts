@@ -56,6 +56,8 @@ export async function spawnIsolatedRoleSession(options: {
   readonly createDelegateBridgeHandler?: (
     primaryCheckout: string,
   ) => Promise<DelegateBridgeHandler>;
+  /** Explicit durable provenance for pre-#86 snapshots without a mode field. */
+  readonly legacyDelegationMode?: boolean;
   /** Prior attempt records used to enforce timeout recovery across role replacement. */
   readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
   /** Loop-owned, 1-based index shared by every model attempt in this role invocation. */
@@ -165,6 +167,12 @@ export async function spawnIsolatedRoleSession(options: {
       ...(requestFilesAuthorized ? (["request_files"] as const) : []),
     ],
     ...(delegateAuthorized ? { enableDelegateBridge: true } : {}),
+    ...(delegateAuthorized && options.roleConfig?.delegation?.mode !== undefined
+      ? { delegationMode: options.roleConfig.delegation.mode }
+      : {}),
+    ...(delegateAuthorized && options.legacyDelegationMode === true
+      ? { legacyDelegationMode: true }
+      : {}),
     ...(requestFilesAuthorized ? { enableRequestFilesBridge: true } : {}),
     ...(confinedTools.activeNames.length === 0 ? {} : { enableExecutionBridge: true }),
     ...(confinedTools.activeNames.length === 0

@@ -7,6 +7,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import type { Role } from "../../core/types.js";
+import type { DelegationMode } from "../../manifest/types.js";
 
 /** Environment variable naming the mandatory machine-tools configuration file. */
 export const MACHINE_TOOLS_CONFIG_ENV = "PI_CONDUCTOR_MACHINE_TOOLS_CONFIG";
@@ -33,6 +34,10 @@ export const machineToolsConfigSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    delegationMode: Type.Optional(
+      Type.Union([Type.Literal("blocking"), Type.Literal("nonblocking")]),
+    ),
+    legacyDelegationMode: Type.Optional(Type.Boolean()),
     requestFilesBridge: Type.Optional(
       Type.Object(
         {
@@ -81,6 +86,10 @@ export interface WriteMachineToolsConfigOptions {
   readonly declaredToolNames: readonly string[];
   /** Explicitly provision the host-owned bridge directory required for `delegate`. */
   readonly enableDelegateBridge?: boolean;
+  /** Trusted effective mode for this role's delegation policy. */
+  readonly delegationMode?: DelegationMode;
+  /** Explicit durable provenance for pre-mode snapshots. */
+  readonly legacyDelegationMode?: boolean;
   /** Explicitly provision the host-owned bridge directory required for `request_files`. */
   readonly enableRequestFilesBridge?: boolean;
   /** Explicitly provision the host-owned bridge directory for executable file tools. */
@@ -125,6 +134,10 @@ export async function writeMachineToolsConfig(
     ...(options.enableDelegateBridge === true && bridgeDirectory !== undefined
       ? { delegateBridge: { directory: bridgeDirectory } }
       : {}),
+    ...(options.delegationMode === undefined ? {} : { delegationMode: options.delegationMode }),
+    ...(options.legacyDelegationMode === undefined
+      ? {}
+      : { legacyDelegationMode: options.legacyDelegationMode }),
     ...(options.enableRequestFilesBridge === true && bridgeDirectory !== undefined
       ? { requestFilesBridge: { directory: bridgeDirectory } }
       : {}),
@@ -199,6 +212,10 @@ export function loadMachineToolsConfig(env: NodeJS.ProcessEnv = process.env): Ma
             ),
           }),
         }),
+    ...(parsed.delegationMode === undefined ? {} : { delegationMode: parsed.delegationMode }),
+    ...(parsed.legacyDelegationMode === undefined
+      ? {}
+      : { legacyDelegationMode: parsed.legacyDelegationMode }),
     ...(parsed.requestFilesBridge === undefined
       ? {}
       : {

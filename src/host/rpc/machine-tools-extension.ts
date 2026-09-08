@@ -24,7 +24,7 @@ import {
 import { buildConfinedTools } from "../workspace/confine-tools.js";
 import { requestDelegateBridge, requestFilesBridge } from "./delegate-bridge.js";
 import { requestExecutionBridge } from "./execution-bridge.js";
-import { loadMachineToolsConfig } from "./machine-tools-config.js";
+import { loadMachineToolsConfig, type MachineToolsConfig } from "./machine-tools-config.js";
 
 /** Register the static, config-gated tool surface for one isolated RPC role process. */
 export default function machineToolsExtension(pi: ExtensionAPI): void {
@@ -50,7 +50,13 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
     }
   }
   if (config.delegateBridge !== undefined && config.declaredToolNames.includes("delegate")) {
-    pi.registerTool(createDelegateBridgeTool(config.delegateBridge.directory));
+    pi.registerTool(
+      createDelegateBridgeTool(
+        config.delegateBridge.directory,
+        config.delegationMode,
+        config.legacyDelegationMode,
+      ),
+    );
   }
   if (
     config.requestFilesBridge !== undefined &&
@@ -84,7 +90,11 @@ function createExecutionBridgeTool(
   };
 }
 
-function createDelegateBridgeTool(directory: string): ToolDefinition {
+function createDelegateBridgeTool(
+  directory: string,
+  configuredMode: MachineToolsConfig["delegationMode"],
+  legacyDelegationMode: MachineToolsConfig["legacyDelegationMode"],
+): ToolDefinition {
   return defineTool({
     name: "delegate",
     label: "delegate",
@@ -96,6 +106,8 @@ function createDelegateBridgeTool(directory: string): ToolDefinition {
           directory,
           args,
           actualToolCallId: toolCallId,
+          ...(configuredMode === undefined ? {} : { configuredMode }),
+          ...(legacyDelegationMode === undefined ? {} : { legacyDelegationMode }),
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (error) {
