@@ -1,12 +1,10 @@
-import * as childProcess from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { runSupervisedProcess } from "../../src/host/execution/supervised-process.js";
-import * as identity from "../../src/host/execution/supervised-process-identity.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("node:child_process", async () => ({
-  ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
-}));
+let childProcess: typeof import("node:child_process");
+let identity: typeof import("../../src/host/execution/supervised-process-identity.js");
+let runSupervisedProcess: typeof import("../../src/host/execution/supervised-process.js").runSupervisedProcess;
 
 function deferred() {
   let resolve!: () => void;
@@ -37,7 +35,7 @@ function delayedClose(onMissingIdentity?: () => void) {
   const realSpawn = childProcess.spawn;
   const realIdentity = identity.readProcessIdentity;
   let releaseClose = () => {};
-  let child: childProcess.ChildProcess | undefined;
+  let child: ChildProcess | undefined;
   vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
     child = realSpawn(...args);
     const emit = child.emit.bind(child);
@@ -71,7 +69,23 @@ function delayedClose(onMissingIdentity?: () => void) {
 }
 
 describe("supervised process admission ordering review", () => {
-  afterEach(() => vi.restoreAllMocks());
+  beforeEach(async () => {
+    // Reproduce the full suite's prior subject import, then load the mock and
+    // subject together. A cached subject would otherwise retain the real spawn.
+    await import("../../src/host/execution/supervised-process.js");
+    vi.resetModules();
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    vi.doMock("node:child_process", () => ({ ...actual }));
+    childProcess = await import("node:child_process");
+    identity = await import("../../src/host/execution/supervised-process-identity.js");
+    ({ runSupervisedProcess } = await import("../../src/host/execution/supervised-process.js"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
+  });
 
   it.each([
     "exit",
@@ -196,7 +210,7 @@ describe("supervised process admission ordering review", () => {
   it("does not confirm cleanup for a live child whose identity is unavailable", async () => {
     const realSpawn = childProcess.spawn;
     const realIdentity = identity.readProcessIdentity;
-    let child: childProcess.ChildProcess | undefined;
+    let child: ChildProcess | undefined;
     vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
       child = realSpawn(...args);
       return child;
