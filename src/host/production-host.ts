@@ -31,8 +31,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-
-import type { Model } from "@earendil-works/pi-ai";
 import {
   type ExtensionContext,
   type ExtensionUIContext,
@@ -41,17 +39,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
-import type {
-  Checkpoint,
-  MachineDefinition,
-  ModelEffort,
-  Role,
-  UsageRecord,
-} from "../core/types.js";
-import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
-import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
-import { modeFor } from "../manifest/handoffs.js";
-import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
+import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
+import type { RoleConfig, WorkspaceSource } from "../manifest/types.js";
 
 import {
   type ArtifactCollectedRecord,
@@ -61,12 +50,7 @@ import {
   type SnapshotPinnedRecord,
   snapshotPinned,
 } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
-import {
-  type HandoffTransportSelectedRecord,
-  sha256Canonical,
-  TrajectoryResumeError,
-} from "../persistence/trajectory-records.js";
+import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
 import type { SessionState } from "./cost.js";
@@ -78,9 +62,7 @@ import {
   type EndGuardRunRequest,
   type EndGuardRunResult,
 } from "./end-guard-runner.js";
-import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
-import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import type {
   ArtifactRouteSource,
   Host,
@@ -88,15 +70,10 @@ import type {
   SessionTerminalReason,
   SpawnRoleOptions,
 } from "./host.js";
-import { spawnIsolatedRoleSession } from "./isolated-role-spawn.js";
 import type { LoadedManifest } from "./manifest.js";
-import {
-  buildToolsAllowlist,
-  loadSystemPrompt,
-  resolveModel,
-  selectModelEntry,
-} from "./production-host-resolve.js";
+import { type SpawnRoleContext, spawnRole as spawnRoleInModule } from "./production-host-spawn.js";
 import { resumeTrajectoryRole as resumeTrajectoryRoleInModule } from "./production-host-trajectory.js";
+import { selectAcceptedHandoffTransport as selectAcceptedHandoffTransportInModule } from "./production-host-trajectory-select.js";
 import { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
@@ -109,20 +86,9 @@ import type { NodeRoleSession } from "./rpc/node-role-session.js";
 import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
 import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
 import type { SessionEventSource } from "./session-event-handler.js";
-import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
-import {
-  admitTrajectory,
-  assertTrajectoryEffortSupported,
-  serializeActiveToolDefinitions,
-  TrajectoryHandoffError,
-} from "./trajectory-admission.js";
-import {
-  assertTrajectorySdkSupported,
-  assertTrajectorySdkSupportedForHandoffs,
-} from "./trajectory-sdk-capability.js";
+import { assertTrajectorySdkSupportedForHandoffs } from "./trajectory-sdk-capability.js";
 import {
   assertPersistedSnapshotPinResolves,
-  assertSupportedWorkspaceBackend,
   readPersistedSnapshotPin,
   resolvePinnedCommit,
 } from "./workspace/index.js";
@@ -296,289 +262,38 @@ export class ProductionHost implements Host {
   // in (one task at a time, per the plan's slice structure).
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
-    // ── Task 18: model-fallback policy (parity with StubHost) ──
-    // §9.4 v1 default: hand to orchestrator once, then escalate.
-    // The "unavailable" marker is set when the role's models were
-    // just exhausted; the next spawnRole for the same role
-    // surfaces as a typed error. Different-role spawns clear the
-    // marker (unless the different role is the orchestrator and
-    // the unavailable role was a non-orchestrator, in which case
-    // the marker persists so a same-role re-dispatch escalates).
-    if (this.unavailableRole === role) {
-      this.unavailableRole = null; // consume the escalation
-      throw new RoleEscalationError(role);
-    }
-    if (this.unavailableRole !== null && this.unavailableRole !== role) {
-      const orchestrator = this.loadedManifest.def.orchestrator;
-      if (role !== orchestrator) {
-        this.unavailableRole = null;
-      }
-    }
-
-    const roleConfig = this.lookupRoleConfig(role);
-    const declaredTools = roleConfig?.tools ?? [];
-    if (
-      declaredTools.some((name) =>
-        ["bash", "read", "write", "edit", "ls", "find", "grep"].includes(name),
-      ) &&
-      !isSupervisedProcessSupported()
-    ) {
-      throw new Error("role executable tools require a platform with supervised process cleanup");
-    }
-    // A replacement or trajectory successor must not begin while a prior
-    // executable still has unknown ownership. Resume applies the same guard;
-    // keeping it here also covers same-process fallback after disposal.
-    assertNoUnfinishedToolExecutions(
-      this.log
-        .records(this.runId)
-        .filter(
-          (record) =>
-            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-        ),
-    );
-    const resumedTransport = this.latestTrajectoryTransport(role);
-    if (resumedTransport?.type === "failed") {
-      throw new TrajectoryResumeError(
-        `trajectory handoff ${resumedTransport.record.from} → ${resumedTransport.record.to} previously failed: ${resumedTransport.record.code}`,
-      );
-    }
-    if (resumedTransport?.type === "selected") {
-      return this.resumeTrajectoryRole(
-        role,
-        roleConfig,
-        resumedTransport.record,
-        opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-      );
-    }
-    const roleWorkspaceConfig = roleConfig?.workspace;
-    const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
-    if (workspaceBackend === "container") {
-      assertSupportedWorkspaceBackend(workspaceBackend);
-    }
-    const modelIndex = opts.modelIndex ?? 0;
-
-    // ── Task 18: resolve the model from the role's models[] list.
-    // The "logical" model is the `provider:id` string the
-    // lifecycle record will carry; the SDK model is resolved via
-    // `resolveModel` against `this.modelRegistry`. On a registry
-    // miss (`NoMoreModelsError` for out-of-range index), the role
-    // is marked unavailable so the next re-dispatch escalates
-    // (§9.4 v1 default).
-    let entry: ModelConfig | null = null;
-    try {
-      entry = selectModelEntry(role, roleConfig, modelIndex);
-    } catch (e) {
-      if (e instanceof NoMoreModelsError) {
-        this.unavailableRole = role;
-      }
-      throw e;
-    }
-    let model: Model<never> | undefined;
-    let logical: string | null = null;
-    const effort: ModelEffort = entry?.effort ?? DEFAULT_MODEL_EFFORT;
-    const retries = entry?.retries ?? 0;
-    const retryDelayMs = entry?.retry_delay_ms ?? 0;
-    if (entry !== null) {
-      const resolved = resolveModel(role, entry.model, this.modelRegistry);
-      model = resolved.model;
-      logical = resolved.logical;
-    }
-
-    // 2. Load the role's system prompt. `loadSystemPrompt` returns
-    //    null when the role has no `system_prompt` field; the
-    //    `systemPromptOverride` then leaves the SDK default in
-    //    place.
-    //
-    //    Phase 7D: thread the manifest's directory + version
-    //    through so the §8.1 prompt resolver can pick the right
-    //    resolution root. v1 (existing manifests) keeps
-    //    cwd-relative resolution; v2 (HOME-sourced and
-    //    self-contained manifests) resolves against
-    //    `manifestDir`. Both fields ride on `LoadedManifest` —
-    //    added in Task 7D.2, populated by `loadManifest` /
-    //    `loadManifestFromString`.
-    const rolePrompt = await loadSystemPrompt(
-      role,
-      roleConfig?.system_prompt,
-      this.cwd,
-      this.loadedManifest.manifestDir,
-      this.loadedManifest.manifestVersion,
-    );
-
-    const prewalk = await this.prewalk.dispatch(this, {
-      role,
-      roleConfig,
-      entry,
-      executorModel: model,
-      executorLogical: logical,
-      baseSystemPrompt: rolePrompt,
-      visitIndex: opts.visitIndex ?? 1,
-      executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-      roleTurnProducer: this.roleTurnProducer,
-    });
-    if (prewalk !== null) return prewalk;
-
-    if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
-      if (roleWorkspaceConfig === undefined) {
-        throw new Error("isolated role requires a workspace configuration");
-      }
-      if (opts.visitIndex === undefined) {
-        throw new Error("isolated role spawning requires the loop-owned visitIndex");
-      }
-      const snapshotPin = await this.getOrCreateSnapshotPin(
-        roleWorkspaceConfig.source ?? "snapshot",
-      );
-      let isolatedParent: RoleSession | null = null;
-      const notifyTerminal = (result: PoolChildResult): void => {
-        if (
-          isolatedParent === null ||
-          this.delegationSessionKeys.get(isolatedParent.sessionId) === undefined ||
-          this.inactiveDelegationSessions.has(isolatedParent.sessionId) ||
-          isolatedParent.isSealed?.() === true ||
-          isolatedParent.steer === undefined
-        )
-          return;
-        void isolatedParent
-          .steer(`Delegated child ${result.childId} finished with status ${result.status}.`)
-          .catch(() => undefined);
-      };
-      const fatalDelegation = (cause: unknown): void => {
-        if (isolatedParent !== null) void this.prewalk.abort(isolatedParent).catch(() => undefined);
-        void cause;
-      };
-      const isolatedSession = await spawnIsolatedRoleSession({
-        role,
-        roleConfig,
-        workspaceConfig: roleWorkspaceConfig,
-        backend: workspaceBackend,
-        snapshotCommit: snapshotPin.commit,
-        model: logical,
-        effort,
-        retries,
-        retryDelayMs,
-        systemPrompt: rolePrompt,
-        cwd: this.cwd,
-        runId: this.runId,
-        sessionDir: this.sessionDir,
-        agentDir: this.isolatedAgentDir,
-        nodeRoleSessionFactory: this.nodeRoleSessionFactory,
-        ...(hasDelegateConfiguration(roleConfig)
-          ? {
-              createDelegateBridgeHandler: (primaryCheckout: string) =>
-                this.createDelegateBridgeHandler(
-                  role,
-                  roleConfig,
-                  primaryCheckout,
-                  opts.visitIndex,
-                  opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-                  opts.getRunCostCap,
-                  opts.getCurrentParentUsage,
-                  notifyTerminal,
-                  fatalDelegation,
-                ),
-            }
-          : {}),
-        visitIndex: opts.visitIndex,
-        executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-        priorToolExecutionRecords: this.log
-          .records(this.runId)
-          .filter(
-            (record): record is ToolExecutionRecord =>
-              record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-          ),
-        persistRecord: (record) => this.persistRecord(record),
-        sessionStates: this.sessionStates,
-        agentsBySessionId: this.agentsBySessionId,
-        roleTurnProducer: this.roleTurnProducer,
-        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-      });
-      isolatedParent = isolatedSession;
-      this.delegationSessionKeys.set(
-        isolatedSession.sessionId,
-        JSON.stringify([this.runId, role, opts.executionVisitIndex ?? opts.visitIndex ?? 1]),
-      );
-      this.inactiveDelegationSessions.delete(isolatedSession.sessionId);
-      return isolatedSession;
-    }
-
-    let sharedParent: RoleSession | null = null;
-    const notifyTerminal = (result: PoolChildResult): void => {
-      if (
-        sharedParent === null ||
-        this.delegationSessionKeys.get(sharedParent.sessionId) === undefined ||
-        this.inactiveDelegationSessions.has(sharedParent.sessionId) ||
-        sharedParent.isSealed?.() === true ||
-        sharedParent.steer === undefined
-      )
-        return;
-      void sharedParent
-        .steer(`Delegated child ${result.childId} finished with status ${result.status}.`)
-        .catch(() => undefined);
-    };
-    const fatalDelegation = (cause: unknown): void => {
-      if (sharedParent !== null) void this.prewalk.abort(sharedParent).catch(() => undefined);
-      void cause;
-    };
-    const delegateTool = hasDelegateConfiguration(roleConfig)
-      ? await this.createDelegateTool(
-          role,
-          roleConfig,
-          this.cwd,
-          opts.visitIndex,
-          opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-          opts.getRunCostCap,
-          opts.getCurrentParentUsage,
-          notifyTerminal,
-          fatalDelegation,
-        )
-      : null;
-
-    const sharedSession = await spawnSharedSdkRoleSession({
-      role,
-      roleConfig,
-      model,
-      logicalModel: logical,
-      effort,
-      retries,
-      retryDelayMs,
-      systemPrompt: rolePrompt,
+    const context: SpawnRoleContext = {
       modelRegistry: this.modelRegistry,
       cwd: this.cwd,
-      agentDir: this.agentDir,
-      sessionDir: this.sessionDir,
+      loadedManifest: this.loadedManifest,
+      log: this.log,
       runId: this.runId,
-      visitIndex: opts.visitIndex ?? 1,
-      executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-      priorToolExecutionRecords: this.log
-        .records(this.runId)
-        .filter(
-          (record): record is ToolExecutionRecord =>
-            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-        ),
-      machineDefinition: this.loadedManifest.def,
-      disableAutoCompaction:
-        this.loadedManifest.manifest.handoffs?.some(
-          (policy) => policy.from === role && policy.mode === "trajectory",
-        ) === true,
-      ...(opts.handoffContextRef !== undefined && { handoffContextRef: opts.handoffContextRef }),
-      delegateTool,
-      ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
-      ...(this.isUiContextCurrent !== undefined && {
-        isUiContextCurrent: this.isUiContextCurrent,
-      }),
-      ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-      persistRecord: (record: PersistedRecord) => this.persistRecord(record),
+      sessionDir: this.sessionDir,
+      agentDir: this.agentDir,
+      isolatedAgentDir: this.isolatedAgentDir,
+      displaySink: this.displaySink,
+      uiContext: this.uiContext,
+      isUiContextCurrent: this.isUiContextCurrent,
+      nodeRoleSessionFactory: this.nodeRoleSessionFactory,
+      roleTurnProducer: this.roleTurnProducer,
       sessionStates: this.sessionStates,
       agentsBySessionId: this.agentsBySessionId,
-      roleTurnProducer: this.roleTurnProducer,
-    });
-    sharedParent = sharedSession;
-    this.delegationSessionKeys.set(
-      sharedSession.sessionId,
-      JSON.stringify([this.runId, role, opts.executionVisitIndex ?? opts.visitIndex ?? 1]),
-    );
-    this.inactiveDelegationSessions.delete(sharedSession.sessionId);
-    return sharedSession;
+      delegationSessionKeys: this.delegationSessionKeys,
+      inactiveDelegationSessions: this.inactiveDelegationSessions,
+      unavailableRole: this.unavailableRole,
+      prewalk: this.prewalk,
+      lookupRoleConfig: (targetRole) => this.lookupRoleConfig(targetRole),
+      latestTrajectoryTransport: (targetRole) => this.latestTrajectoryTransport(targetRole),
+      resumeTrajectoryRole: (targetRole, config, selected, executionVisitIndex) =>
+        this.resumeTrajectoryRole(targetRole, config, selected, executionVisitIndex),
+      getOrCreateSnapshotPin: (source) => this.getOrCreateSnapshotPin(source),
+      createDelegateBridgeHandler: (...args) => this.createDelegateBridgeHandler(...args),
+      createDelegateTool: (...args) => this.createDelegateTool(...args),
+      persistRecord: (record) => this.persistRecord(record),
+    };
+    const session = await spawnRoleInModule(context, role, opts);
+    this.unavailableRole = context.unavailableRole;
+    return session;
   }
 
   /** Return the last durable transport outcome targeting this receiver. */
@@ -825,7 +540,7 @@ export class ProductionHost implements Host {
   }
 
   /** Select and prepare a policy-declared shared-session continuation (Issue #63). */
-  async selectAcceptedHandoffTransport(args: {
+  selectAcceptedHandoffTransport(args: {
     readonly from: Role;
     readonly to: Role;
     readonly source: RoleSession;
@@ -835,149 +550,17 @@ export class ProductionHost implements Host {
   }): Promise<
     { readonly mode: "fresh" } | { readonly mode: "trajectory"; readonly session: RoleSession }
   > {
-    if (modeFor(this.loadedManifest.manifest.handoffs, args.from, args.to) === "fresh") {
-      return { mode: "fresh" };
-    }
-
-    const sourceConversation = {
-      id: args.source.conversationId ?? args.source.sessionId,
-      file: args.source.sessionFile,
-    };
-    try {
-      assertTrajectorySdkSupported();
-      const sourceContext = args.source.getTrajectoryContext?.();
-      if (sourceContext === undefined || args.source.continueTrajectory === undefined) {
-        throw new TrajectoryHandoffError(
-          "trajectory_environment_unsupported",
-          "trajectory source is not a shared SDK session with a rebindable host bridge",
-        );
-      }
-      const sourceRole = this.lookupRoleConfig(args.from);
-      const targetRole = this.lookupRoleConfig(args.to);
-      if (
-        (sourceRole?.workspace?.backend ?? "shared") !== "shared" ||
-        (targetRole?.workspace?.backend ?? "shared") !== "shared" ||
-        hasDelegateConfiguration(sourceRole) ||
-        hasDelegateConfiguration(targetRole) ||
-        sourceRole?.workspace?.progressive_disclosure !== undefined ||
-        targetRole?.workspace?.progressive_disclosure !== undefined
-      ) {
-        throw new TrajectoryHandoffError(
-          "trajectory_environment_unsupported",
-          "trajectory requires shared workspaces and no role-specific custom-tool bridge",
-        );
-      }
-      const modelEntry = targetRole?.models?.[0];
-      if (modelEntry === undefined) {
-        throw new TrajectoryHandoffError(
-          "trajectory_target_environment_invalid",
-          `trajectory target '${args.to}' has no explicit model`,
-        );
-      }
-      const resolved = resolveModel(args.to, modelEntry.model, this.modelRegistry);
-      assertTrajectoryEffortSupported(resolved.model, modelEntry.effort);
-      const targetPrompt = await loadSystemPrompt(
-        args.to,
-        targetRole?.system_prompt,
-        this.cwd,
-        this.loadedManifest.manifestDir,
-        this.loadedManifest.manifestVersion,
-      );
-      if (targetPrompt === null) {
-        throw new TrajectoryHandoffError(
-          "trajectory_target_environment_invalid",
-          `trajectory target '${args.to}' has no explicit system prompt`,
-        );
-      }
-      const activeToolNames = buildToolsAllowlist(targetRole?.tools, false);
-      const missingTool = activeToolNames.find(
-        (name) => !sourceContext.registeredToolNames.includes(name),
-      );
-      if (missingTool !== undefined) {
-        throw new TrajectoryHandoffError(
-          "trajectory_environment_unsupported",
-          `trajectory target tool '${missingTool}' is unavailable in the source registry`,
-        );
-      }
-      const activeToolDefinitions = serializeActiveToolDefinitions(
-        activeToolNames.map((name) => {
-          const definition = sourceContext.toolDefinitions[name];
-          if (definition === undefined) {
-            throw new TrajectoryHandoffError(
-              "trajectory_environment_unsupported",
-              `trajectory target tool '${name}' has no provider-visible definition`,
-            );
-          }
-          return definition;
-        }),
-      );
-      const admission = admitTrajectory({
-        source: sourceContext,
-        targetModel: resolved.model,
-        targetModelName: resolved.logical,
-        systemPrompt: targetPrompt,
-        activeToolNames,
-        activeToolDefinitions,
-        targetSeed: args.targetSeed,
-      });
-      const environmentSha = sha256Canonical({
-        system_prompt: targetPrompt,
-        model: resolved.logical,
-        effort: modelEntry.effort,
-        active_tool_names: activeToolNames,
-        active_tool_definitions: activeToolDefinitions,
-      });
-      this.persistRecord({
-        type: "handoff_transport_selected",
-        schema_version: 1,
-        run_id: this.runId,
-        source_role_session_id: args.source.sessionId,
-        from: args.from,
-        to: args.to,
-        mode: "trajectory",
-        source_conversation: sourceConversation,
-        target: {
-          model: resolved.logical,
-          requested_effort: modelEntry.effort,
-          system_prompt: targetPrompt,
-          active_tool_names: activeToolNames,
-          seed: args.targetSeed,
-          environment_sha256: environmentSha,
-        },
-        admission,
-        ts: Date.now(),
-      });
-      const session = await args.source.continueTrajectory({
-        role: args.to,
-        model: resolved.model,
-        logicalModel: resolved.logical,
-        effort: modelEntry.effort,
-        systemPrompt: targetPrompt,
-        activeToolNames,
-        visitIndex: args.targetVisitIndex,
-        executionVisitIndex: args.targetExecutionVisitIndex ?? args.targetVisitIndex,
-        maxSessionCostUsd: targetRole?.max_session_cost_usd ?? null,
-        toolExecutionPolicy: resolveToolExecutionPolicy(targetRole?.tool_execution),
-      });
-      return { mode: "trajectory", session };
-    } catch (error) {
-      const code =
-        error instanceof TrajectoryHandoffError ? error.code : "trajectory_environment_unsupported";
-      const message = error instanceof Error ? error.message : String(error);
-      this.persistRecord({
-        type: "trajectory_handoff_failed",
-        schema_version: 1,
-        run_id: this.runId,
-        from: args.from,
-        to: args.to,
-        source_conversation: sourceConversation,
-        code,
-        message,
-        ts: Date.now(),
-      });
-      if (error instanceof TrajectoryHandoffError) throw error;
-      throw new TrajectoryHandoffError(code, message);
-    }
+    return selectAcceptedHandoffTransportInModule(
+      {
+        modelRegistry: this.modelRegistry,
+        cwd: this.cwd,
+        runId: this.runId,
+        loadedManifest: this.loadedManifest,
+        persistRecord: (record) => this.persistRecord(record),
+        lookupRoleConfig: (role) => this.lookupRoleConfig(role),
+      },
+      args,
+    );
   }
 
   runCostSoFar(): number {
