@@ -48,6 +48,7 @@ import type {
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
+import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 import type { PrewalkRecord } from "./prewalk-records.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
@@ -86,6 +87,28 @@ export type {
   EndGuardRecord,
   EndGuardStartedRecord,
 } from "./end-guard.js";
+export type {
+  ContextBoundaryCommittedRecord,
+  ContextBoundaryReference,
+  ContextCompactionRecord,
+  ContextDeliveryCommittedRecord,
+  ContextEpochStartedRecord,
+  ContextInvocationStartedRecord,
+  ContextUsage,
+  OrchestratorContextRecord,
+} from "./orchestrator-context.js";
+export {
+  assertOrchestratorContextRecord,
+  contextBoundaryCommittedSchema,
+  contextBoundaryReferenceSchema,
+  contextCompactionSchema,
+  contextDeliveryCommittedSchema,
+  contextEpochStartedSchema,
+  contextInvocationStartedSchema,
+  contextUsageSchema,
+  OrchestratorContextRecordError,
+  orchestratorContextRecordSchema,
+} from "./orchestrator-context.js";
 export {
   assertPersistedRecordGuarantees,
   assertWorkspaceGuarantee,
@@ -370,7 +393,8 @@ export type PersistedRecord =
   | ToolExecutionFinishedRecord
   | PrewalkRecord
   | EndGuardRecord
-  | DelegationSubmissionAcceptedRecord;
+  | DelegationSubmissionAcceptedRecord
+  | OrchestratorContextRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

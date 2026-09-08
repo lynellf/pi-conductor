@@ -3,6 +3,7 @@
 import type { WorkspaceGuarantee } from "../core/types.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
+import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
 import { assertPrewalkRecord } from "./prewalk-records.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { assertToolExecutionRecord } from "./tool-execution.js";
@@ -93,6 +94,15 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   }
   if (record.type === "delegation_submission_accepted") {
     assertDelegationSubmissionAccepted(record);
+  }
+  if (
+    record.type === "context_epoch_started" ||
+    record.type === "context_invocation_started" ||
+    record.type === "context_delivery_committed" ||
+    record.type === "context_boundary_committed" ||
+    record.type === "context_compaction"
+  ) {
+    assertOrchestratorContextRecord(record);
   }
 }
 
