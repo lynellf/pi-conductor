@@ -60,6 +60,20 @@ function formatSubagentTokens(stats: RunStats): string {
   return tokens.length > 0 ? ` · ${tokens.join(" · ")}` : "";
 }
 
+function formatToolExecutionTokens(stats: RunStats, now: number): string {
+  const execution = stats.toolExecution;
+  if (execution === undefined) return "";
+  const tokens: string[] = [];
+  if (execution.active !== null) {
+    const elapsedSeconds = Math.max(0, Math.floor((now - execution.active.startedAt) / 1000));
+    tokens.push(`tool=${execution.active.toolName}`, `tool_elapsed=${elapsedSeconds}s`);
+    if (execution.activeCount > 1) tokens.push(`tools_active=${execution.activeCount}`);
+  }
+  if (execution.recoveryCount > 0) tokens.push(`tool_recoveries=${execution.recoveryCount}`);
+  if (execution.timeoutCount > 0) tokens.push(`tool_timeouts=${execution.timeoutCount}`);
+  return tokens.length > 0 ? ` · ${tokens.join(" · ")}` : "";
+}
+
 /** The status-line key used by `ctx.ui.setStatus`. The
  *  extension is the single owner of this key — no other
  *  extension in this package should `setStatus` under
@@ -70,7 +84,7 @@ export const CONDUCT_STATUS_KEY = "conduct";
  *  Pure; no I/O; no `ctx`. The line stays compact enough
  *  for the TUI footer alongside other extensions' status
  *  lines. */
-export function formatConductStatus(stats: RunStats): string {
+export function formatConductStatus(stats: RunStats, now = Date.now()): string {
   const state = stats.state;
   const reason = stats.exitReason;
   const handoffs = countHandoffs(stats.transitionHistory);
@@ -81,8 +95,9 @@ export function formatConductStatus(stats: RunStats): string {
       ? ""
       : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
   const subagentTokens = formatSubagentTokens(stats);
+  const toolExecutionTokens = formatToolExecutionTokens(stats, now);
   const escapeHint = reason === "running" ? " · Esc abort" : "";
-  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens} · handoffs=${handoffs} · $${cost}${escapeHint}`;
+  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens} · handoffs=${handoffs} · $${cost}${escapeHint}`;
 }
 
 /**

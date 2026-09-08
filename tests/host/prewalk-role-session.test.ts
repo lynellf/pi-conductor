@@ -225,6 +225,8 @@ function setup(
               beforeMachineEmission: async () => ({ allow: true }),
               allowPostBudgetContinuation: () => false,
               ensureRecorded: async () => undefined,
+              close: () => undefined,
+              settle: async () => undefined,
             };
           },
         }

@@ -103,6 +103,7 @@ describe.sequential("Issue #51 initial progressive projection", () => {
     forcedFilesystemFailure.onLink = undefined;
     forcedFilesystemFailure.onRename = undefined;
   });
+  // This path starts a fresh isolated SDK worker for each bridged file call.
   it("uses host-captured Git authority to disclose one approved file through the isolated RPC path", async () => {
     const repository = await createRepository();
     let reader: IsolatedReader | null = null;
@@ -303,7 +304,7 @@ describe.sequential("Issue #51 initial progressive projection", () => {
       await reader?.dispose();
       await rm(repository, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("rejects a whitespace-only reason before bridge framing, disclosure, or audit", async () => {
     const repository = await createRepository();

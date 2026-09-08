@@ -859,6 +859,57 @@ roles:
     await expect(readFile(deliveredPath, "utf8")).resolves.toBe("copied before crash\n");
     expect(firstReceiverSeed).toContain("artifacts/implementer-v1/reports/result.txt");
 
+    let firstResumeExecutionIndex: string | null = null;
+    const firstResume = await resumeRun(manifestPath, runId, {
+      goal: "",
+      baseDir,
+      hostFactory: (ctx) => {
+        let readBridge: NodeRoleSessionOptions["executionBridge"];
+        const host = new ProductionHost({
+          modelRegistry: makeModelRegistryWithStub(),
+          cwd: workdir,
+          log: ctx.log,
+          loadedManifest: ctx.loadedManifest,
+          runId: ctx.runId,
+          agentDir: makeAndTrackIsolatedAgentDir(),
+          nodeRoleSessionFactory: async (options) => {
+            readBridge = options.executionBridge;
+            return isolatedRoleFactory(async (_childOptions, child, command) => {
+              settleTurn(child, command, "end", {});
+            })(options);
+          },
+        });
+        const spawn = host.spawnRole.bind(host);
+        host.spawnRole = async (role, options) => {
+          const session = await spawn(role, options);
+          session.prompt = async () => {
+            const read = readBridge?.tools[0];
+            if (read === undefined) throw new Error("missing first-resume read bridge");
+            await read.execute(
+              "first-resume-read",
+              { path: "artifacts/implementer-v1/reports/result.txt" },
+              new AbortController().signal,
+              undefined,
+            );
+            const started = ctx.log
+              .records(runId)
+              .find(
+                (record) =>
+                  record.type === "tool_execution_started" &&
+                  record.tool_call_id === "first-resume-read",
+              );
+            firstResumeExecutionIndex =
+              started?.type === "tool_execution_started" ? started.logical_session_id : null;
+            throw new Error("first resume crash");
+          };
+          return session;
+        };
+        return host;
+      },
+    });
+    await expect(firstResume.completion()).rejects.toThrow("first resume crash");
+    expect(firstResumeExecutionIndex).toBe(JSON.stringify([runId, "orchestrator", 2]));
+
     const receiverSeeds: string[] = [];
     let resumedReceiverWorkspace: string | null = null;
     let resumedRouteCalls = 0;
@@ -866,6 +917,7 @@ roles:
       goal: "",
       baseDir,
       hostFactory: (ctx) => {
+        let readBridge: NodeRoleSessionOptions["executionBridge"];
         const roleFactory = isolatedRoleFactory(async (_options, child, command) => {
           receiverSeeds.push(String(command.message));
           settleTurn(child, command, "end", {});
@@ -881,9 +933,27 @@ roles:
           agentDir: makeAndTrackIsolatedAgentDir(),
           nodeRoleSessionFactory: async (options) => {
             resumedReceiverWorkspace = options.cwd;
+            readBridge = options.executionBridge;
             return roleFactory(options);
           },
         });
+        const spawn = host.spawnRole.bind(host);
+        host.spawnRole = async (role, options) => {
+          const session = await spawn(role, options);
+          const originalPrompt = session.prompt.bind(session);
+          session.prompt = async (seed) => {
+            const read = readBridge?.tools[0];
+            if (read === undefined) throw new Error("missing final-resume read bridge");
+            await read.execute(
+              "second-resume-read",
+              { path: "artifacts/implementer-v1/reports/result.txt" },
+              new AbortController().signal,
+              undefined,
+            );
+            await originalPrompt(seed);
+          };
+          return session;
+        };
         const route = host.routeAcceptedHandoffArtifacts.bind(host);
         host.routeAcceptedHandoffArtifacts = async (source, receiver) => {
           resumedRouteCalls += 1;
@@ -901,6 +971,15 @@ roles:
       artifactSeedSection(firstReceiverSeed),
     );
     await expect(readFile(deliveredPath, "utf8")).resolves.toBe("copied before crash\n");
+    const secondRead = log
+      .records(runId)
+      .find(
+        (record) =>
+          record.type === "tool_execution_started" && record.tool_call_id === "second-resume-read",
+      );
+    expect(
+      secondRead?.type === "tool_execution_started" ? secondRead.logical_session_id : null,
+    ).toBe(JSON.stringify([runId, "orchestrator", 3]));
   });
 
   it("public resume reuses a persisted unavailable route without materializing a missing artifact", async () => {

@@ -17,6 +17,7 @@
 | `system_prompt`        | any role          | Path to a per-role system-prompt file the host loads. Plain prose, not frontmatter.                                                                                                                                                                       |
 | `tools`                | any role          | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. `delegate` is available only when it is listed here **and** the role declares `delegation`. See [Tools available to roles](role-tools.md#tools-available-to-roles) below for the full tool model and the `tools:`-omission footgun. |
 | `delegation`           | parent roles only | Enables bounded worktree subagents for this role. Requires `tools: [..., delegate]`; see [Worktree subagent delegation](delegation.md#worktree-subagent-delegation) below. |
+| `tool_execution`       | roles and subagent profiles | Pins executable-tool deadlines and timeout recovery. See [Executable tool controls](execution-controls.md). |
 
 The optional top-level `end_request_roles` list enables gated completion. It
 must contain one or more unique declared worker roles—never the orchestrator.

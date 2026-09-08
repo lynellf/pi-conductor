@@ -89,6 +89,8 @@ import {
   validateTrajectorySelector,
   verifyManifestSnapshot,
 } from "../persistence/trajectory-records.js";
+import { nextExecutionVisitIndexes } from "./execution/execution-visit-index.js";
+import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -297,6 +299,14 @@ export async function resumeRun(
           )))
         : await loadPinnedManifest(manifestSnapshot, manifestPath, opts.modelRegistry);
     assertManifestWorkspaceBackendsSupported(loaded);
+    assertNoUnfinishedToolExecutions(
+      log
+        .records(runId)
+        .filter(
+          (record) =>
+            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+        ),
+    );
     const checkpoint = log.latestCheckpoint(runId);
     if (checkpoint === null) {
       throw new Error(
@@ -339,8 +349,25 @@ export async function resumeRun(
     );
     const initialParentSessionId = trajectorySelector?.source_role_session_id ?? null;
     const initialTrajectorySeed = trajectorySelector?.target.seed ?? null;
+    // Workspace visits retain the legacy resume contract for ordinary runs:
+    // isolated workspaces reopen at their original default visit. Execution
+    // identity is reconstructed independently below. Trajectory resumes use
+    // the next durable visit index, while a materialized artifact receiver
+    // is pinned to the persisted delivery visit.
+    const nextVisits = nextVisitIndexes(resumedRecords, runId);
+    const workspaceVisits = initialParentSessionId === null ? undefined : nextVisits;
     const initialVisitIndexByRole =
-      initialParentSessionId === null ? undefined : nextVisitIndexes(resumedRecords, runId);
+      initialArtifactDelivery?.status === "materialized"
+        ? Object.freeze({
+            ...(workspaceVisits ?? {}),
+            [initialArtifactDelivery.receiver_role]: initialArtifactDelivery.visit_index,
+          })
+        : workspaceVisits;
+    const initialExecutionVisitIndexByRole = nextExecutionVisitIndexes(
+      resumedRecords,
+      runId,
+      nextVisits,
+    );
 
     const host = opts.hostFactory({ runId, def, log, loadedManifest: resumedLoaded });
 
@@ -363,6 +390,7 @@ export async function resumeRun(
       initialParentSessionId,
       ...(initialTrajectorySeed !== null && { initialTrajectorySeed }),
       ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
+      initialExecutionVisitIndexByRole,
     });
   } catch (error) {
     await lease.release();
@@ -396,6 +424,7 @@ interface RunWithCompletionArgs {
   readonly initialTrajectorySeed?: string;
   /** Next lifecycle visit indexes reconstructed from durable starts. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
+  readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Live ownership held from API entry through the final loop outcome. */
   readonly lease: RunExecutionLease;
 }
@@ -450,6 +479,9 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     }),
     ...(args.initialVisitIndexByRole !== undefined && {
       initialVisitIndexByRole: args.initialVisitIndexByRole,
+    }),
+    ...(args.initialExecutionVisitIndexByRole !== undefined && {
+      initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,
     }),
     getRunCostCap,
     runControl,

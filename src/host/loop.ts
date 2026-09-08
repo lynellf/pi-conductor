@@ -146,6 +146,8 @@ export interface RunLoopOptions {
   readonly initialTrajectorySeed?: string | null;
   /** Next visit index per role reconstructed from durable lifecycle starts on resume. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
+  /** Fresh executable invocation index per role for operator resume. */
+  readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
    *  that lets the host derive model + system prompt + tools from the
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
@@ -257,6 +259,9 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const visitIndexByRole = new Map<Role, number>(
     Object.entries(opts.initialVisitIndexByRole ?? {}) as [Role, number][],
   );
+  const executionVisitIndexByRole = new Map<Role, number>(
+    Object.entries(opts.initialExecutionVisitIndexByRole ?? {}) as [Role, number][],
+  );
   // Sentinel sessionFile for the synthesized `end` records. There is
   // no live session at the time of synthesis, so the record's
   // `session_file` field carries a stable marker rather than a real
@@ -359,6 +364,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // incremented after the visit ends (below) so the next visit to
     // the same role gets the next index.
     const visitIndex = visitIndexByRole.get(role) ?? 1;
+    const executionVisitIndex = executionVisitIndexByRole.get(role) ?? visitIndex;
     let modelIndex = 0;
     let retryAttempt = 0;
     let roleOutcome: RoleOutcome = { kind: "advance", nextSeed: seed };
@@ -389,6 +395,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           session = await host.spawnRole(role, {
             ...spawnDefaults,
             visitIndex,
+            executionVisitIndex,
             modelIndex,
             ...(handoffContextRef !== null && { handoffContextRef }),
           });
@@ -1019,6 +1026,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
               source: session,
               targetSeed: trajectoryTargetSeed,
               targetVisitIndex: visitIndexByRole.get(nextRole) ?? 1,
+              targetExecutionVisitIndex: executionVisitIndexByRole.get(nextRole) ?? 1,
             });
             if (selected?.mode === "trajectory") pendingTrajectorySession = selected.session;
           } catch (error) {
@@ -1198,6 +1206,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // same role gets the next index. Model retries within this
     // visit already shared the captured `visitIndex` above.
     visitIndexByRole.set(role, visitIndex + 1);
+    executionVisitIndexByRole.set(role, executionVisitIndex + 1);
   }
 
   return { finalCheckpoint: checkpoint, exitReason: "done" };

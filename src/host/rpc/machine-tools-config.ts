@@ -41,6 +41,15 @@ export const machineToolsConfigSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    executionBridge: Type.Optional(
+      Type.Object(
+        {
+          directory: Type.String({ minLength: 1 }),
+          timeout_ms: Type.Integer({ minimum: 1, maximum: 2_147_483_647 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -74,6 +83,10 @@ export interface WriteMachineToolsConfigOptions {
   readonly enableDelegateBridge?: boolean;
   /** Explicitly provision the host-owned bridge directory required for `request_files`. */
   readonly enableRequestFilesBridge?: boolean;
+  /** Explicitly provision the host-owned bridge directory for executable file tools. */
+  readonly enableExecutionBridge?: boolean;
+  /** Bounded bridge wait covering execution plus host cleanup. */
+  readonly executionBridgeTimeoutMs?: number;
 }
 
 /** Atomically write one isolated role's static machine-tools configuration under the host run state. */
@@ -99,6 +112,12 @@ export async function writeMachineToolsConfig(
     options.enableDelegateBridge === true || options.enableRequestFilesBridge === true
       ? await createDelegateBridgeDirectory(configDir, roleFilename, options.visitIndex)
       : undefined;
+  const executionBridgeDirectory = options.enableExecutionBridge
+    ? await createExecutionBridgeDirectory(configDir, roleFilename, options.visitIndex)
+    : undefined;
+  if (options.enableExecutionBridge && !isTimerDelay(options.executionBridgeTimeoutMs)) {
+    throw new MachineToolsConfigError("execution bridge timeout must fit a Node timer");
+  }
   const config: MachineToolsConfig = {
     workspaceRoot,
     mounts,
@@ -109,6 +128,14 @@ export async function writeMachineToolsConfig(
     ...(options.enableRequestFilesBridge === true && bridgeDirectory !== undefined
       ? { requestFilesBridge: { directory: bridgeDirectory } }
       : {}),
+    ...(executionBridgeDirectory === undefined
+      ? {}
+      : {
+          executionBridge: {
+            directory: executionBridgeDirectory,
+            timeout_ms: options.executionBridgeTimeoutMs as number,
+          },
+        }),
   };
   if (!Value.Check(machineToolsConfigSchema, config)) {
     throw new MachineToolsConfigError("machine-tools configuration has an invalid structure");
@@ -182,6 +209,17 @@ export function loadMachineToolsConfig(env: NodeJS.ProcessEnv = process.env): Ma
             ),
           }),
         }),
+    ...(parsed.executionBridge === undefined
+      ? {}
+      : {
+          executionBridge: Object.freeze({
+            directory: requireDirectory(
+              parsed.executionBridge.directory,
+              "execution bridge directory",
+            ),
+            timeout_ms: parsed.executionBridge.timeout_ms,
+          }),
+        }),
   }) as MachineToolsConfig;
 }
 
@@ -195,6 +233,24 @@ async function createDelegateBridgeDirectory(
   await chmod(bridgeRoot, 0o700);
   const canonicalBridgeRoot = realpathSync(bridgeRoot);
   const bridgeDirectory = childPath(canonicalBridgeRoot, `${roleFilename}-v${visitIndex}`);
+  await mkdir(bridgeDirectory, { recursive: true, mode: 0o700 });
+  await chmod(bridgeDirectory, 0o700);
+  return realpathSync(bridgeDirectory);
+}
+
+async function createExecutionBridgeDirectory(
+  configDir: string,
+  roleFilename: string,
+  visitIndex: number,
+): Promise<string> {
+  const bridgeRoot = childPath(configDir, "execution-bridge");
+  await mkdir(bridgeRoot, { recursive: true, mode: 0o700 });
+  await chmod(bridgeRoot, 0o700);
+  const canonicalBridgeRoot = realpathSync(bridgeRoot);
+  const bridgeDirectory = childPath(
+    canonicalBridgeRoot,
+    `${roleFilename}-v${visitIndex}-${randomUUID()}`,
+  );
   await mkdir(bridgeDirectory, { recursive: true, mode: 0o700 });
   await chmod(bridgeDirectory, 0o700);
   return realpathSync(bridgeDirectory);
@@ -246,4 +302,8 @@ function requireDirectory(path: string, field: string): string {
     if (error instanceof MachineToolsConfigError) throw error;
     throw new MachineToolsConfigError(`machine-tools configuration ${field} is unavailable`);
   }
+}
+
+function isTimerDelay(value: number | undefined): value is number {
+  return value !== undefined && Number.isSafeInteger(value) && value >= 1 && value <= 2_147_483_647;
 }

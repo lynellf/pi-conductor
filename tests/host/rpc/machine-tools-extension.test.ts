@@ -6,7 +6,9 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExecutionBridgeHost } from "../../../src/host/rpc/execution-bridge.js";
 import {
   MACHINE_TOOLS_CONFIG_ENV,
   MachineToolsConfigError,
@@ -176,6 +178,48 @@ describe("machine tools RPC extension", () => {
       "read",
       "delegate",
     ]);
+  });
+
+  it("forwards the SDK model input shape through the execution bridge", async () => {
+    const configPath = await writeMachineToolsConfig({
+      sessionDir: join(sandbox, "host-run"),
+      role: "implementer",
+      visitIndex: 1,
+      workspaceRoot: workspace,
+      mounts: [],
+      declaredToolNames: ["read"],
+      enableExecutionBridge: true,
+      executionBridgeTimeoutMs: 5_000,
+    });
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      executionBridge: { directory: string };
+    };
+    let modelInput: unknown;
+    const host = new ExecutionBridgeHost({
+      directory: config.executionBridge.directory,
+      tools: [
+        {
+          name: "read",
+          parameters: Type.Object({ path: Type.String() }),
+          execute: async (_id, _params, _signal, input) => {
+            modelInput = input;
+            return { content: [{ type: "text", text: "vision-ready" }] };
+          },
+        },
+      ],
+    });
+    try {
+      const tools = registeredTools();
+      await expect(
+        execute(tools, "read", { path: "workspace.txt" }, {
+          model: { input: ["text"] },
+        } as unknown as ExtensionContext),
+      ).resolves.toMatchObject({ content: [{ text: "vision-ready" }] });
+      expect(modelInput).toEqual({ input: ["text"] });
+    } finally {
+      await host.close();
+    }
   });
 
   it("requests RPC shutdown after a terminating machine tool records its result", async () => {

@@ -298,6 +298,14 @@ function confinePathTool<TParams extends TSchema, TDetails, TState>(
   };
 }
 
+/** Apply the same projection routing to a host-owned tool definition. */
+export function confineToolDefinition(
+  tool: ToolDefinition,
+  projection: Projection,
+): ToolDefinition {
+  return confinePathTool(tool, projection, tool.name === "edit" || tool.name === "write");
+}
+
 function fileToolError<TDetails>(text: string): AgentToolResult<TDetails> {
   return {
     content: [{ type: "text" as const, text }],

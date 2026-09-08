@@ -3,7 +3,7 @@
 Baseline: `main` 7f5dcd9, eight open issues, no open PRs.
 User requested remediation, merge, then assessment. Main already includes
 Prewalk (#78) and role-turn telemetry (#68); verify before treating trackers as
-unimplemented. New controls use [the proposed spec](spec.md), awaiting acknowledgment.
+unimplemented. New controls use [the proposed spec](spec.md), acknowledged on 2026-09-08.
 
 ## Ordered work
 
@@ -25,7 +25,7 @@ unimplemented. New controls use [the proposed spec](spec.md), awaiting acknowled
   only if supported public runtime identity transfer exists. Record evidence and
   leave open if upstream remains blocked; never bridge private fields. Latest
   Pi 0.85.1 remains blocked; see [SDK assessment](sdk-assessment.md).
-- [ ] Acknowledge new controls specification before #75–#77 implementation.
+- [x] Acknowledge new controls specification before #75–#77 implementation.
 - [ ] #75: manifest/persistence contract; host guard execution and retry behavior;
   success/failure/resume E2E. Gate each slice with focused tests and typecheck.
 - [ ] #76: execution policy and process ownership; timeout/cleanup records;

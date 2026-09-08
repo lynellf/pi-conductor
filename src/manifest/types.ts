@@ -18,6 +18,7 @@
 
 import type { ModelEffort, Role } from "../core/types.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
+import type { ToolExecutionPolicy } from "./execution-policy.js";
 
 // ─── Subagent profile types (delegation lite §3) ───────────────────────
 
@@ -34,6 +35,8 @@ export interface SubagentProfile {
   readonly system_prompt: string;
   /** Issue #57: profile-pinned child terminal contract; default is legacy report_result. */
   readonly completion_protocol: ChildCompletionProtocol;
+  /** Issue #76: pinned executable-tool deadline policy. */
+  readonly tool_execution?: ToolExecutionPolicy;
   /** Issue #55: opt-in exact-file projection policy for delegated children. */
   readonly workspace?: SubagentWorkspaceConfig;
 }
@@ -167,6 +170,8 @@ export interface RoleConfig {
   readonly tools?: readonly string[];
   /** Delegation lite §3: delegation policy for parent roles. */
   readonly delegation?: DelegationPolicy;
+  /** Issue #76: pinned executable-tool deadline policy. */
+  readonly tool_execution?: ToolExecutionPolicy;
   /** Issue #48 §4: optional per-role workspace + artifact config (host-only). */
   readonly workspace?: WorkspaceConfig;
   /** Issue #48 §4: optional artifact-handoff configuration. */

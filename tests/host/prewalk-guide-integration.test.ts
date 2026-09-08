@@ -6,12 +6,14 @@ import { promisify } from "node:util";
 import type { Message, Model } from "@earendil-works/pi-ai";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, onTestFinished } from "vitest";
+import { ToolExecutionController } from "../../src/host/execution/tool-execution-controller.js";
 import {
   type ProductionPrewalkPhaseSpawnOptions,
   spawnProductionPrewalkRoleSession,
 } from "../../src/host/prewalk-manifest-context.js";
 import type { PrewalkPhaseSession } from "../../src/host/prewalk-role-session.js";
 import { makeStubModel } from "../../src/host/stub-provider.js";
+import { DEFAULT_TOOL_EXECUTION_POLICY } from "../../src/manifest/execution-policy.js";
 import type { PrewalkConfig } from "../../src/manifest/types.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
@@ -69,6 +71,13 @@ async function fixture(options: {
     executor: { max_turns: 20, max_wall_clock_s: 600 },
   };
   const records: PersistedRecord[] = [];
+  const executionController = new ToolExecutionController({
+    runId: "run",
+    logicalSessionId: "logical",
+    roleSessionId: "logical",
+    policy: DEFAULT_TOOL_EXECUTION_POLICY,
+    persist: (record) => records.push(record),
+  });
   const steers: string[] = [];
   const opened: string[] = [];
   let completedTurns = 0;
@@ -98,6 +107,7 @@ async function fixture(options: {
       workspace_is_git_repository: true,
     },
     records: () => records,
+    getExecutionController: () => executionController,
     persist: (record) => records.push(record),
     registerUsageSession: () => undefined,
     usageFor: () => ({ ...zeroUsage, cost: options.cost ?? 0 }),

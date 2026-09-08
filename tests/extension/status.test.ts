@@ -117,6 +117,28 @@ describe("formatConductStatus", () => {
     );
   });
 
+  it("renders the active tool and elapsed time from the durable start timestamp", () => {
+    const stats = makeStats({
+      toolExecution: {
+        active: {
+          executionId: "execution-1",
+          supervisionId: "supervision-1",
+          toolName: "grep",
+          toolCallId: "call-1",
+          startedAt: 10_000,
+          recoveryCount: 2,
+          timeoutMs: 10_000,
+        },
+        recoveryCount: 2,
+        timeoutCount: 1,
+        activeCount: 1,
+      },
+    });
+    expect(formatConductStatus(stats, 12_345)).toContain(
+      "tool=grep · tool_elapsed=2s · tool_recoveries=2 · tool_timeouts=1",
+    );
+  });
+
   it("includes the handoff count in the line", () => {
     // Two handoff events + one end event. Q5 default:
     // `end` is NOT counted in `handoffs=N` (it is

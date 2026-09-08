@@ -35,6 +35,7 @@ interface ProductionPrewalkRole {
   readonly executorLogical: string | null;
   readonly baseSystemPrompt: string | null;
   readonly visitIndex: number;
+  readonly executionVisitIndex: number;
   readonly roleTurnProducer: RoleTurnProducer;
 }
 
@@ -66,6 +67,7 @@ export class ProductionPrewalkHost {
       executorLogical: role.executorLogical,
       baseSystemPrompt: role.baseSystemPrompt,
       visitIndex: role.visitIndex,
+      executionVisitIndex: role.executionVisitIndex,
       validationContext: owner.loadedManifest.prewalkValidationContext?.prewalk?.[role.role],
       modelRegistry: owner.modelRegistry,
       cwd: owner.cwd,
@@ -128,9 +130,13 @@ export class ProductionPrewalkHost {
     const sessionId = this.activeSessionId(session);
     const state = this.sessionStates.get(sessionId);
     const agent = this.agentsBySessionId.get(sessionId);
-    if (state === undefined || agent === undefined || state.terminalReason !== null) return;
-    state.markAborted();
-    state.setTerminalReason("user_aborted");
+    if (state === undefined || agent === undefined) return;
+    const shouldAbortAgent = state.terminalReason === null;
+    if (shouldAbortAgent) {
+      state.markAborted();
+      state.setTerminalReason("user_aborted");
+    }
+    await session.abortOwnedWork?.();
     await agent.abort();
   }
 

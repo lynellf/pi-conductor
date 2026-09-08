@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { SessionState } from "../../src/host/cost.js";
+import { ToolExecutionController } from "../../src/host/execution/tool-execution-controller.js";
 import {
   createPrewalkExecutorCaps,
   createPrewalkValidationGate,
@@ -36,8 +37,159 @@ const checkpoint: ExecutionCheckpointArgs = {
 };
 
 describe("host-executed Prewalk validation", () => {
+  it("supervises argv validation and persists the real machine call ID", async () => {
+    const firstTodo = checkpoint.todos[0];
+    if (firstTodo === undefined) throw new Error("test checkpoint has no TODO");
+    const records: import("../../src/persistence/tool-execution.js").ToolExecutionRecord[] = [];
+    const controller = new ToolExecutionController({
+      runId: "run-1",
+      logicalSessionId: "logical-1",
+      roleSessionId: "role-1",
+      policy: {
+        timeout_seconds: 0.1,
+        max_recoverable_timeouts: 0,
+        termination_grace_seconds: 0.1,
+      },
+      persist: (record) => records.push(record),
+    });
+    await expect(
+      runPrewalkValidations({
+        checkpoint: {
+          ...checkpoint,
+          todos: [{ ...firstTodo, validation: "node -e 'setTimeout(() => {}, 1000)'" }],
+        },
+        cwd: process.cwd(),
+        controller,
+        toolCallId: "machine-call-7",
+      }),
+    ).rejects.toMatchObject({ code: "tool_timeout_exhausted", cleanup: "confirmed" });
+    expect(records[0]).toMatchObject({
+      type: "tool_execution_started",
+      tool_call_id: "machine-call-7",
+      tool_name: "prewalk_validation",
+    });
+    expect(records[1]).toMatchObject({
+      type: "tool_execution_finished",
+      outcome: "timed_out",
+      cleanup: "confirmed",
+    });
+  });
+
+  it("does not replay a validation attempt after supervised timeout", async () => {
+    const records: PrewalkRecord[] = [];
+    const firstTodo = checkpoint.todos[0];
+    if (firstTodo === undefined) throw new Error("test checkpoint has no TODO");
+    const controller = new ToolExecutionController({
+      runId: "run-1",
+      logicalSessionId: "logical-1",
+      roleSessionId: "role-1",
+      policy: { timeout_seconds: 0.1, max_recoverable_timeouts: 0, termination_grace_seconds: 0.1 },
+      persist: () => undefined,
+    });
+    const gate = createPrewalkValidationGate({
+      runId: "run-1",
+      roleSessionId: "role-1",
+      checkpoint: {
+        ...checkpoint,
+        todos: [{ ...firstTodo, validation: "node -e 'setTimeout(() => {}, 1000)'" }],
+      },
+      validationRetries: 0,
+      cwd: process.cwd(),
+      getController: () => controller,
+      persist: (record) => records.push(record),
+    });
+    await expect(
+      gate.beforeMachineEmission(undefined, { toolCallId: "call-timeout" }),
+    ).rejects.toBeDefined();
+    await gate.ensureRecorded();
+    expect(controller.records).toHaveLength(2);
+  });
+
+  it("aborts an in-flight validation when the gate closes", async () => {
+    const firstTodo = checkpoint.todos[0];
+    if (firstTodo === undefined) throw new Error("test checkpoint has no TODO");
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = createPrewalkValidationGate({
+      runId: "run-1",
+      roleSessionId: "role-1",
+      checkpoint: { ...checkpoint, todos: [firstTodo] },
+      validationRetries: 0,
+      cwd: process.cwd(),
+      execute: async ({ signal }) => {
+        started();
+        await new Promise<never>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("validation aborted")), {
+            once: true,
+          });
+        });
+        throw new Error("unreachable");
+      },
+      persist: () => undefined,
+    });
+    const pending = gate.beforeMachineEmission(undefined, { toolCallId: "call-1" });
+    await startedPromise;
+    gate.close();
+    await expect(pending).rejects.toThrow("validation aborted");
+  });
+
+  it("settles every concurrent validation before close returns", async () => {
+    const firstRelease = vi.fn();
+    let resolveFirst!: () => void;
+    let resolveSecond!: () => void;
+    const first = new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+      resolveFirst = () => {
+        firstRelease();
+        resolve({ exitCode: 0, stdout: "first", stderr: "" });
+      };
+    });
+    const second = new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolve) => {
+      resolveSecond = () => resolve({ exitCode: 0, stdout: "second", stderr: "" });
+    });
+    let calls = 0;
+    const gate = createPrewalkValidationGate({
+      runId: "run-1",
+      roleSessionId: "role-1",
+      checkpoint: {
+        ...checkpoint,
+        todos: [checkpoint.todos[0] as NonNullable<(typeof checkpoint.todos)[number]>],
+      },
+      validationRetries: 0,
+      cwd: process.cwd(),
+      execute: async () => {
+        calls += 1;
+        return calls === 1 ? first : second;
+      },
+      persist: () => undefined,
+    });
+    const firstRun = gate.beforeMachineEmission();
+    const secondRun = gate.beforeMachineEmission();
+    await vi.waitFor(() => expect(calls).toBe(2));
+    gate.close();
+    resolveSecond();
+    let settled = false;
+    const settlement = gate.settle().then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    resolveFirst();
+    await settlement;
+    await Promise.all([firstRun, secondRun]);
+    expect(firstRelease).toHaveBeenCalledOnce();
+  });
+
   it("executes each command without a shell and computes false_done_rate", async () => {
-    const run = await runPrewalkValidations({ checkpoint, cwd: process.cwd() });
+    const run = await runPrewalkValidations({
+      checkpoint,
+      cwd: process.cwd(),
+      execute: async ({ args }) =>
+        args.some((argument) => argument.includes("process.exit(3)"))
+          ? { exitCode: 3, stdout: "", stderr: "broken" }
+          : { exitCode: 0, stdout: "", stderr: "" },
+    });
 
     expect(
       run.results.map(({ task, exit_code, claimed_done }) => ({ task, exit_code, claimed_done })),

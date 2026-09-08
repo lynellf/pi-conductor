@@ -5,8 +5,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { findPackageJSON } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { MACHINE_TOOLS_CONFIG_ENV } from "../../../src/host/rpc/machine-tools-config.js";
+import { requestExecutionBridge } from "../../../src/host/rpc/execution-bridge.js";
+import {
+  MACHINE_TOOLS_CONFIG_ENV,
+  writeMachineToolsConfig,
+} from "../../../src/host/rpc/machine-tools-config.js";
 import {
   NodeRoleSession,
   RpcAbortTimeoutError,
@@ -19,6 +24,7 @@ import {
 } from "../../../src/host/rpc/node-role-session.js";
 import { createNodeRoleSession } from "../../../src/host/rpc/node-role-session-factory.js";
 import { RunControl } from "../../../src/host/run-control.js";
+import { HostFakeRpcChild } from "./host-rpc-fixture.js";
 
 class FakeWritable extends EventEmitter {
   readonly writes: string[] = [];
@@ -215,6 +221,81 @@ async function settlePrompt(
 }
 
 describe("createNodeRoleSession", () => {
+  it("keeps native disposal pending until an owned execution handler settles", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-rpc-cleanup-"));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const configPath = await writeMachineToolsConfig({
+      sessionDir: directory,
+      role: "implementer",
+      visitIndex: 1,
+      workspaceRoot: directory,
+      mounts: [],
+      declaredToolNames: ["read"],
+      enableExecutionBridge: true,
+      executionBridgeTimeoutMs: 1_000,
+    });
+    const config = JSON.parse(await readFile(configPath, "utf8")) as {
+      executionBridge: { directory: string };
+    };
+    const child = new HostFakeRpcChild();
+    const session = new NodeRoleSession(
+      {
+        role: "implementer",
+        model: "stub:isolated",
+        effort: "medium",
+        cwd: directory,
+        sessionDir: directory,
+        agentDir: directory,
+        systemPrompt: null,
+        machineToolsConfigPath: configPath,
+        executionBridge: {
+          directory: config.executionBridge.directory,
+          closeTimeoutMs: 1_000,
+          tools: [
+            {
+              name: "read",
+              parameters: Type.Object({ path: Type.String() }),
+              execute: async () => {
+                await gate;
+                return { content: [{ type: "text", text: "done" }] };
+              },
+            },
+          ],
+        },
+      },
+      child,
+    );
+    const init = session.initialize();
+    child.success(child.command("get_state"), {
+      sessionId: "cleanup-session",
+      sessionFile: join(directory, "session.jsonl"),
+    });
+    await init;
+    child.stdin.onWrite = (write) => {
+      const command = JSON.parse(write) as Record<string, unknown>;
+      if (command.type === "abort") child.success(command);
+    };
+    const request = requestExecutionBridge({
+      directory: config.executionBridge.directory,
+      actualToolCallId: "cleanup-call",
+      toolName: "read",
+      params: { path: "x" },
+      timeoutMs: 2_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const disposing = session.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(child.killSignals).toEqual([]);
+    release();
+    await expect(request).rejects.toThrow("execution bridge request aborted");
+    await expect(disposing).resolves.toBeUndefined();
+    expect(child.killSignals.length).toBeGreaterThan(0);
+    await rm(directory, { recursive: true, force: true });
+  });
+
   it("derives the existing CLI from Pi's Node-resolved peer package", () => {
     const packageJson = findPackageJSON("@earendil-works/pi-coding-agent", import.meta.url);
     if (packageJson === undefined)

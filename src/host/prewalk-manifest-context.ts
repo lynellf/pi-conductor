@@ -14,6 +14,8 @@ import type { Manifest, PrewalkConfig, RoleConfig } from "../manifest/types.js";
 import type { FileMutationRecord } from "../persistence/file-mutation.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type { PrewalkFailureCode } from "../persistence/prewalk-records.js";
+import type { SessionState } from "./cost.js";
+import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import { derivePrewalkForwardBudget, EVIDENCED_EXECUTOR_MARGIN_PERCENT } from "./prewalk-budget.js";
 import { createPrewalkGitCheckpoint, inspectPrewalkGitBase } from "./prewalk-git-checkpoint.js";
 import { runProductionPreflight } from "./prewalk-production-preflight.js";
@@ -164,7 +166,9 @@ export interface ProductionPrewalkPhaseSpawnOptions {
   readonly guideStartedAt: number;
   readonly beforeMachineEmission: (
     signal?: AbortSignal,
+    context?: { readonly toolCallId: string },
   ) => ReturnType<PrewalkValidationGate["beforeMachineEmission"]>;
+  readonly getExecutionController?: () => ToolExecutionController | null;
   readonly deferSessionCostCapAbort: (
     attempt: Parameters<PrewalkValidationGate["allowPostBudgetContinuation"]>[0],
   ) => boolean;
@@ -185,8 +189,10 @@ export async function spawnProductionPrewalkRoleSession(args: {
   readonly records: () => readonly PersistedRecord[];
   readonly usageFor: (sessionId: string) => UsageRecord;
   readonly spawnPhase: (phase: ProductionPrewalkPhaseSpawnOptions) => Promise<PrewalkPhaseSession>;
+  readonly getExecutionController?: () => ToolExecutionController | null;
   readonly persist: (record: PersistedRecord) => void;
   readonly registerUsageSession: (sessionId: string) => void;
+  readonly sessionStates?: Map<string, SessionState>;
   readonly markTerminalFailure: (
     sessionId: string,
     code: PrewalkFailureCode,
@@ -213,8 +219,9 @@ export async function spawnProductionPrewalkRoleSession(args: {
   const continuationSeed = buildPrewalkContinuationSeed(executorTools);
   const seam = new PrewalkSeam();
   let validationGate: PrewalkValidationGate | null = null;
-  const beforeMachineEmission = (signal?: AbortSignal) =>
-    validationGate?.beforeMachineEmission(signal) ?? Promise.resolve({ allow: true as const });
+  const beforeMachineEmission = (signal?: AbortSignal, context?: { readonly toolCallId: string }) =>
+    validationGate?.beforeMachineEmission(signal, context) ??
+    Promise.resolve({ allow: true as const });
   const deferSessionCostCapAbort = (
     attempt: Parameters<PrewalkValidationGate["allowPostBudgetContinuation"]>[0],
   ) => validationGate?.allowPostBudgetContinuation(attempt) ?? false;
@@ -235,6 +242,9 @@ export async function spawnProductionPrewalkRoleSession(args: {
     kind: "guide",
     guideStartedAt,
     beforeMachineEmission,
+    ...(args.getExecutionController !== undefined
+      ? { getExecutionController: args.getExecutionController }
+      : {}),
     deferSessionCostCapAbort,
   });
   args.registerUsageSession(args.roleSessionId);
@@ -307,6 +317,9 @@ export async function spawnProductionPrewalkRoleSession(args: {
         kind: "executor",
         guideStartedAt,
         beforeMachineEmission,
+        ...(args.getExecutionController !== undefined
+          ? { getExecutionController: args.getExecutionController }
+          : {}),
         deferSessionCostCapAbort,
       });
     },
@@ -330,6 +343,17 @@ export async function spawnProductionPrewalkRoleSession(args: {
         cwd: args.cwd,
         persist: args.persist,
         onUnsatisfied,
+        canRun: () => {
+          const state = args.sessionStates?.get(args.roleSessionId);
+          const executor = args.sessionStates?.get(`${args.roleSessionId}:executor`);
+          return [state, executor].every(
+            (candidate) =>
+              candidate === undefined || (candidate.terminalReason === null && !candidate.aborted),
+          );
+        },
+        ...(args.getExecutionController !== undefined
+          ? { getController: args.getExecutionController }
+          : {}),
       });
       return validationGate;
     },

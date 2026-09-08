@@ -11,6 +11,7 @@
 export {
   buildConfinedTools,
   type ConfinedToolsResult,
+  confineToolDefinition,
   ROLE_FILE_TOOL_NAMES,
 } from "./confine-tools.js";
 export {

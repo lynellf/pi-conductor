@@ -10,6 +10,7 @@ import type {
 } from "../../core/types.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
 import type { DelegateBridgeHandler, RequestFilesBridgeHandler } from "./delegate-bridge.js";
+import type { ExecutionBridgeToolDefinition } from "./execution-bridge.js";
 
 /** All-zero usage before the first child turn settles. */
 export const ZERO_USAGE: UsageRecord = Object.freeze({
@@ -92,6 +93,12 @@ export interface NodeRoleSessionOptions {
   readonly requestFilesBridge?: {
     readonly directory: string;
     readonly requestFiles: RequestFilesBridgeHandler;
+  };
+  /** Host-owned definitions executed for child file-tool calls. */
+  readonly executionBridge?: {
+    readonly directory: string;
+    readonly tools: readonly ExecutionBridgeToolDefinition[];
+    readonly closeTimeoutMs?: number;
   };
   readonly env?: NodeJS.ProcessEnv;
   /** Release host session tracking after the child has been terminated. */

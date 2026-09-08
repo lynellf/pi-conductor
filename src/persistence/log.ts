@@ -49,6 +49,7 @@ import type { FileMutationRecord } from "./file-mutation.js";
 import type { PrewalkRecord } from "./prewalk-records.js";
 import { materializePersistedRecord } from "./record-materialization.js";
 import type { RoleTurnRecord } from "./role-turn.js";
+import type { ToolExecutionFinishedRecord, ToolExecutionStartedRecord } from "./tool-execution.js";
 import type {
   HandoffTransportSelectedRecord,
   ManifestSnapshotRecord,
@@ -69,6 +70,20 @@ export {
   WorkspaceGuaranteeError,
 } from "./record-materialization.js";
 export type { RoleTurnRecord } from "./role-turn.js";
+export type {
+  ToolExecutionFinishedRecord,
+  ToolExecutionRecord,
+  ToolExecutionStartedRecord,
+  ToolExecutionTimeline,
+  ToolExecutionTimelineEntry,
+} from "./tool-execution.js";
+export {
+  assertToolExecutionRecord,
+  reconstructToolExecutionTimeline,
+  ToolExecutionRecordError,
+  toolExecutionFinishedSchema,
+  toolExecutionStartedSchema,
+} from "./tool-execution.js";
 export type {
   ArtifactCollectedRecord,
   ArtifactDeliveryRecord,
@@ -329,6 +344,8 @@ export type PersistedRecord =
   | TrajectoryHandoffFailedRecord
   | TrajectoryTargetSeedDeliveredRecord
   | RoleTurnRecord
+  | ToolExecutionStartedRecord
+  | ToolExecutionFinishedRecord
   | PrewalkRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────

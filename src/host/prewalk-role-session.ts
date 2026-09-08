@@ -26,6 +26,7 @@ import type {
   PrewalkPhaseSession,
 } from "./prewalk-role-session-types.js";
 import { preparePrewalkSeedDelivery, recordPrewalkSeedDelivered } from "./prewalk-seed-delivery.js";
+import type { PrewalkValidationGate } from "./prewalk-validation.js";
 
 export { PrewalkRoleSessionError } from "./prewalk-role-session-errors.js";
 export { hashPrewalkExecutorEnvironment } from "./prewalk-role-session-records.js";
@@ -40,6 +41,8 @@ export type {
 export function createPrewalkRoleSession(options: CreatePrewalkRoleSessionOptions): RoleSession {
   let active = options.guide;
   let started = false;
+  let abortRequested = false;
+  let abortValidation: (() => Promise<void>) | undefined;
   const listeners = new Set<(event: AgentSessionEvent) => void>();
   const subscriptions = new Map<PrewalkPhaseSession, () => void>();
   const subscribePhysical = (session: PrewalkPhaseSession) => {
@@ -80,15 +83,34 @@ export function createPrewalkRoleSession(options: CreatePrewalkRoleSessionOption
     clearQueue: () => active.clearQueue?.() ?? { steering: [], followUp: [] },
     isSealed: () => active.isSealed?.() ?? false,
     subscribeSealed: (listener) => active.subscribeSealed?.(listener) ?? (() => undefined),
+    abortOwnedWork: async () => {
+      abortRequested = true;
+      await abortValidation?.();
+    },
     prompt: async (seed) => {
+      if (abortRequested) throw new Error("Prewalk was aborted before prompt admission");
       if (started) return active.prompt(seed);
       started = true;
-      active = await runFirstPrompt(options, seed, active, (next) => {
-        active = next;
-        subscribePhysical(next);
-      });
+      active = await runFirstPrompt(
+        options,
+        seed,
+        active,
+        (next) => {
+          active = next;
+          subscribePhysical(next);
+        },
+        (gate) => {
+          abortValidation = async () => {
+            gate.close();
+            await gate.settle();
+          };
+          if (abortRequested) void abortValidation();
+        },
+        () => abortRequested,
+      );
     },
     dispose: async () => {
+      await roleSession.abortOwnedWork?.();
       for (const unsubscribe of subscriptions.values()) unsubscribe();
       subscriptions.clear();
       const sessions = new Set([options.guide, active]);
@@ -103,9 +125,17 @@ async function runFirstPrompt(
   seed: string,
   active: PrewalkPhaseSession,
   selectActive: (session: PrewalkPhaseSession) => void,
+  setValidationGate: (gate: PrewalkValidationGate) => void,
+  isAbortRequested: () => boolean,
 ): Promise<PrewalkPhaseSession> {
+  const assertNotAborted = (): void => {
+    if (!isAbortRequested()) return;
+    throw new Error("Prewalk was aborted before phase admission");
+  };
+  assertNotAborted();
   const now = options.now ?? Date.now;
   const base = await options.inspectGitBase();
+  assertNotAborted();
   if (!base.clean) {
     throw new PrewalkRoleSessionError(
       "prewalk_git_checkpoint_failed",
@@ -155,6 +185,7 @@ async function runFirstPrompt(
       });
     },
   });
+  if (validationGate !== undefined) setValidationGate(validationGate);
 
   if (checkpoint.outcome !== "handoff_to_executor") {
     const machineTools = Array.from(
@@ -166,6 +197,7 @@ async function runFirstPrompt(
       ]),
     );
     await active.enableGuideMachineTools(machineTools);
+    assertNotAborted();
     await runPrewalkGuide(
       options,
       checkpoint.outcome === "blocked"
@@ -179,8 +211,11 @@ async function runFirstPrompt(
   }
 
   try {
+    assertNotAborted();
     const configuredEnvironment = detachPrewalkEnvironment(await options.executorEnvironment());
+    assertNotAborted();
     const preflight = await options.preflight(configuredEnvironment);
+    assertNotAborted();
     const mode = selectTransferMode(
       {
         transfer: options.config.transfer,
@@ -190,6 +225,7 @@ async function runFirstPrompt(
       { transcript_fits: !guideResult.forceProjection && options.transcriptFits(preflight) },
     );
     const selectedGitCheckpoint = await options.createGitCheckpoint(base);
+    assertNotAborted();
     gitCheckpoint = selectedGitCheckpoint;
     let projection: PrewalkProjectionResult | undefined;
     let deliveredSeed = configuredEnvironment.continuationSeed;
@@ -202,6 +238,7 @@ async function runFirstPrompt(
       });
       deliveredSeed = projection.prompt;
     }
+    assertNotAborted();
     const environment = detachPrewalkEnvironment({
       ...configuredEnvironment,
       continuationSeed: deliveredSeed,
@@ -236,6 +273,10 @@ async function runFirstPrompt(
       executor = await options.openProjectionSession(environment);
       selectActive(executor);
     }
+    if (isAbortRequested()) {
+      await executor.dispose();
+      assertNotAborted();
+    }
     assertPrewalkExecutorEnvironment(executor.snapshot(), environment, environmentHash);
     const cap =
       options.executorLimits === undefined
@@ -257,6 +298,7 @@ async function runFirstPrompt(
     let executorPromptError: unknown = null;
     try {
       const intent = preparePrewalkSeedDelivery({ ...options, executor, seed: deliveredSeed });
+      assertNotAborted();
       await executor.prompt(deliveredSeed);
       recordPrewalkSeedDelivered({
         executor,
@@ -269,6 +311,7 @@ async function runFirstPrompt(
       executorPromptError = error;
     } finally {
       cap?.stop();
+      if (executorPromptError !== null || (cap?.code ?? null) !== null) validationGate?.close();
       await validationGate?.ensureRecorded();
       persistPrewalkExecutorUsage({
         runId: options.runId,

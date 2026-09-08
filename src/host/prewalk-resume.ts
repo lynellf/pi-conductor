@@ -217,12 +217,20 @@ export async function createPrewalkResumeRoleSession(options: {
     isSealed: () => options.executor.isSealed?.() ?? false,
     subscribeSealed: (listener) =>
       options.executor.subscribeSealed?.(listener) ?? (() => undefined),
+    abortOwnedWork: async () => {
+      options.validationGate?.close();
+      await options.validationGate?.settle();
+    },
     prompt: async (text) => {
       if (!firstPrompt) return options.executor.prompt(text);
       firstPrompt = false;
       return runResumedExecutorPrompt(options);
     },
-    dispose: () => options.executor.dispose(),
+    dispose: async () => {
+      options.validationGate?.close();
+      await options.validationGate?.settle();
+      await options.executor.dispose();
+    },
   };
 }
 
@@ -294,6 +302,7 @@ async function runResumedExecutorPrompt(
     promptError = error;
   } finally {
     cap?.stop();
+    if (promptError !== null || (cap?.code ?? null) !== null) options.validationGate?.close();
     await options.validationGate?.ensureRecorded();
     persistPrewalkExecutorUsage({
       runId: selected.run_id,

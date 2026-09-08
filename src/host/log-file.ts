@@ -421,6 +421,8 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "handoff_transport_selected",
   "trajectory_handoff_failed",
   "trajectory_target_seed_delivered",
+  "tool_execution_started",
+  "tool_execution_finished",
 ]);
 
 /** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */

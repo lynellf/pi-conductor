@@ -63,6 +63,7 @@ import type { TSchema } from "typebox";
 
 import { endArgsSchema, type HandoffCandidate, handoffArgsSchema } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
+import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import {
   formatHandoffCorrection,
   formatHandoffDescription,
@@ -127,6 +128,7 @@ interface EmissionToolFactoryOptions {
   /** Opt-in Prewalk gate run after schema/actionability checks and before capture/seal. */
   readonly beforeValidCapture?: (
     signal: AbortSignal | undefined,
+    context?: { readonly toolCallId: string },
   ) => Promise<
     | { readonly allow: true }
     | { readonly allow: false; readonly terminate: false; readonly correction: string }
@@ -259,7 +261,12 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       const validated = validateEmission([{ toolName, args: params }]);
 
       if (validated.kind === "ok" && beforeValidCapture !== undefined) {
-        const decision = await beforeValidCapture(signal);
+        let decision: Awaited<ReturnType<NonNullable<typeof beforeValidCapture>>>;
+        try {
+          decision = await beforeValidCapture(signal, { toolCallId: _toolCallId });
+        } catch (error) {
+          throw toToolExecutionModelError(error);
+        }
         if (!decision.allow) {
           return {
             content: [{ type: "text" as const, text: decision.correction }],
