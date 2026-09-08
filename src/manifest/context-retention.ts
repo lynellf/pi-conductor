@@ -1,10 +1,12 @@
 import type { RoleConfig } from "./types.js";
 
+/** Role-local Issue #87 validation codes. */
 export type ContextRetentionErrorCode =
   | "invalid-context-retention"
   | "context-retention-on-worker"
   | "context-retention-prewalk-conflict";
 
+/** Structured role-local Issue #87 validation failure. */
 export interface ContextRetentionError {
   readonly code: ContextRetentionErrorCode;
   readonly message: string;

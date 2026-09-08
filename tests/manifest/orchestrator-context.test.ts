@@ -83,6 +83,10 @@ describe("Issue #87 orchestrator context retention manifest contract", () => {
     } as unknown as Manifest;
     expect(errorCodes(nullPolicy)).toContain("invalid-context-retention");
     expect(errorCodes(parseManifest(PREWALK_WORKER))).toContain("context-retention-on-worker");
+    const parsedWorkerNone = parseManifest(
+      PREWALK_WORKER.replace("context_retention: run", "context_retention: none"),
+    );
+    expect(errorCodes(parsedWorkerNone)).toContain("context-retention-on-worker");
     const explicitWorkerNone = {
       ...manifest,
       roles: [{ ...manifest.roles[0] }, { ...manifest.roles[1], context_retention: "none" }],
@@ -106,6 +110,22 @@ describe("Issue #87 orchestrator context retention manifest contract", () => {
     );
   });
 
+  it("rejects a trajectory policy even when its edge is worker-to-worker", () => {
+    const manifest = parseManifest(
+      withOrchestratorRetention(
+        BASE.replace(
+          "version: 1",
+          "version: 1\nhandoffs:\n  - { from: worker, to: worker-two, mode: trajectory }",
+        ).replace(
+          "    system_prompt: worker.md",
+          "    system_prompt: worker.md\n  - name: worker-two\n    max_visits: 2",
+        ),
+        "run",
+      ),
+    );
+    expect(errorCodes(manifest)).toContain("context-retention-trajectory-conflict");
+  });
+
   it("allows prewalk on a worker while retaining run on the orchestrator", () => {
     const manifest = parseManifest(
       PREWALK_WORKER.replace("    context_retention: run\n", "")
@@ -115,7 +135,9 @@ describe("Issue #87 orchestrator context retention manifest contract", () => {
         )
         .replace("    context_retention: run\n    prewalk:", "    prewalk:"),
     );
-    expect(errorCodes(manifest)).not.toContain("context-retention-prewalk-conflict");
+    expect(errorCodes(manifest).filter((code) => code.startsWith("context-retention-"))).toEqual(
+      [],
+    );
     expect(manifest.roles[0]?.context_retention).toBe("run");
   });
 });
