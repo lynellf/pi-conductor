@@ -117,6 +117,23 @@ export const contextBoundaryCommittedSchema = Type.Object(
 );
 export type ContextBoundaryCommittedRecord = Static<typeof contextBoundaryCommittedSchema>;
 
+/** Durable intent marker written before a compaction request begins. */
+export const contextCompactionStartedSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    type: Type.Literal("context_compaction_started"),
+    run_id: idSchema,
+    role: roleSchema,
+    epoch: positiveEpochSchema,
+    role_session_id: idSchema,
+    request_id: idSchema,
+    before_leaf_id: nullableIdSchema,
+    ts: timestampSchema,
+  },
+  { additionalProperties: false },
+);
+export type ContextCompactionStartedRecord = Static<typeof contextCompactionStartedSchema>;
+
 /** Compaction outcome and its explicitly known or unavailable usage. */
 export const contextCompactionSchema = Type.Object(
   {
@@ -144,6 +161,7 @@ export const orchestratorContextRecordSchema = Type.Union([
   contextInvocationStartedSchema,
   contextDeliveryCommittedSchema,
   contextBoundaryCommittedSchema,
+  contextCompactionStartedSchema,
   contextCompactionSchema,
 ]);
 export type OrchestratorContextRecord = Static<typeof orchestratorContextRecordSchema>;

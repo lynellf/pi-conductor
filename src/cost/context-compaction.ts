@@ -17,6 +17,7 @@ export interface UnknownCompactionUsage {
 /** Result of adding unsettled compaction records to persisted accounting. */
 export interface UnsettledCompactionUsage {
   readonly usageByRole: Readonly<Record<string, UsageRecord>>;
+  readonly usageByModel: ReadonlyMap<string | null, UsageRecord>;
   readonly totalUsage: UsageRecord;
   readonly unknown: readonly UnknownCompactionUsage[];
 }
@@ -49,10 +50,40 @@ export function aggregateUnsettledCompactionUsage(
   const terminalInvocationIds = new Set<string>();
   const seenRequests = new Set<string>();
   const usageByRole = new Map<string, UsageRecord>();
+  const usageByModel = new Map<string | null, UsageRecord>();
+  const invocationModels = new Map<string, string | null>();
+  const startedCompactions = new Map<
+    string,
+    Extract<PersistedRecord, { type: "context_compaction_started" }>
+  >();
   const unknown: UnknownCompactionUsage[] = [];
   let totalUsage: UsageRecord = zeroUsage();
 
   for (const record of records) {
+    if (record.type === "context_compaction_started") {
+      if (record.run_id !== options.runId) continue;
+      assertOrchestratorContextRecord(record);
+      if (startedCompactions.has(record.request_id)) {
+        throw new ContextCompactionAccountingError(
+          `duplicate context_compaction_started request '${record.request_id}' in run '${options.runId}'`,
+        );
+      }
+      startedCompactions.set(record.request_id, record);
+      continue;
+    }
+    if (record.type === "context_invocation_started") {
+      if (record.run_id !== options.runId) continue;
+      assertOrchestratorContextRecord(record);
+      const key = invocationKey(record.role, record.role_session_id);
+      const previous = invocationModels.get(key);
+      if (previous !== undefined && previous !== record.model) {
+        throw new ContextCompactionAccountingError(
+          `context invocation '${record.role_session_id}' has conflicting models`,
+        );
+      }
+      invocationModels.set(key, record.model);
+      continue;
+    }
     if (!isTerminal(record) || record.run_id !== options.runId) continue;
     if (record.role_session_id !== undefined) {
       terminalInvocationIds.add(invocationKey(record.role, record.role_session_id));
@@ -68,6 +99,12 @@ export function aggregateUnsettledCompactionUsage(
       );
     }
     seenRequests.add(record.request_id);
+    const started = startedCompactions.get(record.request_id);
+    if (started !== undefined && !sameCompactionIdentity(started, record)) {
+      throw new ContextCompactionAccountingError(
+        `context compaction request '${record.request_id}' does not match its started identity`,
+      );
+    }
 
     if (record.usage === null) {
       if (record.diagnostic === null) {
@@ -95,11 +132,36 @@ export function aggregateUnsettledCompactionUsage(
 
     const roleUsage = usageByRole.get(record.role) ?? zeroUsage();
     usageByRole.set(record.role, addUsage(roleUsage, record.usage));
+    const modelKey = invocationKey(record.role, record.role_session_id);
+    if (!invocationModels.has(modelKey)) {
+      throw new ContextCompactionAccountingError(
+        `context compaction request '${record.request_id}' has no matching invocation selection`,
+      );
+    }
+    const model = invocationModels.get(modelKey) as string | null;
+    const modelUsage = usageByModel.get(model) ?? zeroUsage();
+    usageByModel.set(model, addUsage(modelUsage, record.usage));
     totalUsage = addUsage(totalUsage, record.usage);
+  }
+
+  for (const record of records) {
+    if (record.type !== "context_compaction_started" || record.run_id !== options.runId) {
+      continue;
+    }
+    if (seenRequests.has(record.request_id)) continue;
+    unknown.push({
+      run_id: record.run_id,
+      role: record.role,
+      epoch: record.epoch,
+      role_session_id: record.role_session_id,
+      request_id: record.request_id,
+      diagnostic: "context compaction started without an outcome",
+    });
   }
 
   return {
     usageByRole: Object.freeze(Object.fromEntries(usageByRole)),
+    usageByModel,
     totalUsage: Object.freeze(totalUsage),
     unknown: Object.freeze(unknown),
   };
@@ -120,6 +182,18 @@ export function assertKnownCompactionUsage(
 
 function invocationKey(role: string, roleSessionId: string): string {
   return JSON.stringify([role, roleSessionId]);
+}
+
+function sameCompactionIdentity(
+  started: Extract<PersistedRecord, { type: "context_compaction_started" }>,
+  outcome: Extract<PersistedRecord, { type: "context_compaction" }>,
+): boolean {
+  return (
+    started.role === outcome.role &&
+    started.epoch === outcome.epoch &&
+    started.role_session_id === outcome.role_session_id &&
+    started.before_leaf_id === outcome.before_leaf_id
+  );
 }
 
 function isTerminal(

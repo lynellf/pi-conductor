@@ -10,6 +10,7 @@ import {
   type ContextBoundaryCommittedRecord,
   type ContextBoundaryReference,
   type ContextCompactionRecord,
+  type ContextCompactionStartedRecord,
   type ContextDeliveryCommittedRecord,
   type ContextEpochStartedRecord,
   type ContextInvocationStartedRecord,
@@ -64,6 +65,17 @@ const records = [
   } satisfies ContextDeliveryCommittedRecord,
   {
     schema_version: 1,
+    type: "context_compaction_started",
+    run_id: "run-1",
+    role: "orchestrator",
+    epoch: 1,
+    role_session_id: "session-1",
+    request_id: "request-1",
+    before_leaf_id: "leaf-1",
+    ts: 5,
+  } satisfies ContextCompactionStartedRecord,
+  {
+    schema_version: 1,
     type: "context_boundary_committed",
     run_id: "run-1",
     role: "orchestrator",
@@ -88,11 +100,22 @@ const records = [
     diagnostic: null,
     before_leaf_id: "leaf-1",
     after_leaf_id: "leaf-2",
-    ts: 5,
+    ts: 6,
   } satisfies ContextCompactionRecord,
 ] as const;
 
 describe("orchestrator context persistence records", () => {
+  it("materializes compaction intent records through both log boundaries", () => {
+    const log = new InMemoryRecordLog();
+    try {
+      log.append(records[3]);
+      expect(log.records("run-1")).toEqual([records[3]]);
+      expect(() => log.append({ ...records[3], request_id: "" })).toThrow();
+    } finally {
+      log.close();
+    }
+  });
+
   it.each(["memory", "file"] as const)("round-trips valid records through %s log", async (kind) => {
     let log: InMemoryRecordLog | FileRecordLog;
     let cleanup: (() => Promise<void>) | undefined;
@@ -108,7 +131,7 @@ describe("orchestrator context persistence records", () => {
         log.append(record);
       }
       expect(log.records("run-1")).toHaveLength(records.length);
-      expect(log.records("run-1")[4]).toMatchObject({ type: "context_compaction" });
+      expect(log.records("run-1").at(-1)).toMatchObject({ type: "context_compaction" });
     } finally {
       log.close();
       await cleanup?.();
@@ -127,8 +150,8 @@ describe("orchestrator context persistence records", () => {
     ["unsupported schema version", { ...records[0], schema_version: 2 }],
     ["non-finite timestamp", { ...records[0], ts: Number.POSITIVE_INFINITY }],
     ["bad digest", { ...records[3], history_sha256: "bad" }],
-    ["non-finite usage", { ...records[4], usage: { ...records[4].usage, cost: Number.NaN } }],
-    ["negative usage", { ...records[4], usage: { ...records[4].usage, cost: -1 } }],
+    ["non-finite usage", { ...records[5], usage: { ...records[5].usage, cost: Number.NaN } }],
+    ["negative usage", { ...records[5], usage: { ...records[5].usage, cost: -1 } }],
   ])("rejects %s", (_name, record) => {
     expect(() => assertOrchestratorContextRecord(record)).toThrow();
   });
@@ -136,10 +159,10 @@ describe("orchestrator context persistence records", () => {
   it("requires known usage for successful compaction and a diagnostic for failure", () => {
     expect(() => assertOrchestratorContextRecord({ ...records[0], epoch: 2 })).toThrow();
     expect(() =>
-      assertOrchestratorContextRecord({ ...records[4], outcome: "completed", usage: null }),
+      assertOrchestratorContextRecord({ ...records[5], outcome: "completed", usage: null }),
     ).toThrow();
     expect(() =>
-      assertOrchestratorContextRecord({ ...records[4], outcome: "failed", diagnostic: null }),
+      assertOrchestratorContextRecord({ ...records[5], outcome: "failed", diagnostic: null }),
     ).toThrow();
   });
 });

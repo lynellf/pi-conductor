@@ -100,6 +100,7 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
     record.type === "context_invocation_started" ||
     record.type === "context_delivery_committed" ||
     record.type === "context_boundary_committed" ||
+    record.type === "context_compaction_started" ||
     record.type === "context_compaction"
   ) {
     assertOrchestratorContextRecord(record);

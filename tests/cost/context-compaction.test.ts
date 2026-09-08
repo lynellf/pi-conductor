@@ -14,6 +14,26 @@ function usage(cost: number): UsageRecord {
   return { input: 10, output: 20, cache_read: 0, cache_write: 0, tokens: 30, cost };
 }
 
+function invocation(
+  roleSessionId = "session-a",
+  model: string | null = "provider:model-a",
+  role = "orchestrator",
+): Extract<PersistedRecord, { type: "context_invocation_started" }> {
+  return {
+    schema_version: 1,
+    type: "context_invocation_started",
+    run_id: RUN,
+    role,
+    epoch: 1,
+    role_session_id: roleSessionId,
+    conversation_id: `${roleSessionId}-conversation`,
+    session_file: `${roleSessionId}.jsonl`,
+    model,
+    source_boundary: null,
+    ts: 0,
+  };
+}
+
 function compaction(
   overrides: Partial<Extract<PersistedRecord, { type: "context_compaction" }>> = {},
 ): Extract<PersistedRecord, { type: "context_compaction" }> {
@@ -30,6 +50,23 @@ function compaction(
     diagnostic: null,
     before_leaf_id: null,
     after_leaf_id: null,
+    ts: 1,
+    ...overrides,
+  };
+}
+
+function started(
+  overrides: Partial<Extract<PersistedRecord, { type: "context_compaction_started" }>> = {},
+): Extract<PersistedRecord, { type: "context_compaction_started" }> {
+  return {
+    schema_version: 1,
+    type: "context_compaction_started",
+    run_id: RUN,
+    role: "orchestrator",
+    epoch: 1,
+    role_session_id: "session-a",
+    request_id: "request-a",
+    before_leaf_id: null,
     ts: 1,
     ...overrides,
   };
@@ -56,8 +93,46 @@ function terminal(
 }
 
 describe("aggregateUnsettledCompactionUsage", () => {
+  it("reports a started-only compaction after reset and terminal settlement", () => {
+    const result = aggregateUnsettledCompactionUsage(
+      [started(), terminal(), started({ request_id: "after-reset", epoch: 2 })],
+      { runId: RUN, excludedLiveInvocationIds: new Set(["session-a"]) },
+    );
+    expect(result.totalUsage.cost).toBe(0);
+    expect(result.unknown.map((entry) => entry.request_id)).toEqual(["request-a", "after-reset"]);
+  });
+
+  it("resolves a started compaction when its outcome arrives and charges it once", () => {
+    const result = aggregateUnsettledCompactionUsage([invocation(), started(), compaction()], {
+      runId: RUN,
+    });
+    expect(result.totalUsage.cost).toBe(1);
+    expect(result.unknown).toEqual([]);
+  });
+
+  it("filters started records from other runs", () => {
+    const result = aggregateUnsettledCompactionUsage([started({ run_id: OTHER_RUN })], {
+      runId: RUN,
+    });
+    expect(result.unknown).toEqual([]);
+  });
+
+  it("rejects duplicate starts and mismatched outcome identity", () => {
+    expect(() => aggregateUnsettledCompactionUsage([started(), started()], { runId: RUN })).toThrow(
+      "duplicate context_compaction_started",
+    );
+    expect(() =>
+      aggregateUnsettledCompactionUsage(
+        [started(), compaction({ before_leaf_id: "different-leaf" })],
+        { runId: RUN },
+      ),
+    ).toThrow("does not match its started identity");
+  });
+
   it("does not double-charge a compaction covered by a completed terminal", () => {
-    const result = aggregateUnsettledCompactionUsage([compaction(), terminal()], { runId: RUN });
+    const result = aggregateUnsettledCompactionUsage([invocation(), compaction(), terminal()], {
+      runId: RUN,
+    });
     expect(result.totalUsage.cost).toBe(0);
     expect(result.usageByRole).toEqual({});
   });
@@ -65,6 +140,8 @@ describe("aggregateUnsettledCompactionUsage", () => {
   it("preserves a known orphan after a reset epoch", () => {
     const result = aggregateUnsettledCompactionUsage(
       [
+        invocation("old-session"),
+        invocation("new-session"),
         compaction({ request_id: "old", role_session_id: "old-session", epoch: 1 }),
         compaction({
           request_id: "reset",
@@ -80,7 +157,7 @@ describe("aggregateUnsettledCompactionUsage", () => {
   });
 
   it("excludes known usage for a live invocation already held in SessionState", () => {
-    const result = aggregateUnsettledCompactionUsage([compaction()], {
+    const result = aggregateUnsettledCompactionUsage([invocation(), compaction()], {
       runId: RUN,
       excludedLiveInvocationIds: new Set(["session-a"]),
     });
@@ -90,6 +167,8 @@ describe("aggregateUnsettledCompactionUsage", () => {
   it("aggregates multiple unsettled invocations by role", () => {
     const result = aggregateUnsettledCompactionUsage(
       [
+        invocation("a"),
+        invocation("b", null, "worker"),
         compaction({ request_id: "a", role_session_id: "a", usage: usage(1) }),
         compaction({ request_id: "b", role_session_id: "b", role: "worker", usage: usage(2) }),
       ],
@@ -135,22 +214,38 @@ describe("aggregateUnsettledCompactionUsage", () => {
 
   it("keeps nonzero failed-terminal usage independent of compaction accounting", () => {
     const result = aggregateUnsettledCompactionUsage(
-      [compaction({ role_session_id: "failed-session" }), terminal({ role_session_id: "other" })],
+      [
+        invocation("failed-session"),
+        invocation("other"),
+        compaction({ role_session_id: "failed-session" }),
+        terminal({ role_session_id: "other" }),
+      ],
       { runId: RUN },
     );
     expect(result.totalUsage.cost).toBe(1);
   });
 
   it("does not suppress an orchestrator compaction for a same-ID worker terminal", () => {
-    const result = aggregateUnsettledCompactionUsage([compaction(), terminal({ role: "worker" })], {
-      runId: RUN,
-    });
+    const result = aggregateUnsettledCompactionUsage(
+      [invocation(), compaction(), terminal({ role: "worker" })],
+      {
+        runId: RUN,
+      },
+    );
     expect(result.totalUsage.cost).toBe(1);
   });
 
   it("rejects malformed nonfinite compaction usage before accounting", () => {
     const malformed = compaction({ usage: { ...usage(1), cost: Number.NaN } }) as PersistedRecord;
-    expect(() => aggregateUnsettledCompactionUsage([malformed], { runId: RUN })).toThrow();
+    expect(() =>
+      aggregateUnsettledCompactionUsage([invocation(), malformed], { runId: RUN }),
+    ).toThrow();
+  });
+
+  it("rejects a known orphan without invocation model provenance", () => {
+    expect(() => aggregateUnsettledCompactionUsage([compaction()], { runId: RUN })).toThrow(
+      "no matching invocation selection",
+    );
   });
 
   it("rejects duplicate compaction request IDs and exposes unknown usage", () => {

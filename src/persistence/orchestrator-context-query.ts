@@ -2,6 +2,7 @@ import type { PersistedRecord } from "./log.js";
 import type {
   ContextBoundaryCommittedRecord,
   ContextCompactionRecord,
+  ContextCompactionStartedRecord,
   ContextDeliveryCommittedRecord,
   ContextEpochStartedRecord,
   ContextInvocationStartedRecord,
@@ -15,6 +16,7 @@ export interface OrchestratorContextState {
   readonly pendingInvocation: ContextInvocationStartedRecord | null;
   readonly deliveries: readonly ContextDeliveryCommittedRecord[];
   readonly compactions: readonly ContextCompactionRecord[];
+  readonly pendingCompactions: readonly ContextCompactionStartedRecord[];
 }
 
 /** Actionable corruption or restoration rejection in the context timeline. */
@@ -41,6 +43,7 @@ export function queryOrchestratorContext(
   let invocationTerminal = false;
   const deliveries: ContextDeliveryCommittedRecord[] = [];
   const compactions: ContextCompactionRecord[] = [];
+  const pendingCompactions = new Map<string, ContextCompactionStartedRecord>();
   const deliveryIds = new Set<string>();
   const requestIds = new Set<string>();
   const invocationIds = new Set<string>();
@@ -108,6 +111,7 @@ export function queryOrchestratorContext(
       invocationTerminal = false;
       deliveries.length = 0;
       compactions.length = 0;
+      pendingCompactions.clear();
       continue;
     }
     if (epoch === null || record.epoch !== epoch.epoch) {
@@ -171,13 +175,31 @@ export function queryOrchestratorContext(
       deliveryIds.add(record.delivery_id);
       deliveries.push(record);
       currentDelivery = record;
+    } else if (record.type === "context_compaction_started") {
+      if (!invocationStarted || invocationTerminal) {
+        throw new ContextQueryError(
+          "compaction cannot start before session start or after terminal",
+        );
+      }
+      if (requestIds.has(record.request_id) || pendingCompactions.has(record.request_id)) {
+        throw new ContextQueryError("compaction request ID was reused");
+      }
+      requestIds.add(record.request_id);
+      pendingCompactions.set(record.request_id, record);
     } else if (record.type === "context_compaction") {
       if (requestIds.has(record.request_id))
-        throw new ContextQueryError("compaction request ID was reused");
+        if (!pendingCompactions.has(record.request_id))
+          throw new ContextQueryError("compaction request ID was reused");
+      const started = pendingCompactions.get(record.request_id);
+      if (started === undefined) throw new ContextQueryError("compaction outcome has no start");
+      if (started.before_leaf_id !== record.before_leaf_id) {
+        throw new ContextQueryError("compaction outcome does not match its start tip");
+      }
+      pendingCompactions.delete(record.request_id);
       requestIds.add(record.request_id);
       compactions.push(record);
     } else {
-      if (!invocationStarted || !invocationTerminal) {
+      if (!invocationStarted || !invocationTerminal || pendingCompactions.size > 0) {
         throw new ContextQueryError("committed boundary lacks terminal lifecycle evidence");
       }
       if (
@@ -201,6 +223,7 @@ export function queryOrchestratorContext(
     pendingInvocation,
     deliveries: Object.freeze([...deliveries]),
     compactions: Object.freeze([...compactions]),
+    pendingCompactions: Object.freeze([...pendingCompactions.values()]),
   };
 }
 
@@ -214,6 +237,8 @@ export function assertRestorableOrchestratorContext(
   if (state.epoch === null) throw new ContextQueryError("context epoch is missing");
   if (state.pendingInvocation !== null)
     throw new ContextQueryError("context invocation is pending");
+  if (state.pendingCompactions.length > 0)
+    throw new ContextQueryError("context compaction is pending");
   if (state.compactions.some((record) => record.usage === null)) {
     throw new ContextQueryError("context compaction usage is unknown");
   }

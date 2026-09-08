@@ -81,12 +81,22 @@ const compacted = {
   after_leaf_id: "leaf-2",
   ts: 5,
 };
+const compactionStarted = {
+  schema_version: 1 as const,
+  type: "context_compaction_started" as const,
+  ...base,
+  role_session_id: "session-1",
+  request_id: "request-1",
+  before_leaf_id: "leaf-1",
+  ts: 4,
+};
 
 const settled: readonly PersistedRecord[] = [
   epoch,
   invocation,
   started,
   delivery,
+  compactionStarted,
   compacted,
   terminal,
   boundary,
@@ -231,7 +241,26 @@ describe("orchestrator context query", () => {
     [[epoch, invocation, started, started], "duplicate session start"],
     [[epoch, invocation, delivery, terminal, boundary], "terminal without session start"],
     [[epoch, invocation, started, delivery, terminal, compacted], "compaction after terminal"],
-    [[epoch, invocation, delivery, { ...delivery, delivery_id: "delivery-2" }], "duplicate seed"],
+    [
+      [epoch, invocation, started, delivery, { ...delivery, delivery_id: "delivery-2" }],
+      "duplicate seed",
+    ],
+    [[epoch, invocation, started, delivery, compacted], "outcome without start"],
+    [
+      [epoch, invocation, started, delivery, compactionStarted, { ...compactionStarted, ts: 6 }],
+      "duplicate compaction start",
+    ],
+    [
+      [
+        epoch,
+        invocation,
+        started,
+        delivery,
+        compactionStarted,
+        { ...compacted, before_leaf_id: "different-leaf" },
+      ],
+      "compaction tip mismatch",
+    ],
     [
       [epoch, invocation, delivery, terminal, { ...boundary, role_session_id: "other" }],
       "boundary identity",
@@ -339,16 +368,47 @@ describe("orchestrator context query", () => {
   it("rejects restoration after unknown compaction usage", () => {
     const failedCompaction = {
       ...compacted,
+      request_id: "request-failed",
       outcome: "failed" as const,
       usage: null,
       diagnostic: "unavailable",
     };
     expect(() =>
       assertRestorableOrchestratorContext(
-        [epoch, invocation, started, delivery, failedCompaction, terminal, boundary],
+        [
+          epoch,
+          invocation,
+          started,
+          delivery,
+          { ...compactionStarted, request_id: "request-failed" },
+          failedCompaction,
+          terminal,
+          boundary,
+        ],
         "run-1",
         "orchestrator",
       ),
     ).toThrow(/unknown/);
+  });
+
+  it("exposes a crash-pending compaction and clears it only in a new context epoch", () => {
+    const pending = queryOrchestratorContext(
+      [epoch, invocation, started, delivery, compactionStarted],
+      "run-1",
+      "orchestrator",
+    );
+    expect(pending.pendingCompactions).toHaveLength(1);
+    expect(() =>
+      assertRestorableOrchestratorContext(
+        [epoch, invocation, started, delivery, compactionStarted],
+        "run-1",
+        "orchestrator",
+      ),
+    ).toThrow(/pending/);
+    const reset = { ...epoch, epoch: 2, reason: "reset" as const, previous_epoch: 1, ts: 10 };
+    expect(
+      queryOrchestratorContext([epoch, invocation, reset], "run-1", "orchestrator")
+        .pendingCompactions,
+    ).toHaveLength(0);
   });
 });
