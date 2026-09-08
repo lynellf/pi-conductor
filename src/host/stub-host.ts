@@ -522,6 +522,14 @@ export class StubHost implements Host {
     await agent.abort();
   }
 
+  pendingDelegationTasks(_session: RoleSession): readonly string[] {
+    return [];
+  }
+
+  async settleDelegation(_session: RoleSession, _reason: string): Promise<void> {
+    await this.delegationManager.abortAll();
+  }
+
   sealSession(_session: RoleSession): void {
     // No-op: sealing is owned by the handoff/end tool wrapper
     // (Task 15.5) flipping SessionSeam.isSealed. The Host

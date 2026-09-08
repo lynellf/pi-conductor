@@ -37,6 +37,9 @@ disable them.
   [end guard](end-guard.md) before accepting completion. Args: optional
   `reason: string`.
 
+A role with pending delegated children receives a correction to wait or cancel
+them before its handoff/end can be accepted. See [delegation controls](delegation.md#nonblocking-tasks-and-controls).
+
 Both tools only **validate and record intent** into a per-session capture buffer
 and return a terminating message after a valid capture; they do **not** call
 `reduce` and do **not** persist — the loop owns those exclusively (§12.1). An

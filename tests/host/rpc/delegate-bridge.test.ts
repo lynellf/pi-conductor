@@ -142,11 +142,119 @@ async function requestId(requestPath: string): Promise<string> {
   return value.id;
 }
 
+async function requestFrame(requestPath: string): Promise<{ id: string; tool_call_id: string }> {
+  const value: unknown = JSON.parse(await readFile(requestPath, "utf8"));
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    !("tool_call_id" in value) ||
+    typeof value.id !== "string" ||
+    typeof value.tool_call_id !== "string"
+  ) {
+    throw new Error("delegate bridge request did not contain tool identity");
+  }
+  return { id: value.id, tool_call_id: value.tool_call_id };
+}
+
 describe("isolated delegate bridge", () => {
+  it("selects an unbounded wait deadline only for wait/blocking calls", async () => {
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const waitAbort = new AbortController();
+    const wait = requestDelegateBridge({
+      directory: bridgeDirectory,
+      args: { operation: "wait", child_ids: ["child-a"] },
+      actualToolCallId: "wait-call",
+      signal: waitAbort.signal,
+    });
+    await waitForRequest(bridgeDirectory);
+    expect(timer.mock.calls.some((call) => call[1] === 300_000)).toBe(false);
+    waitAbort.abort();
+    await expect(wait).rejects.toBeInstanceOf(DelegateBridgeInterruptedError);
+
+    const blockingAbort = new AbortController();
+    const blocking = requestDelegateBridge({
+      directory: bridgeDirectory,
+      args: delegateArgs,
+      actualToolCallId: "blocking-call",
+      signal: blockingAbort.signal,
+    });
+    await waitForRequest(bridgeDirectory);
+    expect(timer.mock.calls.some((call) => call[1] === 300_000)).toBe(false);
+    blockingAbort.abort();
+    await expect(blocking).rejects.toBeInstanceOf(DelegateBridgeInterruptedError);
+
+    const nonblockingAbort = new AbortController();
+    const nonblocking = requestDelegateBridge({
+      directory: bridgeDirectory,
+      args: { ...delegateArgs, mode: "nonblocking" },
+      actualToolCallId: "nonblocking-call",
+      signal: nonblockingAbort.signal,
+    });
+    await waitForRequest(bridgeDirectory);
+    expect(timer.mock.calls.some((call) => call[1] === 300_000)).toBe(true);
+    nonblockingAbort.abort();
+    await expect(nonblocking).rejects.toBeInstanceOf(DelegateBridgeInterruptedError);
+    timer.mockRestore();
+  });
+
+  it("rejects a missing SDK tool-call ID before writing a transport frame", async () => {
+    await expect(
+      requestDelegateBridge({
+        directory: bridgeDirectory,
+        args: delegateArgs,
+        actualToolCallId: "",
+        timeoutMs: 500,
+      }),
+    ).rejects.toBeInstanceOf(DelegateBridgeConfigError);
+    expect(await readdir(bridgeDirectory)).toEqual([]);
+  });
+
+  it("preserves the SDK tool-call ID across transport UUID redelivery", async () => {
+    const calls: string[] = [];
+    const bridge = new DelegateBridgeHost({
+      sessionDir,
+      directory: bridgeDirectory,
+      delegate: vi.fn(async (_args: DelegateArgs, toolCallId: string) => {
+        calls.push(toolCallId);
+        return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+      }),
+    });
+
+    const first = requestDelegateBridge({
+      directory: bridgeDirectory,
+      args: delegateArgs,
+      actualToolCallId: "sdk-tool-call-1",
+      timeoutMs: 500,
+    });
+    const firstFrame = await requestFrame(await waitForRequest(bridgeDirectory));
+    await first;
+
+    const second = requestDelegateBridge({
+      directory: bridgeDirectory,
+      args: delegateArgs,
+      actualToolCallId: "sdk-tool-call-1",
+      timeoutMs: 500,
+    });
+    const secondFrame = await requestFrame(await waitForRequest(bridgeDirectory));
+    await second;
+
+    expect(firstFrame.tool_call_id).toBe("sdk-tool-call-1");
+    expect(secondFrame.tool_call_id).toBe("sdk-tool-call-1");
+    expect(secondFrame.id).not.toBe(firstFrame.id);
+    expect(calls).toEqual(["sdk-tool-call-1", "sdk-tool-call-1"]);
+    await bridge.close();
+  });
+
   it("relays a schema-valid static-extension delegate call to the injected host callback exactly once", async () => {
     const child = new FakeChild();
-    const callback = vi.fn(async (args: DelegateArgs) => ({
-      content: [{ type: "text" as const, text: `delegated ${args.tasks[0]?.id}` }],
+    const callback = vi.fn(async (args: DelegateArgs, _toolCallId: string) => ({
+      content: [
+        {
+          type: "text" as const,
+          text: `delegated ${"tasks" in args ? args.tasks[0]?.id : "control"}`,
+        },
+      ],
       details: { remainingChildren: 2 },
       terminate: false,
     }));
@@ -174,7 +282,7 @@ describe("isolated delegate bridge", () => {
     );
 
     expect(callback).toHaveBeenCalledOnce();
-    expect(callback).toHaveBeenCalledWith(delegateArgs);
+    expect(callback).toHaveBeenCalledWith(delegateArgs, "delegate-call");
     expect(result).toEqual({
       content: [{ type: "text", text: "delegated review-1" }],
       details: { remainingChildren: 2 },
@@ -189,6 +297,7 @@ describe("isolated delegate bridge", () => {
     const malformed = requestDelegateBridge({
       directory: bridgeDirectory,
       args: delegateArgs,
+      actualToolCallId: "malformed-call",
       timeoutMs: 500,
     });
     const malformedRequest = await waitForRequest(bridgeDirectory);
@@ -202,6 +311,7 @@ describe("isolated delegate bridge", () => {
     const crossCall = requestDelegateBridge({
       directory: bridgeDirectory,
       args: delegateArgs,
+      actualToolCallId: "cross-call",
       timeoutMs: 500,
     });
     const crossCallRequest = await waitForRequest(bridgeDirectory);
@@ -250,6 +360,7 @@ describe("isolated delegate bridge", () => {
     const pending = requestDelegateBridge({
       directory: bridgeDirectory,
       args: delegateArgs,
+      actualToolCallId: "pending-call",
       signal: controller.signal,
       timeoutMs: 500,
     });

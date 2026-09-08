@@ -50,6 +50,7 @@ const delegateBridgeResultSchema = Type.Object(
 const delegateBridgeRequestSchema = Type.Object(
   {
     id: Type.String({ pattern: REQUEST_ID_PATTERN }),
+    tool_call_id: Type.String({ minLength: 1 }),
     args: delegateArgsSchema,
   },
   { additionalProperties: false },
@@ -97,7 +98,10 @@ export type DelegateBridgeResult = MachineToolBridgeResult;
 export type RequestFilesBridgeResult = MachineToolBridgeResult;
 
 /** Callback supplied by a later host-delegation wiring slice. */
-export type DelegateBridgeHandler = (args: DelegateArgs) => Promise<DelegateBridgeResult>;
+export type DelegateBridgeHandler = (
+  args: DelegateArgs,
+  toolCallId: string,
+) => Promise<DelegateBridgeResult>;
 
 /** Callback supplied by the host-owned progressive-disclosure wiring slice. */
 export type RequestFilesBridgeHandler = (
@@ -132,6 +136,7 @@ export class DelegateBridgeInterruptedError extends Error {
 export async function requestDelegateBridge(options: {
   readonly directory: string;
   readonly args: DelegateArgs;
+  readonly actualToolCallId: string;
   readonly signal?: AbortSignal;
   /** Test-only bound; production uses a five-minute operation deadline. */
   readonly timeoutMs?: number;
@@ -163,6 +168,7 @@ async function requestMachineToolBridge(options: {
   readonly args: DelegateArgs | RequestFilesArgs;
   readonly argsSchema: typeof delegateArgsSchema | typeof requestFilesArgsSchema;
   readonly toolName: "delegate" | "request_files";
+  readonly actualToolCallId?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
 }): Promise<MachineToolBridgeResult> {
@@ -175,8 +181,14 @@ async function requestMachineToolBridge(options: {
   if (options.signal?.aborted === true) {
     throw new DelegateBridgeInterruptedError(`${options.toolName} bridge request was interrupted`);
   }
-  const timeoutMs = options.timeoutMs ?? DEFAULT_RESPONSE_TIMEOUT_MS;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+  const timeoutMs =
+    options.timeoutMs ??
+    (options.toolName === "delegate" &&
+    Value.Check(delegateArgsSchema, options.args) &&
+    hasUnboundedWait(options.args)
+      ? undefined
+      : DEFAULT_RESPONSE_TIMEOUT_MS);
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)) {
     throw new DelegateBridgeConfigError(
       `${options.toolName} bridge timeout must be a positive integer`,
     );
@@ -185,7 +197,17 @@ async function requestMachineToolBridge(options: {
   const id = randomUUID();
   const requestPath = bridgePath(directory, id, REQUEST_SUFFIX);
   const responsePath = bridgePath(directory, id, RESPONSE_SUFFIX);
-  await writeJsonFrame(requestPath, { id, args: options.args });
+  if (
+    options.toolName === "delegate" &&
+    (typeof options.actualToolCallId !== "string" || options.actualToolCallId.length === 0)
+  ) {
+    throw new DelegateBridgeConfigError("delegate bridge requires the actual tool call ID");
+  }
+  const frame =
+    options.toolName === "delegate"
+      ? { id, tool_call_id: options.actualToolCallId, args: options.args }
+      : { id, args: options.args };
+  await writeJsonFrame(requestPath, frame);
   try {
     return await waitForResponse({
       id,
@@ -197,6 +219,11 @@ async function requestMachineToolBridge(options: {
   } finally {
     await Promise.all([rm(requestPath, { force: true }), rm(responsePath, { force: true })]);
   }
+}
+
+function hasUnboundedWait(args: DelegateArgs): boolean {
+  if ("operation" in args) return args.operation === "wait";
+  return args.mode === undefined || args.mode === "blocking";
 }
 
 /** Host-side owner for one canonical per-session bridge directory. */
@@ -312,7 +339,7 @@ export class DelegateBridgeHost {
     try {
       result =
         operation.name === "delegate"
-          ? await operation.handler(operation.args)
+          ? await operation.handler(operation.args, operation.toolCallId)
           : await operation.handler(operation.args);
     } catch {
       if (pending.active && !this.closed) {
@@ -336,6 +363,7 @@ export class DelegateBridgeHost {
         readonly name: "delegate";
         readonly args: DelegateArgs;
         readonly handler: DelegateBridgeHandler;
+        readonly toolCallId: string;
       }
     | {
         readonly name: "request_files";
@@ -346,7 +374,12 @@ export class DelegateBridgeHost {
     if (Value.Check(delegateBridgeRequestSchema, request)) {
       return this.delegate === undefined
         ? null
-        : { name: "delegate", args: request.args, handler: this.delegate };
+        : {
+            name: "delegate",
+            args: request.args,
+            handler: this.delegate,
+            toolCallId: request.tool_call_id,
+          };
     }
     if (Value.Check(requestFilesBridgeRequestSchema, request)) {
       return this.requestFiles === undefined
@@ -383,7 +416,7 @@ async function waitForResponse(options: {
   readonly id: string;
   readonly responsePath: string;
   readonly signal: AbortSignal | undefined;
-  readonly timeoutMs: number;
+  readonly timeoutMs: number | undefined;
   readonly toolName: "delegate" | "request_files";
 }): Promise<MachineToolBridgeResult> {
   return new Promise<MachineToolBridgeResult>((resolveResponse, rejectResponse) => {
@@ -438,11 +471,16 @@ async function waitForResponse(options: {
     const interval = setInterval(() => {
       void readResponse();
     }, SCAN_INTERVAL_MS);
-    const timeout = setTimeout(
-      () =>
-        reject(new DelegateBridgeInterruptedError(`${options.toolName} bridge response timed out`)),
-      options.timeoutMs,
-    );
+    const timeout =
+      options.timeoutMs === undefined
+        ? undefined
+        : setTimeout(
+            () =>
+              reject(
+                new DelegateBridgeInterruptedError(`${options.toolName} bridge response timed out`),
+              ),
+            options.timeoutMs,
+          );
     options.signal?.addEventListener("abort", onAbort, { once: true });
     void readResponse();
   });

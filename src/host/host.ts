@@ -232,6 +232,10 @@ export interface ArtifactRouteSource {
 }
 
 export interface SpawnRoleOptions {
+  /** Run-level cost cap consulted before admitting delegated children. */
+  readonly getRunCostCap?: () => number | null;
+  /** Current parent-session usage included in admission checks. */
+  readonly getCurrentParentUsage?: () => number;
   /** Resolved model for this role invocation (Host resolves from
    *  `role.models` via `modelRegistry.find` or the system default, §8.1). */
   readonly model?: Model<// biome-ignore lint/suspicious/noExplicitAny: pi-coding-agent's own `CreateAgentSessionOptions.model` is `Model<any>`; matching the SDK convention.
@@ -370,6 +374,12 @@ export interface Host {
    * `session_cost_cap_exceeded` vs `model_error` vs `crashed`).
    */
   abortSession(session: RoleSession, reason: string): Promise<void>;
+
+  /** Accepted delegated children that must settle before terminal disposal. */
+  pendingDelegationTasks?(session: RoleSession): readonly string[];
+
+  /** Await owned delegated-child cleanup before replacement or disposal. */
+  settleDelegation?(session: RoleSession, reason: string): Promise<void>;
 
   /** Execute the pinned end guard in the primary checkout. */
   runEndGuard?(request: EndGuardRunRequest): Promise<EndGuardRunResult>;
@@ -510,5 +520,6 @@ export type SessionTerminalReason =
   | "user_aborted"
   | "tool_timeout_exhausted"
   | "tool_cleanup_unconfirmed"
+  | "delegation_failed"
   | PrewalkFailureCode
   | null;

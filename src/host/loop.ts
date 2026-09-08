@@ -409,6 +409,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             visitIndex,
             executionVisitIndex,
             modelIndex,
+            getRunCostCap: opts.getRunCostCap ?? (() => opts.runCostCap ?? null),
+            getCurrentParentUsage: () => host.captureUsage(session).cost,
             ...(handoffContextRef !== null && { handoffContextRef }),
           });
         }
@@ -461,6 +463,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           : appendArtifactSeedSection(seed, artifactSeedForVisit);
       let noEmissionRecoveryPrompts = 0;
       let trajectorySeedDeliveryRecorded = false;
+      let delegationSettled = false;
+      let delegationSettlementError: unknown = null;
 
       try {
         const sessionId = session.sessionId;
@@ -575,7 +579,19 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         // Track this session as parent for the next session_started.
         parentSessionId = sessionId;
 
+        const settleDelegationBeforeLifecycle = async (reason: string): Promise<void> => {
+          if (delegationSettled) return;
+          try {
+            await host.settleDelegation?.(session, reason);
+          } catch (cause) {
+            delegationSettlementError = cause;
+            throw cause;
+          }
+          delegationSettled = true;
+        };
+
         const finishUserAbort = async (usage: UsageRecord): Promise<RunLoopResult> => {
+          await settleDelegationBeforeLifecycle("parent session aborted");
           const failed = reduceLifecycle(checkpoint, "session_failed", def, {
             role,
             sessionId,
@@ -602,6 +618,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         const finishEndGuardFailure = async (
           failureReason: "end_guard_exhausted" | "end_guard_cleanup_unconfirmed",
         ): Promise<RunLoopResult> => {
+          await settleDelegationBeforeLifecycle(failureReason);
           const failed = reduceLifecycle(checkpoint, "session_failed", def, {
             role,
             sessionId,
@@ -717,13 +734,14 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             }
             const failureReason: string = hostReason ?? promptFailureReason ?? validated.reason;
             const failureDetail =
-              hostReason === "model_error"
+              hostReason === "model_error" || hostReason === "delegation_failed"
                 ? (host.sessionFailureDetail?.(session) ?? null)
                 : hostReason === null &&
                     promptFailureReason === null &&
                     validated.reason === "no_emission"
                   ? `${noEmissionRecoveryPrompts} recovery prompts attempted`
                   : null;
+            await settleDelegationBeforeLifecycle(failureReason);
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
               sessionId,
@@ -767,47 +785,52 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             runCap !== null && host.runCostSoFar() + capturedUsage.cost >= runCap;
           const capturedIsHandoff = validated.event.type === "handoff";
 
-          if (runCapBreached && capturedIsHandoff) {
-            if (role === def.orchestrator) {
-              // ── Orchestrator current: synthesize end, reduce it.
-              // The captured handoff is SUPERSEDED; no worker is
-              // spawned. session_ended for the orchestrator is
-              // recorded normally first (it carries the captured
-              // usage — both terminals cost, §11.4), then the
-              // synthesized transition_accepted ends the run.
-              const ended = reduceLifecycle(checkpoint, "session_ended", def, {
-                role,
-                sessionId,
-                sessionFile,
-                ts: Date.now(),
-                visit_index: visitIndex,
-                parent_session: sessionParentId,
-                usage: capturedUsage,
-              });
-              checkpoint = ended.checkpoint;
-              host.persistRecord(withRoleSessionIdentity(ended.record, session));
-              host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-              await collectSessionArtifacts(host, session, {
-                role,
-                visitIndex,
-                terminal: "session_ended",
-              });
+          if (
+            runCapBreached &&
+            role === def.orchestrator &&
+            (capturedIsHandoff || validated.event.type === "end")
+          ) {
+            // ── Orchestrator current: synthesize end, reduce it.
+            // The captured handoff is SUPERSEDED; no worker is
+            // spawned. session_ended for the orchestrator is
+            // recorded normally first (it carries the captured
+            // usage — both terminals cost, §11.4), then the
+            // synthesized transition_accepted ends the run.
+            await settleDelegationBeforeLifecycle("run cost cap forced close");
+            const ended = reduceLifecycle(checkpoint, "session_ended", def, {
+              role,
+              sessionId,
+              sessionFile,
+              ts: Date.now(),
+              visit_index: visitIndex,
+              parent_session: sessionParentId,
+              usage: capturedUsage,
+            });
+            checkpoint = ended.checkpoint;
+            host.persistRecord(withRoleSessionIdentity(ended.record, session));
+            host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+            await collectSessionArtifacts(host, session, {
+              role,
+              visitIndex,
+              terminal: "session_ended",
+            });
 
-              const synthesized: MachineEvent = {
-                type: "end",
-                authority: "run_cost_cap",
-                payload: { reason: "run_cost_cap_exceeded" },
-              };
-              const result = reduce(checkpoint, synthesized, def, {
-                role: def.orchestrator,
-                sessionFile: SYNTHESIZED_SESSION_FILE,
-                ts: Date.now(),
-              });
-              host.persistRecord(result.record);
-              checkpoint = result.checkpoint;
-              host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
-              return { finalCheckpoint: checkpoint, exitReason: "done" };
-            }
+            const synthesized: MachineEvent = {
+              type: "end",
+              authority: "run_cost_cap",
+              payload: { reason: "run_cost_cap_exceeded" },
+            };
+            const result = reduce(checkpoint, synthesized, def, {
+              role: def.orchestrator,
+              sessionFile: SYNTHESIZED_SESSION_FILE,
+              ts: Date.now(),
+            });
+            host.persistRecord(result.record);
+            checkpoint = result.checkpoint;
+            host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+            return { finalCheckpoint: checkpoint, exitReason: "done" };
+          }
+          if (runCapBreached && role !== def.orchestrator && capturedIsHandoff) {
             // ── Worker current: defer the synthesized end.
             // `end` from a worker is rejected (§7.2/§12.1). Let the
             // worker's natural handoff to the orchestrator reduce
@@ -817,6 +840,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             // hard stop — no further dispatch, no orchestrator
             // session in between.
             pendingForcedEnd = true;
+            await settleDelegationBeforeLifecycle("run cost cap forced close");
           }
 
           // ── Host-driven session termination (Task 17 / Task 18) ──────
@@ -836,9 +860,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           if (terminalReasonOnOk !== null) {
             sessionHostReason = hostReasonOnOk;
             const failureDetail =
-              hostReasonOnOk === "model_error"
+              hostReasonOnOk === "model_error" || hostReasonOnOk === "delegation_failed"
                 ? (host.sessionFailureDetail?.(session) ?? null)
                 : null;
+            await settleDelegationBeforeLifecycle(terminalReasonOnOk);
             const failed = reduceLifecycle(checkpoint, "session_failed", def, {
               role,
               sessionId,
@@ -862,6 +887,21 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             });
             inner = { kind: "failed" };
             break;
+          }
+
+          // A parent cannot commit a machine transition while one of its
+          // accepted delegated children is still queued or running. Keep the
+          // same role session open so the model can wait for or cancel the
+          // listed children; reducing first would make the parent terminal
+          // durable before child cleanup (§7.2, §12.1).
+          if (validated.event.type === "handoff" || validated.event.type === "end") {
+            const pendingChildren = host.pendingDelegationTasks?.(session) ?? [];
+            if (pendingChildren.length > 0) {
+              session.resetCaptureBuffer();
+              opts.runControl?.reopenActiveSession(session);
+              nextSeed = formatDelegationSettlementPrompt(pendingChildren);
+              continue;
+            }
           }
 
           // Operator guidance that arrives after a valid `end` capture but
@@ -987,6 +1027,9 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           // collect its optional artifacts. Persist the accepted transition
           // first; artifact failure is a semantic deficiency for the receiver
           // and must never become a session contract breach (§4, §7.3.2).
+          // Child settlement is complete before this acceptance becomes
+          // durable, while reducer-rejected retries keep their child scope.
+          await settleDelegationBeforeLifecycle("accepted machine transition");
           host.persistRecord(enrichedRecord);
           let acceptedArtifactRoute: PendingArtifactRoute | null =
             validated.event.type === "handoff" &&
@@ -1069,6 +1112,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           // did NOT clear it (only lifecycle terminals do). session_ended
           // validates meta.sessionId/role against the live session and
           // clears active_role_session.
+          await settleDelegationBeforeLifecycle("accepted machine transition");
           const ended = reduceLifecycle(checkpoint, "session_ended", def, {
             role,
             sessionId,
@@ -1166,11 +1210,23 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         // suppress it here and route to structured logging once Task 5's
         // observability seam lands. This is a deliberate, documented
         // suppression — not a silent fallback on ambiguity.
+        if (!delegationSettled && delegationSettlementError === null) {
+          try {
+            await host.settleDelegation?.(
+              session,
+              sessionHostReason ??
+                (inner.kind === "failed" ? "parent session failed" : "parent session settled"),
+            );
+          } catch (cause) {
+            delegationSettlementError = cause;
+          }
+        }
         opts.runControl?.releaseActiveSession(session);
         await session.dispose().catch((disposeError) => {
           void disposeError;
         });
         if (opts.runControl === undefined) await opts.abortControl?.setActiveSession(null);
+        if (delegationSettlementError !== null) await Promise.reject(delegationSettlementError);
       }
 
       // ── Task 18: model_error → fallback to next model ──────────
@@ -1340,6 +1396,14 @@ function formatDeferredEndPrompt(): string {
   return [
     "The previous end request was deferred because new operator guidance arrived.",
     "Address the guidance below, then emit exactly one actionable handoff or end event.",
+  ].join("\n");
+}
+
+function formatDelegationSettlementPrompt(childIds: readonly string[]): string {
+  return [
+    "The requested transition is waiting for delegated child work to settle.",
+    `Pending child IDs: ${childIds.join(", ")}.`,
+    "Wait for these children or cancel them, then emit exactly one handoff or end event.",
   ].join("\n");
 }
 

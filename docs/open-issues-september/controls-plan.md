@@ -83,26 +83,30 @@ concurrent edits in the original checkout remain preserved.
    - [x] Document behavior; independent review and full gates pass.
      Final gate: 167 files / 2,009 tests; strict typecheck, build, lint,
      format and production audit passed.
-   - [ ] Merge #75 and close after verifying the reviewed tree.
+   - [x] Merge #75 and close after verifying the reviewed tree.
+     PR #82 merged at `71a18c1`; its tree equals reviewed head `b4c892e`.
+     Required pre-push lint, typecheck and full tests also passed.
 
 ## Phase 3 — #77 asynchronous delegation (after Phase 2 gate)
 
 10. Durable submission and task ledger.
-    - [ ] Stable run/logical invocation/tool-call identity, atomic acceptance,
+    - [x] Stable run/logical invocation/tool-call identity, atomic acceptance,
       fingerprints, pinned context/base/projection and fallback-persistent admission.
-    - [ ] Duplicate/response-loss/different-input/restart tests pass.
+    - [x] Duplicate/response-loss/different-input/restart tests pass.
 11. Session scheduler and task operations.
-    - [ ] One shared capacity pool; status/result/targeted wait/cancel; independent
+    - [x] One shared capacity pool; status/result/targeted wait/cancel; independent
       failures; exactly one terminal result and usage contribution per task.
-    - [ ] Gated A/B/C tests prove early B review and C start while A remains active.
+    - [x] Gated A/B/C tests prove early B review and C start while A remains active.
 12. Parent/RPC lifecycle.
-    - [ ] Public SDK notifications and durable retrieval; RPC submission identity;
+    - [x] Public SDK notifications and durable retrieval; RPC submission identity;
       handoff/end blocking; fallback/abort/budget settlement; interrupted restart.
-    - [ ] Shared/RPC response loss, targeted cancellation, replacement and cleanup
+    - [x] Shared/RPC response loss, targeted cancellation, replacement and cleanup
       regressions pass; old blocking delegate remains compatible.
 13. Issue gate and final assessment.
-    - [ ] Document tools/contracts; independent review and full gates pass; merge
-      and close #77. Refresh remote issue inventory and post-merge assessment.
+    - [x] Document tools/contracts; independent review and full gates pass.
+      Final frozen gate: 179 files / 2,082 tests; strict typecheck, build, lint,
+      format and production audit passed.
+    - [ ] Merge and close #77. Refresh remote issue inventory and post-merge assessment.
 
 Each numbered slice is reviewed and committed after focused verification. Broad
 integration slices are split further by concrete files as API evidence is found;

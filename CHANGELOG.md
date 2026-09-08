@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Features
+
+- Enforce pinned executable deadlines, bounded timeout recovery and confirmed
+  process cleanup across shared, isolated and delegated tools (Issue #76).
+- Support an optional deterministic end guard with durable attempts and bounded
+  retries before accepting run completion (Issue #75).
+- Add nonblocking delegation with stable handles, targeted status/result/wait/
+  cancellation controls, shared capacity, pinned inputs and durable recovery
+  across parent replacement (Issue #77).
+
 ### Bug fixes
 
 - Enforce cumulative role-turn telemetry byte limits across all blocks in a

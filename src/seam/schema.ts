@@ -255,11 +255,41 @@ export type DelegateTask = Static<typeof delegateTaskSchema>;
  * - bounded non-empty objective and expected output
  * - a clean Git primary checkout
  */
-export const delegateArgsSchema = Type.Object({
-  tasks: Type.Array(delegateTaskSchema, { minLength: 1 }),
-});
+export const delegateSubmissionArgsSchema = Type.Object(
+  {
+    tasks: Type.Array(delegateTaskSchema, { minItems: 1 }),
+    mode: Type.Optional(Type.Union([Type.Literal("blocking"), Type.Literal("nonblocking")])),
+  },
+  { additionalProperties: false },
+);
 
-/** Typed view of validated delegate args. */
+/** Typed view of one delegate submission. */
+export type DelegateSubmissionArgs = Static<typeof delegateSubmissionArgsSchema>;
+
+/** Strict control operation over already accepted delegated children. */
+export const delegateControlArgsSchema = Type.Object(
+  {
+    operation: Type.Union([
+      Type.Literal("status"),
+      Type.Literal("result"),
+      Type.Literal("wait"),
+      Type.Literal("cancel"),
+    ]),
+    child_ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Typed view of one delegate control request. */
+export type DelegateControlArgs = Static<typeof delegateControlArgsSchema>;
+
+/** Single TypeBox union for blocking/nonblocking delegate calls and controls. */
+export const delegateArgsSchema = Type.Union([
+  delegateSubmissionArgsSchema,
+  delegateControlArgsSchema,
+]);
+
+/** Typed view of a delegate submission or control request. */
 export type DelegateArgs = Static<typeof delegateArgsSchema>;
 
 // ─── Issue #51: progressive disclosure ────────────────────────────────

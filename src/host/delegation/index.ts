@@ -1,5 +1,10 @@
 /** Delegation-lite host helpers. */
 
+export {
+  type PreparedDelegateChild,
+  type PreparedDelegateSubmission,
+  prepareDelegateSubmission,
+} from "./admission.js";
 export { buildChildPrompt, type ChildPrompt } from "./child-prompt.js";
 export {
   type DelegateResult,

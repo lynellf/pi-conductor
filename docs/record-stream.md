@@ -46,9 +46,16 @@ const unsubscribe = subscribeToRecords((record: PersistedRecord) => {
 `PersistedRecord` is the union from `src/persistence/log.ts`:
 `transition_accepted`, `transition_rejected`, `session_started` /
 `session_ended` / `session_failed`, `model_fallback`, `checkpoint_snapshot`,
-and delegation's `subagent_started`, `subagent_completed`, and
-`subagent_failed` records. The emitter is a transparent fan-out of what the
-host persists.
+and delegation's `delegation_submission_accepted`, `subagent_started`,
+`subagent_completed`, and `subagent_failed` records, among other typed host
+records. The emitter is a transparent fan-out of what the host persists.
+
+For asynchronous delegation, acceptance is one atomic batch of stable handles
+and pinned input fingerprints. It consumes admission but carries no usage.
+Only `subagent_completed` / `subagent_failed` contribute terminal child usage;
+status queries, notifications and result retrieval do not create another usage
+record. Accepted queued cancellation/interruption has `session_file: null` and
+`usage: null`. See [delegation recovery](delegation.md#settlement-and-recovery).
 
 The contract — FIFO subscription order, fire-and-forget async delivery,
 sync-throw and async-rejection isolation, re-entrant subscribe /

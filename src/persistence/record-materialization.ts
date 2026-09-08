@@ -1,6 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertPrewalkRecord } from "./prewalk-records.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
@@ -89,6 +90,9 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
     record.type === "end_guard_budget_reset"
   ) {
     assertEndGuardRecord(record);
+  }
+  if (record.type === "delegation_submission_accepted") {
+    assertDelegationSubmissionAccepted(record);
   }
 }
 
