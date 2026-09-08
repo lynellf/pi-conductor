@@ -7,6 +7,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ExecutionBridgeHost } from "../../../src/host/rpc/execution-bridge.js";
 import {
@@ -178,6 +179,47 @@ describe("machine tools RPC extension", () => {
       "read",
       "delegate",
     ]);
+  });
+
+  it("uses the broad legacy schema when trusted provenance overrides current blocking config", async () => {
+    const sessionDir = join(sandbox, "legacy-rpc");
+    await writeMachineToolsConfig({
+      sessionDir,
+      role: "implementer",
+      visitIndex: 1,
+      workspaceRoot: workspace,
+      mounts: [],
+      declaredToolNames: ["delegate"],
+      enableDelegateBridge: true,
+      delegationMode: "blocking",
+      legacyDelegationMode: true,
+    });
+    const legacyConfig = join(sessionDir, "machine-tools", "implementer-v1.json");
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = legacyConfig;
+    const legacyTool = requiredTool(registeredTools(), "delegate");
+    const submission = {
+      tasks: [{ id: "task-1", subagent: "child", objective: "do work", expected_output: "result" }],
+      mode: "nonblocking",
+    };
+    expect(Value.Check(legacyTool.parameters, submission)).toBe(true);
+
+    await writeMachineToolsConfig({
+      sessionDir,
+      role: "implementer",
+      visitIndex: 2,
+      workspaceRoot: workspace,
+      mounts: [],
+      declaredToolNames: ["delegate"],
+      enableDelegateBridge: true,
+      delegationMode: "blocking",
+    });
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = join(
+      sessionDir,
+      "machine-tools",
+      "implementer-v2.json",
+    );
+    const freshTool = requiredTool(registeredTools(), "delegate");
+    expect(Value.Check(freshTool.parameters, submission)).toBe(false);
   });
 
   it("forwards the SDK model input shape through the execution bridge", async () => {
