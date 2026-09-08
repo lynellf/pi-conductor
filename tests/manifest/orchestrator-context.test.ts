@@ -62,12 +62,13 @@ describe("Issue #87 orchestrator context retention manifest contract", () => {
     expect(parseManifest(withOrchestratorRetention(BASE, "none")).roles[0]?.context_retention).toBe(
       "none",
     );
+    expect(parseManifest(BASE).roles[1]?.context_retention).toBeUndefined();
   });
 
   it("parses run retention only as a role policy", () => {
     const manifest = parseManifest(withOrchestratorRetention(BASE, "run"));
     expect(manifest.roles[0]?.context_retention).toBe("run");
-    expect(manifest.roles[1]?.context_retention).toBe("none");
+    expect(manifest.roles[1]?.context_retention).toBeUndefined();
   });
 
   it.each(["snapshot", "null", "true"])("rejects invalid parser value %s", (value) => {
@@ -82,6 +83,14 @@ describe("Issue #87 orchestrator context retention manifest contract", () => {
     } as unknown as Manifest;
     expect(errorCodes(nullPolicy)).toContain("invalid-context-retention");
     expect(errorCodes(parseManifest(PREWALK_WORKER))).toContain("context-retention-on-worker");
+    const explicitWorkerNone = {
+      ...manifest,
+      roles: [{ ...manifest.roles[0] }, { ...manifest.roles[1], context_retention: "none" }],
+    } as unknown as Manifest;
+    expect(errorCodes(explicitWorkerNone)).toContain("context-retention-on-worker");
+    expect(
+      errorCodes({ version: 1, roles: [{ name: "orchestrator", is_orchestrator: true }] }),
+    ).not.toContain("invalid-context-retention");
   });
 
   it("rejects retention with trajectory and on a prewalk orchestrator", () => {
@@ -97,9 +106,16 @@ describe("Issue #87 orchestrator context retention manifest contract", () => {
     );
   });
 
-  it("allows prewalk on a worker while retaining none on the orchestrator", () => {
-    const manifest = parseManifest(PREWALK_WORKER.replace("    context_retention: run\n", ""));
+  it("allows prewalk on a worker while retaining run on the orchestrator", () => {
+    const manifest = parseManifest(
+      PREWALK_WORKER.replace("    context_retention: run\n", "")
+        .replace(
+          "    is_orchestrator: true",
+          "    is_orchestrator: true\n    context_retention: run",
+        )
+        .replace("    context_retention: run\n    prewalk:", "    prewalk:"),
+    );
     expect(errorCodes(manifest)).not.toContain("context-retention-prewalk-conflict");
-    expect(manifest.roles[0]?.context_retention).toBe("none");
+    expect(manifest.roles[0]?.context_retention).toBe("run");
   });
 });
