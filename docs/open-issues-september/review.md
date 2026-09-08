@@ -30,6 +30,12 @@ batch. #75–#77 remain proposed specifications, not implemented features.
   parent-fallback settlement and durable submission identity. Human acknowledgment
   is still pending; these design changes do not claim implementation.
 
+- The first push exposed Git hook environment leakage into temporary repository
+  fixtures. The test hook now clears Git repository-local variables using
+  `git rev-parse --local-env-vars` before running tests. This follows
+  [Git hook guidance](https://git-scm.com/docs/githooks). A fixture isolation check
+  and the subsequent real pre-push run passed; all checks remain enabled.
+
 ## Verification
 
 In isolated worktree `/tmp/pi-conductor-september-review`, with a frozen install:
