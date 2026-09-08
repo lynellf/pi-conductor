@@ -96,6 +96,7 @@ export {
   selectTransferMode,
 } from "./manifest/prewalk-transfer.js";
 export type {
+  ContextRetention,
   DelegationMode,
   DelegationPolicy,
   Manifest,

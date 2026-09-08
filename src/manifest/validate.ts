@@ -68,6 +68,14 @@ export type ManifestErrorCode =
   | "delegation-duplicate-allowed-subagent"
   /** Issue #86: delegation mode must be one of the trusted literals. */
   | "invalid-delegation-mode"
+  /** Issue #87: context retention must be a trusted literal. */
+  | "invalid-context-retention"
+  /** Issue #87: only the designated orchestrator may retain context. */
+  | "context-retention-on-worker"
+  /** Issue #87: retained orchestrator context cannot use trajectory handoff. */
+  | "context-retention-trajectory-conflict"
+  /** Issue #87: Prewalk orchestrators cannot retain their conversation. */
+  | "context-retention-prewalk-conflict"
   /** Issue #63: policy source does not name a declared role. */
   | "handoff-policy-from-undeclared"
   /** Issue #63: policy target does not name a declared role. */
@@ -304,6 +312,31 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
   }
 
   for (const role of m.roles) {
+    if (
+      role.context_retention !== undefined &&
+      role.context_retention !== "none" &&
+      role.context_retention !== "run"
+    ) {
+      errors.push({
+        code: "invalid-context-retention",
+        message: `role '${role.name}' has invalid \`context_retention\`; expected "none" or "run"`,
+        role: role.name,
+      });
+    }
+    if (role.context_retention === "run" && !role.is_orchestrator) {
+      errors.push({
+        code: "context-retention-on-worker",
+        message: `role '${role.name}' cannot retain orchestrator context because it is a worker`,
+        role: role.name,
+      });
+    }
+    if (role.context_retention === "run" && role.prewalk !== undefined) {
+      errors.push({
+        code: "context-retention-prewalk-conflict",
+        message: `orchestrator '${role.name}' cannot combine \`context_retention: run\` with prewalk`,
+        role: role.name,
+      });
+    }
     for (const message of validateToolExecutionPolicy(
       role.tool_execution,
       `role '${role.name}'.tool_execution`,
@@ -637,6 +670,12 @@ function validateHandoffPolicies(
     const source = manifest.roles.find((role) => role.name === policy.from);
     const target = manifest.roles.find((role) => role.name === policy.to);
     if (source === undefined || target === undefined) continue;
+    if (source.context_retention === "run" || target.context_retention === "run") {
+      errors.push({
+        code: "context-retention-trajectory-conflict",
+        message: `trajectory policy '${policy.from}' → '${policy.to}' cannot combine with orchestrator context retention`,
+      });
+    }
     if (
       (source.workspace?.backend ?? "shared") !== "shared" ||
       (target.workspace?.backend ?? "shared") !== "shared"

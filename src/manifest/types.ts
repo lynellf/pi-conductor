@@ -64,6 +64,9 @@ export interface ContextArtifactLimits {
 /** Issue #86: trusted parent behavior for delegate submissions. */
 export type DelegationMode = "blocking" | "nonblocking";
 
+/** Issue #87: whether the orchestrator conversation survives role turns. */
+export type ContextRetention = "none" | "run";
+
 /**
  * §3: the delegation policy attached to a parent role.
  *
@@ -170,6 +173,8 @@ export interface Manifest {
 export interface RoleConfig {
   readonly name: Role;
   readonly is_orchestrator?: boolean;
+  /** Issue #87: normalized fresh-run context retention policy. */
+  readonly context_retention?: ContextRetention;
   readonly max_visits?: number;
   readonly models?: readonly ModelConfig[];
   readonly max_session_cost_usd?: number;
