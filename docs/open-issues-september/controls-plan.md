@@ -83,7 +83,9 @@ concurrent edits in the original checkout remain preserved.
    - [x] Document behavior; independent review and full gates pass.
      Final gate: 167 files / 2,009 tests; strict typecheck, build, lint,
      format and production audit passed.
-   - [ ] Merge #75 and close after verifying the reviewed tree.
+   - [x] Merge #75 and close after verifying the reviewed tree.
+     PR #82 merged at `71a18c1`; its tree equals reviewed head `b4c892e`.
+     Required pre-push lint, typecheck and full tests also passed.
 
 ## Phase 3 — #77 asynchronous delegation (after Phase 2 gate)
 

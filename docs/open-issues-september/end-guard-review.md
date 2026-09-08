@@ -35,7 +35,8 @@ records, execution and loop integration are reviewed as separate increments.
   precedence and API resume proven through integration tests.
 - [x] Full repository gates and final independent review passed: 167 files /
   2,009 tests, strict typecheck, build, lint, format and production audit.
-- [ ] Merged tree verified against the tested head and #75 closed.
+- [x] PR #82 merged at `71a18c1`, exactly matching tested head `b4c892e`;
+  #75 is closed. The required pre-push checks passed.
 
 The public resume tests exposed a shared pinning gap: ordinary runs did not
 snapshot normalized manifests unless trajectory or Prewalk was enabled. This
