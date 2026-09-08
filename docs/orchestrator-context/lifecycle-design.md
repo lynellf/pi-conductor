@@ -122,3 +122,11 @@ context-enabled child may therefore use a small compiled bootstrap built from
 the public runtime factory and `runRpcMode`, with the same trusted machine-tool
 configuration and current model authority. Validate real child protocol/tool
 parity before selecting this path; ordinary sessions retain their existing driver.
+
+For retained RPC invocations, `agent_end` is not a settlement barrier: Pi emits it
+before post-turn auto-compaction finishes. Wait for public `agent_settled` instead.
+A trusted child extension can report the exact public session-manager tip from
+its `agent_settled` hook before that event reaches the parent. Meter observations
+must reach the parent before it captures terminal usage. The production parent
+already subscribes to live assistant events; the RPC adapter's separate cumulative
+statistics API also needs an imported-history baseline when retention is enabled.
