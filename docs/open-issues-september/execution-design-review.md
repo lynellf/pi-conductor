@@ -43,13 +43,25 @@ Exact-version API behavior was also inspected in the installed package.
   pool would require a separate lifecycle and is deferred until correctness holds.
 - API correction: `createRequire(...).resolve()` fails for the package's
   import-only exports. Use the public ESM `import.meta.resolve()` path.
+- API correction: the pinned SDK marks a resolved tool result as successful even
+  when it contains `isError: true`. Supervised failures throw a bounded JSON
+  message so the public SDK emits an actual error result with cleanup identity
+  and repair guidance. Ordinary failures retain their bounded cause diagnostic.
+- Resume correction: workspace visits and executable invocation budgets have
+  distinct identities. Reopening a materialized artifact workspace must preserve
+  its path while an explicit operator resume receives a fresh timeout allowance.
+  Reconstruct invocation indexes from durable executions as well as lifecycle
+  starts; physical model fallback retains the current invocation identity.
+- Queue correction: uncertain cleanup poisons already queued aliases as well as
+  later submissions. Waiting callers must receive a fatal cleanup error before
+  any worker can start on the affected path.
 
 ## Verification still required
 
 - [x] Delayed confinement cannot launch after timeout (controller regression).
 - [x] CPU-heavy child work times out while the host remains responsive.
-- [ ] Overlapping mutations retain serialization.
-- [ ] Cleanup precedes fallback, transition and native disposal.
+- [x] Overlapping mutations retain serialization.
+- [x] Cleanup precedes fallback, transition and native disposal.
 - [x] Fast exits, spawn failures, callback delays and abort/timeout races settle
   once, clear timers, and retain bounded valid UTF-8 diagnostics.
 - [x] Shell leader exit with TERM-resistant descendants leaves no live owned work.
@@ -65,3 +77,18 @@ scan rejecting before timeout cleanup settled. Both now reject or wait as
 required. Permission errors remain conservative; only an observed vanished or
 zombie PID is treated as absent. Controller and production integration have
 separate gates and are not covered by that foundation approval.
+
+The final integration review approved shared/RPC/child boundaries and Prewalk
+ownership after reproducing and fixing validation after provider/cost-cap
+termination, overlapping validation settlement, and phase admission after abort.
+Four real ProductionHost regressions cover native/projection execution and
+reopened executors. Repeated artifact resume reads the same delivered file with
+durable execution identities 2 then 3. The RPC shutdown regression fails when its
+post-await admission check is removed and passes with the check restored.
+
+One full-suite run exposed an intermittent existing snapshot-worktree creation
+race in `production-host-snapshot.test.ts`: concurrent spawns can observe the same
+checkout while another `git worktree add` is still establishing it. Snapshot
+provisioning source is unchanged by #76, and the focused nine-test suite passed
+on rerun. This remains an assessment follow-up, not a timeout-control fix or a
+reason to weaken that concurrency assertion.

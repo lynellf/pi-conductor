@@ -36,25 +36,34 @@ concurrent edits in the original checkout remain preserved.
    - [x] Table-driven manifest tests and typecheck pass (60 focused tests).
    - Files: manifest policy module, types, parser, validator and focused test.
 3. Durable execution lifecycle (depends on 1–2).
-   - [ ] Typed start/result identities, one terminal result, recovery accounting
+   - [x] Typed start/result identities, one terminal result, recovery accounting
      across model fallback, restart reconciliation with explicit unknown ownership.
-   - [ ] Append/reopen/order/privacy/restart tests and typecheck pass.
+   - [x] Append/reopen/order/privacy/restart tests and typecheck pass.
+     Persistence gate: 28 focused tests; controller gate: 18 tests, including
+     ambiguous appends before and after write and concurrent timeout exhaustion.
    - Files: execution ledger, additive persistence contract, log validation, tests.
 4. Shared SDK path (depends on 1–3).
-   - [ ] Enforce deadlines at executable boundaries; never replay commands;
+   - [x] Enforce deadlines at executable boundaries; never replay commands;
      confirmed timeout permits repair, exhaustion/uncertain cleanup stops resumably.
-   - [ ] File operations settle or stop with unconfirmed cleanup; intentional owner
+   - [x] File operations settle or stop with unconfirmed cleanup; intentional owner
      and delegation waits remain exempt. Focused tool/session integration tests pass.
    - Files: tool factory/wrappers, production-host narrow wiring, integration tests.
 5. Isolated RPC and delegated children (depends on 4).
-   - [ ] Same pinned deadlines/ownership/recovery contract crosses RPC; child tools
+   - [x] Same pinned deadlines/ownership/recovery contract crosses RPC; child tools
      retain confinement; cancellation waits for confirmed execution cleanup.
-   - [ ] Shared/RPC/child tests prove timeout and abort outcomes, no hidden process.
+   - [x] Shared/RPC/child tests prove timeout and abort outcomes, no hidden process.
+     RPC integration gate: 60 tests. Child lifecycle and confinement gate: 12
+     tests. Prewalk production review: four cases covering native/projection
+     provider failure and cost caps in both fresh and resumed executors.
    - Files: RPC configuration/bridge, child tool wiring, focused tests.
 6. Operator visibility and issue gate (depends on 5).
-   - [ ] Active tool/elapsed and timeout/recovery status, user documentation.
+   - [x] Active tool/elapsed and timeout/recovery status, user documentation.
    - [ ] Independent review reconciled; full typecheck/build/test/lint/format/audit
      gates pass. Merge #76 and close only after acceptance is met.
+     Local gate: 155 files / 1,929 tests, typecheck, build, lint, format and
+     production audit pass. The final strengthened resume regression separately
+     passes with two prior timeouts, an actual resumed bash call, workspace visit
+     1 and execution invocation 2. Pre-push verification and merge remain.
 
 ## Phase 2 — #75 end guard (after Phase 1 gate)
 
