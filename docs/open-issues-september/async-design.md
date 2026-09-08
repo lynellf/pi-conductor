@@ -99,3 +99,8 @@ passed 61 persistence tests, including corrupt JSONL reopening, duplicate termin
 rejection, queued failures and real-session cancellation. Main verification of
 the ledger, admission, seam and bridge foundations passed 107 tests across nine
 files and full strict typecheck. Host restart reconciliation remains outstanding.
+
+Restart reconciliation gate: 46 tests across API, delegation and persistence
+passed with full strict typecheck. Accepted queued and started children receive
+one durable interruption terminal, while unfinished executable ownership rejects
+before reconciliation writes. Legacy child reconciliation remains covered.

@@ -96,6 +96,7 @@ import {
   validateTrajectorySelector,
   verifyManifestSnapshot,
 } from "../persistence/trajectory-records.js";
+import { reconcileDelegationChildren } from "./delegation/reconcile.js";
 import { nextExecutionVisitIndexes } from "./execution/execution-visit-index.js";
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import type { Host } from "./host.js";
@@ -949,59 +950,7 @@ export function reconcileLostChildren(
   log: RecordLog,
   persistRecord: (record: PersistedRecord) => void = (record) => log.append(record),
 ): void {
-  const started = new Map<string, Extract<PersistedRecord, { type: "subagent_started" }>>();
-  const terminalChildIds = new Set<string>();
-
-  // Scan in append order. A terminal before its start is an orphan and must
-  // not suppress recovery of the later start; duplicate starts and terminals
-  // are both reduced to the first lifecycle for that child ID.
-  for (const record of log.records(runId)) {
-    if (record.type === "subagent_started") {
-      if (!started.has(record.child_id)) started.set(record.child_id, record);
-    } else if (
-      (record.type === "subagent_completed" || record.type === "subagent_failed") &&
-      started.has(record.child_id)
-    ) {
-      terminalChildIds.add(record.child_id);
-    }
-  }
-
-  for (const record of started.values()) {
-    if (terminalChildIds.has(record.child_id)) continue;
-    persistRecord({
-      type: "subagent_failed",
-      run_id: runId,
-      child_id: record.child_id,
-      task_id: record.task_id,
-      subagent: record.subagent,
-      model: record.model,
-      status: "cancelled",
-      failure_reason: "recovered_child_lost",
-      branch: record.branch,
-      worktree_path: record.worktree_path,
-      base_commit: record.base_commit,
-      head_commit: null,
-      session_file: record.session_file,
-      usage: null,
-      ...(record.completion_protocol === undefined
-        ? {}
-        : {
-            completion_evidence: {
-              completion_protocol: record.completion_protocol,
-              completion_source: "host",
-              normalization_reason: "cancelled",
-              report_result_called: false,
-              final_response_present: false,
-              summary_truncated: false,
-              worktree_state: "uninspected",
-              file_tool_calls: { read: 0, grep: 0, find: 0, ls: 0, edit: 0, write: 0 },
-              duplicate_read_calls: 0,
-            },
-          }),
-      ts: Date.now(),
-    });
-    terminalChildIds.add(record.child_id);
-  }
+  reconcileDelegationChildren(runId, log, persistRecord);
 }
 
 async function loadPinnedManifest(
