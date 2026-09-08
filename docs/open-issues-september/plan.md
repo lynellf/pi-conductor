@@ -38,9 +38,9 @@ unimplemented. New controls use [the proposed spec](spec.md), awaiting acknowled
   source gate: 137 test files, 1,797 tests passed. Production audit: zero; full
   audit: one low esbuild finding, zero moderate/high/critical, after targeted
   transitive security patches. See [review](review.md).
-- [ ] Commit and merge the verified issue fixes; close only issues
+- [x] Commit and merge the verified issue fixes; close only issues
   whose implemented acceptance criteria are met on remote main.
-- [ ] Assess merged main: issue status, verified behavior, operational limits,
+- [x] Assess merged main: issue status, verified behavior, operational limits,
   architecture/maintenance risks and prioritized remaining work.
 
 Dependencies: #73 terminal diagnosis supports #71. #76 supervised process
@@ -49,3 +49,7 @@ Implement #76 process supervision before #75 execution wiring; manifest work can
 precede that boundary.
 #74 and #68 review are independent. #67 may depend on upstream API availability.
 Assessment follows remote merge verification; no release/publish is requested.
+
+Merged implementation: PR #79,
+`d628f8de4791d07b4e96baae43c7956fc3961a37`. See the
+[post-merge assessment](assessment.md) for remaining priorities and limits.
