@@ -113,7 +113,7 @@ Implementation uses Luna in dependency-ordered, reviewable increments.
 - [ ] Durable context boundaries and epochs: define records and restoration queries;
   test round trips, run/role isolation, missing/corrupt history, crash boundaries,
   reset, restart in an empty epoch, and duplicate delivery. Keep pure record validation separate from host I/O.
-- [ ] Metered compaction spike: prove public-hook/stream interception and SDK/RPC
+- [x] Metered compaction spike: prove public-hook/stream interception and SDK/RPC
   cost parity, including failures and exclusion of imported historical charges.
 - [ ] Shared SDK lifecycle: retain own history across A/B worker round trips with
   current role authority, no repeated side effects, and fresh logical identities.

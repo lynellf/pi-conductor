@@ -13,9 +13,9 @@ the coordinating agent owns integration and independent review. Work only in
   to explicit `none`; historical absence means `none`.
 - [x] Reject worker retention, invalid values, trajectory combinations and Prewalk
   orchestrator retention; permit Prewalk workers.
-- [ ] Demonstrate public Pi 0.80.6 compaction metering using deterministic providers,
+- [x] Demonstrate public Pi 0.80.6 compaction metering using deterministic providers,
   including failure usage and exclusion of imported historical usage, in SDK/RPC.
-- [ ] Record exact session-tip restoration and model-rebinding SDK evidence.
+- [x] Record exact session-tip restoration and model-rebinding SDK evidence.
 
 Files: manifest types/parser/validation and focused helper/tests; separate SDK
 spike tests and evidence document. Verification: focused Vitest, strict typecheck,
@@ -27,7 +27,7 @@ Depends on the verified manifest contract and reviewed lifecycle ordering. Pure
 records can proceed alongside the SDK/RPC spike; adapter integration still waits
 for the complete metering proof.
 
-- [ ] Define append-only context policy/epoch, selection/delivery, boundary and
+- [x] Define append-only context policy/epoch, selection/delivery, boundary and
   compaction records with pure validation and explicit run/role identities.
 - [ ] Define restoration queries that distinguish a durable empty epoch from
   missing, corrupt, mismatched or ambiguously committed history.
