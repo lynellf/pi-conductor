@@ -74,6 +74,11 @@ import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/ro
 import type { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
+import {
+  EndGuardRunner,
+  type EndGuardRunRequest,
+  type EndGuardRunResult,
+} from "./end-guard-runner.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
@@ -221,6 +226,7 @@ export class ProductionHost implements Host {
   private readonly nodeRoleSessionFactory: (
     options: NodeRoleSessionOptions,
   ) => Promise<NodeRoleSession>;
+  private readonly endGuardRunner: EndGuardRunner;
 
   constructor(opts: ProductionHostOptions) {
     assertTrajectorySdkSupportedForHandoffs(opts.loadedManifest.manifest.handoffs);
@@ -247,6 +253,10 @@ export class ProductionHost implements Host {
       telemetry: opts.roleTurnTelemetry,
     });
     this.nodeRoleSessionFactory = opts.nodeRoleSessionFactory ?? createNodeRoleSession;
+    if (this.loadedManifest.manifest.end_guard !== undefined && !isSupervisedProcessSupported()) {
+      throw new Error("end_guard requires a platform with supervised process cleanup");
+    }
+    this.endGuardRunner = new EndGuardRunner(this.cwd);
     // The SessionManager writes JSONL files directly into `sessionDir`
     // without creating parent directories. Ensure the dir exists so
     // the first `SessionManager.create(cwd, this.sessionDir)` call
@@ -1002,8 +1012,13 @@ export class ProductionHost implements Host {
   }
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
+    await this.endGuardRunner.abort(session.sessionId);
     await this.delegationManager.abortAll();
     await this.prewalk.abort(session);
+  }
+
+  runEndGuard(request: EndGuardRunRequest): Promise<EndGuardRunResult> {
+    return this.endGuardRunner.run(request);
   }
 
   sealSession(_session: RoleSession): void {

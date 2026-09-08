@@ -171,6 +171,11 @@ export class RunControl {
     if (this.active !== null) await this.abortSession(this.active.session, reason);
   }
 
+  /** Whether an operator abort has been requested for this run. */
+  isAbortRequested(): boolean {
+    return this.abortReason !== null;
+  }
+
   /** Reject new operator guidance while retaining the latest response snapshot. */
   close(): void {
     if (!this.open) return;

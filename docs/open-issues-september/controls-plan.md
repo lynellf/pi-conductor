@@ -69,15 +69,21 @@ concurrent edits in the original checkout remain preserved.
 ## Phase 2 — #75 end guard (after Phase 1 gate)
 
 7. Manifest and durable guard attempts.
-   - [ ] Optional pinned command/deadline; typed start/result/reset records,
+   - [x] Optional pinned command/deadline; typed start/result/reset records,
      three-failure budget per authorized request or ungated run.
-   - [ ] Manifest and append/reopen/reset tests pass.
+   - [x] Manifest and append/reopen/reset tests pass.
+     Manifest gate: 54 focused tests. Record gate: 55 tests with actual
+     append/reopen ordering and identity checks; typecheck and Biome pass.
+     Runner gate: 18 tests, including independent ownership and UTF-8 probes.
 8. Guard execution and resume.
-   - [ ] Execute only before mechanically legal role-issued orchestrator end;
+   - [x] Execute only before mechanically legal role-issued orchestrator end;
      preserve pending request on failure; forced-close bypass; no success cache.
-   - [ ] Success/failure/timeout/order/exhaustion/crash/unknown-owner tests pass.
+   - [x] Success/failure/timeout/order/exhaustion/crash/unknown-owner tests pass.
 9. Issue gate.
-   - [ ] Document behavior; independent review and full gates pass; merge and close.
+   - [x] Document behavior; independent review and full gates pass.
+     Final gate: 167 files / 2,009 tests; strict typecheck, build, lint,
+     format and production audit passed.
+   - [ ] Merge #75 and close after verifying the reviewed tree.
 
 ## Phase 3 — #77 asynchronous delegation (after Phase 2 gate)
 

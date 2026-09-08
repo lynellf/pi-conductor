@@ -62,6 +62,7 @@ import type { PrewalkFailureCode } from "../persistence/prewalk-records.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
+import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 
 // ─── RoleSession ───────────────────────────────────────────────────────
 
@@ -369,6 +370,9 @@ export interface Host {
    * `session_cost_cap_exceeded` vs `model_error` vs `crashed`).
    */
   abortSession(session: RoleSession, reason: string): Promise<void>;
+
+  /** Execute the pinned end guard in the primary checkout. */
+  runEndGuard?(request: EndGuardRunRequest): Promise<EndGuardRunResult>;
 
   /**
    * Flip the session's emission-sealed flag (Task 15.5, §12.1).

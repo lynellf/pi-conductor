@@ -28,8 +28,15 @@ That approval is single-use: it is consumed by `end` and cleared if the
 orchestrator dispatches more work. Run-cost-cap forced closure remains legal
 without a request and still passes through the reducer.
 
+The optional top-level `end_guard` command adds host-executed verification before
+a legal orchestrator end. See [End guard](end-guard.md) for deadlines, retry
+budgets and resume behavior.
+
 `version` is a human-bumped integer, **pinned at run-start and never mutated
-mid-run** (spec §10). `resumeRun` rejects a manifest whose version disagrees
-with the snapshot's pinned version.
+mid-run** (spec §10). New runs save a normalized manifest snapshot, including
+resolved executable-tool defaults, before starting a role. Resume uses that
+snapshot even if the current YAML changes. Legacy logs without a manifest
+snapshot still load the current YAML and require its version to match the
+checkpoint.
 
 Related reference: [per-role isolated workspaces](workspaces.md#per-role-isolated-workspaces-issue-48) and [worktree subagent delegation](delegation.md#worktree-subagent-delegation) extend role configuration with workspace and child-profile policies.

@@ -33,7 +33,9 @@ disable them.
   only from the orchestrator (§7.2). With `end_request_roles` configured, a
   normal `end` additionally requires a pending authorized request. A worker
   calling `end` produces a `transition_rejected` record with `legal_targets`
-  surfaced. Args: optional `reason: string`.
+  surfaced. When configured, the host also requires a successful
+  [end guard](end-guard.md) before accepting completion. Args: optional
+  `reason: string`.
 
 Both tools only **validate and record intent** into a per-session capture buffer
 and return a terminating message after a valid capture; they do **not** call

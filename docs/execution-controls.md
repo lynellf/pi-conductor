@@ -11,7 +11,9 @@ tool_execution:
 
 These are the defaults when the block is omitted. Values must be positive safe
 integers; `timeout_seconds` cannot exceed 3,600. The manifest snapshot pins the
-policy for the run. A model's explicit bash timeout may shorten that deadline,
+policy for the run, including resolved defaults for every role and subagent.
+New runs retain that snapshot across resume even if current YAML changes.
+A model's explicit bash timeout may shorten that deadline,
 but cannot extend it. Output and CPU activity do not reset the clock.
 
 The deadline includes file-path confinement and any wait for an earlier mutation
