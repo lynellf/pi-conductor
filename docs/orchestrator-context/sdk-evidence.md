@@ -19,11 +19,19 @@ boundaries:
 The focused spike test exercises the public loader hook and
 `AgentSession.compact()` with the repository's real stub provider. It observes a
 manual `session_before_compact` event, meters the actual summary stream's
-`Usage`, and verifies that five preexisting assistant messages with `125`
-historical tokens do not get charged again. A second case proves provider
-failure is surfaced and does not append a compaction entry.
+`Usage`, and verifies that five preexisting assistant messages carrying
+`30,000` tokens each do not get charged again. A second case proves provider
+failure is surfaced and does not append a compaction entry. A dedicated hook
+case invokes the exported `compact()` itself with a local metered stream while
+the native provider is configured to fail, proving the seam does not globally
+replace the user's provider. Failed assistant responses retain nonzero usage
+(`22` tokens); unknown usage must remain an explicit diagnostic rather than
+being coerced to zero. The durable case reopens the persisted session tip and
+creates a new session with a model override; the override appends SDK state but
+the original tip remains on the restored branch.
 
-The SDK does not expose native compaction usage through `CompactionResult` or
+This spike does not claim RPC subprocess parity; that requires a separate
+child-process fixture. The SDK does not expose native compaction usage through `CompactionResult` or
 the `session_compact` event. The minimal host seam therefore needs to wrap the
 provider `StreamFunction` (or the shared SDK/RPC provider boundary), record the
 returned assistant usage and failures, and leave session history reconstruction

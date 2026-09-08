@@ -1,6 +1,7 @@
 import type { AssistantMessageEventStream, Usage } from "@earendil-works/pi-ai";
 import {
   AuthStorage,
+  compact,
   createAgentSession,
   DefaultResourceLoader,
   type InlineExtension,
@@ -154,6 +155,190 @@ describe("orchestrator context compaction SDK spike", () => {
     await expect(session.compact()).rejects.toThrow("compaction provider unavailable");
     expect(attempts).toBe(1);
     expect(manager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    session.dispose();
+  });
+
+  it("lets the public hook call exported compact with a local metered stream", async () => {
+    const auth = AuthStorage.inMemory();
+    const registry = ModelRegistry.inMemory(auth);
+    const nativeCalls: number[] = [];
+    registry.registerProvider("stub", {
+      api: "anthropic-messages",
+      apiKey: "stub-key",
+      streamSimple: () => {
+        nativeCalls.push(1);
+        throw new Error("native provider must not be used by hook compaction");
+      },
+    });
+    const usages: Usage[] = [];
+    const local = meteredStream(
+      makeStubStreamFunction({
+        steps: [{ kind: "emit_text", text: "hook summary" }],
+        usage: CANNED_USAGE,
+      }),
+      usages,
+    );
+    const manager = SessionManager.inMemory();
+    const extension: InlineExtension = {
+      name: "exported-compact-meter-spike",
+      factory: (pi) => {
+        pi.on("session_before_compact", async (event, context) => {
+          if (!context.model) throw new Error("hook did not receive the active model");
+          const result = await compact(
+            event.preparation,
+            context.model,
+            undefined,
+            undefined,
+            event.customInstructions,
+            event.signal,
+            undefined,
+            local.stream,
+          );
+          return { compaction: result };
+        });
+      },
+    };
+    const loader = new DefaultResourceLoader({
+      cwd: process.cwd(),
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-exported-compact-"),
+      extensionFactories: [extension],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      model: makeStubModel(),
+      modelRegistry: registry,
+      sessionManager: manager,
+      resourceLoader: loader,
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-exported-agent-"),
+      noTools: "all",
+    });
+    seedHistory(manager);
+
+    await expect(session.compact()).resolves.toMatchObject({ summary: "hook summary" });
+    expect(nativeCalls).toHaveLength(0);
+    expect(local.attempts()).toBe(1);
+    expect(usages).toHaveLength(1);
+    expect(usages[0]).toMatchObject({ totalTokens: 22 });
+    session.dispose();
+  });
+
+  it("records nonzero usage from a failed final assistant response and diagnoses unknown usage", async () => {
+    const auth = AuthStorage.inMemory();
+    const registry = ModelRegistry.inMemory(auth);
+    const usages: Usage[] = [];
+    const local = meteredStream(
+      makeStubStreamFunction({
+        steps: [{ kind: "fail", errorMessage: "summary quota exhausted", usage: CANNED_USAGE }],
+      }),
+      usages,
+    );
+    registry.registerProvider("stub", {
+      api: "anthropic-messages",
+      apiKey: "stub-key",
+      streamSimple: () => {
+        throw new Error("native provider must not be used");
+      },
+    });
+    const manager = SessionManager.inMemory();
+    let diagnostic: string | undefined;
+    const extension: InlineExtension = {
+      name: "failed-compact-meter-spike",
+      factory: (pi) => {
+        pi.on("session_before_compact", async (event, context) => {
+          if (!context.model) throw new Error("hook did not receive the active model");
+          try {
+            await compact(
+              event.preparation,
+              context.model,
+              undefined,
+              undefined,
+              undefined,
+              event.signal,
+              undefined,
+              local.stream,
+            );
+          } catch (_error: unknown) {
+            const usage = usages[0];
+            diagnostic = usage?.totalTokens
+              ? `failed-after-${usage.totalTokens}-tokens`
+              : "unknown-usage";
+            return { cancel: true };
+          }
+          return { cancel: true };
+        });
+      },
+    };
+    const loader = new DefaultResourceLoader({
+      cwd: process.cwd(),
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-failed-compact-"),
+      extensionFactories: [extension],
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      model: makeStubModel(),
+      modelRegistry: registry,
+      sessionManager: manager,
+      resourceLoader: loader,
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-failed-agent-"),
+      noTools: "all",
+    });
+    seedHistory(manager);
+
+    await expect(session.compact()).rejects.toThrow();
+    expect(local.attempts()).toBe(1);
+    expect(usages).toHaveLength(1);
+    expect(usages[0]?.totalTokens).toBe(22);
+    expect(diagnostic).toBe("failed-after-22-tokens");
+    session.dispose();
+  });
+
+  it("reopens the durable tip without changing the restored branch", async () => {
+    const sessionDir = makeAndTrackIsolatedAgentDir("pi-context-durable-session-");
+    const manager = SessionManager.create(process.cwd(), sessionDir);
+    const first = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "first answer" }],
+      api: "anthropic-messages",
+      provider: "stub",
+      model: "stub-model",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const tip = manager.appendMessage({ role: "user", content: "tip", timestamp: 3 });
+    const sessionFile = manager.getSessionFile();
+    if (!sessionFile) throw new Error("expected durable session file");
+    const reopened = SessionManager.open(sessionFile);
+    expect(first).not.toBe(tip);
+    expect(reopened.getLeafId()).toBe(tip);
+    expect(reopened.getBranch().map((entry) => entry.id)).toContain(tip);
+    const { session } = await createAgentSession({
+      model: { ...makeStubModel(), id: "override-model", name: "Override Model" },
+      sessionManager: reopened,
+      agentDir: makeAndTrackIsolatedAgentDir("pi-context-restored-model-"),
+      noTools: "all",
+    });
+    expect(session.model?.id).toBe("override-model");
+    const modelOverrideTip = reopened.getLeafId();
+    expect(modelOverrideTip).not.toBe(tip);
+    const restoredBranch = reopened.getBranch();
+    expect(restoredBranch.map((entry) => entry.id)).toContain(tip);
     session.dispose();
   });
 });
