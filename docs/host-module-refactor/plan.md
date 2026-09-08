@@ -60,17 +60,17 @@ through explicit owner callbacks.
    - [x] Focused API/resume/trajectory/delegation tests pass (27 tests); strict typecheck and Biome pass.
 2. **Production host boundary**
    - [x] Physical session construction, trajectory continuation, and accepted transport extracted into cohesive modules.
-   - [x] Host options, run-scoped state, artifact routing, delegation, and terminal control extracted with explicit contexts; `production-host.ts` is 458 lines and every extracted helper is below 400 lines.
+   - [x] Host options, run-scoped state, artifact routing, delegation, and terminal control extracted with explicit contexts; `production-host.ts` is 440 lines and every extracted helper is below 400 lines.
    - [x] Focused production-host snapshot/trajectory/preflight/spawn tests pass (37 tests); strict production-host typecheck and Biome pass.
    - [x] Fallback marker state is synchronized in `finally`, preserving escalation consumption when spawn fails before returning a session.
 3. **Loop boundary**
-   - [ ] Per-attempt and terminal coordination extracted with owner callbacks.
-   - [ ] Focused loop/fallback/cap/abort/delegation/trajectory/artifact tests pass.
-   - [ ] Typecheck, build, and lint/format pass.
+   - [x] Per-attempt and terminal coordination extracted with owner callbacks.
+   - [x] Focused loop/fallback/cap/abort/delegation/trajectory/artifact tests pass.
+   - [x] Typecheck, build, and lint/format pass.
 4. **Review and final verification**
-   - [ ] Independent review completed.
-   - [ ] Full suite and mandatory checks pass.
-   - [ ] Remaining oversized modules have explicit follow-up notes.
+   - [x] Independent review completed.
+   - [x] Full suite and mandatory checks pass.
+   - [x] Remaining oversized modules have explicit follow-up notes.
 
 ## Invariants and risks
 
@@ -81,3 +81,21 @@ through explicit owner callbacks.
   practical; any coherent exception stays below 500 with a top-file explanation.
 - Closure-captured host and loop state is the primary extraction risk; each slice gets
   focused tests and an atomic rollback commit.
+
+## Completed verification
+
+Integrated with delegation-mode PR #89 (`origin/main` at `b5d156f`). Final initial
+target sizes are `api.ts` 496, `production-host.ts` 440, and `loop.ts` 383 lines.
+The 476-line turn helper keeps its coherent prompt/retry boundary together. All
+source modules in this change stay below 500 lines; those above 400 explain the
+exception at the top of the file.
+
+Independent API, production-host, and loop reviews found no remaining behavioral
+regressions. Review fixed fallback-marker copy-back on rejected spawning and added
+a regression test. The full suite exposed an extension fixture's factory mock
+leaking between files; its teardown now unregisters the mock.
+
+Final verification on 2026-09-08: 2,106 tests across 182 files passed, including
+the grep guards. Strict typecheck, build, lint, formatting, and the production
+dependency audit passed. No dependency or lockfile changes were required. The
+remaining inventory is deferred to #88.
