@@ -426,7 +426,10 @@ describe("shared SDK supervised executable tools", () => {
         return host;
       },
     });
-    expect((await handle.completion()).exitReason).toBe("done");
+    const completion = await handle.completion();
+    expect(completion.exitReason, JSON.stringify({ completion, records: log.records(runId) })).toBe(
+      "done",
+    );
     expect(workspaceVisitIndex).toBe(1);
     expect(executionVisitIndex).toBe(2);
     expect(
