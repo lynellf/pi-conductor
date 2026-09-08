@@ -94,6 +94,8 @@ export type ManifestErrorCode =
   | PrewalkManifestErrorCode;
 
 export type ManifestWarningCode =
+  /** Issue #86: legacy resume has no durable manifest snapshot proving mode. */
+  | "legacy-delegation-mode-unproven"
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
   | "no-cheaper-fallback"
   /** A role's `tools:` omits `handoff` or `end`; host force-injects (§8.1). */

@@ -111,6 +111,8 @@ export interface LoadedManifest {
   readonly warnings: readonly ManifestWarning[];
   readonly manifestDir: string | null;
   readonly manifestVersion: number;
+  /** True only when resume lacked a durable manifest snapshot proving Issue #86 mode. */
+  readonly legacyDelegationMode?: boolean;
   /** Runtime facts used to admit opt-in Prewalk roles before guide spend. */
   readonly prewalkValidationContext?: ManifestValidationContext;
 }

@@ -11,6 +11,8 @@
 - Add nonblocking delegation with stable handles, targeted status/result/wait/
   cancellation controls, shared capacity, pinned inputs and durable recovery
   across parent replacement (Issue #77).
+- Enforce manifest-controlled delegation mode for new runs, with blocking as the
+  default and explicit historical compatibility for legacy snapshots (Issue #86).
 
 ### Bug fixes
 
