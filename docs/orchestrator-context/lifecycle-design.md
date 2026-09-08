@@ -39,6 +39,10 @@ All records carry schema version, run ID, role, epoch and timestamp as applicabl
 - Compaction observation: role-session/request identity, outcome, before/after
   history reference and actual new usage or explicit unavailable-usage diagnosis.
   Historical usage never enters the invocation meter again.
+- Compaction start: persist request identity and the preceding history tip before
+  starting provider work. A start without an outcome is an unknown charge across
+  terminal records and reset epochs. RPC children await the parent's durable ACK
+  before issuing the request, and await outcome persistence before settlement.
 
 Pure validation/query helpers reject malformed identities, invalid ordering,
 duplicate conflicting deliveries, cross-run references and missing expected
