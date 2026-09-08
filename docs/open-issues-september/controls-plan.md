@@ -58,12 +58,13 @@ concurrent edits in the original checkout remain preserved.
    - Files: RPC configuration/bridge, child tool wiring, focused tests.
 6. Operator visibility and issue gate (depends on 5).
    - [x] Active tool/elapsed and timeout/recovery status, user documentation.
-   - [ ] Independent review reconciled; full typecheck/build/test/lint/format/audit
+   - [x] Independent review reconciled; full typecheck/build/test/lint/format/audit
      gates pass. Merge #76 and close only after acceptance is met.
-     Local gate: 155 files / 1,929 tests, typecheck, build, lint, format and
-     production audit pass. The final strengthened resume regression separately
-     passes with two prior timeouts, an actual resumed bash call, workspace visit
-     1 and execution invocation 2. Pre-push verification and merge remain.
+     Merged PR #81 at `6b7f245` after 156 files / 1,937 tests, strict
+     typecheck, build, lint, format and production audit passed. The pre-push
+     hook passed all three required checks; remote main exactly matches the
+     reviewed implementation tree. #76 is closed. Fast-exit arbitration and
+     module-cache-independent regressions are included in the final gate.
 
 ## Phase 2 — #75 end guard (after Phase 1 gate)
 
