@@ -92,3 +92,17 @@ checkout while another `git worktree add` is still establishing it. Snapshot
 provisioning source is unchanged by #76, and the focused nine-test suite passed
 on rerun. This remains an assessment follow-up, not a timeout-control fix or a
 reason to weaken that concurrency assertion.
+
+The pre-push suite also exposed a fast-process admission race: `/proc` could
+lose a child's identity before Node delivered its queued close event. A real
+`/bin/true` regression with deliberately held close delivery reproduces the
+false unconfirmed-cleanup failure against the previous implementation. Admission
+now reconciles close, abort and the fixed deadline before classification, then
+checks group and escaped-descendant evidence. Unknown identities are never
+signaled by PID alone. The regression also covers missing executables and
+control changes during ownership scans.
+
+The permission-race fixture also needed explicit module isolation: the suite's
+shared module cache could bypass its filesystem mock and falsely pass against a
+nonexistent real PID. The test now checks its three intended reads and releases
+the mock, with valid `/proc` stat fields.

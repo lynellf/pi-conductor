@@ -2,7 +2,16 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { hrtime } from "node:process";
+import { waitForAdmissionSettlement } from "./supervised-process-admission.js";
 import { safeTerminateOwnedGroup } from "./supervised-process-cleanup.js";
+import {
+  isSupervisedProcessSupported,
+  SupervisedProcessAbortError,
+  SupervisedProcessError,
+  type SupervisedProcessOptions,
+  type SupervisedProcessResult,
+  SupervisedProcessTimeoutError,
+} from "./supervised-process-contract.js";
 import {
   findProcessesByOwnerToken,
   type ProcessIdentity,
@@ -16,117 +25,20 @@ import {
   type OutputCapture,
 } from "./supervised-process-output.js";
 
+export {
+  isSupervisedProcessSupported,
+  SupervisedProcessAbortError,
+  SupervisedProcessError,
+  type SupervisedProcessFailureCode,
+  type SupervisedProcessOptions,
+  type SupervisedProcessResult,
+  SupervisedProcessTimeoutError,
+} from "./supervised-process-contract.js";
+
 const DEFAULT_OUTPUT_LIMIT_BYTES = 64 * 1024;
 
-/** Inputs for one Linux process-group-supervised executable invocation. */
-export interface SupervisedProcessOptions {
-  /** Durable caller identity reserved before any process is spawned. */
-  readonly executionId: string;
-  readonly command?: string;
-  readonly file?: string;
-  readonly args?: readonly string[];
-  readonly stdin?: string | Uint8Array;
-  readonly cwd: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly timeoutMs: number;
-  readonly graceMs?: number;
-  readonly outputLimitBytes?: number;
-  readonly signal?: AbortSignal;
-  /** Persist the start record before command side effects begin. */
-  readonly onStart: (record: {
-    readonly executionId: string;
-    readonly effectiveDeadlineMs: number;
-  }) => void | Promise<void>;
-  /** Persist the owned process identity as soon as it is established. */
-  readonly onSpawn?: (
-    record: { readonly executionId: string } & ProcessIdentity,
-  ) => void | Promise<void>;
-  readonly onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void;
-}
-
-/** Successful terminal result after the owned process group has settled. */
-export interface SupervisedProcessResult {
-  readonly outcome: "exited";
-  readonly exitCode: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly truncated: boolean;
-  readonly elapsedMs: number;
-  readonly pid: number;
-}
-
-/** Stable failure codes emitted by the supervised process boundary. */
-export type SupervisedProcessFailureCode =
-  | "supervised-process-aborted"
-  | "supervised-process-timeout"
-  | "supervised-process-spawn-failed"
-  | "supervised-process-unsupported";
-
-/** Structured process-boundary failure including cleanup evidence. */
-export class SupervisedProcessError extends Error {
-  readonly code: SupervisedProcessFailureCode;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
-  readonly identity: ProcessIdentity | null;
-  readonly elapsedMs: number | null;
-
-  constructor(
-    code: SupervisedProcessFailureCode,
-    message: string,
-    cleanup: "confirmed" | "unconfirmed" | "not-started",
-    identity: ProcessIdentity | null,
-    elapsedMs: number | null = null,
-  ) {
-    super(message);
-    this.name = "SupervisedProcessError";
-    this.code = code;
-    this.cleanup = cleanup;
-    this.identity = identity;
-    this.elapsedMs = elapsedMs;
-  }
-}
-
-/** Deadline failure; callers may retry only when cleanup is confirmed. */
-export class SupervisedProcessTimeoutError extends SupervisedProcessError {
-  constructor(
-    cleanup: "confirmed" | "unconfirmed" | "not-started",
-    identity: ProcessIdentity | null,
-    elapsedMs: number,
-  ) {
-    super(
-      "supervised-process-timeout",
-      "supervised process exceeded its deadline",
-      cleanup,
-      identity,
-      elapsedMs,
-    );
-    this.name = "SupervisedProcessTimeoutError";
-  }
-}
-
-/** Abort failure emitted only after owned cleanup settles. */
-export class SupervisedProcessAbortError extends SupervisedProcessError {
-  constructor(
-    cleanup: "confirmed" | "unconfirmed" | "not-started",
-    identity: ProcessIdentity | null,
-    elapsedMs: number,
-  ) {
-    super(
-      "supervised-process-aborted",
-      "supervised process was aborted",
-      cleanup,
-      identity,
-      elapsedMs,
-    );
-    this.name = "SupervisedProcessAbortError";
-  }
-}
-
-/** Report whether this implementation can prove Linux process-group cleanup. */
-export function isSupervisedProcessSupported(
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform === "linux";
+function elapsedMs(startedAt: bigint): number {
+  return Number(hrtime.bigint() - startedAt) / 1_000_000;
 }
 
 function validateOptions(options: SupervisedProcessOptions): void {
@@ -227,12 +139,18 @@ export async function runSupervisedProcess(
         stdio: ["pipe", "pipe", "pipe"],
       });
   let spawnError: Error | undefined;
+  const readSpawnError = (): Error | undefined => spawnError;
   let closed: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
+  let resolveClose!: () => void;
+  const closeObserved = new Promise<void>((resolve) => {
+    resolveClose = resolve;
+  });
   child.once("error", (error) => {
     spawnError = error;
   });
   child.once("close", (exitCode, signal) => {
     closed = { exitCode, signal };
+    resolveClose();
   });
   child.stdout?.on("data", (chunk: Buffer) => {
     options.onOutput?.("stdout", chunk);
@@ -257,7 +175,40 @@ export async function runSupervisedProcess(
     );
   }
   if (!identity) {
-    if (closed !== undefined && spawnError === undefined) {
+    const observedSpawnError = readSpawnError();
+    if (observedSpawnError !== undefined) {
+      throw new SupervisedProcessError(
+        "supervised-process-spawn-failed",
+        observedSpawnError.message,
+        "not-started",
+        null,
+      );
+    }
+    if (closed === undefined) {
+      const admission = await waitForAdmissionSettlement({
+        closeObserved,
+        signal: options.signal,
+        deadlineMs: processDeadline,
+      });
+      if (admission === "aborted")
+        throw new SupervisedProcessAbortError("unconfirmed", null, elapsedMs(startedAt));
+      if (admission === "deadline")
+        throw new SupervisedProcessTimeoutError("unconfirmed", null, elapsedMs(startedAt));
+    }
+    const afterAdmissionSpawnError = readSpawnError();
+    if (afterAdmissionSpawnError !== undefined) {
+      throw new SupervisedProcessError(
+        "supervised-process-spawn-failed",
+        afterAdmissionSpawnError.message,
+        "not-started",
+        null,
+      );
+    }
+    if (options.signal?.aborted)
+      throw new SupervisedProcessAbortError("unconfirmed", null, elapsedMs(startedAt));
+    if (Date.now() >= processDeadline)
+      throw new SupervisedProcessTimeoutError("unconfirmed", null, elapsedMs(startedAt));
+    if (closed !== undefined && readSpawnError() === undefined) {
       let groupLive: boolean;
       let escaped: readonly ProcessIdentity[];
       try {
@@ -271,6 +222,10 @@ export async function runSupervisedProcess(
           null,
         );
       }
+      if (options.signal?.aborted)
+        throw new SupervisedProcessAbortError("unconfirmed", null, elapsedMs(startedAt));
+      if (Date.now() >= processDeadline)
+        throw new SupervisedProcessTimeoutError("unconfirmed", null, elapsedMs(startedAt));
       if (groupLive || escaped.length > 0) {
         throw new SupervisedProcessError(
           "supervised-process-spawn-failed",
@@ -290,7 +245,6 @@ export async function runSupervisedProcess(
         pid: child.pid ?? -1,
       };
     }
-    child.kill("SIGKILL");
     throw new SupervisedProcessError(
       "supervised-process-spawn-failed",
       "could not establish process ownership",
