@@ -40,7 +40,11 @@ function submission(id: string, mode?: "blocking" | "nonblocking") {
   } as const;
 }
 
-function makeTool(pool: ReturnType<typeof fixture>, roleConfig: RoleConfig = role) {
+function makeTool(
+  pool: ReturnType<typeof fixture>,
+  roleConfig: RoleConfig = role,
+  legacyDelegationMode = false,
+) {
   return createDelegateTool({
     role: roleConfig,
     subagents: [worker],
@@ -57,6 +61,7 @@ function makeTool(pool: ReturnType<typeof fixture>, roleConfig: RoleConfig = rol
     sessionDir: "/tmp/delegation-factory-sessions",
     manager: new DelegationManager(),
     scheduler: pool.scheduler,
+    ...(legacyDelegationMode ? { legacyDelegationMode: true } : {}),
   });
 }
 
@@ -236,6 +241,18 @@ describe("delegate factory asynchronous boundary", () => {
     const result = await invoke(tool, "conflict-call", submission("conflict", "nonblocking"));
     expect(result).toMatchObject({ isError: true, details: { code: "delegation_mode_mismatch" } });
     expect(pool.starts).toEqual([]);
+    await pool.scheduler.close("test cleanup");
+  });
+
+  it("uses per-call mode only with explicit historical provenance", async () => {
+    const pool = fixture({
+      maxParallel: 1,
+      maxChildren: 1,
+      runTask: async (task) => completed(task),
+    });
+    const tool = makeTool(pool, role, true);
+    const result = await invoke(tool, "legacy-call", submission("legacy", "nonblocking"));
+    expect(result).toMatchObject({ details: { remainingChildren: 0 } });
     await pool.scheduler.close("test cleanup");
   });
 });

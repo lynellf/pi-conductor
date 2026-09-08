@@ -797,7 +797,10 @@ export class ProductionHost implements Host {
       },
       ...(onTaskTerminal === undefined ? {} : { onTaskTerminal }),
       ...(onFatal === undefined ? {} : { onFatal }),
-      ...(this.loadedManifest.legacyDelegationMode === true ? { legacyDelegationMode: true } : {}),
+      ...(this.loadedManifest.legacyDelegationMode === true ||
+      this.loadedManifest.legacyDelegationRoles?.includes(role) === true
+        ? { legacyDelegationMode: true }
+        : {}),
     };
     return this.delegation.createTool(
       factoryOptions,
