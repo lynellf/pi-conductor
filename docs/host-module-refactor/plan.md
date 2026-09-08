@@ -29,6 +29,8 @@ reducer/persistence/spawn ownership, error identity, and dependencies remain unc
 | `src/persistence/log.ts` | 431 | monitor |
 | `src/core/reduce.ts` | 400 | convention boundary |
 
+Remaining modules are tracked by follow-up issue #88, deferred from this initial slice.
+
 ## Responsibilities and dependency plan
 
 `api.ts` owns public start/resume/list entry points, file-log/lease admission, pinned
@@ -55,10 +57,11 @@ through explicit owner callbacks.
    - [x] Resume reconstruction and completion wiring extracted.
    - [x] Public API and recovery exports preserved.
    - [x] Strict typecheck passes.
-   - [ ] Focused API tests, build, and lint/format pass.
+   - [x] Focused API/resume/trajectory/delegation tests pass (27 tests); strict typecheck and Biome pass.
 2. **Production host boundary**
-   - [ ] Physical session construction and trajectory continuation extracted.
-   - [ ] Focused production-host tests, typecheck, build, and lint/format pass.
+   - [x] Physical session construction, trajectory continuation, and accepted transport extracted into cohesive modules.
+   - [x] Focused production-host snapshot/trajectory/preflight tests pass (16 tests); strict typecheck and Biome pass.
+   - [ ] Remaining host operations/state extraction is deferred to the same issue slice.
 3. **Loop boundary**
    - [ ] Per-attempt and terminal coordination extracted with owner callbacks.
    - [ ] Focused loop/fallback/cap/abort/delegation/trajectory/artifact tests pass.
