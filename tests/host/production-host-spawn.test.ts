@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildToolsAllowlist, loadManifestFromString } from "../../src/index.js";
+import {
+  buildToolsAllowlist,
+  loadManifestFromString,
+  NoMoreModelsError,
+  RoleEscalationError,
+} from "../../src/index.js";
 import { asFull, makeHost, makeLoadedV2Manifest } from "./production-host-fixture.js";
 
 describe("buildToolsAllowlist — Task 7A.3", () => {
@@ -158,6 +163,18 @@ roles:
   it("uses the standalone SDK session path rather than the extension session tree", async () => {
     const session = await makeHost(workdir).spawnRole("implementer", { modelIndex: 0 });
     expect(session.sessionFile).toBeTruthy();
+    await session.dispose();
+  });
+
+  it("preserves fallback exhaustion across a failed spawn and consumes escalation once", async () => {
+    const host = makeHost(workdir);
+
+    await expect(host.spawnRole("implementer", { modelIndex: 1 })).rejects.toBeInstanceOf(
+      NoMoreModelsError,
+    );
+    await expect(host.spawnRole("implementer")).rejects.toBeInstanceOf(RoleEscalationError);
+
+    const session = await host.spawnRole("implementer");
     await session.dispose();
   });
 });

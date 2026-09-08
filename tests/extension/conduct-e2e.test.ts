@@ -54,7 +54,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CONDUCT_STATUS_KEY } from "../../src/extension/status.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
@@ -93,6 +93,13 @@ vi.mock("../../src/host/production-host-factory.js", async () => {
       });
     },
   };
+});
+
+afterAll(() => {
+  // This file's factory mock is module-scoped because Vitest runs with
+  // `isolate: false`; release it before the next file reuses the worker.
+  vi.doUnmock("../../src/host/production-host-factory.js");
+  vi.resetModules();
 });
 
 describe("extension shell — Task 7B.4: stub-driven E2E", () => {

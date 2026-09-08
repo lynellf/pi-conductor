@@ -266,6 +266,20 @@ export const delegateSubmissionArgsSchema = Type.Object(
 /** Typed view of one delegate submission. */
 export type DelegateSubmissionArgs = Static<typeof delegateSubmissionArgsSchema>;
 
+/** Build the model-visible submission schema constrained to trusted policy mode (Issue #86). */
+export function delegateSubmissionArgsSchemaForMode(mode: "blocking" | "nonblocking") {
+  return Type.Object(
+    {
+      tasks: Type.Array(delegateTaskSchema, { minItems: 1 }),
+      mode: Type.Optional(Type.Literal(mode)),
+    },
+    { additionalProperties: false },
+  );
+}
+
+/** Describe the effective behavior selected by the pinned parent policy. */
+export { delegateModeDescription } from "../manifest/delegation-mode.js";
+
 /** Strict control operation over already accepted delegated children. */
 export const delegateControlArgsSchema = Type.Object(
   {
@@ -288,6 +302,11 @@ export const delegateArgsSchema = Type.Union([
   delegateSubmissionArgsSchema,
   delegateControlArgsSchema,
 ]);
+
+/** Build the model-visible delegate union for one trusted configured mode. */
+export function delegateArgsSchemaForMode(mode: "blocking" | "nonblocking") {
+  return Type.Union([delegateSubmissionArgsSchemaForMode(mode), delegateControlArgsSchema]);
+}
 
 /** Typed view of a delegate submission or control request. */
 export type DelegateArgs = Static<typeof delegateArgsSchema>;

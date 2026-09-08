@@ -33,6 +33,7 @@ roles:
     system_prompt: .pi/roles/implementer.md
     tools: [read, grep, edit, write, bash, handoff, end, delegate]
     delegation:
+      mode: nonblocking
       allowed_subagents: [api-implementer, test-writer]
       max_children_per_session: 6
       max_parallel: 2
@@ -56,6 +57,12 @@ subagents:
 ```
 
 `allowed_subagents` must name declared profiles without duplicates.
+`mode` is operator-controlled: `blocking` waits for ordered child results and
+`nonblocking` returns stable child handles after durable acceptance. New runs
+default to `blocking` when it is omitted. The model may omit `mode` or repeat
+the configured value for compatibility; a conflicting value is rejected before
+admission. Existing manifests that relied on per-call nonblocking mode must
+add `mode: nonblocking` before starting a new run.
 `max_children_per_session` is the total child-task allowance for one parent
 logical invocation, including model fallback; accepted queued tasks consume it,
 and completion or cancellation does not refund it. `max_parallel` bounds concurrent
@@ -102,22 +109,20 @@ validated before any worktree is created. Delegation requires a clean primary
 checkout (`git status --porcelain=v1 --untracked-files=all`) and a resolvable
 `HEAD`; commit or stash ordinary and untracked changes first.
 
-By default, the tool waits for all children and returns results in input order.
-An explicit `"mode": "blocking"` has the same behavior. Each result
-contains its authoritative status, branch, worktree path, base/head commits,
-session file, usage, summary, and any failure reason. `completed` requires
+The configured blocking mode waits for all children and returns results in input
+order. Each result contains its authoritative status, branch, worktree path,
+base/head commits, session file, usage, summary, and any failure reason. `completed` requires
 verified uncommitted changes in the child worktree; `no_changes` requires a
 clean worktree at the batch base. A `completed` report without changes becomes
 `no_changes`; an unexpected commit or invalid Git state becomes `failed`.
 
 ### Nonblocking tasks and controls
 
-Add `"mode": "nonblocking"` beside `tasks` to return after the whole batch has
-been durably accepted:
+Configure `mode: nonblocking` in the parent role policy to return after the
+whole batch has been durably accepted. Submit tasks without a mode argument:
 
 ```json
 {
-  "mode": "nonblocking",
   "tasks": [{
     "id": "parser",
     "subagent": "api-implementer",
@@ -126,6 +131,9 @@ been durably accepted:
   }]
 }
 ```
+
+For compatibility, a `mode` argument may repeat the configured value; a
+contradictory value is rejected.
 
 The response is `{"child_ids":["<stable-child-id>"]}` in input order. Use these
 host-issued handles, rather than the task's `id`, for subsequent controls on the

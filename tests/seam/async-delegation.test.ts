@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
   delegateControlArgsSchema,
+  delegateModeDescription,
   delegateSubmissionArgsSchema,
+  delegateSubmissionArgsSchemaForMode,
 } from "../../src/seam/schema.js";
 
 const task = {
@@ -30,6 +33,16 @@ describe("async delegation seam", () => {
     expect(Value.Check(delegateArgsSchema, { tasks: [task], mode: "invalid" })).toBe(false);
   });
 
+  it("exposes only the configured compatibility literal", () => {
+    expect(Value.Check(delegateArgsSchemaForMode("nonblocking"), { tasks: [task] })).toBe(true);
+    expect(
+      Value.Check(delegateArgsSchemaForMode("nonblocking"), {
+        tasks: [task],
+        mode: "blocking",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts strict controls with one or more child IDs", () => {
     expect(
       Value.Check(delegateControlArgsSchema, {
@@ -40,6 +53,14 @@ describe("async delegation seam", () => {
     expect(Value.Check(delegateArgsSchema, { operation: "status", child_ids: ["child-a"] })).toBe(
       true,
     );
+  });
+
+  it("constrains compatibility mode to the trusted configured literal", () => {
+    const blocking = delegateSubmissionArgsSchemaForMode("blocking");
+    expect(Value.Check(blocking, { tasks: [task] })).toBe(true);
+    expect(Value.Check(blocking, { tasks: [task], mode: "blocking" })).toBe(true);
+    expect(Value.Check(blocking, { tasks: [task], mode: "nonblocking" })).toBe(false);
+    expect(delegateModeDescription("nonblocking")).toContain("stable child handles");
   });
 
   it("rejects empty controls and unknown control fields", () => {

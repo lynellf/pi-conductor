@@ -63,6 +63,12 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // parser + the typed error so consumers can `import { parseManifest }`
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
+export {
+  assertDelegationMode,
+  DEFAULT_DELEGATION_MODE,
+  delegateModeDescription,
+  resolveDelegationMode,
+} from "./manifest/delegation-mode.js";
 export type { EndGuardConfig } from "./manifest/end-guard.js";
 export {
   parseEndGuardConfig,
@@ -90,6 +96,8 @@ export {
   selectTransferMode,
 } from "./manifest/prewalk-transfer.js";
 export type {
+  DelegationMode,
+  DelegationPolicy,
   Manifest,
   ModelConfig,
   PrewalkConfig,
@@ -135,6 +143,7 @@ export type {
 } from "./seam/schema.js";
 export {
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
   delegateControlArgsSchema,
   delegateSubmissionArgsSchema,
   endArgsSchema,
