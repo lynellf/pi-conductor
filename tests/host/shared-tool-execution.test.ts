@@ -405,7 +405,10 @@ describe("shared SDK supervised executable tools", () => {
       hostFactory: (context) => {
         const host = new ProductionHost({
           modelRegistry: makeModelRegistryWithStub([
-            { kind: "emit_tool_calls", calls: [{ name: "bash", arguments: { command: "printf resumed" } }] },
+            {
+              kind: "emit_tool_calls",
+              calls: [{ name: "bash", arguments: { command: "printf resumed" } }],
+            },
             { kind: "emit_end", reason: "resumed" },
           ]),
           cwd: workdir,
@@ -416,8 +419,8 @@ describe("shared SDK supervised executable tools", () => {
         });
         const spawn = host.spawnRole.bind(host);
         host.spawnRole = async (role, options) => {
-          workspaceVisitIndex = options.visitIndex;
-          executionVisitIndex = options.executionVisitIndex;
+          workspaceVisitIndex = options?.visitIndex;
+          executionVisitIndex = options?.executionVisitIndex;
           return spawn(role, options);
         };
         return host;
@@ -427,14 +430,16 @@ describe("shared SDK supervised executable tools", () => {
     expect(workspaceVisitIndex).toBe(1);
     expect(executionVisitIndex).toBe(2);
     expect(
-      log.records(runId).some(
-        (record) =>
-          record.type === "tool_execution_finished" &&
-          record.tool_call_id !== "tool-call-1" &&
-          record.tool_call_id !== "tool-call-2" &&
-          record.logical_session_id === JSON.stringify([runId, "orchestrator", 2]) &&
-          record.outcome === "completed",
-      ),
+      log
+        .records(runId)
+        .some(
+          (record) =>
+            record.type === "tool_execution_finished" &&
+            record.tool_call_id !== "tool-call-1" &&
+            record.tool_call_id !== "tool-call-2" &&
+            record.logical_session_id === JSON.stringify([runId, "orchestrator", 2]) &&
+            record.outcome === "completed",
+        ),
     ).toBe(true);
   });
 });
