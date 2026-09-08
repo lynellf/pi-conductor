@@ -12,10 +12,12 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
+import { delegateModeDescription } from "../../manifest/delegation-mode.js";
 
 import {
   type DelegateArgs,
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
   endArgsSchema,
   handoffArgsSchema,
   type RequestFilesArgs,
@@ -24,7 +26,7 @@ import {
 import { buildConfinedTools } from "../workspace/confine-tools.js";
 import { requestDelegateBridge, requestFilesBridge } from "./delegate-bridge.js";
 import { requestExecutionBridge } from "./execution-bridge.js";
-import { loadMachineToolsConfig } from "./machine-tools-config.js";
+import { loadMachineToolsConfig, type MachineToolsConfig } from "./machine-tools-config.js";
 
 /** Register the static, config-gated tool surface for one isolated RPC role process. */
 export default function machineToolsExtension(pi: ExtensionAPI): void {
@@ -50,7 +52,13 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
     }
   }
   if (config.delegateBridge !== undefined && config.declaredToolNames.includes("delegate")) {
-    pi.registerTool(createDelegateBridgeTool(config.delegateBridge.directory));
+    pi.registerTool(
+      createDelegateBridgeTool(
+        config.delegateBridge.directory,
+        config.delegationMode,
+        config.legacyDelegationMode,
+      ),
+    );
   }
   if (
     config.requestFilesBridge !== undefined &&
@@ -84,18 +92,29 @@ function createExecutionBridgeTool(
   };
 }
 
-function createDelegateBridgeTool(directory: string): ToolDefinition {
+function createDelegateBridgeTool(
+  directory: string,
+  configuredMode: MachineToolsConfig["delegationMode"],
+  legacyDelegationMode: MachineToolsConfig["legacyDelegationMode"],
+): ToolDefinition {
+  const effectiveMode = legacyDelegationMode === true ? undefined : configuredMode;
   return defineTool({
     name: "delegate",
     label: "delegate",
-    description: "Request bounded delegated work from the conductor host.",
-    parameters: delegateArgsSchema,
+    description:
+      effectiveMode === undefined
+        ? "Request bounded delegated work from the conductor host."
+        : `Request bounded delegated work from the conductor host. ${delegateModeDescription(effectiveMode)}`,
+    parameters:
+      effectiveMode === undefined ? delegateArgsSchema : delegateArgsSchemaForMode(effectiveMode),
     async execute(toolCallId, args: DelegateArgs, signal) {
       try {
         return await requestDelegateBridge({
           directory,
           args,
           actualToolCallId: toolCallId,
+          ...(configuredMode === undefined ? {} : { configuredMode }),
+          ...(legacyDelegationMode === undefined ? {} : { legacyDelegationMode }),
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (error) {

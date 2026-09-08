@@ -46,7 +46,7 @@ import { dirname } from "node:path";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
-import type { MachineDefinition } from "../core/types.js";
+import type { MachineDefinition, Role } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
 import { parseManifest } from "../manifest/parse.js";
 import type { ManifestValidationContext } from "../manifest/prewalk.js";
@@ -111,6 +111,10 @@ export interface LoadedManifest {
   readonly warnings: readonly ManifestWarning[];
   readonly manifestDir: string | null;
   readonly manifestVersion: number;
+  /** True only when resume lacked a durable manifest snapshot proving Issue #86 mode. */
+  readonly legacyDelegationMode?: boolean;
+  /** Roles whose durable snapshot predates Issue #86 and has no mode field. */
+  readonly legacyDelegationRoles?: readonly Role[];
   /** Runtime facts used to admit opt-in Prewalk roles before guide spend. */
   readonly prewalkValidationContext?: ManifestValidationContext;
 }

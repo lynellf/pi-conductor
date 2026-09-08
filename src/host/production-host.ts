@@ -479,6 +479,10 @@ export class ProductionHost implements Host {
                 ),
             }
           : {}),
+        ...(this.loadedManifest.legacyDelegationMode === true ||
+        this.loadedManifest.legacyDelegationRoles?.includes(role) === true
+          ? { legacyDelegationMode: true }
+          : {}),
         visitIndex: opts.visitIndex,
         executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
         priorToolExecutionRecords: this.log
@@ -793,6 +797,10 @@ export class ProductionHost implements Host {
       },
       ...(onTaskTerminal === undefined ? {} : { onTaskTerminal }),
       ...(onFatal === undefined ? {} : { onFatal }),
+      ...(this.loadedManifest.legacyDelegationMode === true ||
+      this.loadedManifest.legacyDelegationRoles?.includes(role) === true
+        ? { legacyDelegationMode: true }
+        : {}),
     };
     return this.delegation.createTool(
       factoryOptions,

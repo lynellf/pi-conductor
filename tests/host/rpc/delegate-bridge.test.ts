@@ -158,6 +158,18 @@ async function requestFrame(requestPath: string): Promise<{ id: string; tool_cal
 }
 
 describe("isolated delegate bridge", () => {
+  it("rejects a conflicting trusted mode before writing a request", async () => {
+    await expect(
+      requestDelegateBridge({
+        directory: bridgeDirectory,
+        args: { ...delegateArgs, mode: "nonblocking" },
+        configuredMode: "blocking",
+        actualToolCallId: "mode-conflict",
+      }),
+    ).rejects.toThrow("manifest configures blocking");
+    expect(await readdir(bridgeDirectory)).toEqual([]);
+  });
+
   it("selects an unbounded wait deadline only for wait/blocking calls", async () => {
     const timer = vi.spyOn(globalThis, "setTimeout");
     const waitAbort = new AbortController();
@@ -177,6 +189,7 @@ describe("isolated delegate bridge", () => {
       directory: bridgeDirectory,
       args: delegateArgs,
       actualToolCallId: "blocking-call",
+      configuredMode: "blocking",
       signal: blockingAbort.signal,
     });
     await waitForRequest(bridgeDirectory);
@@ -189,6 +202,7 @@ describe("isolated delegate bridge", () => {
       directory: bridgeDirectory,
       args: { ...delegateArgs, mode: "nonblocking" },
       actualToolCallId: "nonblocking-call",
+      configuredMode: "nonblocking",
       signal: nonblockingAbort.signal,
     });
     await waitForRequest(bridgeDirectory);

@@ -184,6 +184,28 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
       displaySink,
     );
   });
+
+  it("notifies when resume preserves legacy delegation mode without a snapshot", async () => {
+    const ctx = makeCtx(cwd);
+    const handle = makeCompletionHandle("run-resume-legacy-warning");
+    const loadedManifest = handle.loadedManifest as unknown as {
+      warnings: unknown[];
+    };
+    loadedManifest.warnings = [
+      {
+        code: "legacy-delegation-mode-unproven",
+        message: "run has no durable manifest snapshot proving delegation.mode",
+      },
+    ] as never;
+    bridgeMocks.resumeRun.mockResolvedValue(handle as never);
+
+    await handleResume("run-resume-legacy-warning", ctx, { getFlag: () => undefined });
+
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("no durable manifest snapshot"),
+      "warning",
+    );
+  });
 });
 
 describe("extension shell — Phase 2 + 5 display sink wiring", () => {

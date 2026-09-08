@@ -8,6 +8,7 @@ import type { ModelRegistry, ToolDefinition } from "@earendil-works/pi-coding-ag
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
 import type { Role } from "../../core/types.js";
+import { delegateModeDescription, resolveDelegationMode } from "../../manifest/delegation-mode.js";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type { PersistedRecord } from "../../persistence/log.js";
 import {
@@ -15,6 +16,7 @@ import {
   type DelegateControlArgs,
   type DelegateSubmissionArgs,
   delegateArgsSchema,
+  delegateArgsSchemaForMode,
 } from "../../seam/schema.js";
 import type { DisplaySink } from "../display-sink.js";
 import { mapPoolResult } from "./child-result-mapping.js";
@@ -50,11 +52,21 @@ export interface DelegateToolFactoryOptions {
   readonly onTaskTerminal?: (result: PoolChildResult) => void;
   /** Optional #77 scheduler supplied by the host-owned lifecycle. */
   readonly scheduler?: DelegationScheduler;
+  /** Trusted resolved mode from the run snapshot; omitted means resolve policy. */
+  readonly delegationMode?: import("../../manifest/types.js").DelegationMode;
+  /** Explicit durable provenance for pre-#86 snapshots without a mode field. */
+  readonly legacyDelegationMode?: boolean;
 }
 
 /** Create a parent-only delegate tool; it never creates an FSM event. */
 export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefinition {
   const policy = delegationPolicy(opts.role);
+  const configuredMode =
+    opts.legacyDelegationMode === true
+      ? undefined
+      : (opts.delegationMode ?? resolveDelegationMode(policy));
+  const parameters =
+    configuredMode === undefined ? delegateArgsSchema : delegateArgsSchemaForMode(configuredMode);
   let remaining = Math.min(opts.remainingChildren, policy.max_children_per_session);
   let executionTail = Promise.resolve();
 
@@ -62,8 +74,10 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
     name: "delegate",
     label: "delegate",
     description:
-      "Submit independent coding tasks in isolated Git worktrees. Use blocking or nonblocking mode; controls retrieve or cancel accepted child handles.",
-    parameters: delegateArgsSchema,
+      configuredMode === undefined
+        ? "Submit independent coding tasks in isolated Git worktrees. Use blocking or nonblocking mode; controls retrieve or cancel accepted child handles."
+        : `Submit independent coding tasks in isolated Git worktrees. ${delegateModeDescription(configuredMode)} Controls retrieve or cancel accepted child handles.`,
+    parameters: parameters as typeof delegateArgsSchema,
     async execute(_toolCallId, args, signal) {
       if (!isSubmission(args)) {
         if (opts.scheduler === undefined) throw new Error("delegation controls are unavailable");
@@ -79,8 +93,26 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           terminate: false,
         };
       }
-      if (args.mode === "nonblocking" && opts.scheduler === undefined) {
-        throw new Error("nonblocking delegation requires the shared scheduler");
+      const effectiveMode = configuredMode ?? args.mode ?? "blocking";
+      if (configuredMode !== undefined && args.mode !== undefined && args.mode !== configuredMode) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "delegate_failed",
+                code: "delegation_mode_mismatch",
+                message: `delegate mode mismatch: manifest configures ${configuredMode}; omit mode or use mode: ${configuredMode}`,
+              }),
+            },
+          ],
+          details: {
+            remainingChildren: opts.scheduler?.remainingChildren() ?? remaining,
+            code: "delegation_mode_mismatch",
+          },
+          isError: true,
+          terminate: false,
+        };
       }
       const abortChildren = (): void => {
         void opts.manager.abortAll();
@@ -92,11 +124,14 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
         finishExecution = resolve;
       });
       try {
+        if (effectiveMode === "nonblocking" && opts.scheduler === undefined) {
+          throw new Error("nonblocking delegation requires the shared scheduler");
+        }
         await previousExecution;
         if (opts.scheduler !== undefined) {
           const scheduler = opts.scheduler;
           const childIds = await scheduler.submit(_toolCallId, args);
-          if (args.mode === "nonblocking")
+          if (effectiveMode === "nonblocking")
             return {
               content: [{ type: "text", text: JSON.stringify({ child_ids: childIds }) }],
               details: { remainingChildren: scheduler.remainingChildren() },

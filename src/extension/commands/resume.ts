@@ -131,10 +131,15 @@ export async function handleResume(
   const unregisteredWarnings = handle.loadedManifest.warnings.filter(
     (w) => w.code === "unregistered-provider",
   );
-  if (unregisteredWarnings.length > 0) {
-    const entries = unregisteredWarnings.map((w) => w.message).join("; ");
+  const compatibilityWarnings = handle.loadedManifest.warnings.filter(
+    (w) => w.code === "legacy-delegation-mode-unproven",
+  );
+  if (unregisteredWarnings.length > 0 || compatibilityWarnings.length > 0) {
+    const entries = [...unregisteredWarnings, ...compatibilityWarnings]
+      .map((w) => w.message)
+      .join("; ");
     notify(
-      `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
+      `pi-conductor: ${unregisteredWarnings.length + compatibilityWarnings.length} resume warning(s): ${entries}`,
       "warning",
     );
   }

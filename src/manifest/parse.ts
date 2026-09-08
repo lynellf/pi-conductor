@@ -103,7 +103,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
       : undefined;
   const end_guard = obj.end_guard === undefined ? undefined : parseEndGuardConfig(obj.end_guard);
 
-  return Object.freeze({
+  const manifest = Object.freeze({
     version,
     ...(end_request_roles !== undefined && { end_request_roles }),
     handoffs,
@@ -111,6 +111,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
     ...(end_guard === undefined ? {} : { end_guard }),
   }) as Manifest;
+  return manifest;
 }
 
 // ─── Issue #63 handoff policy parsing ───────────────────────────────────
@@ -216,6 +217,9 @@ function parseDelegationPolicy(raw: unknown, roleIndex: number): DelegationPolic
   const entry = raw as Record<string, unknown>;
   const path = `roles[${roleIndex}].delegation`;
 
+  const mode =
+    entry.mode === undefined ? ("blocking" as const) : parseDelegationMode(entry.mode, path);
+
   const allowed_subagents = toNonEmptyStringArray(
     entry.allowed_subagents,
     `${path}.allowed_subagents`,
@@ -234,11 +238,17 @@ function parseDelegationPolicy(raw: unknown, roleIndex: number): DelegationPolic
         );
 
   return Object.freeze({
+    mode,
     allowed_subagents,
     max_children_per_session,
     max_parallel,
     ...(context_artifact_limits === undefined ? {} : { context_artifact_limits }),
   }) as DelegationPolicy;
+}
+
+function parseDelegationMode(value: unknown, path: string): "blocking" | "nonblocking" {
+  if (value === "blocking" || value === "nonblocking") return value;
+  throw new ManifestParseError(`${path}.mode must be "blocking" or "nonblocking"`);
 }
 
 // ─── Role config parsing ─────────────────────────────────────────────
