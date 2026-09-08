@@ -102,6 +102,10 @@ export async function createDelegateTool(
     },
     ...(onTaskTerminal === undefined ? {} : { onTaskTerminal }),
     ...(onFatal === undefined ? {} : { onFatal }),
+    ...(ctx.loadedManifest.legacyDelegationMode === true ||
+    ctx.loadedManifest.legacyDelegationRoles?.includes(role) === true
+      ? { legacyDelegationMode: true }
+      : {}),
   };
   return ctx.delegation.createTool(
     factoryOptions,

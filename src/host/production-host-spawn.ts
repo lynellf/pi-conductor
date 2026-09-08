@@ -270,6 +270,10 @@ export async function spawnRole(
               ),
           }
         : {}),
+      ...(host.loadedManifest.legacyDelegationMode === true ||
+      host.loadedManifest.legacyDelegationRoles?.includes(role) === true
+        ? { legacyDelegationMode: true }
+        : {}),
       visitIndex: opts.visitIndex,
       executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
       priorToolExecutionRecords: host.log

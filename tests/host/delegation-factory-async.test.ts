@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createDelegateTool } from "../../src/host/delegation/delegate-tool-factory.js";
 import { appendFailed } from "../../src/host/delegation/factory-records.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
+import type { RoleConfig } from "../../src/manifest/types.js";
 import { child, completed, deferred, fixture } from "./delegation-scheduler-review-fixture.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 
@@ -32,16 +33,20 @@ function invoke(tool: ReturnType<typeof createDelegateTool>, id: string, args: u
   );
 }
 
-function submission(id: string, mode: "blocking" | "nonblocking" = "nonblocking") {
+function submission(id: string, mode?: "blocking" | "nonblocking") {
   return {
-    mode,
+    ...(mode === undefined ? {} : { mode }),
     tasks: [{ id, subagent: "worker", objective: id, expected_output: "done" }],
   } as const;
 }
 
-function makeTool(pool: ReturnType<typeof fixture>) {
+function makeTool(
+  pool: ReturnType<typeof fixture>,
+  roleConfig: RoleConfig = role,
+  legacyDelegationMode = false,
+) {
   return createDelegateTool({
-    role,
+    role: roleConfig,
     subagents: [worker],
     remainingChildren: 4,
     runId: "run",
@@ -56,6 +61,7 @@ function makeTool(pool: ReturnType<typeof fixture>) {
     sessionDir: "/tmp/delegation-factory-sessions",
     manager: new DelegationManager(),
     scheduler: pool.scheduler,
+    ...(legacyDelegationMode ? { legacyDelegationMode: true } : {}),
   });
 }
 
@@ -71,7 +77,10 @@ describe("delegate factory asynchronous boundary", () => {
         return gate.promise;
       },
     });
-    const tool = makeTool(pool);
+    const tool = makeTool(pool, {
+      ...role,
+      delegation: { ...role.delegation, mode: "nonblocking" },
+    } as RoleConfig);
     try {
       const a = await invoke(tool, "call-a", submission("a"));
       const b = await invoke(tool, "call-b", submission("b"));
@@ -134,7 +143,10 @@ describe("delegate factory asynchronous boundary", () => {
         },
       }),
     });
-    const tool = makeTool(pool);
+    const tool = makeTool(pool, {
+      ...role,
+      delegation: { ...role.delegation, mode: "blocking" },
+    } as RoleConfig);
     try {
       const first = await invoke(tool, "blocking-call", {
         mode: "blocking",
@@ -213,5 +225,34 @@ describe("delegate factory asynchronous boundary", () => {
     );
     expect(prestartRecord).toMatchObject({ session_file: null, usage: null });
     await pool.scheduler.close();
+  });
+
+  it("rejects a conflicting configured mode before scheduler admission", async () => {
+    const pool = fixture({
+      maxParallel: 1,
+      maxChildren: 2,
+      runTask: async (task) => completed(task),
+    });
+    const configuredRole = {
+      ...role,
+      delegation: { ...role.delegation, mode: "blocking" },
+    } as const;
+    const tool = makeTool(pool, configuredRole);
+    const result = await invoke(tool, "conflict-call", submission("conflict", "nonblocking"));
+    expect(result).toMatchObject({ isError: true, details: { code: "delegation_mode_mismatch" } });
+    expect(pool.starts).toEqual([]);
+    await pool.scheduler.close("test cleanup");
+  });
+
+  it("uses per-call mode only with explicit historical provenance", async () => {
+    const pool = fixture({
+      maxParallel: 1,
+      maxChildren: 1,
+      runTask: async (task) => completed(task),
+    });
+    const tool = makeTool(pool, role, true);
+    const result = await invoke(tool, "legacy-call", submission("legacy", "nonblocking"));
+    expect(result).toMatchObject({ details: { remainingChildren: 0 } });
+    await pool.scheduler.close("test cleanup");
   });
 });

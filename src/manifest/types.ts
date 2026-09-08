@@ -61,6 +61,9 @@ export interface ContextArtifactLimits {
   readonly max_total_utf8_bytes: number;
 }
 
+/** Issue #86: trusted parent behavior for delegate submissions. */
+export type DelegationMode = "blocking" | "nonblocking";
+
 /**
  * §3: the delegation policy attached to a parent role.
  *
@@ -68,6 +71,8 @@ export interface ContextArtifactLimits {
  * AND a `delegation` block. Neither is injected implicitly.
  */
 export interface DelegationPolicy {
+  /** Issue #86: omitted in programmatic legacy inputs; fresh YAML is normalized to blocking. */
+  readonly mode?: DelegationMode;
   readonly allowed_subagents: readonly string[];
   readonly max_children_per_session: number;
   readonly max_parallel: number;
