@@ -17,9 +17,9 @@
  * `StubHost` (every method now implemented; the event-handler
  * logic is shared via `session-event-handler.ts`).
  *
- * Isolated RPC spawning and shared SDK spawning live in dedicated helpers.
- * The remaining class stays below the 500-LOC exception ceiling because it
- * owns the Host's policy plus its shared per-session state and lifecycle API.
+ * Isolated RPC spawning, shared SDK spawning, and run-scoped state live in
+ * dedicated helpers. The remaining class stays below the 500-LOC exception
+ * ceiling because it owns the Host policy and lifecycle API as one seam.
  *
  * **Host-agnosticism:** this module imports from
  * `@earendil-works/pi-coding-agent` (it's in `src/host/` — the
@@ -28,28 +28,14 @@
  * untouched and remains host-agnostic.
  */
 
-import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
-import {
-  type ExtensionUIContext,
-  getAgentDir,
-  type ModelRegistry,
-} from "@earendil-works/pi-coding-agent";
 import type { RunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
 
-import type { PersistedRecord, RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
+import type { PersistedRecord } from "../persistence/log.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
-import type { SessionState } from "./cost.js";
 import { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
-import type { DisplaySink } from "./display-sink.js";
-import {
-  EndGuardRunner,
-  type EndGuardRunRequest,
-  type EndGuardRunResult,
-} from "./end-guard-runner.js";
-import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
+import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 import type {
   ArtifactRouteSource,
   Host,
@@ -91,19 +77,12 @@ import {
 } from "./production-host-state.js";
 import { resumeTrajectoryRole as resumeTrajectoryRoleInModule } from "./production-host-trajectory.js";
 import { selectAcceptedHandoffTransport as selectAcceptedHandoffTransportInModule } from "./production-host-trajectory-select.js";
-import { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import { notifyListeners } from "./record-emitter.js";
-import { RoleTurnProducer } from "./role-turn-producer.js";
 
 export type { ProductionHostOptions } from "./production-host-options.js";
 
-import type { ProductionHostOptions } from "./production-host-options.js";
+import { ProductionHostContext } from "./production-host-context.js";
 import { DelegateBridgeConfigError, type DelegateBridgeResult } from "./rpc/delegate-bridge.js";
-import type { NodeRoleSession } from "./rpc/node-role-session.js";
-import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
-import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
-import type { SessionEventSource } from "./session-event-handler.js";
-import { assertTrajectorySdkSupportedForHandoffs } from "./trajectory-sdk-capability.js";
 
 /**
  * Production `Host` — `Phase 7A` scaffold + role-session spawn
@@ -116,84 +95,7 @@ import { assertTrajectorySdkSupportedForHandoffs } from "./trajectory-sdk-capabi
  * seam and the implementation is caught at the boundary, not
  * at runtime.
  */
-export class ProductionHost implements Host {
-  // ─── Stored production context ────────────────────────────────────
-  /** See {@link ProductionHostOptions.modelRegistry}. */
-  readonly modelRegistry: ModelRegistry;
-  /** See {@link ProductionHostOptions.cwd}. */
-  readonly cwd: string;
-  /** See {@link ProductionHostOptions.log}. */
-  readonly log: RecordLog;
-  /** See {@link ProductionHostOptions.loadedManifest}. */
-  readonly loadedManifest: LoadedManifest;
-  /** See {@link ProductionHostOptions.runId}. */
-  readonly runId: string;
-  /** See {@link ProductionHostOptions.uiContext}. */
-  readonly uiContext: ExtensionUIContext | undefined;
-  /** See {@link ProductionHostOptions.isUiContextCurrent}. */
-  readonly isUiContextCurrent: (() => boolean) | undefined;
-  /** See {@link ProductionHostOptions.displaySink}. */
-  readonly displaySink: DisplaySink | undefined;
-  /** See {@link ProductionHostOptions.sessionDir}. */
-  readonly sessionDir: string;
-  /** See {@link ProductionHostOptions.agentDir}. */
-  readonly agentDir: string;
-  /** Pi configuration inherited by isolated RPC children. */
-  readonly isolatedAgentDir: string;
-  /** Issue #68: run-owned bounded role-turn telemetry producer/ledger. */
-  private readonly roleTurnProducer: RoleTurnProducer;
-  private readonly nodeRoleSessionFactory: (
-    options: NodeRoleSessionOptions,
-  ) => Promise<NodeRoleSession>;
-  private readonly endGuardRunner: EndGuardRunner;
-
-  constructor(opts: ProductionHostOptions) {
-    assertTrajectorySdkSupportedForHandoffs(opts.loadedManifest.manifest.handoffs);
-    this.modelRegistry = opts.modelRegistry;
-    this.cwd = resolve(opts.cwd);
-    this.log = opts.log;
-    this.loadedManifest = opts.loadedManifest;
-    this.runId = opts.runId;
-    this.uiContext = opts.uiContext;
-    this.isUiContextCurrent = opts.isUiContextCurrent;
-    this.displaySink = opts.displaySink;
-    this.sessionDir =
-      opts.sessionDir === undefined
-        ? join(this.cwd, ".pi-conductor", "runs", opts.runId, "sessions")
-        : resolve(opts.sessionDir);
-    this.agentDir =
-      opts.agentDir === undefined
-        ? join(this.cwd, ".pi-conductor", "agent")
-        : resolve(opts.agentDir);
-    this.isolatedAgentDir = opts.agentDir === undefined ? resolve(getAgentDir()) : this.agentDir;
-    this.roleTurnProducer = new RoleTurnProducer({
-      runId: this.runId,
-      log: this.log,
-      telemetry: opts.roleTurnTelemetry,
-    });
-    this.nodeRoleSessionFactory = opts.nodeRoleSessionFactory ?? createNodeRoleSession;
-    if (this.loadedManifest.manifest.end_guard !== undefined && !isSupervisedProcessSupported()) {
-      throw new Error("end_guard requires a platform with supervised process cleanup");
-    }
-    this.endGuardRunner = new EndGuardRunner(this.cwd);
-    // The SessionManager writes JSONL files directly into `sessionDir`
-    // without creating parent directories. Ensure the dir exists so
-    // the first `SessionManager.create(cwd, this.sessionDir)` call
-    // in `spawnRole` doesn't ENOENT.
-    mkdirSync(this.sessionDir, { recursive: true });
-  }
-
-  // ─── Per-session state (Task 17 / 7A.4) ────────────────────────
-  // The host tracks the `SessionState` + the live `AgentSession`
-  // for each spawned role so the `Host` methods (`captureUsage`,
-  // `sessionTerminalReason`, `dispose`) can read the per-session
-  // cap/usage/terminal-reason state and clean up on dispose.
-  // Mirrors `StubHost.sessionStates` / `agentsBySessionId`.
-  private readonly sessionStates: Map<string, SessionState> = new Map();
-  private readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
-  private readonly prewalk = new ProductionPrewalkHost(this.sessionStates, this.agentsBySessionId);
-  private snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
-
+export class ProductionHost extends ProductionHostContext implements Host {
   /**
    * Tracks the most-recent role that exhausted its model fallback
    * (Task 18, §9.4 v1 default). The next `spawnRole` for this

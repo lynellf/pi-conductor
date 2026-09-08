@@ -60,8 +60,9 @@ through explicit owner callbacks.
    - [x] Focused API/resume/trajectory/delegation tests pass (27 tests); strict typecheck and Biome pass.
 2. **Production host boundary**
    - [x] Physical session construction, trajectory continuation, and accepted transport extracted into cohesive modules.
-   - [x] Focused production-host snapshot/trajectory/preflight tests pass (16 tests); strict typecheck and Biome pass.
-   - [ ] Remaining host operations/state extraction is still required before this slice is complete.
+   - [x] Host options, run-scoped state, artifact routing, delegation, and terminal control extracted with explicit contexts; `production-host.ts` is 458 lines and every extracted helper is below 400 lines.
+   - [x] Focused production-host snapshot/trajectory/preflight/spawn tests pass (37 tests); strict production-host typecheck and Biome pass.
+   - [x] Fallback marker state is synchronized in `finally`, preserving escalation consumption when spawn fails before returning a session.
 3. **Loop boundary**
    - [ ] Per-attempt and terminal coordination extracted with owner callbacks.
    - [ ] Focused loop/fallback/cap/abort/delegation/trajectory/artifact tests pass.
