@@ -1,7 +1,7 @@
 # Orchestrator context retention — Issue #87
 
-Status: proposed; operator acknowledgment required before implementation.
-Baseline: origin/main `54c482f`. Extends the fresh-session memory contract in
+Status: acknowledged by the repository owner on 2026-09-08; implementation in progress.
+Implementation baseline: origin/main `7592fa4` (after delegation policy and host module refactors). Extends the fresh-session memory contract in
 `docs/archive/orchestrator-fsm-spec.md` §8.4 without changing the FSM.
 
 ## Objective and proposed operator contract
