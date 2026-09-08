@@ -24,6 +24,7 @@ import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  createInitialCheckpoint,
   FileRecordLog,
   type Host,
   type HostFactoryContext,
@@ -31,6 +32,8 @@ import {
   StubHost,
   startRun,
 } from "../../src/index.js";
+import { toMachineDefinition } from "../../src/manifest/definition.js";
+import { parseManifest } from "../../src/manifest/parse.js";
 import type { InMemoryRecordLog } from "../../src/persistence/log.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
@@ -459,7 +462,7 @@ describe("resumeRun with modelRegistry (T2.10)", () => {
   });
 
   it("resumeRun with modelRegistry → preflight runs on resumed load", async () => {
-    // First, start a run to create a checkpoint log.
+    // Start a normal run so the resume path reads its pinned manifest snapshot.
     await writeFile(manifestPath, MANIFEST_WITH_UNREGISTERED, "utf8");
     const startHandle = await startRun(manifestPath, {
       goal: "test",
@@ -486,6 +489,27 @@ describe("resumeRun with modelRegistry (T2.10)", () => {
     await handle.abort("test cleanup");
     await handle.completion();
     await expect(handle.steer("too late")).rejects.toMatchObject({ code: "run_terminal" });
+  });
+
+  it("legacy resume without a manifest snapshot still preflights current YAML", async () => {
+    await writeFile(manifestPath, MANIFEST_WITH_UNREGISTERED, "utf8");
+    const manifest = parseManifest(MANIFEST_WITH_UNREGISTERED);
+    const checkpoint = createInitialCheckpoint(toMachineDefinition(manifest));
+    const legacyLog = new FileRecordLog({ baseDir });
+    legacyLog.append({ type: "checkpoint_snapshot", checkpoint });
+    legacyLog.append({ type: "run_seeded", run_id: checkpoint.run_id, goal: "test", ts: 1 });
+
+    const handle = await resumeRun(manifestPath, checkpoint.run_id, {
+      goal: "",
+      hostFactory: stubHostFactory,
+      baseDir,
+      modelRegistry: registryWithAnthropic(),
+    });
+    expect(handle.loadedManifest.warnings.some((w) => w.code === "unregistered-provider")).toBe(
+      true,
+    );
+    await handle.abort("test cleanup");
+    await handle.completion();
   });
 
   it("resumeRun without modelRegistry → no unregistered-provider warnings", async () => {

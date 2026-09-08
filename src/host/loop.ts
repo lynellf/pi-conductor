@@ -87,6 +87,7 @@ import type {
 import {
   type ArtifactDeliveryRecord,
   artifactDelivery,
+  type EndGuardRecord,
   type PersistedRecord,
 } from "../persistence/log.js";
 import { sha256Canonical } from "../persistence/trajectory-records.js";
@@ -95,6 +96,8 @@ import type { HandoffArgs } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import { ArtifactCollectionError } from "./artifacts/collect.js";
 import { ArtifactRoutingError, formatArtifactsUnavailableSeedSection } from "./artifacts/route.js";
+import { runEndGuardAttempt } from "./end-guard-loop.js";
+import type { EndGuardConfig } from "./end-guard-runner.js";
 import { NoMoreModelsError } from "./errors.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type {
@@ -179,6 +182,12 @@ export interface RunLoopOptions {
   readonly abortControl?: RunAbortControl;
   /** Run-owned steering, follow-up mailbox, abort, and response state. */
   readonly runControl?: RunControl;
+  /** Coherent pinned #75 guard capability; absent preserves legacy ending. */
+  readonly endGuard?: {
+    readonly config: EndGuardConfig;
+    readonly records: () => readonly EndGuardRecord[];
+    readonly requestId: (checkpoint: Checkpoint) => string;
+  };
 }
 
 /** Result of `runLoop`. */
@@ -203,6 +212,9 @@ export interface RunLoopResult {
  */
 export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const { def, host, initialCheckpoint, initialGoal } = opts;
+  if (opts.endGuard !== undefined && host.runEndGuard === undefined) {
+    throw new Error("configured end_guard requires Host.runEndGuard");
+  }
   let checkpoint: Checkpoint = initialCheckpoint;
   // parent_session for the next session_started (§11.4). Initialized to
   // the snapshot's active_role_session id (resume case) or null (fresh).
@@ -587,6 +599,32 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           return { finalCheckpoint: checkpoint, exitReason: "aborted" };
         };
 
+        const finishEndGuardFailure = async (
+          failureReason: "end_guard_exhausted" | "end_guard_cleanup_unconfirmed",
+        ): Promise<RunLoopResult> => {
+          const failed = reduceLifecycle(checkpoint, "session_failed", def, {
+            role,
+            sessionId,
+            sessionFile,
+            ts: Date.now(),
+            visit_index: visitIndex,
+            parent_session: sessionParentId,
+            usage: capturedUsage,
+            failureReason,
+            model: session.model,
+            model_effort: session.effort,
+          });
+          checkpoint = failed.checkpoint;
+          host.persistRecord(withRoleSessionIdentity(failed.record, session));
+          host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+          await collectSessionArtifacts(host, session, {
+            role,
+            visitIndex,
+            terminal: "session_failed",
+          });
+          return { finalCheckpoint: checkpoint, exitReason: "session_failed" };
+        };
+
         // ── Inner loop: prompt → validate → reduce (with retry on rejection) ──
         while (true) {
           if (opts.runControl !== undefined) {
@@ -838,7 +876,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           }
 
           // ── Single valid emission — call reduce (§12) ──────────────
-          const reduceResult = reduce(checkpoint, validated.event, def, {
+          let reduceResult = reduce(checkpoint, validated.event, def, {
             role,
             sessionFile,
             ts: Date.now(),
@@ -857,7 +895,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
                   source_session_file: sessionFile,
                 }
               : null;
-          const enrichedRecord: typeof reduceResult.record =
+          let enrichedRecord: typeof reduceResult.record =
             reduceResult.kind === "accepted"
               ? {
                   ...reduceResult.record,
@@ -872,6 +910,77 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
             session.resetCaptureBuffer();
             nextSeed = formatRejectionMessage(reduceResult);
             continue;
+          }
+
+          if (
+            opts.endGuard !== undefined &&
+            role === def.orchestrator &&
+            validated.event.type === "end" &&
+            validated.event.authority === "role"
+          ) {
+            const capBeforeGuard = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
+            const forcedCloseBeforeGuard =
+              capBeforeGuard !== null && host.runCostSoFar() + capturedUsage.cost >= capBeforeGuard;
+            const guardOutcome = forcedCloseBeforeGuard
+              ? { kind: "passed" as const, diagnostic: "run cost cap forced close" }
+              : await runEndGuardAttempt({
+                  host,
+                  session,
+                  runId: checkpoint.run_id,
+                  role,
+                  requestId: opts.endGuard.requestId(checkpoint),
+                  config: opts.endGuard.config,
+                  records: opts.endGuard.records,
+                  persist: (record) => host.persistRecord(record),
+                });
+            const capAfterGuard = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
+            const forcedCloseAfterGuard =
+              capAfterGuard !== null && host.runCostSoFar() + capturedUsage.cost >= capAfterGuard;
+            if (guardOutcome.kind === "fatal") {
+              return await finishEndGuardFailure("end_guard_cleanup_unconfirmed");
+            }
+            if (guardOutcome.kind === "aborted" || opts.runControl?.isAbortRequested() === true) {
+              return await finishUserAbort(capturedUsage);
+            }
+            if (forcedCloseAfterGuard) {
+              reduceResult = reduce(
+                checkpoint,
+                {
+                  type: "end",
+                  authority: "run_cost_cap",
+                  payload: { reason: "run_cost_cap_exceeded" },
+                },
+                def,
+                {
+                  role: def.orchestrator,
+                  sessionFile: SYNTHESIZED_SESSION_FILE,
+                  ts: Date.now(),
+                },
+              );
+              enrichedRecord =
+                reduceResult.kind === "accepted"
+                  ? {
+                      ...reduceResult.record,
+                      payload_summary: summarizePayload({ reason: "run_cost_cap_exceeded" }),
+                      context_ref: null,
+                    }
+                  : reduceResult.record;
+            }
+            if (guardOutcome.kind === "exhausted" && !forcedCloseAfterGuard) {
+              return await finishEndGuardFailure("end_guard_exhausted");
+            }
+            if (guardOutcome.kind === "retry" && !forcedCloseAfterGuard) {
+              session.resetCaptureBuffer();
+              opts.runControl?.reopenActiveSession(session);
+              nextSeed = `The end guard did not pass. Repair the workspace and emit a valid end request again. Guard diagnostics: ${guardOutcome.diagnostic}`;
+              continue;
+            }
+            if (!forcedCloseAfterGuard && opts.runControl?.hasPendingGuidance() === true) {
+              session.resetCaptureBuffer();
+              opts.runControl.reopenActiveSession(session);
+              nextSeed = formatDeferredEndPrompt();
+              continue;
+            }
           }
 
           // A valid machine event remains accepted even if the host cannot

@@ -63,6 +63,12 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // parser + the typed error so consumers can `import { parseManifest }`
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
+export type { EndGuardConfig } from "./manifest/end-guard.js";
+export {
+  parseEndGuardConfig,
+  resolveEndGuardConfig,
+  validateEndGuardConfig,
+} from "./manifest/end-guard.js";
 export type { ToolExecutionPolicy } from "./manifest/execution-policy.js";
 export {
   DEFAULT_TOOL_EXECUTION_POLICY,
@@ -71,6 +77,7 @@ export {
   validateToolExecutionPolicy,
 } from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
+export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
 export type { PrewalkManifestErrorCode } from "./manifest/prewalk.js";
 export { deriveGuideTranscriptBudget } from "./manifest/prewalk.js";
 export type {
@@ -164,6 +171,13 @@ export type {
   ChildWorktreeState,
   DelegateResultStatus,
 } from "./persistence/child-completion.js";
+export type {
+  EndGuardBudgetResetRecord,
+  EndGuardBudgetState,
+  EndGuardFinishedRecord,
+  EndGuardRecord,
+  EndGuardStartedRecord,
+} from "./persistence/end-guard.js";
 export type { FileMutationRecord, HunkLine, TouchedFile } from "./persistence/file-mutation.js";
 export type {
   CheckpointSnapshot,
@@ -192,7 +206,6 @@ export {
   materializePrewalkRecord,
   PrewalkRecordError,
 } from "./persistence/prewalk-records.js";
-
 // ─── Issue #68: bounded structured role-turn telemetry record + option ───
 // Additive `role_turn` persisted record and the host-only partial limits option.
 // Pure, host-agnostic; see docs/issue-68-role-turn-telemetry/spec.md.

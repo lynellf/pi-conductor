@@ -58,25 +58,32 @@ concurrent edits in the original checkout remain preserved.
    - Files: RPC configuration/bridge, child tool wiring, focused tests.
 6. Operator visibility and issue gate (depends on 5).
    - [x] Active tool/elapsed and timeout/recovery status, user documentation.
-   - [ ] Independent review reconciled; full typecheck/build/test/lint/format/audit
+   - [x] Independent review reconciled; full typecheck/build/test/lint/format/audit
      gates pass. Merge #76 and close only after acceptance is met.
-     Local gate: 155 files / 1,929 tests, typecheck, build, lint, format and
-     production audit pass. The final strengthened resume regression separately
-     passes with two prior timeouts, an actual resumed bash call, workspace visit
-     1 and execution invocation 2. Pre-push verification and merge remain.
+     Merged PR #81 at `6b7f245` after 156 files / 1,937 tests, strict
+     typecheck, build, lint, format and production audit passed. The pre-push
+     hook passed all three required checks; remote main exactly matches the
+     reviewed implementation tree. #76 is closed. Fast-exit arbitration and
+     module-cache-independent regressions are included in the final gate.
 
 ## Phase 2 — #75 end guard (after Phase 1 gate)
 
 7. Manifest and durable guard attempts.
-   - [ ] Optional pinned command/deadline; typed start/result/reset records,
+   - [x] Optional pinned command/deadline; typed start/result/reset records,
      three-failure budget per authorized request or ungated run.
-   - [ ] Manifest and append/reopen/reset tests pass.
+   - [x] Manifest and append/reopen/reset tests pass.
+     Manifest gate: 54 focused tests. Record gate: 55 tests with actual
+     append/reopen ordering and identity checks; typecheck and Biome pass.
+     Runner gate: 18 tests, including independent ownership and UTF-8 probes.
 8. Guard execution and resume.
-   - [ ] Execute only before mechanically legal role-issued orchestrator end;
+   - [x] Execute only before mechanically legal role-issued orchestrator end;
      preserve pending request on failure; forced-close bypass; no success cache.
-   - [ ] Success/failure/timeout/order/exhaustion/crash/unknown-owner tests pass.
+   - [x] Success/failure/timeout/order/exhaustion/crash/unknown-owner tests pass.
 9. Issue gate.
-   - [ ] Document behavior; independent review and full gates pass; merge and close.
+   - [x] Document behavior; independent review and full gates pass.
+     Final gate: 167 files / 2,009 tests; strict typecheck, build, lint,
+     format and production audit passed.
+   - [ ] Merge #75 and close after verifying the reviewed tree.
 
 ## Phase 3 — #77 asynchronous delegation (after Phase 2 gate)
 

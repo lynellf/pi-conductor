@@ -365,7 +365,7 @@ describe("Issue #63 trajectory environment", () => {
     expect(completion.exitReason).toBe("done");
 
     const records = new FileRecordLog({ baseDir: runs }).records(handle.runId);
-    expect(records.some((record) => record.type === "manifest_snapshot")).toBe(false);
+    expect(records.some((record) => record.type === "manifest_snapshot")).toBe(true);
     expect(records.some((record) => record.type === "handoff_transport_selected")).toBe(false);
     const starts = records.filter((record) => record.type === "session_started");
     const ends = records.filter((record) => record.type === "session_ended");

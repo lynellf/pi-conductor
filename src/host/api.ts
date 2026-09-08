@@ -72,6 +72,13 @@ import type {
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
 import { modeFor } from "../manifest/handoffs.js";
+import { pinExecutionPolicies } from "../manifest/pin-execution-policy.js";
+import {
+  type EndGuardRecord,
+  endGuardBudgetExhausted,
+  endGuardRequestId,
+  unfinishedEndGuardAttempts,
+} from "../persistence/end-guard.js";
 import type {
   ArtifactDeliveryRecord,
   CheckpointSnapshot,
@@ -94,7 +101,7 @@ import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-con
 import type { Host } from "./host.js";
 import { FileRecordLog, type RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
-import { type LoadedManifest, loadManifest } from "./manifest.js";
+import { checkModelProvidersRegistered, type LoadedManifest, loadManifest } from "./manifest.js";
 import { resolvePrewalkManifestContext } from "./prewalk-manifest-context.js";
 import { notifyListeners } from "./record-emitter.js";
 import { RunControl } from "./run-control.js";
@@ -187,21 +194,16 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
   const lease = await log.acquireRunLease(runId);
 
   try {
-    // A policy-bearing run pins normalized configuration before any role
-    // session exists. No policy means no new record and the legacy fresh path.
-    if (
-      (loaded.manifest.handoffs?.length ?? 0) > 0 ||
-      loaded.manifest.roles.some((role) => role.prewalk !== undefined)
-    ) {
-      log.append(
-        createManifestSnapshot({
-          runId,
-          manifest: loaded.manifest,
-          definition: def,
-          ts: Date.now(),
-        }),
-      );
-    }
+    // Pin every executable policy before any role session exists. Legacy
+    // logs without this snapshot retain their historical resume path.
+    log.append(
+      createManifestSnapshot({
+        runId,
+        manifest: pinExecutionPolicies(loaded.manifest),
+        definition: def,
+        ts: Date.now(),
+      }),
+    );
 
     // Persist the initial checkpoint snapshot (§11.1: each transition
     // produces a new full snapshot).
@@ -307,6 +309,25 @@ export async function resumeRun(
             record.type === "tool_execution_started" || record.type === "tool_execution_finished",
         ),
     );
+    const endGuardRecords = log
+      .records(runId)
+      .filter(
+        (record): record is EndGuardRecord =>
+          record.type === "end_guard_started" ||
+          record.type === "end_guard_finished" ||
+          record.type === "end_guard_budget_reset",
+      );
+    if (endGuardRecords.length > 0 && unfinishedEndGuardAttempts(endGuardRecords).length > 0) {
+      throw new Error("resumeRun: end_guard has an unfinished attempt; refusing unknown ownership");
+    }
+    if (
+      endGuardRecords.some(
+        (record) =>
+          record.type === "end_guard_finished" && record.outcome === "cleanup_unconfirmed",
+      )
+    ) {
+      throw new Error("resumeRun: end_guard cleanup is unconfirmed; refusing unknown ownership");
+    }
     const checkpoint = log.latestCheckpoint(runId);
     if (checkpoint === null) {
       throw new Error(
@@ -323,6 +344,37 @@ export async function resumeRun(
       );
     }
     const def = resumedLoaded.def;
+
+    let endGuardEpoch = endGuardRecords.reduce(
+      (highest, record) =>
+        record.type === "end_guard_budget_reset" ? Math.max(highest, record.epoch) : highest,
+      1,
+    );
+    let resetUngatedEndGuardBudget = false;
+    if (
+      resumedLoaded.manifest.end_guard !== undefined &&
+      resumedLoaded.def.end_request_roles === null
+    ) {
+      const pendingRequest = checkpoint.end_request;
+      const requestOrdinal = log
+        .records(runId)
+        .filter((record) => record.type === "transition_accepted" && record.request_end).length;
+      const currentRequestId = endGuardRequestId({
+        runId,
+        epoch: endGuardEpoch,
+        ...(pendingRequest === null
+          ? {}
+          : {
+              ordinal: requestOrdinal,
+              role: pendingRequest.role,
+              file: pendingRequest.session_file,
+            }),
+      });
+      if (endGuardBudgetExhausted(endGuardRecords, currentRequestId)) {
+        endGuardEpoch += 1;
+        resetUngatedEndGuardBudget = true;
+      }
+    }
 
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
@@ -369,6 +421,18 @@ export async function resumeRun(
       nextVisits,
     );
 
+    // Only mutate the durable budget after all resume admission and
+    // trajectory/workspace validation has succeeded.
+    if (resetUngatedEndGuardBudget) {
+      log.append({
+        type: "end_guard_budget_reset",
+        schema_version: 1,
+        run_id: runId,
+        epoch: endGuardEpoch,
+        ts: Date.now(),
+      });
+    }
+
     const host = opts.hostFactory({ runId, def, log, loadedManifest: resumedLoaded });
 
     // Restore the original goal from the run log (if available).
@@ -391,6 +455,7 @@ export async function resumeRun(
       ...(initialTrajectorySeed !== null && { initialTrajectorySeed }),
       ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
       initialExecutionVisitIndexByRole,
+      endGuardEpoch,
     });
   } catch (error) {
     await lease.release();
@@ -425,6 +490,7 @@ interface RunWithCompletionArgs {
   /** Next lifecycle visit indexes reconstructed from durable starts. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
+  readonly endGuardEpoch?: number;
   /** Live ownership held from API entry through the final loop outcome. */
   readonly lease: RunExecutionLease;
 }
@@ -464,6 +530,28 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     abortSession: (session, reason) => host.abortSession(session, reason),
   });
 
+  const endGuard = loadedManifest.manifest.end_guard;
+  const endGuardRecords = (): readonly EndGuardRecord[] =>
+    log
+      .records(runId)
+      .filter(
+        (record): record is EndGuardRecord =>
+          record.type === "end_guard_started" ||
+          record.type === "end_guard_finished" ||
+          record.type === "end_guard_budget_reset",
+      );
+  const endGuardRequest = (checkpoint: Checkpoint): string => {
+    const request = checkpoint.end_request;
+    const ordinal = log
+      .records(runId)
+      .filter((record) => record.type === "transition_accepted" && record.request_end).length;
+    return endGuardRequestId({
+      runId,
+      epoch: args.endGuardEpoch ?? 1,
+      ...(request === null ? {} : { ordinal, role: request.role, file: request.session_file }),
+    });
+  };
+
   const completionPromise = runLoop({
     def,
     initialCheckpoint,
@@ -485,6 +573,15 @@ async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle
     }),
     getRunCostCap,
     runControl,
+    ...(endGuard === undefined
+      ? {}
+      : {
+          endGuard: {
+            config: endGuard,
+            records: endGuardRecords,
+            requestId: endGuardRequest,
+          },
+        }),
   }).finally(async () => {
     try {
       runControl.close();
@@ -919,10 +1016,14 @@ async function loadPinnedManifest(
     workspaceCwd: manifestDir,
     manifestDir,
   });
+  const warnings =
+    modelRegistry === undefined
+      ? Object.freeze([])
+      : checkModelProvidersRegistered(snapshot.normalized_manifest, modelRegistry);
   return Object.freeze({
     manifest: snapshot.normalized_manifest,
     def: toMachineDefinition(snapshot.normalized_manifest, context),
-    warnings: Object.freeze([]),
+    warnings,
     manifestDir,
     manifestVersion: snapshot.normalized_manifest.version,
     ...(context !== undefined ? { prewalkValidationContext: context } : {}),

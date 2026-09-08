@@ -19,6 +19,7 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
 import {
   type ManifestValidationContext,
@@ -85,6 +86,8 @@ export type ManifestErrorCode =
   | "trajectory-target-system-prompt-unresolved"
   /** Issue #76: executable tool policy contains malformed values or keys. */
   | "invalid-tool-execution-policy"
+  /** Issue #75: end guard contains malformed values or keys. */
+  | "invalid-end-guard"
   /** Experimental Prewalk manifest and derived-admission failures. */
   | PrewalkManifestErrorCode;
 
@@ -200,6 +203,10 @@ function isSafeProgressiveDisclosurePath(path: string): boolean {
 export function validateManifest(m: Manifest, context?: ManifestValidationContext): ManifestReport {
   const errors: ManifestError[] = [];
   const warnings: ManifestWarning[] = [];
+
+  for (const message of validateEndGuardConfig(m.end_guard)) {
+    errors.push({ code: "invalid-end-guard", message });
+  }
 
   // §13: exactly one orchestrator.
   const orchestrators = m.roles.filter((r) => r.is_orchestrator === true);
