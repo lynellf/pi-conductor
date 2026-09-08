@@ -98,3 +98,27 @@ Validate with real temporary session files, real public SDK hooks and package-lo
 RPC processes driven by deterministic providers. No paid provider calls or private
 SDK access are required. Independent review has examined the lifecycle ordering;
 the SDK/RPC metering proof remains the gate before adapter integration.
+
+## Integration refinements
+
+The public SDK/RPC compaction proof is now verified. Seed delivery belongs in a
+retained-session prompt wrapper so it records the exact prompt, including any
+host-added artifact section, and naturally covers inner retries without enlarging
+the turn classifier. The loop owns the capture/dispose/commit sequence through an
+optional retained-context capability on the role session. That capability uses
+the existing durable boundary-reference type rather than a second identity shape.
+
+Compaction usage enters the live invocation accumulator and its terminal usage.
+An observation without a matching terminal also contributes its known usage to
+persisted accounting, preserving charges across a crash. Budget readers that add
+live invocation usage must exclude those same live invocations from this orphaned
+observation total. Inspection, which has no live accumulator, includes them.
+Unavailable usage remains an explicit diagnosis across terminal records and reset
+epochs; resetting conversation history cannot establish an unknown charge.
+
+Pinned settings must not write caller-owned Pi configuration. The ordinary RPC
+CLI has no option for supplying an in-memory compaction-settings snapshot. A
+context-enabled child may therefore use a small compiled bootstrap built from
+the public runtime factory and `runRpcMode`, with the same trusted machine-tool
+configuration and current model authority. Validate real child protocol/tool
+parity before selecting this path; ordinary sessions retain their existing driver.
