@@ -13,8 +13,10 @@ import type { PrewalkRoleValidationContext } from "../manifest/prewalk.js";
 import type { ModelConfig, RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type { PrewalkSwitchSelectedRecord } from "../persistence/prewalk-records.js";
+import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
+import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import type { RoleSession } from "./host.js";
 import {
   createPrewalkResumeRoleSession,
@@ -46,6 +48,7 @@ export interface ProductionPrewalkDispatchArgs {
   readonly executorLogical: string | null;
   readonly baseSystemPrompt: string | null;
   readonly visitIndex: number;
+  readonly executionVisitIndex: number;
   readonly validationContext: PrewalkRoleValidationContext | undefined;
   readonly modelRegistry: ModelRegistry;
   readonly cwd: string;
@@ -61,6 +64,7 @@ export interface ProductionPrewalkDispatchArgs {
   readonly sessionStates: Map<string, SessionState>;
   readonly agentsBySessionId: Map<string, SessionEventSource>;
   readonly roleTurnProducer: RoleTurnProducer;
+  readonly getExecutionController?: () => ToolExecutionController | null;
 }
 
 /** Resume an interrupted selected switch, otherwise create the eligible fresh Prewalk visit. */
@@ -100,6 +104,7 @@ export async function dispatchProductionPrewalk(
     role: args.role,
     roleConfig: args.roleConfig as RoleConfig & { readonly prewalk: typeof config },
     visitIndex: args.visitIndex,
+    executionVisitIndex: args.executionVisitIndex,
     executor: { model: args.executorModel, logical: args.executorLogical },
     baseSystemPrompt: args.baseSystemPrompt,
     validationContext: args.validationContext,
@@ -120,6 +125,9 @@ export async function dispatchProductionPrewalk(
     sessionStates: args.sessionStates,
     agentsBySessionId: args.agentsBySessionId,
     roleTurnProducer: args.roleTurnProducer,
+    ...(args.getExecutionController !== undefined
+      ? { getExecutionController: args.getExecutionController }
+      : {}),
   });
 }
 
@@ -146,9 +154,14 @@ async function resumeProductionPrewalk(
       throw invalid("persisted executor provider/API no longer matches model resolution");
     }
     const reopened = await recoverySessionManager(args, recovery);
+    const executionControllerRef: { current: ToolExecutionController | null } = { current: null };
     let validationGate: PrewalkValidationGate | null = null;
-    const beforeMachineEmission = (signal?: AbortSignal) =>
-      validationGate?.beforeMachineEmission(signal) ?? Promise.resolve({ allow: true as const });
+    const beforeMachineEmission = (
+      signal?: AbortSignal,
+      context?: { readonly toolCallId: string },
+    ) =>
+      validationGate?.beforeMachineEmission(signal, context) ??
+      Promise.resolve({ allow: true as const });
     const deferSessionCostCapAbort = (
       attempt: Parameters<PrewalkValidationGate["allowPostBudgetContinuation"]>[0],
     ) => validationGate?.allowPostBudgetContinuation(attempt) ?? false;
@@ -175,6 +188,15 @@ async function resumeProductionPrewalk(
             message: "resumed executor validation remained unsatisfied after corrective retries",
             guideUsage: selected.guide_usage,
           },
+        );
+      },
+      getController: () => args.getExecutionController?.() ?? executionControllerRef.current,
+      canRun: () => {
+        return [
+          args.sessionStates.get(selected.role_session_id),
+          args.sessionStates.get(`${selected.role_session_id}:executor`),
+        ].every(
+          (state) => state === undefined || (state.terminalReason === null && !state.aborted),
         );
       },
     });
@@ -204,7 +226,22 @@ async function resumeProductionPrewalk(
       runId: args.runId,
       machineDefinition: args.machineDefinition,
       delegateTool: null,
-      prewalk: { phase: "executor", seam: new PrewalkSeam(), beforeMachineEmission },
+      visitIndex: args.visitIndex,
+      executionVisitIndex: args.executionVisitIndex,
+      priorToolExecutionRecords: args
+        .records()
+        .filter(
+          (record): record is ToolExecutionRecord =>
+            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+        ),
+      executionControllerRef,
+      prewalk: {
+        phase: "executor",
+        seam: new PrewalkSeam(),
+        beforeMachineEmission,
+        getExecutionController: () =>
+          args.getExecutionController?.() ?? executionControllerRef.current,
+      },
       deferSessionCostCapAbort,
       ...(args.uiContext !== undefined && { uiContext: args.uiContext }),
       ...(args.isUiContextCurrent !== undefined && {

@@ -51,6 +51,7 @@ function makeSession() {
     bindExtensions: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn().mockResolvedValue(undefined),
     prompt: vi.fn(),
+    setActiveToolsByName: vi.fn(),
     sessionFile: undefined,
     sessionId: "session-1",
     subscribe: vi.fn(() => () => {}),
@@ -239,10 +240,34 @@ describe("ProductionHost — uiContext bridge", () => {
     expect(opts.model).toBeUndefined();
     expect(opts.thinkingLevel).toBe("medium");
     expect((opts.customTools as { name: string }[]).map((tool) => tool.name)).toEqual([
+      "read",
+      "write",
+      "edit",
+      "ls",
+      "find",
+      "grep",
+      "bash",
       "handoff",
       "end",
       "ask_user",
     ]);
-    expect(opts.tools).toEqual(["read", "handoff", "end", "ask_user"]);
+    expect(opts.tools).toEqual([
+      "read",
+      "handoff",
+      "end",
+      "ask_user",
+      "write",
+      "edit",
+      "ls",
+      "find",
+      "grep",
+      "bash",
+    ]);
+    expect(session.setActiveToolsByName).toHaveBeenCalledWith([
+      "read",
+      "handoff",
+      "end",
+      "ask_user",
+    ]);
   });
 });

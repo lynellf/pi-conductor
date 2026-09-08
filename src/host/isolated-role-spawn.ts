@@ -1,17 +1,22 @@
 /** Isolated worktree/copy role spawning — Issue #48 remediation R2/R3. */
 
 import { join } from "node:path";
-
+import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
+import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { RoleConfig, WorkspaceConfig } from "../manifest/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import { workspaceProvisioned } from "../persistence/log.js";
+import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
+import { createSupervisedTools } from "./execution/supervised-tools.js";
+import { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import type { RoleSession } from "./host.js";
 import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { DelegateBridgeConfigError, type DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
+import type { ExecutionBridgeToolDefinition } from "./rpc/execution-bridge.js";
 import {
   loadMachineToolsConfig,
   MACHINE_TOOLS_CONFIG_ENV,
@@ -23,6 +28,7 @@ import { attachSessionEventHandler, type SessionEventSource } from "./session-ev
 import {
   buildConfinedTools,
   computeGuarantee,
+  confineToolDefinition,
   ensureSnapshotCheckout,
   provisionWorkspace,
 } from "./workspace/index.js";
@@ -50,8 +56,11 @@ export async function spawnIsolatedRoleSession(options: {
   readonly createDelegateBridgeHandler?: (
     primaryCheckout: string,
   ) => Promise<DelegateBridgeHandler>;
+  /** Prior attempt records used to enforce timeout recovery across role replacement. */
+  readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
   /** Loop-owned, 1-based index shared by every model attempt in this role invocation. */
   readonly visitIndex: number;
+  readonly executionVisitIndex?: number;
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly sessionStates: Map<string, SessionState>;
   readonly agentsBySessionId: Map<string, SessionEventSource>;
@@ -59,7 +68,7 @@ export async function spawnIsolatedRoleSession(options: {
   /** Issue #68: run-owned producer shared across every logical invocation. */
   readonly roleTurnProducer: RoleTurnProducer;
 }): Promise<RoleSession> {
-  const { visitIndex } = options;
+  const { visitIndex, executionVisitIndex = visitIndex } = options;
   const source = options.workspaceConfig.source ?? "snapshot";
   const progressiveDisclosure = options.workspaceConfig.progressive_disclosure;
   const requestFilesAuthorized =
@@ -96,6 +105,15 @@ export async function spawnIsolatedRoleSession(options: {
     snapshotPath: sharedSnapshot.checkoutPath,
   });
   const confinedTools = buildConfinedTools(guarantee.projection, options.roleConfig?.tools);
+  const executionPolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
+  let executionController: ToolExecutionController | null = null;
+  const supervisedTools = createSupervisedTools({
+    cwd: workspaceResult.workspacePath,
+    declaredTools: confinedTools.activeNames,
+    getController: () => executionController,
+    getPolicy: () => executionPolicy,
+    wrapFileTool: (raw) => confineToolDefinition(raw, guarantee.projection),
+  });
   const workspace = Object.freeze({
     backend: options.backend,
     guarantee: guarantee.level,
@@ -148,52 +166,68 @@ export async function spawnIsolatedRoleSession(options: {
     ],
     ...(delegateAuthorized ? { enableDelegateBridge: true } : {}),
     ...(requestFilesAuthorized ? { enableRequestFilesBridge: true } : {}),
+    ...(confinedTools.activeNames.length === 0 ? {} : { enableExecutionBridge: true }),
+    ...(confinedTools.activeNames.length === 0
+      ? {}
+      : {
+          executionBridgeTimeoutMs: boundedBridgeTimeout(
+            executionPolicy.timeout_seconds,
+            executionPolicy.termination_grace_seconds,
+          ),
+        }),
   });
   let delegateBridge: NonNullable<NodeRoleSessionOptions["delegateBridge"]> | undefined;
   let requestFilesBridge: NonNullable<NodeRoleSessionOptions["requestFilesBridge"]> | undefined;
-  if (delegateAuthorized || requestFilesAuthorized) {
-    const config = loadMachineToolsConfig({
-      [MACHINE_TOOLS_CONFIG_ENV]: machineToolsConfigPath,
-    });
-    if (delegateAuthorized) {
-      if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
-        throw new DelegateBridgeConfigError(
-          "isolated delegate bridge configuration is missing its authorized tool",
-        );
-      }
-      const createHandler = options.createDelegateBridgeHandler;
-      if (createHandler === undefined) {
-        throw new DelegateBridgeConfigError("isolated delegate bridge has no host handler");
-      }
-      delegateBridge = {
-        directory: config.delegateBridge.directory,
-        delegate: await createHandler(workspaceResult.workspacePath),
-      };
+  let executionBridge: NonNullable<NodeRoleSessionOptions["executionBridge"]> | undefined;
+  const config = loadMachineToolsConfig({ [MACHINE_TOOLS_CONFIG_ENV]: machineToolsConfigPath });
+  if (delegateAuthorized) {
+    if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
+      throw new DelegateBridgeConfigError(
+        "isolated delegate bridge configuration is missing its authorized tool",
+      );
     }
-    if (requestFilesAuthorized) {
-      if (
-        progressiveDisclosure === undefined ||
-        config.requestFilesBridge === undefined ||
-        !config.declaredToolNames.includes("request_files")
-      ) {
-        throw new DelegateBridgeConfigError(
-          "isolated request_files bridge configuration is missing its authorized tool",
-        );
-      }
-      requestFilesBridge = {
-        directory: config.requestFilesBridge.directory,
-        requestFiles: createRequestFilesBridgeHandler({
-          commit,
-          policy: progressiveDisclosure,
-          role: options.role,
-          runId: options.runId,
-          visitIndex,
-          authority: progressiveProjectionGitAuthority,
-          isReadOnly: confinedTools.isReadOnly,
-          persistRecord: options.persistRecord,
-        }),
-      };
+    const createHandler = options.createDelegateBridgeHandler;
+    if (createHandler === undefined) {
+      throw new DelegateBridgeConfigError("isolated delegate bridge has no host handler");
     }
+    delegateBridge = {
+      directory: config.delegateBridge.directory,
+      delegate: await createHandler(workspaceResult.workspacePath),
+    };
+  }
+  if (requestFilesAuthorized) {
+    if (
+      progressiveDisclosure === undefined ||
+      config.requestFilesBridge === undefined ||
+      !config.declaredToolNames.includes("request_files")
+    ) {
+      throw new DelegateBridgeConfigError(
+        "isolated request_files bridge configuration is missing its authorized tool",
+      );
+    }
+    requestFilesBridge = {
+      directory: config.requestFilesBridge.directory,
+      requestFiles: createRequestFilesBridgeHandler({
+        commit,
+        policy: progressiveDisclosure,
+        role: options.role,
+        runId: options.runId,
+        visitIndex,
+        authority: progressiveProjectionGitAuthority,
+        isReadOnly: confinedTools.isReadOnly,
+        persistRecord: options.persistRecord,
+      }),
+    };
+  }
+  if (confinedTools.activeNames.length > 0) {
+    if (config.executionBridge === undefined) {
+      throw new DelegateBridgeConfigError("isolated execution bridge configuration is missing");
+    }
+    executionBridge = {
+      directory: config.executionBridge.directory,
+      tools: supervisedTools.map(toExecutionBridgeTool),
+      closeTimeoutMs: executionPolicy.termination_grace_seconds * 2_000 + 1_000,
+    };
   }
   let sessionId: string | null = null;
   const session = await options.nodeRoleSessionFactory({
@@ -207,6 +241,7 @@ export async function spawnIsolatedRoleSession(options: {
     machineToolsConfigPath,
     ...(delegateBridge === undefined ? {} : { delegateBridge }),
     ...(requestFilesBridge === undefined ? {} : { requestFilesBridge }),
+    ...(executionBridge === undefined ? {} : { executionBridge }),
     retries: options.retries,
     retryDelayMs: options.retryDelayMs,
     workspace,
@@ -222,6 +257,28 @@ export async function spawnIsolatedRoleSession(options: {
     cap: options.roleConfig?.max_session_cost_usd ?? null,
     model: options.model,
   });
+  executionController =
+    confinedTools.activeNames.length === 0
+      ? null
+      : new ToolExecutionController({
+          runId: options.runId,
+          logicalSessionId: JSON.stringify([options.runId, options.role, executionVisitIndex]),
+          roleSessionId: session.sessionId,
+          policy: executionPolicy,
+          persist: options.persistRecord,
+          onFatal: (error) => {
+            state.setTerminalReason(
+              error.code === "tool_timeout_exhausted"
+                ? "tool_timeout_exhausted"
+                : "tool_cleanup_unconfirmed",
+              error.message,
+            );
+            void session.abort().catch(() => undefined);
+          },
+          ...(options.priorToolExecutionRecords === undefined
+            ? {}
+            : { priorRecords: options.priorToolExecutionRecords }),
+        });
   options.sessionStates.set(sessionId, state);
   options.agentsBySessionId.set(sessionId, session);
   attachSessionEventHandler({
@@ -242,4 +299,26 @@ export async function spawnIsolatedRoleSession(options: {
     ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
   });
   return session;
+}
+
+function boundedBridgeTimeout(timeoutSeconds: number, graceSeconds: number): number {
+  const milliseconds = timeoutSeconds * 1_000 + graceSeconds * 2_000 + 5_000;
+  return Math.min(2_147_483_647, Math.max(1, Math.floor(milliseconds)));
+}
+
+function toExecutionBridgeTool(tool: ToolDefinition): ExecutionBridgeToolDefinition {
+  return {
+    name: tool.name as ExecutionBridgeToolDefinition["name"],
+    parameters: tool.parameters,
+    execute: (toolCallId, params, signal, modelInput) =>
+      tool.execute(toolCallId, params as never, signal, undefined, {
+        model:
+          typeof modelInput === "object" &&
+          modelInput !== null &&
+          "input" in modelInput &&
+          Array.isArray(modelInput.input)
+            ? { input: modelInput.input }
+            : undefined,
+      } as unknown as ExtensionContext),
+  };
 }

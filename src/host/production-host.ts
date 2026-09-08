@@ -50,6 +50,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
+import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
 import { modeFor } from "../manifest/handoffs.js";
 import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
 
@@ -61,6 +62,7 @@ import {
   type SnapshotPinnedRecord,
   snapshotPinned,
 } from "../persistence/log.js";
+import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import {
   type HandoffTransportSelectedRecord,
   sha256Canonical,
@@ -73,6 +75,8 @@ import type { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
+import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
+import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import type {
   ArtifactRouteSource,
   Host,
@@ -300,6 +304,26 @@ export class ProductionHost implements Host {
     }
 
     const roleConfig = this.lookupRoleConfig(role);
+    const declaredTools = roleConfig?.tools ?? [];
+    if (
+      declaredTools.some((name) =>
+        ["bash", "read", "write", "edit", "ls", "find", "grep"].includes(name),
+      ) &&
+      !isSupervisedProcessSupported()
+    ) {
+      throw new Error("role executable tools require a platform with supervised process cleanup");
+    }
+    // A replacement or trajectory successor must not begin while a prior
+    // executable still has unknown ownership. Resume applies the same guard;
+    // keeping it here also covers same-process fallback after disposal.
+    assertNoUnfinishedToolExecutions(
+      this.log
+        .records(this.runId)
+        .filter(
+          (record) =>
+            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+        ),
+    );
     const resumedTransport = this.latestTrajectoryTransport(role);
     if (resumedTransport?.type === "failed") {
       throw new TrajectoryResumeError(
@@ -307,7 +331,12 @@ export class ProductionHost implements Host {
       );
     }
     if (resumedTransport?.type === "selected") {
-      return this.resumeTrajectoryRole(role, roleConfig, resumedTransport.record);
+      return this.resumeTrajectoryRole(
+        role,
+        roleConfig,
+        resumedTransport.record,
+        opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+      );
     }
     const roleWorkspaceConfig = roleConfig?.workspace;
     const workspaceBackend = roleWorkspaceConfig?.backend ?? "shared";
@@ -372,6 +401,7 @@ export class ProductionHost implements Host {
       executorLogical: logical,
       baseSystemPrompt: rolePrompt,
       visitIndex: opts.visitIndex ?? 1,
+      executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
       roleTurnProducer: this.roleTurnProducer,
     });
     if (prewalk !== null) return prewalk;
@@ -414,6 +444,13 @@ export class ProductionHost implements Host {
             }
           : {}),
         visitIndex: opts.visitIndex,
+        executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+        priorToolExecutionRecords: this.log
+          .records(this.runId)
+          .filter(
+            (record): record is ToolExecutionRecord =>
+              record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+          ),
         persistRecord: (record) => this.persistRecord(record),
         sessionStates: this.sessionStates,
         agentsBySessionId: this.agentsBySessionId,
@@ -440,6 +477,14 @@ export class ProductionHost implements Host {
       agentDir: this.agentDir,
       sessionDir: this.sessionDir,
       runId: this.runId,
+      visitIndex: opts.visitIndex ?? 1,
+      executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+      priorToolExecutionRecords: this.log
+        .records(this.runId)
+        .filter(
+          (record): record is ToolExecutionRecord =>
+            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+        ),
       machineDefinition: this.loadedManifest.def,
       disableAutoCompaction:
         this.loadedManifest.manifest.handoffs?.some(
@@ -492,6 +537,7 @@ export class ProductionHost implements Host {
     role: Role,
     roleConfig: RoleConfig | undefined,
     selected: HandoffTransportSelectedRecord,
+    executionVisitIndex: number,
   ): Promise<RoleSession> {
     const persisted = validateTrajectorySelector(selected);
     let session: RoleSession | null = null;
@@ -525,6 +571,14 @@ export class ProductionHost implements Host {
         // outgoing source, so exact resume needs the same isolated setting.
         disableAutoCompaction: true,
         runId: this.runId,
+        visitIndex: 1,
+        executionVisitIndex,
+        priorToolExecutionRecords: this.log
+          .records(this.runId)
+          .filter(
+            (record): record is ToolExecutionRecord =>
+              record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+          ),
         machineDefinition: this.loadedManifest.def,
         delegateTool: null,
         ...(this.uiContext !== undefined && { uiContext: this.uiContext }),
@@ -781,6 +835,7 @@ export class ProductionHost implements Host {
     readonly source: RoleSession;
     readonly targetSeed: string;
     readonly targetVisitIndex: number;
+    readonly targetExecutionVisitIndex?: number;
   }): Promise<
     { readonly mode: "fresh" } | { readonly mode: "trajectory"; readonly session: RoleSession }
   > {
@@ -904,7 +959,9 @@ export class ProductionHost implements Host {
         systemPrompt: targetPrompt,
         activeToolNames,
         visitIndex: args.targetVisitIndex,
+        executionVisitIndex: args.targetExecutionVisitIndex ?? args.targetVisitIndex,
         maxSessionCostUsd: targetRole?.max_session_cost_usd ?? null,
+        toolExecutionPolicy: resolveToolExecutionPolicy(targetRole?.tool_execution),
       });
       return { mode: "trajectory", session };
     } catch (error) {

@@ -7,8 +7,10 @@ import type { PrewalkRoleValidationContext } from "../manifest/prewalk.js";
 import type { PrewalkConfig, RoleConfig } from "../manifest/types.js";
 import type { FileMutationRecord } from "../persistence/file-mutation.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
+import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import type { RoleSession } from "./host.js";
 import {
   type ProductionPrewalkPhaseSpawnOptions,
@@ -32,6 +34,7 @@ export async function spawnProductionHostPrewalk(args: {
   readonly role: Role;
   readonly roleConfig: RoleConfig & { readonly prewalk: PrewalkConfig };
   readonly visitIndex: number;
+  readonly executionVisitIndex: number;
   readonly executor: { readonly model: Model<never>; readonly logical: string };
   readonly baseSystemPrompt: string;
   readonly validationContext: PrewalkRoleValidationContext;
@@ -52,6 +55,7 @@ export async function spawnProductionHostPrewalk(args: {
   readonly roleTurnProducer: RoleTurnProducer;
 }): Promise<ProductionPrewalkSpawnResult> {
   const usageSessionIds: string[] = [];
+  const executionControllerRef: { current: ToolExecutionController | null } = { current: null };
   const spawnPhase = async (phase: ProductionPrewalkPhaseSpawnOptions) =>
     (await spawnSharedSdkRoleSession({
       role: args.role,
@@ -86,11 +90,13 @@ export async function spawnProductionHostPrewalk(args: {
                     (record): record is FileMutationRecord => record.type === "file_mutation",
                   ),
               beforeMachineEmission: phase.beforeMachineEmission,
+              getExecutionController: () => executionControllerRef.current,
             }
           : {
               phase: "executor",
               seam: phase.seam,
               beforeMachineEmission: phase.beforeMachineEmission,
+              getExecutionController: () => executionControllerRef.current,
             },
       deferSessionCostCapAbort: phase.deferSessionCostCapAbort,
       ...(args.uiContext !== undefined && { uiContext: args.uiContext }),
@@ -102,6 +108,15 @@ export async function spawnProductionHostPrewalk(args: {
       sessionStates: args.sessionStates,
       agentsBySessionId: args.agentsBySessionId,
       roleTurnProducer: args.roleTurnProducer,
+      executionControllerRef,
+      visitIndex: args.visitIndex,
+      executionVisitIndex: args.executionVisitIndex,
+      priorToolExecutionRecords: args
+        .records()
+        .filter(
+          (record): record is ToolExecutionRecord =>
+            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
+        ),
     })) as unknown as PrewalkPhaseSession;
   const session = await spawnProductionPrewalkRoleSession({
     runId: args.runId,
@@ -116,9 +131,11 @@ export async function spawnProductionHostPrewalk(args: {
     roleSessionId: args.roleSessionId,
     records: args.records,
     usageFor: args.usageFor,
+    getExecutionController: () => executionControllerRef.current,
     spawnPhase,
     persist: args.persist,
     registerUsageSession: (sessionId) => usageSessionIds.push(sessionId),
+    sessionStates: args.sessionStates,
     markTerminalFailure: (sessionId, code, message) => {
       const state = args.sessionStates.get(sessionId);
       if (state === undefined) {

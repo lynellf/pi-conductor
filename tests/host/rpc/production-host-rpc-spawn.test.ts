@@ -1433,11 +1433,16 @@ subagents:
     const priorConfigPath = process.env[MACHINE_TOOLS_CONFIG_ENV];
     process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
     try {
-      expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual({
+      const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+      expect(config).toMatchObject({
         workspaceRoot: session.workspace?.path_or_image,
         mounts: [],
         declaredToolNames: ["read"],
       });
+      expect(config.executionBridge).toMatchObject({ timeout_ms: expect.any(Number) });
+      expect((config.executionBridge as { directory: string }).directory).toContain(
+        "execution-bridge",
+      );
       await expect(
         stat(join(host.sessionDir, "machine-tools", "delegate-bridge")),
       ).rejects.toMatchObject({
@@ -1641,11 +1646,12 @@ roles:
       throw new Error("expected production host to create the isolated Node role session");
     }
     const config = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
-    expect(config).toEqual({
+    expect(config).toMatchObject({
       workspaceRoot: session.workspace?.path_or_image,
       mounts: [{ path: mountedDir, writable: false }],
       declaredToolNames: ["read", "write"],
     });
+    expect(config.executionBridge).toMatchObject({ timeout_ms: expect.any(Number) });
     expect(adapterOptions.cwd).toBe(session.workspace?.path_or_image);
     expect(adapterOptions.machineToolsConfigPath).toBe(configPath);
     expect((await stat(configPath)).isFile()).toBe(true);

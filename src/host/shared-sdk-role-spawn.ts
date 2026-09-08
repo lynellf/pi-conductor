@@ -1,4 +1,9 @@
-/** Shared-role SDK session spawning — preserves the Phase 7A execution path. */
+/**
+ * Shared-role SDK session spawning — preserves the Phase 7A execution path.
+ * The fresh-session and trajectory continuation lifecycle stays together because
+ * both mutate one native session's active seam, state, tools, and disposal ownership.
+ * Repeated execution binding is isolated in role-tool-execution-binding.ts.
+ */
 
 import { randomUUID } from "node:crypto";
 
@@ -12,11 +17,17 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { HandoffContextRef, MachineDefinition, ModelEffort, Role } from "../core/types.js";
+import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
+import { bindLiveRoleToolExecution } from "./execution/role-tool-execution-binding.js";
+import { createSupervisedTools } from "./execution/supervised-tools.js";
+import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
+import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
 import { createPrewalkPhaseSessionAdapter } from "./prewalk-phase-session.js";
@@ -26,7 +37,6 @@ import { createRoleSessionAdapter } from "./role-session.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { SessionSeam } from "./seam.js";
 import {
-  attachSessionEventHandler,
   createCaptureRejector,
   type SessionCostCapDeferral,
   type SessionEventSource,
@@ -72,6 +82,11 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly agentsBySessionId: Map<string, SessionEventSource>;
   /** Issue #68: run-owned producer shared across every logical invocation. */
   readonly roleTurnProducer: RoleTurnProducer;
+  readonly visitIndex?: number;
+  readonly executionVisitIndex?: number;
+  readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
+  /** Mutable binding used by Prewalk validation while a phase session is live. */
+  readonly executionControllerRef?: { current: ToolExecutionController | null };
   readonly prewalk?: SdkPrewalkPhase;
   readonly deferSessionCostCapAbort?: SessionCostCapDeferral;
 }): Promise<RoleSession> {
@@ -124,20 +139,49 @@ export async function spawnSharedSdkRoleSession(options: {
     roleSessionId: options.roleSessionId ?? "",
     ordinaryActiveToolNames: buildToolsAllowlist(options.roleConfig?.tools, false),
   });
+  const beforeMachineEmission = prewalkPhase.beforeMachineEmission;
   const handoff = createHandoffTool(
     () => activeSeam,
     rejector.shouldRejectCapture,
     () => activeHandoffContext,
     options.disableAutoCompaction === true || options.isTrajectory === true,
-    prewalkPhase.beforeMachineEmission,
+    beforeMachineEmission === undefined
+      ? undefined
+      : (signal, context) => beforeMachineEmission(signal, context),
   );
   const end = createEndTool(
     () => activeSeam,
     rejector.shouldRejectCapture,
-    prewalkPhase.beforeMachineEmission,
+    beforeMachineEmission === undefined
+      ? undefined
+      : (signal, context) => beforeMachineEmission(signal, context),
   );
   const askUser = createAskUserTool() as ToolDefinition;
   const checkpointTool = prewalkPhase.checkpointTool;
+  let controller: ToolExecutionController | null = null;
+  let activeState: SessionState | null = null;
+  let sdkSession: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
+  let activePolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
+  const executionRecords = [...(options.priorToolExecutionRecords ?? [])];
+  const persistExecutionRecord = (record: PersistedRecord): void => {
+    if (record.type === "tool_execution_started" || record.type === "tool_execution_finished") {
+      executionRecords.push(record);
+    }
+    options.persistRecord(record);
+  };
+  const supervisedTools = createSupervisedTools({
+    cwd: options.cwd,
+    getController: () => controller,
+    getPolicy: () => activePolicy,
+  });
+  const restoredActiveToolNames =
+    options.activeToolNames === undefined
+      ? [
+          ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
+          ...(options.delegateTool === null ? [] : ["delegate"]),
+          ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
+        ]
+      : [...options.activeToolNames];
   // The parent registry owns the runtime that carries extension-registered
   // providers (e.g. antigravity via pi-antigravity). Local SDK types (0.80.6)
   // accept `modelRegistry` but declare no `modelRuntime`; global pi 0.84.3
@@ -157,6 +201,7 @@ export async function spawnSharedSdkRoleSession(options: {
     sessionManager:
       options.sessionManager ?? SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
+      ...supervisedTools,
       handoff,
       end,
       askUser,
@@ -164,21 +209,26 @@ export async function spawnSharedSdkRoleSession(options: {
       ...(options.delegateTool === null ? [] : [options.delegateTool]),
       ...(checkpointTool === null ? [] : [checkpointTool]),
     ],
-    tools:
-      options.activeToolNames === undefined
-        ? [
-            ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
-            ...(options.delegateTool === null ? [] : ["delegate"]),
-            ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
-          ]
-        : [...options.activeToolNames],
+    // Pi registers custom tools only when their names are present in `tools`.
+    // Register the complete supervised executable surface, then immediately
+    // restore the manifest/trajectory allowlist below. This keeps a later
+    // trajectory target from bypassing supervision when it activates a tool
+    // absent from the source role's declaration.
+    tools: [
+      ...restoredActiveToolNames,
+      ...supervisedTools.map((candidate) => candidate.name),
+      ...(options.delegateTool === null ? [] : ["delegate"]),
+      ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
+    ].filter((name, index, names) => names.indexOf(name) === index),
   };
   if (options.model !== undefined) {
     (createOpts as { model?: Model<never> }).model = options.model;
   }
   (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = options.effort;
   const { session } = await createAgentSession(createOpts);
+  sdkSession = session;
   try {
+    session.setActiveToolsByName([...restoredActiveToolNames]);
     if (prewalkPhase.initialActiveToolNames !== null) {
       session.setActiveToolsByName([...prewalkPhase.initialActiveToolNames]);
     }
@@ -214,19 +264,23 @@ export async function spawnSharedSdkRoleSession(options: {
     cap: options.roleConfig?.max_session_cost_usd ?? null,
     model: options.logicalModel,
   });
-  options.sessionStates.set(sessionId, state);
-  options.agentsBySessionId.set(sessionId, session);
-  rejector.bindState(state);
-  const sourceEventUnsubscribe = attachSessionEventHandler({
+  activeState = state;
+  const sourceBinding = bindLiveRoleToolExecution({
+    runId: options.runId,
+    role: options.role,
+    visitIndex: options.executionVisitIndex ?? options.visitIndex ?? 1,
+    roleSessionId: sessionId,
+    policy: activePolicy,
+    ...(options.priorToolExecutionRecords === undefined
+      ? {}
+      : { priorRecords: options.priorToolExecutionRecords }),
+    persist: persistExecutionRecord,
     session,
     state,
-    role: options.role,
-    fileMutation: {
-      runId: options.runId,
-      sessionId,
-      sessionFile,
-      persist: options.persistRecord,
-    },
+    sessionFile,
+    sessionStates: options.sessionStates,
+    agentsBySessionId: options.agentsBySessionId,
+    rejector,
     roleTurn: {
       producer: options.roleTurnProducer,
       context: {
@@ -238,11 +292,25 @@ export async function spawnSharedSdkRoleSession(options: {
         persist: options.persistRecord,
       },
     },
-    ...(options.deferSessionCostCapAbort !== undefined
-      ? { deferSessionCostCapAbort: options.deferSessionCostCapAbort }
-      : {}),
-    ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
+    ...(options.deferSessionCostCapAbort === undefined
+      ? {}
+      : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
+    ...(options.displaySink === undefined ? {} : { displaySink: options.displaySink }),
+    onFatal: (error) => {
+      activeState?.setTerminalReason(
+        error.code === "tool_timeout_exhausted"
+          ? "tool_timeout_exhausted"
+          : "tool_cleanup_unconfirmed",
+        error.message,
+      );
+      void sdkSession?.abort();
+    },
   });
+  controller = sourceBinding.controller;
+  if (options.executionControllerRef !== undefined) {
+    options.executionControllerRef.current = controller;
+  }
+  const sourceEventUnsubscribe = sourceBinding.unsubscribe;
 
   let nativeRetained = false;
 
@@ -252,6 +320,7 @@ export async function spawnSharedSdkRoleSession(options: {
     if (!session.isIdle) {
       throw new Error("trajectory reconfiguration requires an idle source session");
     }
+    assertNoUnfinishedToolExecutions(executionRecords);
     // All mutations follow a preflight performed by ProductionHost. The
     // assertions turn Pi's silent unknown-tool behavior into a hard failure.
     await session.setModel(target.model);
@@ -280,19 +349,24 @@ export async function spawnSharedSdkRoleSession(options: {
       cap: target.maxSessionCostUsd,
       model: target.logicalModel,
     });
-    options.sessionStates.set(targetSessionId, targetState);
-    options.agentsBySessionId.set(targetSessionId, session);
-    rejector.bindState(targetState);
-    const targetEventUnsubscribe = attachSessionEventHandler({
+    activePolicy = target.toolExecutionPolicy ?? activePolicy;
+    activeState = targetState;
+    const targetBinding = bindLiveRoleToolExecution({
+      runId: options.runId,
+      role: target.role,
+      visitIndex: target.executionVisitIndex ?? target.visitIndex,
+      roleSessionId: targetSessionId,
+      policy: activePolicy,
+      ...(options.priorToolExecutionRecords === undefined
+        ? {}
+        : { priorRecords: options.priorToolExecutionRecords }),
+      persist: persistExecutionRecord,
       session,
       state: targetState,
-      role: target.role,
-      fileMutation: {
-        runId: options.runId,
-        sessionId: targetSessionId,
-        sessionFile,
-        persist: options.persistRecord,
-      },
+      sessionFile,
+      sessionStates: options.sessionStates,
+      agentsBySessionId: options.agentsBySessionId,
+      rejector,
       roleTurn: {
         producer: options.roleTurnProducer,
         context: {
@@ -304,8 +378,22 @@ export async function spawnSharedSdkRoleSession(options: {
           persist: options.persistRecord,
         },
       },
-      ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
+      ...(options.displaySink === undefined ? {} : { displaySink: options.displaySink }),
+      onFatal: (error) => {
+        activeState?.setTerminalReason(
+          error.code === "tool_timeout_exhausted"
+            ? "tool_timeout_exhausted"
+            : "tool_cleanup_unconfirmed",
+          error.message,
+        );
+        void sdkSession?.abort();
+      },
     });
+    controller = targetBinding.controller;
+    if (options.executionControllerRef !== undefined) {
+      options.executionControllerRef.current = controller;
+    }
+    const targetEventUnsubscribe = targetBinding.unsubscribe;
 
     let targetRetained = false;
     return createRoleSessionAdapter({

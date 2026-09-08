@@ -2,6 +2,7 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { FileMutationRecord } from "../persistence/file-mutation.js";
+import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import {
   createExecutionCheckpointTool,
   createExecutorExecutionCheckpointTool,
@@ -11,6 +12,7 @@ import {
 
 type BeforePrewalkMachineEmission = (
   signal?: AbortSignal,
+  context?: { readonly toolCallId: string },
 ) => Promise<
   | { readonly allow: true }
   | { readonly allow: false; readonly terminate: false; readonly correction: string }
@@ -20,6 +22,7 @@ export type SdkPrewalkPhase =
   | {
       readonly phase: "guide";
       readonly beforeMachineEmission: BeforePrewalkMachineEmission;
+      readonly getExecutionController?: () => ToolExecutionController | null;
       readonly seam: PrewalkSeam;
       readonly maxTodos: number;
       readonly validationAllowlist: readonly string[];
@@ -30,6 +33,7 @@ export type SdkPrewalkPhase =
       readonly phase: "executor";
       readonly seam: PrewalkSeam;
       readonly beforeMachineEmission: BeforePrewalkMachineEmission;
+      readonly getExecutionController?: () => ToolExecutionController | null;
     };
 
 export function createSdkPrewalkPhase(
@@ -44,6 +48,7 @@ export function createSdkPrewalkPhase(
   readonly initialActiveToolNames: readonly string[] | null;
   readonly setExecutorPhase: () => void;
   readonly beforeMachineEmission: BeforePrewalkMachineEmission | undefined;
+  readonly getExecutionController: (() => ToolExecutionController | null) | undefined;
 } {
   let executorPhase = phase?.phase === "executor";
   const checkpointTool = (
@@ -72,5 +77,6 @@ export function createSdkPrewalkPhase(
       executorPhase = true;
     },
     beforeMachineEmission: phase?.beforeMachineEmission,
+    getExecutionController: phase?.getExecutionController,
   };
 }

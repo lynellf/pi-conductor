@@ -56,6 +56,7 @@ import type {
   SessionWorkspaceDescriptor,
   UsageRecord,
 } from "../core/types.js";
+import type { ToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type { PrewalkFailureCode } from "../persistence/prewalk-records.js";
 import type { HandoffArgs } from "../seam/schema.js";
@@ -161,6 +162,9 @@ export interface RoleSession {
   /** Subscribe to false-to-true machine-emission seal transitions. */
   subscribeSealed?(listener: () => void): () => void;
 
+  /** Abort host-owned work before the SDK session is aborted (Prewalk). */
+  abortOwnedWork?(): Promise<void>;
+
   /** Send a prompt and await completion of the role's turn. The
    *  orchestrator or worker speaks once; the loop awaits resolution
    *  before reading the capture buffer. */
@@ -199,7 +203,9 @@ export interface TrajectoryContinuationOptions {
   readonly systemPrompt: string;
   readonly activeToolNames: readonly string[];
   readonly visitIndex: number;
+  readonly executionVisitIndex?: number;
   readonly maxSessionCostUsd: number | null;
+  readonly toolExecutionPolicy?: Readonly<Required<ToolExecutionPolicy>>;
 }
 
 // ─── Spawn options ─────────────────────────────────────────────────────
@@ -245,6 +251,8 @@ export interface SpawnRoleOptions {
    * one invocation stays in the same workspace. Shared sessions ignore it.
    */
   readonly visitIndex?: number;
+  /** Fresh executable-tool invocation index; workspace identity remains visitIndex. */
+  readonly executionVisitIndex?: number;
   /**
    * 0-based index into the role's `models[]` list (Task 18, §8.2).
    * `0` = primary model; `1` = first fallback, etc. The Host resolves
@@ -481,6 +489,7 @@ export interface Host {
     readonly source: RoleSession;
     readonly targetSeed: string;
     readonly targetVisitIndex: number;
+    readonly targetExecutionVisitIndex?: number;
   }): Promise<
     { readonly mode: "fresh" } | { readonly mode: "trajectory"; readonly session: RoleSession }
   >;
@@ -495,5 +504,7 @@ export type SessionTerminalReason =
   | "session_cost_cap_exceeded"
   | "model_error"
   | "user_aborted"
+  | "tool_timeout_exhausted"
+  | "tool_cleanup_unconfirmed"
   | PrewalkFailureCode
   | null;
