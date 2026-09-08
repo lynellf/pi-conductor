@@ -107,7 +107,10 @@ import {
   serializeActiveToolDefinitions,
   TrajectoryHandoffError,
 } from "./trajectory-admission.js";
-import { assertTrajectorySdkSupported } from "./trajectory-sdk-capability.js";
+import {
+  assertTrajectorySdkSupported,
+  assertTrajectorySdkSupportedForHandoffs,
+} from "./trajectory-sdk-capability.js";
 import {
   assertPersistedSnapshotPinResolves,
   assertSupportedWorkspaceBackend,
@@ -216,6 +219,7 @@ export class ProductionHost implements Host {
   ) => Promise<NodeRoleSession>;
 
   constructor(opts: ProductionHostOptions) {
+    assertTrajectorySdkSupportedForHandoffs(opts.loadedManifest.manifest.handoffs);
     this.modelRegistry = opts.modelRegistry;
     this.cwd = resolve(opts.cwd);
     this.log = opts.log;

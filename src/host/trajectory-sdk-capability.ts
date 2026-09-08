@@ -2,6 +2,7 @@
 
 import { VERSION } from "@earendil-works/pi-coding-agent";
 
+import type { HandoffPolicy } from "../manifest/types.js";
 import { TrajectoryHandoffError } from "./trajectory-admission.js";
 
 const TRAJECTORY_SDK_VERSION = "0.80.6";
@@ -14,4 +15,13 @@ export function assertTrajectorySdkSupported(version: string = VERSION): void {
       `trajectory requires @earendil-works/pi-coding-agent ${TRAJECTORY_SDK_VERSION}; loaded ${version}`,
     );
   }
+}
+
+/** Reject trajectory-bearing manifests before production host side effects. */
+export function assertTrajectorySdkSupportedForHandoffs(
+  handoffs: readonly HandoffPolicy[] | undefined,
+  version: string = VERSION,
+): void {
+  if (handoffs?.some((policy) => policy.mode === "trajectory") !== true) return;
+  assertTrajectorySdkSupported(version);
 }

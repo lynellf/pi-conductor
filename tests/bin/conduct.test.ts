@@ -36,7 +36,7 @@ import type {
   RunHandle,
   StartRunOptions,
 } from "../../src/index.js";
-import { InMemoryRecordLog } from "../../src/index.js";
+import { InMemoryRecordLog, loadManifestFromString } from "../../src/index.js";
 
 // ─── Test helpers ───────────────────────────────────────────────────────
 
@@ -157,6 +157,23 @@ function makeManifestDir(): string {
     "utf8",
   );
   return dir;
+}
+
+function makeLoadedManifest(): LoadedManifest {
+  return loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [stub:stub-model]
+    system_prompt: roles/orchestrator.md
+    tools: [handoff, end]
+  - name: worker
+    max_visits: 1
+    models: [stub:stub-model]
+    system_prompt: roles/worker.md
+    tools: [handoff, end]
+`);
 }
 
 /** Make a `startRun` mock that resolves with a fake handle. */
@@ -425,7 +442,7 @@ describe("runCli delegation to startRun", () => {
         runId: "fake",
         def: {} as HostFactoryContext["def"],
         log: new InMemoryRecordLog(),
-        loadedManifest: {} as LoadedManifest,
+        loadedManifest: makeLoadedManifest(),
       };
       expect(() => opts.hostFactory(fakeCtx)).not.toThrow();
     } finally {
@@ -444,7 +461,7 @@ describe("runCli delegation to startRun", () => {
           runId: "fake",
           def: {} as HostFactoryContext["def"],
           log: new InMemoryRecordLog(),
-          loadedManifest: {} as LoadedManifest,
+          loadedManifest: makeLoadedManifest(),
         });
         const uiContext = (
           host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
@@ -500,7 +517,7 @@ describe("runCli delegation to startRun", () => {
           runId: "fake",
           def: {} as HostFactoryContext["def"],
           log: new InMemoryRecordLog(),
-          loadedManifest: {} as LoadedManifest,
+          loadedManifest: makeLoadedManifest(),
         });
         const uiContext = (
           host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
@@ -699,7 +716,7 @@ describe("runCli delegation to startRun", () => {
           runId: "fake",
           def: {} as HostFactoryContext["def"],
           log: new InMemoryRecordLog(),
-          loadedManifest: {} as LoadedManifest,
+          loadedManifest: makeLoadedManifest(),
         });
         const uiContext = (
           host as { uiContext?: { input: (title: string) => Promise<string | undefined> } }
