@@ -77,6 +77,7 @@ export {
   validateToolExecutionPolicy,
 } from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
+export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
 export type { PrewalkManifestErrorCode } from "./manifest/prewalk.js";
 export { deriveGuideTranscriptBudget } from "./manifest/prewalk.js";
 export type {
