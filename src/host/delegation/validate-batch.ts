@@ -16,7 +16,7 @@
  */
 
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
-import type { ContextArtifact, DelegateArgs } from "../../seam/schema.js";
+import type { ContextArtifact, DelegateSubmissionArgs } from "../../seam/schema.js";
 import { isValidTaskId } from "./ids.js";
 import { isSafeExactProjectionPath } from "./projection.js";
 import {
@@ -90,7 +90,7 @@ export interface GitCheckResult {
  * gets a complete picture of what's wrong.
  */
 export function validateBatch(
-  args: DelegateArgs,
+  args: DelegateSubmissionArgs,
   policy: DelegationPolicy,
   profiles: readonly SubagentProfile[],
   remainingChildren: number,
@@ -232,7 +232,7 @@ export function validateBatch(
 
 /** Preserve Issue #52 runtime projection validation for profile-less children. */
 function validateLegacyProjectionPaths(
-  task: DelegateArgs["tasks"][number],
+  task: DelegateSubmissionArgs["tasks"][number],
   materializedPathSet: ReadonlySet<string> | undefined,
 ): BatchValidationError[] {
   const projectionPaths = task.projection_paths;

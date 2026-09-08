@@ -126,8 +126,20 @@ export { validateManifest } from "./manifest/validate.js";
 // sees them (§3/§12: payload is `unknown`).
 
 export { summarizePayload } from "./seam/payload-summary.js";
-export type { EndArgs, HandoffArgs } from "./seam/schema.js";
-export { endArgsSchema, handoffArgsSchema } from "./seam/schema.js";
+export type {
+  DelegateArgs,
+  DelegateControlArgs,
+  DelegateSubmissionArgs,
+  EndArgs,
+  HandoffArgs,
+} from "./seam/schema.js";
+export {
+  delegateArgsSchema,
+  delegateControlArgsSchema,
+  delegateSubmissionArgsSchema,
+  endArgsSchema,
+  handoffArgsSchema,
+} from "./seam/schema.js";
 export type {
   BreachFailureReason,
   EmissionCapture,
@@ -171,6 +183,19 @@ export type {
   ChildWorktreeState,
   DelegateResultStatus,
 } from "./persistence/child-completion.js";
+export type {
+  DelegationAcceptedChild,
+  DelegationSubmissionAcceptedRecord,
+} from "./persistence/delegation-task.js";
+export {
+  acceptedDelegationResults,
+  assertDelegationSubmissionAccepted,
+  assertDelegationTaskTimeline,
+  DelegationTaskRecordError,
+  delegationSubmissionId,
+  pendingDelegationChildren,
+  spentDelegationSlots,
+} from "./persistence/delegation-task.js";
 export type {
   EndGuardBudgetResetRecord,
   EndGuardBudgetState,

@@ -46,7 +46,11 @@ export function observeChildTerminal(args: {
   readonly config: SpawnChildConfig;
   readonly manager: DelegationManager;
   readonly reportCapture: ReportCapture;
-}): { readonly promise: Promise<ChildTerminal>; fail(reason: string): void } {
+}): {
+  readonly promise: Promise<ChildTerminal>;
+  fail(reason: string): void;
+  reject(cause: unknown): void;
+} {
   let finish: ((terminal: ChildTerminal) => void) | undefined;
   let unsubscribe: (() => void) | undefined;
   let settled = false;
@@ -61,8 +65,10 @@ export function observeChildTerminal(args: {
     unsubscribe?.();
     finish?.(terminal);
   };
-  const promise = new Promise<ChildTerminal>((resolve) => {
+  let rejectPromise: (cause: unknown) => void = () => {};
+  const promise = new Promise<ChildTerminal>((resolve, reject) => {
     finish = resolve;
+    rejectPromise = reject;
   });
   const selectedSummaryTruncated = (): boolean =>
     args.config.profile.completion_protocol === "minimal"
@@ -122,6 +128,12 @@ export function observeChildTerminal(args: {
         sessionFile: args.session.sessionFile ?? null,
         usage: args.state.usage(),
       });
+    },
+    reject(cause) {
+      if (settled) return;
+      settled = true;
+      unsubscribe?.();
+      rejectPromise(cause);
     },
   };
 }

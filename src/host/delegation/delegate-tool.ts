@@ -1,7 +1,6 @@
 /** Delegate tool execution — delegation lite §4–§5 / Issue #57 §7. */
 
 import { mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
 
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
 import type {
@@ -10,7 +9,7 @@ import type {
   DelegateResultStatus,
 } from "../../persistence/child-completion.js";
 import type { SubagentUsage } from "../../persistence/log.js";
-import { buildChildPrompt, type ChildPrompt } from "./child-prompt.js";
+import type { PreparedDelegateChild } from "./admission.js";
 import { capChildText, type LegacyChildReport, normalizeChildTerminal } from "./child-result.js";
 import {
   completionEvidence,
@@ -20,18 +19,19 @@ import {
   selectedFailureReason,
   selectedSummary,
 } from "./child-result-mapping.js";
-import { type PreparedTask, prepareTaskContextArtifacts } from "./context-artifact-admission.js";
+import type { PreparedTask } from "./context-artifact-admission.js";
 import type {
   ResolveContextArtifactBatchOptions,
   ResolvedContextArtifact,
 } from "./context-artifacts.js";
-import { DelegateToolError } from "./delegate-error.js";
+import { DelegationOwnershipError } from "./delegate-error.js";
 
 export type { DelegateValidationErrorItem } from "./delegate-error.js";
 export { DelegateToolError } from "./delegate-error.js";
 
+import { prepareDelegateSubmission } from "./admission.js";
 import { projectionFingerprint, taskFingerprint } from "./fingerprints.js";
-import { buildBranchName, buildWorktreePath, generateChildId } from "./ids.js";
+import type { ChildId } from "./ids.js";
 import type {
   PoolChildResult,
   PoolChildStartedInfo,
@@ -39,18 +39,7 @@ import type {
   PoolFailedResult,
 } from "./pool.js";
 import { runBoundedPool } from "./pool.js";
-import {
-  captureParentProjection,
-  type DelegateParentProjectionCapture,
-  ParentProjectionCaptureError,
-} from "./projection.js";
-import { formatBatchErrors, validateBatch } from "./validate-batch.js";
-import {
-  checkPrimaryGitStatus,
-  configureExactSparseWorktree,
-  createWorktree,
-  inspectChildWorktree,
-} from "./worktree.js";
+import { configureExactSparseWorktree, createWorktree, inspectChildWorktree } from "./worktree.js";
 
 /** Child status exposed by the parent tool. */
 export type { DelegateResultStatus } from "../../persistence/child-completion.js";
@@ -81,7 +70,7 @@ export interface DelegateResult {
 
 /** Dependencies for one delegate tool invocation. */
 export interface DelegateToolOptions {
-  readonly args: import("../../seam/schema.js").DelegateArgs;
+  readonly args: import("../../seam/schema.js").DelegateSubmissionArgs;
   readonly policy: DelegationPolicy;
   readonly profiles: readonly SubagentProfile[];
   readonly remainingChildren: number;
@@ -139,73 +128,17 @@ export interface ChildTerminal {
 
 /** Validate, create worktrees, run bounded children, and preserve input order. */
 export async function executeDelegate(options: DelegateToolOptions): Promise<DelegateResult> {
-  const gitCheck = await checkPrimaryGitStatus(options.primaryCheckout);
-  let parentProjection: DelegateParentProjectionCapture;
-  try {
-    parentProjection = await captureParentProjection(options.primaryCheckout, gitCheck);
-  } catch (cause) {
-    const detail = cause instanceof ParentProjectionCaptureError ? cause.message : message(cause);
-    throw new DelegateToolError("batch_validation_failed", detail, [
-      { code: "projection-authority-unavailable", message: detail },
-    ]);
-  }
-  const validation = validateBatch(
-    options.args,
-    options.policy,
-    options.profiles,
-    options.remainingChildren,
-    gitCheck,
-    parentProjection.materializedPaths,
-  );
-  if (!validation.valid) {
-    throw new DelegateToolError(
-      "batch_validation_failed",
-      formatBatchErrors(validation.errors),
-      validation.errors.map((error) => ({
-        code: error.code,
-        message: error.message,
-        ...(error.path === undefined ? {} : { path: error.path }),
-      })),
-    );
-  }
-  if (parentProjection.baseCommit === null || parentProjection.materializedPaths === undefined) {
-    throw new DelegateToolError(
-      "batch_validation_failed",
-      "primary projection authority is unavailable",
-      [],
-    );
-  }
-  const baseCommit = parentProjection.baseCommit;
-  const materializedParentPaths = parentProjection.materializedPaths;
-  const inheritedProjectionPaths =
-    parentProjection.isSparse === true ? parentProjection.materializedPaths : undefined;
-  const projectionResolvedTasks =
-    inheritedProjectionPaths === undefined
-      ? validation.tasks
-      : validation.tasks.map((task) =>
-          task.profile.workspace?.projection === undefined && task.projectionPaths === undefined
-            ? { ...task, projectionPaths: inheritedProjectionPaths }
-            : task,
-        );
-  const contextResolution = await prepareTaskContextArtifacts(
-    projectionResolvedTasks,
-    options.policy,
-    options.primaryCheckout,
-    baseCommit,
-    materializedParentPaths,
-    options.contextArtifactTestHook,
-  );
-  if (!contextResolution.valid) {
-    const errors = contextResolution.errors;
-    throw new DelegateToolError(
-      "batch_validation_failed",
-      errors.length === 1
-        ? `${errors[0]?.code}: ${errors[0]?.message}`
-        : `${errors.length} context artifact validation errors`,
-      errors,
-    );
-  }
-  const tasks = contextResolution.tasks;
+  const prepared = await prepareDelegateSubmission(options);
+  const tasks = prepared.tasks.map((child) => ({
+    taskId: child.taskId,
+    subagent: child.profile.name,
+    profile: child.profile,
+    objective: child.objective,
+    expectedOutput: child.expectedOutput,
+    ...(child.projectionPaths === undefined ? {} : { projectionPaths: child.projectionPaths }),
+    resolvedContextArtifacts: child.contextArtifacts,
+  }));
+  const preparedByTask = new Map(prepared.tasks.map((child) => [child.taskId, child] as const));
 
   await Promise.all([
     mkdir(`${options.runStateDir}/worktrees`, { recursive: true }),
@@ -215,7 +148,7 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
     tasks,
     {
       maxParallel: options.policy.max_parallel,
-      baseCommit,
+      baseCommit: prepared.baseCommit,
       runStateDir: options.runStateDir,
       runId: options.runId,
       parentRole: options.parentRole,
@@ -227,20 +160,20 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
       },
     },
     async (poolOptions) => {
-      const childId = generateChildId();
-      const result = await runSingleChild({
-        childId,
-        task: poolOptions.task,
-        worktreePath: buildWorktreePath(options.runStateDir, childId),
-        branch: buildBranchName(options.runId, childId),
-        baseCommit,
+      const child = preparedByTask.get(poolOptions.task.taskId);
+      if (child === undefined)
+        throw new Error(`prepared child '${poolOptions.task.taskId}' is missing`);
+      const result = await runPreparedChild({
+        prepared: child,
         runId: options.runId,
         parentRole: options.parentRole,
         primaryCheckout: options.primaryCheckout,
-        parentMaterializedPaths: materializedParentPaths,
+        parentMaterializedPaths: prepared.materializedParentPaths,
         systemPromptRoot: options.systemPromptRoot,
         spawnAndRunChild: options.spawnAndRunChild,
-        isAdmissionClosed: options.isAdmissionClosed,
+        ...(options.isAdmissionClosed === undefined
+          ? {}
+          : { isAdmissionClosed: options.isAdmissionClosed }),
       });
       if (isPoolCompleted(result)) {
         poolOptions.callbacks.onChildCompleted(result);
@@ -253,7 +186,7 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
 }
 
 interface RunSingleChildOptions {
-  readonly childId: ReturnType<typeof generateChildId>;
+  readonly childId: ChildId;
   readonly task: PreparedTask;
   readonly worktreePath: string;
   readonly branch: string;
@@ -264,7 +197,8 @@ interface RunSingleChildOptions {
   readonly parentMaterializedPaths: readonly string[];
   readonly systemPromptRoot: string;
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
-  readonly isAdmissionClosed: (() => boolean) | undefined;
+  readonly isAdmissionClosed?: () => boolean;
+  readonly prepared: PreparedDelegateChild;
 }
 
 async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChildResult> {
@@ -281,23 +215,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     return preStartFailure(options, "failed", `failed to create worktree: ${message(cause)}`);
   }
 
-  let prompt: ChildPrompt;
-  try {
-    prompt = await buildChildPrompt(
-      task.profile,
-      resolve(options.systemPromptRoot, task.profile.system_prompt),
-      task.taskId,
-      task.objective,
-      task.expectedOutput,
-      options.runId,
-      options.parentRole,
-      worktreePath,
-      task.projectionPaths,
-      task.resolvedContextArtifacts,
-    );
-  } catch (cause) {
-    return preStartFailure(options, "failed", `failed to load child prompt: ${message(cause)}`);
-  }
+  const prompt = { systemPrompt: options.prepared.systemPrompt };
 
   const authorityPaths = task.projectionPaths ?? options.parentMaterializedPaths;
   const childTaskFingerprint = taskFingerprint(
@@ -329,6 +247,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       systemPrompt: prompt.systemPrompt,
     });
   } catch (cause) {
+    if (cause instanceof DelegationOwnershipError) throw cause;
     terminal = {
       started: false,
       model: task.profile.models[0]?.model ?? "",
@@ -391,6 +310,47 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     lifecycleStarted: terminal.started,
     completionEvidence: evidence,
   };
+}
+
+/** Execute one already-prepared child without rereading parent checkout state. */
+export async function runPreparedChild(options: {
+  readonly prepared: PreparedDelegateChild;
+  readonly runId: string;
+  readonly parentRole: string;
+  readonly primaryCheckout: string;
+  readonly parentMaterializedPaths: readonly string[];
+  readonly systemPromptRoot: string;
+  readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
+  readonly isAdmissionClosed?: () => boolean;
+}): Promise<PoolChildResult> {
+  const prepared = options.prepared;
+  return runSingleChild({
+    childId: prepared.childId,
+    task: {
+      taskId: prepared.taskId,
+      subagent: prepared.profile.name,
+      profile: prepared.profile,
+      objective: prepared.objective,
+      expectedOutput: prepared.expectedOutput,
+      ...(prepared.projectionPaths === undefined
+        ? {}
+        : { projectionPaths: prepared.projectionPaths }),
+      resolvedContextArtifacts: prepared.contextArtifacts,
+    },
+    worktreePath: prepared.worktreePath,
+    branch: prepared.branch,
+    baseCommit: prepared.baseCommit,
+    runId: options.runId,
+    parentRole: options.parentRole,
+    primaryCheckout: options.primaryCheckout,
+    parentMaterializedPaths: options.parentMaterializedPaths,
+    systemPromptRoot: options.systemPromptRoot,
+    spawnAndRunChild: options.spawnAndRunChild,
+    ...(options.isAdmissionClosed === undefined
+      ? {}
+      : { isAdmissionClosed: options.isAdmissionClosed }),
+    prepared,
+  });
 }
 
 function legacyReportFromCompatibilityTerminal(

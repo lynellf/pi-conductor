@@ -71,36 +71,63 @@ No new dependencies, service, automatic integration or extra reducer owner.
 
 ## Review gates
 
-- [ ] Ledger: atomic batch, duplicate delivery before recapture, mismatched input,
+- [x] Ledger: atomic batch, duplicate delivery before recapture, mismatched input,
   duplicate/malformed terminal, append/reopen and interrupted queued recovery.
 - [x] Admission: changing checkout, prompt or context after acceptance cannot
   change the queued task; projection confinement remains enforced.
-- [ ] Scheduler: gated A/B, parent action, B result/review, C starts while A is
+- [x] Scheduler: gated A/B, parent action, B result/review, C starts while A is
   active; shared capacity, unrelated failure and targeted cancellation.
-- [ ] Lifecycle: parent model failure settles active/queued tasks before terminal
+- [x] Lifecycle: parent model failure settles active/queued tasks before terminal
   persistence/disposal/fallback; fallback retains spent slots and completed results.
-- [ ] Budget: terminal child usage can close admission before another queued
+- [x] Budget: terminal child usage can close admission before another queued
   child starts; parent/run cancellation awaits executable cleanup.
-- [ ] Transport: shared and real RPC tools carry the actual SDK call identity;
+- [x] Transport: shared and real RPC tools carry the actual SDK call identity;
   response loss and redelivery return original handles without resubmission.
-- [ ] Host: pending handles block normal handoff/end; forced closure settles
+- [x] Host: pending handles block normal handoff/end; forced closure settles
   children first; public SDK notifications queue without a concurrent prompt.
-- [ ] Restart: unknown executable ownership fails before reconciliation; accepted
+- [x] Restart: unknown executable ownership fails before reconciliation; accepted
   queued and started work is interrupted exactly once, never relaunched.
-- [ ] Full checks, independent review, documentation and merged-tree comparison.
+- [x] Full checks, independent review and documentation.
+- [ ] Merged-tree comparison.
 
 Admission gate: 36 focused tests across preparation, existing delegation, context
 artifacts, prompts and the tool schema passed. The real Git regression verifies
 that preparation creates no worktree and execution retains original file content
-after the parent commits a newer checkout. Scheduler and host gates remain open.
+after the parent commits a newer checkout. Subsequent scheduler and host gates passed as recorded below.
 
 Ledger foundation: strict batch acceptance and accepted-child lifecycle schemas
 passed 61 persistence tests, including corrupt JSONL reopening, duplicate terminal
 rejection, queued failures and real-session cancellation. Main verification of
 the ledger, admission, seam and bridge foundations passed 107 tests across nine
-files and full strict typecheck. Host restart reconciliation remains outstanding.
+files and full strict typecheck. Restart reconciliation is recorded below.
 
 Restart reconciliation gate: 46 tests across API, delegation and persistence
 passed with full strict typecheck. Accepted queued and started children receive
 one durable interruption terminal, while unfinished executable ownership rejects
 before reconciliation writes. Legacy child reconciliation remains covered.
+
+
+Cross-layer review: independent scheduler tests reproduced append ambiguity,
+first-failure replacement, cleanup and admission bugs before fixes. The real loop
+regressions gate child cleanup before model-failure persistence, parent disposal,
+and model replacement; failed cleanup rejects without a replacement. Orchestrator
+and worker budget closure settle children before machine completion. ProductionHost
+boundary tests exercise actual fatal-to-parent abort routing, live usage admission,
+steering rejection/seal handling, late-notice suppression, repeated settlement and
+competing parent/child abort errors. The existing production RPC suite exposed and
+now guards remaining-admission reporting and late bridge responses on parent abort.
+The public blocking result shape and child confinement tests remain unchanged.
+
+The host stops parent delivery immediately during operator abort, then awaits both
+parent protocol abort and child settlement. A parent abort error cannot become an
+unhandled rejection while child cleanup runs, and cannot hide a child ownership
+failure. This distinguishes stopping delivery from persisting parent settlement.
+
+
+Final frozen implementation gate: **179 test files / 2,082 tests passed**,
+including the grep guards. Strict typecheck, build, repository lint, formatting,
+local documentation link targets and production dependency audit passed.
+Independent review approved the final source after the RPC abort and worker
+budget regressions passed. The full dependency graph retains one low esbuild
+advisory with no moderate/high/critical findings. No paid provider or deployment
+trial was performed.

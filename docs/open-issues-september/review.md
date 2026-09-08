@@ -3,7 +3,8 @@
 Reviewed source against FSM §§3, 7, 10–12, the existing role-turn contract, and
 issues #68, #71, #73 and #74. Implementation used Luna; integration and
 review were performed by the main agent. No release publication is part of this
-batch. #75–#77 remain proposed specifications, not implemented features.
+batch. This section records the initial PR #79 review; subsequent implementation
+of the acknowledged #75–#77 specification is tracked in [controls-plan.md](controls-plan.md).
 
 ## Findings reconciled
 
@@ -28,7 +29,8 @@ batch. #75–#77 remain proposed specifications, not implemented features.
 - New-controls design review found five recovery/ownership gaps. The proposed
   spec now includes durable guard starts, guard retry limits, targeted cancellation,
   parent-fallback settlement and durable submission identity. Human acknowledgment
-  is still pending; these design changes do not claim implementation.
+  was pending at that initial review; the subsequent approval is recorded in
+  [spec.md](spec.md).
 
 - The first push exposed Git hook environment leakage into temporary repository
   fixtures. The test hook now clears Git repository-local variables using

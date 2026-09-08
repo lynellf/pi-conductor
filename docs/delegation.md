@@ -7,6 +7,8 @@
 - [Worktree subagent delegation](#worktree-subagent-delegation)
 - [Configure a parent and profiles](#configure-a-parent-and-profiles)
 - [Ask the parent to delegate](#ask-the-parent-to-delegate)
+- [Nonblocking tasks and controls](#nonblocking-tasks-and-controls)
+- [Settlement and recovery](#settlement-and-recovery)
 - [Projection-aware child authority (Issue #52)](#projection-aware-child-authority-issue-52)
 - [Read-only context artifacts (Issue #60)](#read-only-context-artifacts-issue-60)
 - [Declarative profile projection policy (Issue #55)](#declarative-profile-projection-policy-issue-55)
@@ -55,8 +57,9 @@ subagents:
 
 `allowed_subagents` must name declared profiles without duplicates.
 `max_children_per_session` is the total child-task allowance for one parent
-session; completed children do not free a slot. `max_parallel` bounds concurrent
-children and cannot exceed that allowance. Profile names cannot collide with
+logical invocation, including model fallback; accepted queued tasks consume it,
+and completion or cancellation does not refund it. `max_parallel` bounds concurrent
+children across all submissions and cannot exceed that allowance. Profile names cannot collide with
 FSM role names. The optional closed `context_artifact_limits` block applies per
 task. Its defaults are exactly 8 items, 8,192 UTF-8 bytes per item, and 32,768
 UTF-8 bytes total; hard maxima are 16, 32,768, and 131,072 respectively. All
@@ -99,12 +102,91 @@ validated before any worktree is created. Delegation requires a clean primary
 checkout (`git status --porcelain=v1 --untracked-files=all`) and a resolvable
 `HEAD`; commit or stash ordinary and untracked changes first.
 
-The tool waits for all children and returns results in input order. Each result
+By default, the tool waits for all children and returns results in input order.
+An explicit `"mode": "blocking"` has the same behavior. Each result
 contains its authoritative status, branch, worktree path, base/head commits,
 session file, usage, summary, and any failure reason. `completed` requires
 verified uncommitted changes in the child worktree; `no_changes` requires a
 clean worktree at the batch base. A `completed` report without changes becomes
 `no_changes`; an unexpected commit or invalid Git state becomes `failed`.
+
+### Nonblocking tasks and controls
+
+Add `"mode": "nonblocking"` beside `tasks` to return after the whole batch has
+been durably accepted:
+
+```json
+{
+  "mode": "nonblocking",
+  "tasks": [{
+    "id": "parser",
+    "subagent": "api-implementer",
+    "objective": "Implement the parser change.",
+    "expected_output": "A focused parser diff."
+  }]
+}
+```
+
+The response is `{"child_ids":["<stable-child-id>"]}` in input order. Use these
+host-issued handles, rather than the task's `id`, for subsequent controls on the
+same `delegate` tool. A control call contains `operation` and a nonempty
+`child_ids` array; it cannot also contain `tasks` or `mode`.
+
+| Call | Behavior |
+| --- | --- |
+| `{"operation":"status","child_ids":["<child-id>"]}` | Inspect queued, running, or terminal state immediately. |
+| `{"operation":"result","child_ids":["<child-id>"]}` | Retrieve available durable results immediately; unfinished tasks retain their pending state. |
+| `{"operation":"wait","child_ids":["<child-id>"]}` | Wait only for the selected children and return their results in requested order. |
+| `{"operation":"cancel","child_ids":["<child-id>"]}` | Cancel selected queued/active children and await their settlement. |
+
+`status`, `result`, and `cancel` return an array of objects with `child_id`,
+`task_id`, `submission_id`, `status`, and a `result` when available. `wait` returns
+`{"results":[...]}`. Terminal result fields use the same snake_case contract as
+blocking submission. For compatibility, a missing session is an empty string and
+unknown usage is an all-zero object in tool results; the durable log retains null
+for both instead of asserting that usage was measured.
+
+Controls consume no admission allowance and do not delete results. Unknown
+handles reject. The parent can submit A and B, continue its own work, wait for B,
+review B's result, and submit C while A is still running. All three share the
+same concurrency and admission limits. An ordinary child failure leaves unrelated
+children available.
+
+The host queues brief child ID/status notifications through the parent's public
+SDK steering interface at safe turn boundaries. These notices are advisory;
+query the durable result before acting on it. The host does not start another
+parent prompt from a child completion callback. Blocking delegation and explicit
+result waits have no implicit RPC transport deadline; child executable tools
+still use their configured [execution deadlines](execution-controls.md).
+
+Acceptance pins the clean Git base, profile, prompt, context artifacts and exact
+projection before queueing. Later parent commits or prompt edits do not change
+queued work. The run log atomically records one `delegation_submission_accepted`
+batch before returning handles. The run, logical parent invocation and actual SDK
+tool-call ID identify that submission. Redelivery of identical arguments under
+the same identity returns the original handles before recapturing the checkout;
+changed arguments reject. A new model-issued tool call is a new submission.
+
+### Settlement and recovery
+
+A normal role handoff or end waits for all accepted children to settle. If work
+is pending, the parent receives a correction listing handles and can wait or
+cancel before emitting the transition again. Abort, budget exhaustion and parent
+failure close admission and settle owned children before the parent terminal or
+replacement. Model fallback retains spent admission and completed results.
+
+Completed results remain retrievable by the same parent role after fallback,
+handoff and resume. Retrieval contributes no additional usage: the existing
+`subagent_completed` or `subagent_failed` record is the sole terminal/accounting
+authority. A queued cancellation has no SDK session and unknown usage.
+
+Resume never resubmits accepted work. After checking executable ownership, it
+records one cancellation with `delegation_interrupted` for each unfinished
+accepted child, including tasks that never started. Historical unmatched child
+starts retain the `recovered_child_lost` recovery reason. Worktrees and completed
+results remain available for inspection and explicit follow-up tasks. Unknown
+executable ownership or ambiguous persistence/cleanup stops progress instead of
+claiming completion or starting replacement work.
 
 ### Projection-aware child authority (Issue #52)
 
@@ -267,7 +349,7 @@ git cherry-pick conductor/<runId>/<childId>
 
 Worktree confinement is a path-control boundary, not an OS, network,
 credential, or process sandbox. Child failures do not cancel siblings. A run
-abort cancels active children and then the parent; resume marks in-flight
-children as cancelled (`recovered_child_lost`) rather than relaunching them.
+abort settles queued and active children before the parent. See
+[settlement and recovery](#settlement-and-recovery) for restart behavior.
 
 Related page: [per-role isolated workspaces](workspaces.md#per-role-isolated-workspaces-issue-48) explains the parent role workspace and artifact lifecycle that delegation relies on.

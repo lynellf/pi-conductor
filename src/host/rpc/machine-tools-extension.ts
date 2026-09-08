@@ -90,11 +90,12 @@ function createDelegateBridgeTool(directory: string): ToolDefinition {
     label: "delegate",
     description: "Request bounded delegated work from the conductor host.",
     parameters: delegateArgsSchema,
-    async execute(_toolCallId, args: DelegateArgs, signal) {
+    async execute(toolCallId, args: DelegateArgs, signal) {
       try {
         return await requestDelegateBridge({
           directory,
           args,
+          actualToolCallId: toolCallId,
           ...(signal === undefined ? {} : { signal }),
         });
       } catch (error) {

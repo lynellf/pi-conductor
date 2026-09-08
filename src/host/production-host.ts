@@ -72,7 +72,8 @@ import {
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
 import type { SessionState } from "./cost.js";
-import { DelegationManager } from "./delegation/manager.js";
+import type { PoolChildResult } from "./delegation/pool.js";
+import { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { DisplaySink } from "./display-sink.js";
 import {
   EndGuardRunner,
@@ -286,7 +287,9 @@ export class ProductionHost implements Host {
    * policy doesn't cross a "real duplication" threshold).
    */
   private unavailableRole: Role | null = null;
-  private readonly delegationManager = new DelegationManager();
+  private readonly delegation = new ProductionDelegationCoordinator();
+  private readonly delegationSessionKeys = new Map<string, string>();
+  private readonly inactiveDelegationSessions = new Set<string>();
 
   // ─── Host methods ──────────────────────────────────────────────────
   // `spawnRole` is wired (7A.3). The remaining methods throw a
@@ -426,7 +429,25 @@ export class ProductionHost implements Host {
       const snapshotPin = await this.getOrCreateSnapshotPin(
         roleWorkspaceConfig.source ?? "snapshot",
       );
-      return spawnIsolatedRoleSession({
+      let isolatedParent: RoleSession | null = null;
+      const notifyTerminal = (result: PoolChildResult): void => {
+        if (
+          isolatedParent === null ||
+          this.delegationSessionKeys.get(isolatedParent.sessionId) === undefined ||
+          this.inactiveDelegationSessions.has(isolatedParent.sessionId) ||
+          isolatedParent.isSealed?.() === true ||
+          isolatedParent.steer === undefined
+        )
+          return;
+        void isolatedParent
+          .steer(`Delegated child ${result.childId} finished with status ${result.status}.`)
+          .catch(() => undefined);
+      };
+      const fatalDelegation = (cause: unknown): void => {
+        if (isolatedParent !== null) void this.prewalk.abort(isolatedParent).catch(() => undefined);
+        void cause;
+      };
+      const isolatedSession = await spawnIsolatedRoleSession({
         role,
         roleConfig,
         workspaceConfig: roleWorkspaceConfig,
@@ -450,6 +471,11 @@ export class ProductionHost implements Host {
                   roleConfig,
                   primaryCheckout,
                   opts.visitIndex,
+                  opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+                  opts.getRunCostCap,
+                  opts.getCurrentParentUsage,
+                  notifyTerminal,
+                  fatalDelegation,
                 ),
             }
           : {}),
@@ -467,13 +493,48 @@ export class ProductionHost implements Host {
         roleTurnProducer: this.roleTurnProducer,
         ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
       });
+      isolatedParent = isolatedSession;
+      this.delegationSessionKeys.set(
+        isolatedSession.sessionId,
+        JSON.stringify([this.runId, role, opts.executionVisitIndex ?? opts.visitIndex ?? 1]),
+      );
+      this.inactiveDelegationSessions.delete(isolatedSession.sessionId);
+      return isolatedSession;
     }
 
+    let sharedParent: RoleSession | null = null;
+    const notifyTerminal = (result: PoolChildResult): void => {
+      if (
+        sharedParent === null ||
+        this.delegationSessionKeys.get(sharedParent.sessionId) === undefined ||
+        this.inactiveDelegationSessions.has(sharedParent.sessionId) ||
+        sharedParent.isSealed?.() === true ||
+        sharedParent.steer === undefined
+      )
+        return;
+      void sharedParent
+        .steer(`Delegated child ${result.childId} finished with status ${result.status}.`)
+        .catch(() => undefined);
+    };
+    const fatalDelegation = (cause: unknown): void => {
+      if (sharedParent !== null) void this.prewalk.abort(sharedParent).catch(() => undefined);
+      void cause;
+    };
     const delegateTool = hasDelegateConfiguration(roleConfig)
-      ? await this.createDelegateTool(role, roleConfig, this.cwd, opts.visitIndex)
+      ? await this.createDelegateTool(
+          role,
+          roleConfig,
+          this.cwd,
+          opts.visitIndex,
+          opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+          opts.getRunCostCap,
+          opts.getCurrentParentUsage,
+          notifyTerminal,
+          fatalDelegation,
+        )
       : null;
 
-    return spawnSharedSdkRoleSession({
+    const sharedSession = await spawnSharedSdkRoleSession({
       role,
       roleConfig,
       model,
@@ -507,11 +568,18 @@ export class ProductionHost implements Host {
         isUiContextCurrent: this.isUiContextCurrent,
       }),
       ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
-      persistRecord: (record) => this.persistRecord(record),
+      persistRecord: (record: PersistedRecord) => this.persistRecord(record),
       sessionStates: this.sessionStates,
       agentsBySessionId: this.agentsBySessionId,
       roleTurnProducer: this.roleTurnProducer,
     });
+    sharedParent = sharedSession;
+    this.delegationSessionKeys.set(
+      sharedSession.sessionId,
+      JSON.stringify([this.runId, role, opts.executionVisitIndex ?? opts.visitIndex ?? 1]),
+    );
+    this.inactiveDelegationSessions.delete(sharedSession.sessionId);
+    return sharedSession;
   }
 
   /** Return the last durable transport outcome targeting this receiver. */
@@ -687,6 +755,11 @@ export class ProductionHost implements Host {
     roleConfig: RoleConfig | undefined,
     primaryCheckout: string,
     parentVisitIndex: number | undefined,
+    executionVisitIndex: number,
+    getRunCostCap?: () => number | null,
+    getCurrentParentUsage?: () => number,
+    onTaskTerminal?: (result: PoolChildResult) => void,
+    onFatal?: (cause: unknown) => void,
   ): Promise<
     ReturnType<typeof import("./delegation/delegate-tool-factory.js").createDelegateTool>
   > {
@@ -697,8 +770,7 @@ export class ProductionHost implements Host {
       throw new Error("delegation requires the loop-owned parent visitIndex");
     }
     const manifest = this.loadedManifest.manifest;
-    const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
-    return createDelegateTool({
+    const factoryOptions = {
       role: roleConfig,
       subagents: manifest.subagents ?? [],
       remainingChildren: roleConfig.delegation.max_children_per_session,
@@ -707,14 +779,25 @@ export class ProductionHost implements Host {
       parentVisitIndex,
       primaryCheckout,
       runStateDir: join(this.cwd, ".pi-conductor", "runs", this.runId),
-      persistRecord: (record) => this.persistRecord(record),
+      persistRecord: (record: PersistedRecord) => this.persistRecord(record),
       agentDir: this.agentDir,
       systemPromptRoot: delegationPromptRoot(this.loadedManifest, this.cwd),
       modelRegistry: this.modelRegistry,
       ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
       sessionDir: this.sessionDir,
-      manager: this.delegationManager,
-    });
+      records: () => this.log.records(this.runId),
+      isBudgetExhausted: () => {
+        const cap = getRunCostCap?.();
+        if (cap === null || cap === undefined) return false;
+        return this.runCostSoFar() + (getCurrentParentUsage?.() ?? 0) >= cap;
+      },
+      ...(onTaskTerminal === undefined ? {} : { onTaskTerminal }),
+      ...(onFatal === undefined ? {} : { onFatal }),
+    };
+    return this.delegation.createTool(
+      factoryOptions,
+      JSON.stringify([this.runId, role, executionVisitIndex]),
+    );
   }
 
   /** Adapt the existing delegate tool to the isolated role's RPC bridge. */
@@ -723,22 +806,26 @@ export class ProductionHost implements Host {
     roleConfig: RoleConfig | undefined,
     primaryCheckout: string,
     parentVisitIndex: number | undefined,
+    executionVisitIndex: number,
+    getRunCostCap?: () => number | null,
+    getCurrentParentUsage?: () => number,
+    onTaskTerminal?: (result: PoolChildResult) => void,
+    onFatal?: (cause: unknown) => void,
   ): Promise<DelegateBridgeHandler> {
     const delegateTool = await this.createDelegateTool(
       role,
       roleConfig,
       primaryCheckout,
       parentVisitIndex,
+      executionVisitIndex,
+      getRunCostCap,
+      getCurrentParentUsage,
+      onTaskTerminal,
+      onFatal,
     );
-    return async (args) =>
+    return async (args, toolCallId) =>
       adaptDelegateToolResult(
-        await delegateTool.execute(
-          "isolated-delegate-bridge",
-          args,
-          undefined,
-          undefined,
-          {} as ExtensionContext,
-        ),
+        await delegateTool.execute(toolCallId, args, undefined, undefined, {} as ExtensionContext),
       );
   }
 
@@ -778,10 +865,18 @@ export class ProductionHost implements Host {
   }
 
   sessionTerminalReason(session: RoleSession): SessionTerminalReason {
+    const delegationKey = this.delegationSessionKeys.get(session.sessionId);
+    if (delegationKey !== undefined && this.delegation.failure(delegationKey) !== undefined)
+      return "delegation_failed";
     return this.prewalk.sessionTerminalReason(session);
   }
 
   sessionFailureDetail(session: RoleSession): string | null {
+    const delegationKey = this.delegationSessionKeys.get(session.sessionId);
+    if (delegationKey !== undefined) {
+      const detail = this.delegation.failureDetail(delegationKey);
+      if (detail !== null) return detail;
+    }
     return this.prewalk.sessionFailureDetail(session);
   }
 
@@ -1013,8 +1108,47 @@ export class ProductionHost implements Host {
 
   async abortSession(session: RoleSession, _reason: string): Promise<void> {
     await this.endGuardRunner.abort(session.sessionId);
-    await this.delegationManager.abortAll();
+    const key = this.delegationSessionKeys.get(session.sessionId);
+    if (key !== undefined) {
+      this.inactiveDelegationSessions.add(session.sessionId);
+      let parentAbortFailure: unknown;
+      const parentAbort = this.prewalk.abort(session).catch((error: unknown) => {
+        parentAbortFailure = error;
+      });
+      let childCloseFailure: unknown;
+      try {
+        await this.delegation.closeScope(key, _reason);
+        this.delegationSessionKeys.delete(session.sessionId);
+      } catch (error) {
+        childCloseFailure = error;
+      } finally {
+        if (this.delegationSessionKeys.get(session.sessionId) === undefined)
+          this.inactiveDelegationSessions.delete(session.sessionId);
+        await parentAbort;
+      }
+      if (childCloseFailure !== undefined) throw childCloseFailure;
+      if (parentAbortFailure !== undefined) throw parentAbortFailure;
+      return;
+    }
     await this.prewalk.abort(session);
+  }
+
+  pendingDelegationTasks(session: RoleSession): readonly string[] {
+    const key = this.delegationSessionKeys.get(session.sessionId);
+    return key === undefined ? [] : this.delegation.pending(key);
+  }
+
+  async settleDelegation(session: RoleSession, reason: string): Promise<void> {
+    const key = this.delegationSessionKeys.get(session.sessionId);
+    if (key === undefined) return;
+    this.inactiveDelegationSessions.add(session.sessionId);
+    try {
+      await this.delegation.closeScope(key, reason);
+      this.delegationSessionKeys.delete(session.sessionId);
+    } finally {
+      if (this.delegationSessionKeys.get(session.sessionId) === undefined)
+        this.inactiveDelegationSessions.delete(session.sessionId);
+    }
   }
 
   runEndGuard(request: EndGuardRunRequest): Promise<EndGuardRunResult> {

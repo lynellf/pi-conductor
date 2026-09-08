@@ -20,3 +20,14 @@ export class DelegateToolError extends Error {
     this.name = "DelegateToolError";
   }
 }
+
+/** Fatal child lifecycle ambiguity after SDK ownership was created. */
+export class DelegationOwnershipError extends Error {
+  override readonly cause: unknown;
+
+  constructor(message: string, cause: unknown) {
+    super(message, { cause });
+    this.name = "DelegationOwnershipError";
+    this.cause = cause;
+  }
+}
