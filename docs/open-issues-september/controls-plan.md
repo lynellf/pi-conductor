@@ -21,10 +21,14 @@ concurrent edits in the original checkout remain preserved.
 ## Phase 1 — #76 tool deadlines and cleanup
 
 1. Supervised subprocess foundation (independent of manifest wiring).
-   - [ ] Own process groups, deadline/abort arbitration, termination escalation,
+   - [x] Own process groups, deadline/abort arbitration, termination escalation,
      bounded output and cleanup evidence; explicit platform admission.
-   - [ ] RED/GREEN real-process tests: silent hang, CPU loop, descendants/pipelines,
+   - [x] RED/GREEN real-process tests: silent hang, CPU loop, descendants/pipelines,
      normal exit and abort races. Focused tests and typecheck pass.
+     Final foundation gate: 23 process tests, scoped strict typecheck and
+     Biome pass; fast exits, bounded callbacks, stdin EPIPE and UTF-8 included.
+     Independent review approved after reproducing and fixing successful exits
+     with escaped descendants, close/deadline arbitration and dying-PID reads.
    - Files: new `src/host/execution/supervised-process*.ts` and focused tests.
 2. Pinned policy contract (independent of subprocess foundation).
    - [x] Parse/validate/freeze role and subagent policy; omitted defaults and
@@ -87,3 +91,8 @@ concurrent edits in the original checkout remain preserved.
 Each numbered slice is reviewed and committed after focused verification. Broad
 integration slices are split further by concrete files as API evidence is found;
 no unrelated refactors or dependency upgrades are included.
+
+Integration inventory: Prewalk host validation (`prewalk-validation.ts`) also
+executes role-triggered commands and must use the supervised boundary. Ordinary
+host repository provisioning is distinct from model-issued executable tools;
+this change does not silently broaden role shell permissions.
