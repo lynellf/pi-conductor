@@ -106,7 +106,10 @@ concurrent edits in the original checkout remain preserved.
     - [x] Document tools/contracts; independent review and full gates pass.
       Final frozen gate: 179 files / 2,082 tests; strict typecheck, build, lint,
       format and production audit passed.
-    - [ ] Merge and close #77. Refresh remote issue inventory and post-merge assessment.
+    - [x] Merge and close #77. Refresh remote issue inventory and post-merge assessment.
+      PR #83 merged at `2e3572b`, exactly matching reviewed tree `12a79f3`.
+      Required pre-push checks passed (179 files / 2,082 tests). Only #67 remains
+      open; see [assessment.md](assessment.md) for confidence and remaining work.
 
 Each numbered slice is reviewed and committed after focused verification. Broad
 integration slices are split further by concrete files as API evidence is found;
