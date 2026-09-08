@@ -97,15 +97,16 @@ function createDelegateBridgeTool(
   configuredMode: MachineToolsConfig["delegationMode"],
   legacyDelegationMode: MachineToolsConfig["legacyDelegationMode"],
 ): ToolDefinition {
+  const effectiveMode = legacyDelegationMode === true ? undefined : configuredMode;
   return defineTool({
     name: "delegate",
     label: "delegate",
     description:
-      configuredMode === undefined
+      effectiveMode === undefined
         ? "Request bounded delegated work from the conductor host."
-        : `Request bounded delegated work from the conductor host. ${delegateModeDescription(configuredMode)}`,
+        : `Request bounded delegated work from the conductor host. ${delegateModeDescription(effectiveMode)}`,
     parameters:
-      configuredMode === undefined ? delegateArgsSchema : delegateArgsSchemaForMode(configuredMode),
+      effectiveMode === undefined ? delegateArgsSchema : delegateArgsSchemaForMode(effectiveMode),
     async execute(toolCallId, args: DelegateArgs, signal) {
       try {
         return await requestDelegateBridge({
