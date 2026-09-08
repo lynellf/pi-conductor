@@ -13,7 +13,7 @@ import { dispatchProductionPrewalk } from "./production-prewalk-dispatch.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import type { SessionEventSource } from "./session-event-handler.js";
 
-interface ProductionPrewalkOwner {
+export interface ProductionPrewalkOwner {
   readonly modelRegistry: ModelRegistry;
   readonly cwd: string;
   readonly log: RecordLog;
