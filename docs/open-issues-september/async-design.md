@@ -88,7 +88,7 @@ No new dependencies, service, automatic integration or extra reducer owner.
 - [x] Restart: unknown executable ownership fails before reconciliation; accepted
   queued and started work is interrupted exactly once, never relaunched.
 - [x] Full checks, independent review and documentation.
-- [ ] Merged-tree comparison.
+- [x] Merged-tree comparison.
 
 Admission gate: 36 focused tests across preparation, existing delegation, context
 artifacts, prompts and the tool schema passed. The real Git regression verifies
@@ -140,3 +140,8 @@ timeout settlement while that gate remains closed, requires confirmed cleanup,
 and retains the no-delayed-write assertion. Repeated focused runs and the complete
 seven-case process regression suite passed; process supervision source is unchanged.
 The hook remains mandatory and is rerun before publishing the branch.
+
+
+PR #83 merged at `2e3572b` and closed #77. Remote main has the exact tree of
+reviewed head `12a79f3`. The final mandatory pre-push hook passed lint, typecheck,
+and all 179 files / 2,082 tests. Remote issue inventory now contains only #67.
