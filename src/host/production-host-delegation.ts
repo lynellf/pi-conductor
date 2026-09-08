@@ -16,6 +16,7 @@ import {
   readPersistedSnapshotPin,
   resolvePinnedCommit,
 } from "./workspace/index.js";
+/** Dependencies for constructing and adapting delegation tools. */
 export interface DelegateHostContext {
   readonly loadedManifest: LoadedManifest;
   readonly runId: string;
@@ -35,6 +36,7 @@ export interface DelegateHostContext {
   }) => DelegateBridgeResult;
 }
 
+/** Reuse or persist the run's immutable workspace snapshot pin. */
 export async function getOrCreateSnapshotPin(
   ctx: DelegateHostContext & {
     snapshotPin: Promise<SnapshotPinnedRecord> | null;
@@ -57,6 +59,7 @@ export async function getOrCreateSnapshotPin(
   ctx.setSnapshotPin(pin);
   return pin;
 }
+/** Create the loop-owned delegate tool for a role session. */
 export async function createDelegateTool(
   ctx: DelegateHostContext,
   role: Role,
@@ -107,6 +110,7 @@ export async function createDelegateTool(
 }
 
 /** Adapt the existing delegate tool to the isolated role's RPC bridge. */
+/** Adapt the delegate tool to the isolated role-session bridge. */
 export async function createDelegateBridgeHandler(
   ctx: DelegateHostContext,
   role: Role,

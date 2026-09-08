@@ -15,6 +15,7 @@ import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
  * `ctx.cwd`), and the run-scoped state (`log`, `loadedManifest`,
  * `runId`) the loop already gives `StubHost`.
  */
+/** Construction dependencies for a production Host run. */
 export interface ProductionHostOptions {
   /** Real `ModelRegistry` from the host's environment (extension
    *  `ExtensionCommandContext.modelRegistry` or

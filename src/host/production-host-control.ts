@@ -4,6 +4,7 @@ import type { ProductionDelegationCoordinator } from "./delegation/production-de
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 import type { RoleSession } from "./host.js";
 import type { ProductionPrewalkHost } from "./production-prewalk-host.js";
+/** Dependencies for terminal, abort, and delegation control operations. */
 export interface ControlHostContext {
   readonly endGuardRunner: {
     abort(sessionId: string): Promise<void>;
@@ -14,6 +15,7 @@ export interface ControlHostContext {
   readonly inactiveDelegationSessions: Set<string>;
   readonly prewalk: ProductionPrewalkHost;
 }
+/** Abort a live role session and record its terminal state. */
 export async function abortSession(
   ctx: ControlHostContext,
   session: RoleSession,
@@ -45,6 +47,7 @@ export async function abortSession(
   await ctx.prewalk.abort(session);
 }
 
+/** Return delegation tasks that still require settlement. */
 export function pendingDelegationTasks(
   ctx: ControlHostContext,
   session: RoleSession,
@@ -53,6 +56,7 @@ export function pendingDelegationTasks(
   return key === undefined ? [] : ctx.delegation.pending(key);
 }
 
+/** Settle a completed delegation and emit its host-owned records. */
 export async function settleDelegation(
   ctx: ControlHostContext,
   session: RoleSession,
@@ -70,6 +74,7 @@ export async function settleDelegation(
   }
 }
 
+/** Run the configured end guard for a terminal session. */
 export function runEndGuard(
   ctx: ControlHostContext,
   request: EndGuardRunRequest,
@@ -77,6 +82,7 @@ export function runEndGuard(
   return ctx.endGuardRunner.run(request);
 }
 
+/** Seal a role session after its terminal lifecycle record is complete. */
 export function sealSession(_ctx: ControlHostContext, _session: RoleSession): void {
   // No-op: sealing is owned by the handoff/end tool wrapper
   // (Task 15.5) flipping `SessionSeam.isSealed`. This method

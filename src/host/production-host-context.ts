@@ -18,6 +18,7 @@ import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
 import type { SessionEventSource } from "./session-event-handler.js";
 import { assertTrajectorySdkSupportedForHandoffs } from "./trajectory-sdk-capability.js";
 
+/** Shared run-scoped SDK state used by the production Host facade. */
 export class ProductionHostContext {
   readonly modelRegistry: ModelRegistry;
   readonly cwd: string;

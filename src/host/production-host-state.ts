@@ -9,6 +9,7 @@ import type { RoleSession, SessionTerminalReason } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import { notifyListeners } from "./record-emitter.js";
+/** Dependencies for state inspection and record persistence helpers. */
 export interface StateHostContext {
   readonly prewalk: ProductionPrewalkHost;
   readonly delegationSessionKeys: Map<string, string>;
@@ -19,10 +20,12 @@ export interface StateHostContext {
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly lookupRoleConfig: (role: Role) => import("../manifest/types.js").RoleConfig | undefined;
 }
+/** Capture the latest usage record from a role session. */
 export function captureUsage(host: StateHostContext, session: RoleSession): UsageRecord {
   return host.prewalk.captureUsage(session);
 }
 
+/** Read the terminal reason recorded for a role session. */
 export function sessionTerminalReason(
   host: StateHostContext,
   session: RoleSession,
@@ -33,6 +36,7 @@ export function sessionTerminalReason(
   return host.prewalk.sessionTerminalReason(session);
 }
 
+/** Read the failure detail recorded for a role session, if any. */
 export function sessionFailureDetail(host: StateHostContext, session: RoleSession): string | null {
   const delegationKey = host.delegationSessionKeys.get(session.sessionId);
   if (delegationKey !== undefined) {
@@ -42,6 +46,7 @@ export function sessionFailureDetail(host: StateHostContext, session: RoleSessio
   return host.prewalk.sessionFailureDetail(session);
 }
 
+/** Append a host-owned record to the run log. */
 export function persistRecord(host: StateHostContext, record: PersistedRecord): void {
   // Append-only: the host is the sole writer (the loop and delegated
   // child lifecycle callbacks use this seam for durable records).
@@ -49,6 +54,7 @@ export function persistRecord(host: StateHostContext, record: PersistedRecord): 
   notifyListeners(record); // spec §4.1 — fan-out after durable append
 }
 
+/** Seed a role session with the run memory captured by the host. */
 export function seedRunMemory(
   host: StateHostContext,
   args: {
@@ -71,6 +77,7 @@ export function seedRunMemory(
   });
 }
 
+/** Compute the next visit index for a role from persisted records. */
 export function nextVisitIndex(host: StateHostContext, role: Role): number {
   // Count terminals (session_ended + session_failed) for the
   // role. A model retry (Task 18) is the SAME visit with a
@@ -86,6 +93,7 @@ export function nextVisitIndex(host: StateHostContext, role: Role): number {
   );
 }
 
+/** Resolve the logical model at a role's next fallback index. */
 export function getNextModel(
   host: StateHostContext,
   role: Role,
@@ -102,6 +110,7 @@ export function getNextModel(
 }
 
 /** Sum terminal usage costs for the run, including delegated child terminals. */
+/** Return accumulated run cost from persisted usage records. */
 export function runCostSoFar(host: StateHostContext): number {
   let total = 0;
   for (const record of host.log.records(host.runId)) {

@@ -11,12 +11,14 @@ import type {
 import { collectTerminalArtifacts as collectTerminalArtifactsFromWorkspace } from "./artifacts/lifecycle.js";
 import { formatArtifactsSeedSection, materializeArtifacts } from "./artifacts/route.js";
 import type { ArtifactRouteSource, RoleSession } from "./host.js";
+/** Dependencies for host-owned artifact routing and collection. */
 export interface ArtifactHostContext {
   readonly cwd: string;
   readonly runId: string;
   readonly log: RecordLog;
   readonly persistRecord: (record: PersistedRecord) => void;
 }
+/** Route artifacts selected by an accepted handoff. */
 export async function routeAcceptedHandoffArtifacts(
   host: ArtifactHostContext,
   source: ArtifactRouteSource,
@@ -54,6 +56,7 @@ export async function routeAcceptedHandoffArtifacts(
 }
 
 /** Collect isolated-session artifacts before the loop can spawn a successor (§7.2). */
+/** Collect artifacts after a role reaches a terminal state. */
 export async function collectTerminalArtifacts(
   host: ArtifactHostContext,
   session: RoleSession,
