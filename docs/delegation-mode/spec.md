@@ -1,6 +1,6 @@
 # Manifest-controlled delegation mode
 
-Status: acknowledged by the repository owner on 2026-09-08; ready for implementation.
+Status: implemented; acknowledged by the repository owner on 2026-09-08.
 Baseline: main `54c482f`, following asynchronous delegation PR #83.
 This revises the per-call mode contract in the acknowledged September #77 spec.
 
@@ -110,7 +110,7 @@ Each slice requires focused tests and typecheck before the next one starts.
 - [x] RPC tool/bridge: enforce the same schema and response behavior; test wait
   deadline selection, actual tool-call identity, response loss/redelivery, and
   policy mismatch without child creation.
-- [ ] End-to-end regression: A/B/C coordination succeeds with mode configured
+- [x] End-to-end regression: A/B/C coordination succeeds with mode configured
   only in the manifest and omitted from all submission arguments. Blocking
   returns ordered results; fallback/resume retain policy and spent allowance.
 - [x] Update delegation/role configuration documentation, examples and changelog;
@@ -127,14 +127,15 @@ Commands:
 pnpm typecheck
 pnpm build
 pnpm exec vitest run tests/manifest/delegation-mode.test.ts
-pnpm exec vitest run tests/host/delegation-mode.test.ts
-pnpm exec vitest run tests/host/rpc/delegation-mode.test.ts
+pnpm exec vitest run tests/host/delegation-mode-production.test.ts tests/host/delegation-mode-resume.test.ts tests/host/delegation-factory-async.test.ts
+pnpm exec vitest run tests/host/rpc/delegate-bridge.test.ts tests/host/rpc/machine-tools-extension.test.ts
 pnpm test
 pnpm lint
 pnpm format:check
 pnpm audit --prod
 ```
 
-The three focused mode test paths are planned new files. Existing delegation,
-RPC, manifest snapshot/resume and persistence tests must remain green. No paid
+Focused coverage uses the new manifest and production/resume mode suites plus
+the existing factory and RPC suites. Delegation, manifest snapshot/resume and
+persistence regressions must remain green. No paid
 provider run or package installation change is included in this specification.
