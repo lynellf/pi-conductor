@@ -1,6 +1,7 @@
 /** In-memory append-only RecordLog implementation — spec §11.1. */
 
 import type { Checkpoint } from "../core/types.js";
+import { assertDelegationTaskTimeline } from "./delegation-task.js";
 import { assertEndGuardAppend, type EndGuardRecord } from "./end-guard.js";
 import type { PersistedRecord, RecordLog } from "./log.js";
 import { materializePersistedRecord } from "./record-materialization.js";
@@ -25,6 +26,9 @@ export class InMemoryRecordLog implements RecordLog {
     if (isEndGuardRecord(snapshot)) {
       const prior = this.records(runId).filter(isEndGuardRecord);
       assertEndGuardAppend(prior, snapshot);
+    }
+    if (isDelegationTaskRecord(snapshot)) {
+      assertDelegationTaskTimeline([...this.records(runId), snapshot]);
     }
     const list = this.byRun.get(runId);
     this.byRun.set(runId, list === undefined ? [materialized.json] : [...list, materialized.json]);
@@ -69,5 +73,14 @@ function isEndGuardRecord(record: PersistedRecord): record is EndGuardRecord {
     record.type === "end_guard_started" ||
     record.type === "end_guard_finished" ||
     record.type === "end_guard_budget_reset"
+  );
+}
+
+function isDelegationTaskRecord(record: PersistedRecord): boolean {
+  return (
+    record.type === "delegation_submission_accepted" ||
+    record.type === "subagent_started" ||
+    record.type === "subagent_completed" ||
+    record.type === "subagent_failed"
   );
 }

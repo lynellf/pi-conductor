@@ -45,6 +45,7 @@ import type {
   ChildCompletionProtocol,
   ChildProjectionFingerprint,
 } from "./child-completion.js";
+import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { PrewalkRecord } from "./prewalk-records.js";
@@ -65,6 +66,19 @@ import type {
   WorkspaceProvisionedRecord,
 } from "./workspace-artifact-records.js";
 
+export type {
+  DelegationAcceptedChild,
+  DelegationSubmissionAcceptedRecord,
+} from "./delegation-task.js";
+export {
+  acceptedDelegationResults,
+  assertDelegationSubmissionAccepted,
+  assertDelegationTaskTimeline,
+  DelegationTaskRecordError,
+  delegationSubmissionId,
+  pendingDelegationChildren,
+  spentDelegationSlots,
+} from "./delegation-task.js";
 export type {
   EndGuardBudgetResetRecord,
   EndGuardBudgetState,
@@ -355,7 +369,8 @@ export type PersistedRecord =
   | ToolExecutionStartedRecord
   | ToolExecutionFinishedRecord
   | PrewalkRecord
-  | EndGuardRecord;
+  | EndGuardRecord
+  | DelegationSubmissionAcceptedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

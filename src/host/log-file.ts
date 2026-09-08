@@ -52,6 +52,7 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { join } from "node:path";
 
 import type { Checkpoint } from "../core/types.js";
+import { assertDelegationTaskTimeline } from "../persistence/delegation-task.js";
 import {
   assertEndGuardAppend,
   type EndGuardRecord,
@@ -136,6 +137,9 @@ export class FileRecordLog implements RecordLog {
     if (isEndGuardRecord(materialized.record)) {
       const prior = this.records(runId).filter(isEndGuardRecord);
       assertEndGuardAppend(prior, materialized.record);
+    }
+    if (isDelegationTaskRecord(materialized.record)) {
+      assertDelegationTaskTimeline([...this.records(runId), materialized.record]);
     }
     appendFileSync(this.filePath(runId), `${materialized.json}\n`, "utf8");
   }
@@ -247,6 +251,7 @@ export class FileRecordLog implements RecordLog {
     }
     const endGuardRecords = records.filter(isEndGuardRecord);
     unfinishedEndGuardAttempts(endGuardRecords);
+    assertDelegationTaskTimeline(records);
     return Object.freeze(records);
   }
 
@@ -275,6 +280,15 @@ function isEndGuardRecord(record: PersistedRecord): record is EndGuardRecord {
     record.type === "end_guard_started" ||
     record.type === "end_guard_finished" ||
     record.type === "end_guard_budget_reset"
+  );
+}
+
+function isDelegationTaskRecord(record: PersistedRecord): boolean {
+  return (
+    record.type === "delegation_submission_accepted" ||
+    record.type === "subagent_started" ||
+    record.type === "subagent_completed" ||
+    record.type === "subagent_failed"
   );
 }
 
@@ -445,6 +459,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "end_guard_started",
   "end_guard_finished",
   "end_guard_budget_reset",
+  "delegation_submission_accepted",
 ]);
 
 /** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */

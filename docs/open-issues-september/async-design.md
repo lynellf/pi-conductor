@@ -68,3 +68,34 @@ unfinished children without resubmitting or guessing process identities.
 5. Durable restart, real boundary regressions, documentation, full gates and merge.
 
 No new dependencies, service, automatic integration or extra reducer owner.
+
+## Review gates
+
+- [ ] Ledger: atomic batch, duplicate delivery before recapture, mismatched input,
+  duplicate/malformed terminal, append/reopen and interrupted queued recovery.
+- [x] Admission: changing checkout, prompt or context after acceptance cannot
+  change the queued task; projection confinement remains enforced.
+- [ ] Scheduler: gated A/B, parent action, B result/review, C starts while A is
+  active; shared capacity, unrelated failure and targeted cancellation.
+- [ ] Lifecycle: parent model failure settles active/queued tasks before terminal
+  persistence/disposal/fallback; fallback retains spent slots and completed results.
+- [ ] Budget: terminal child usage can close admission before another queued
+  child starts; parent/run cancellation awaits executable cleanup.
+- [ ] Transport: shared and real RPC tools carry the actual SDK call identity;
+  response loss and redelivery return original handles without resubmission.
+- [ ] Host: pending handles block normal handoff/end; forced closure settles
+  children first; public SDK notifications queue without a concurrent prompt.
+- [ ] Restart: unknown executable ownership fails before reconciliation; accepted
+  queued and started work is interrupted exactly once, never relaunched.
+- [ ] Full checks, independent review, documentation and merged-tree comparison.
+
+Admission gate: 36 focused tests across preparation, existing delegation, context
+artifacts, prompts and the tool schema passed. The real Git regression verifies
+that preparation creates no worktree and execution retains original file content
+after the parent commits a newer checkout. Scheduler and host gates remain open.
+
+Ledger foundation: strict batch acceptance and accepted-child lifecycle schemas
+passed 61 persistence tests, including corrupt JSONL reopening, duplicate terminal
+rejection, queued failures and real-session cancellation. Main verification of
+the ledger, admission, seam and bridge foundations passed 107 tests across nine
+files and full strict typecheck. Host restart reconciliation remains outstanding.
