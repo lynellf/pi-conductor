@@ -29,8 +29,10 @@ export class ToolExecutionModelError extends Error {
 
 /** Convert a caught controller/worker error without carrying raw arguments or output. */
 export function toToolExecutionModelError(error: unknown): ToolExecutionModelError {
-  const candidate: Partial<ToolExecutionModelErrorFields> & { readonly message?: unknown } =
-    typeof error === "object" && error !== null ? error : {};
+  const candidate: Partial<ToolExecutionModelErrorFields> & {
+    readonly cause?: unknown;
+    readonly message?: unknown;
+  } = typeof error === "object" && error !== null ? error : {};
   const code = typeof candidate.code === "string" ? candidate.code : "tool_failed";
   const cleanup =
     candidate.cleanup === "confirmed" ||
@@ -39,7 +41,13 @@ export function toToolExecutionModelError(error: unknown): ToolExecutionModelErr
       ? candidate.cleanup
       : "not-started";
   const executionId = typeof candidate.executionId === "string" ? candidate.executionId : undefined;
-  const diagnostic = error instanceof Error ? error.message : String(error);
+  const cause = candidate.cause;
+  const diagnostic =
+    code === "tool_failed" && cause instanceof Error
+      ? cause.message
+      : error instanceof Error
+        ? error.message
+        : String(error);
   const boundedDiagnostic = diagnostic.slice(0, 300);
   const guidance =
     code === "tool_timeout" ||

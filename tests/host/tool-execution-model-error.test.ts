@@ -1,11 +1,13 @@
 import { createAgentSession, defineTool, SessionManager } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { ToolExecutionController } from "../../src/host/execution/tool-execution-controller.js";
 import {
   ToolExecutionModelError,
   toToolExecutionModelError,
 } from "../../src/host/execution/tool-execution-model-error.js";
 import { makeStubModel } from "../../src/host/stub-provider.js";
+import { DEFAULT_TOOL_EXECUTION_POLICY } from "../../src/manifest/execution-policy.js";
 import { makeModelRegistryWithStub } from "./production-host-fixture.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
@@ -52,6 +54,26 @@ describe("tool execution model error boundary", () => {
     expect(message).toContain("The operation was not replayed");
     expect(message).toContain("Inspect the workspace before repair.");
     expect(message.length).toBeLessThanOrEqual(512);
+  });
+
+  it("preserves the controller cause for an ordinary worker failure", async () => {
+    const controller = new ToolExecutionController({
+      runId: "run",
+      logicalSessionId: "logical",
+      roleSessionId: "role",
+      policy: DEFAULT_TOOL_EXECUTION_POLICY,
+      persist: () => undefined,
+    });
+    let caught: unknown;
+    try {
+      await controller.run("read", "missing", async () => {
+        throw new Error("ENOENT: missing.txt");
+      });
+    } catch (error) {
+      caught = error;
+    }
+    const modelError = toToolExecutionModelError(caught);
+    expect(JSON.parse(modelError.message).message).toBe("ENOENT: missing.txt");
   });
 
   it("makes a thrown boundary error an SDK tool error", async () => {
