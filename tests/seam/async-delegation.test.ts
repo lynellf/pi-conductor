@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   delegateArgsSchema,
+  delegateModeDescription,
+  delegateSubmissionArgsSchemaForMode,
   delegateControlArgsSchema,
   delegateSubmissionArgsSchema,
 } from "../../src/seam/schema.js";
@@ -40,6 +42,14 @@ describe("async delegation seam", () => {
     expect(Value.Check(delegateArgsSchema, { operation: "status", child_ids: ["child-a"] })).toBe(
       true,
     );
+  });
+
+  it("constrains compatibility mode to the trusted configured literal", () => {
+    const blocking = delegateSubmissionArgsSchemaForMode("blocking");
+    expect(Value.Check(blocking, { tasks: [task] })).toBe(true);
+    expect(Value.Check(blocking, { tasks: [task], mode: "blocking" })).toBe(true);
+    expect(Value.Check(blocking, { tasks: [task], mode: "nonblocking" })).toBe(false);
+    expect(delegateModeDescription("nonblocking")).toContain("stable child handles");
   });
 
   it("rejects empty controls and unknown control fields", () => {

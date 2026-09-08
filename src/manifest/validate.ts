@@ -66,6 +66,8 @@ export type ManifestErrorCode =
   | "delegation-empty-allowed-subagents"
   /** Delegation lite §3.2: `allowed_subagents` contains duplicates. */
   | "delegation-duplicate-allowed-subagent"
+  /** Issue #86: delegation mode must be one of the trusted literals. */
+  | "invalid-delegation-mode"
   /** Issue #63: policy source does not name a declared role. */
   | "handoff-policy-from-undeclared"
   /** Issue #63: policy target does not name a declared role. */
@@ -376,6 +378,14 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
     // ─── Delegation lite §3 validation ────────────────────────────────
     if (role.delegation) {
       const policy = role.delegation;
+
+      if (policy.mode !== undefined && policy.mode !== "blocking" && policy.mode !== "nonblocking") {
+        errors.push({
+          code: "invalid-delegation-mode",
+          message: `role '${role.name}' has invalid \`delegation.mode\`; expected "blocking" or "nonblocking"`,
+          role: role.name,
+        });
+      }
 
       // §3.3: `allowed_subagents` must be non-empty.
       if (policy.allowed_subagents.length === 0) {

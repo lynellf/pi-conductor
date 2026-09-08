@@ -1,6 +1,6 @@
 # Manifest-controlled delegation mode
 
-Status: proposed; implementation awaits acknowledgment of this contract.
+Status: acknowledged by the repository owner on 2026-09-08; ready for implementation.
 Baseline: main `54c482f`, following asynchronous delegation PR #83.
 This revises the per-call mode contract in the acknowledged September #77 spec.
 
@@ -97,7 +97,7 @@ Implementation uses Luna; integration and independent review verify the result.
 After this specification is acknowledged, execute these dependency-ordered slices.
 Each slice requires focused tests and typecheck before the next one starts.
 
-- [ ] Policy contract: manifest types/parser/validation and a focused mode helper.
+- [x] Policy contract: manifest types/parser/validation and a focused mode helper.
   Test both enum values, omitted default, invalid values and programmatic input.
 - [ ] Pinned run policy: snapshot creation and historical resume distinction.
   Test fresh defaults pinned explicitly, edited source ignored on resume,
