@@ -14,11 +14,17 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
+import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { ChildCompletionProtocol } from "../../persistence/child-completion.js";
+import { createSupervisedTools } from "../execution/supervised-tools.js";
+import type { ToolExecutionController } from "../execution/tool-execution-controller.js";
 
 /** Context used to build a confined child tool surface. */
 export interface ChildToolOptions {
   readonly worktreePath: string;
+  /** Optional child controller bound after SDK session creation. */
+  readonly getController?: () => ToolExecutionController | null;
+  readonly getPolicy?: () => Readonly<Required<ToolExecutionPolicy>>;
 }
 
 /** The only built-in tool names enabled for a child SDK session (§6). */
@@ -34,17 +40,30 @@ export function childToolNames(protocol: ChildCompletionProtocol): string[] {
 /** Build the child file tools, all confined to its generated worktree (§6). */
 export function buildChildTools(opts: ChildToolOptions): ToolDefinition[] {
   const root = resolve(opts.worktreePath);
-  const tools = [
-    confinePathTool(createReadToolDefinition(root), root),
-    confinePathTool(createGrepToolDefinition(root), root),
-    confinePathTool(createFindToolDefinition(root), root),
-    confinePathTool(createLsToolDefinition(root), root),
-    confinePathTool(createEditToolDefinition(root), root),
-    confinePathTool(createWriteToolDefinition(root), root),
-  ];
+  const tools =
+    opts.getController !== undefined && opts.getPolicy !== undefined
+      ? createSupervisedTools({
+          cwd: root,
+          declaredTools: [...CHILD_FILE_TOOL_NAMES],
+          getController: opts.getController,
+          getPolicy: opts.getPolicy,
+          wrapFileTool: (rawTool) => confinePathTool(rawTool, root),
+        })
+      : [
+          createReadToolDefinition(root),
+          createGrepToolDefinition(root),
+          createFindToolDefinition(root),
+          createLsToolDefinition(root),
+          createEditToolDefinition(root),
+          createWriteToolDefinition(root),
+        ];
+  const confined =
+    opts.getController !== undefined && opts.getPolicy !== undefined
+      ? tools
+      : (tools as unknown as ToolDefinition[]).map((tool) => confinePathTool(tool, root));
   // The SDK's `customTools` boundary erases each definition's parameter
   // schema. Preserve the factories' precise types above, then erase only here.
-  return tools as unknown as ToolDefinition[];
+  return confined as unknown as ToolDefinition[];
 }
 
 function isAbsolutePath(value: string): boolean {

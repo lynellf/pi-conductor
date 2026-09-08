@@ -14,6 +14,7 @@ import {
 import type { Static } from "typebox";
 
 import type { Role } from "../../core/types.js";
+import { resolveToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
 import type {
   PersistedRecord,
@@ -24,6 +25,7 @@ import type {
 import { delegateArgsSchema, reportResultArgsSchema } from "../../seam/schema.js";
 import { SessionState } from "../cost.js";
 import type { DisplaySink } from "../display-sink.js";
+import { ToolExecutionController } from "../execution/tool-execution-controller.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
 import {
   createReportCapture,
@@ -253,6 +255,8 @@ async function createChildSession(
   });
   await loader.reload();
   const reportCapture = createReportCapture();
+  const policy = resolveToolExecutionPolicy(config.profile.tool_execution);
+  let controller: ToolExecutionController | null = null;
   const reportTool =
     config.profile.completion_protocol === "report_result"
       ? [buildReportResultTool(reportCapture)]
@@ -263,7 +267,14 @@ async function createChildSession(
     modelRegistry: opts.modelRegistry,
     resourceLoader: loader,
     sessionManager: SessionManager.create(config.worktreePath, opts.sessionDir),
-    customTools: [...buildChildTools({ worktreePath: config.worktreePath }), ...reportTool],
+    customTools: [
+      ...buildChildTools({
+        worktreePath: config.worktreePath,
+        getController: () => controller,
+        getPolicy: () => policy,
+      }),
+      ...reportTool,
+    ],
     tools: childToolNames(config.profile.completion_protocol),
     thinkingLevel: entry.effort as never,
   });
@@ -278,6 +289,23 @@ async function createChildSession(
     role: opts.parentRole,
     ...(opts.displaySink === undefined ? {} : { onDisplay: opts.displaySink }),
     origin: { child_id: config.childId, task_id: config.taskId, subagent: config.profile.name },
+  });
+  controller = new ToolExecutionController({
+    runId: opts.runId,
+    logicalSessionId: `${opts.runId}:${config.childId}`,
+    roleSessionId: config.childId,
+    policy,
+    persist: opts.persistRecord,
+    onFatal: (error) => {
+      reportCapture.close();
+      const reason =
+        error.code === "tool_timeout_exhausted"
+          ? "tool_timeout_exhausted"
+          : "tool_cleanup_unconfirmed";
+      state.setTerminalReason(reason, error.message);
+      state.markAborted();
+      void session.abort().catch(() => undefined);
+    },
   });
   return { session, state, model: entry.model, reportCapture };
 }
@@ -297,6 +325,14 @@ function buildReportResultTool(capture: ReportCapture): ToolDefinition {
     description: "Report the child result and terminate this child session.",
     parameters: reportResultArgsSchema,
     async execute(_toolCallId, args: Static<typeof reportResultArgsSchema>) {
+      if (capture.isClosed()) {
+        return {
+          content: [{ type: "text", text: "child session is closed" }],
+          details: {},
+          isError: true,
+          terminate: true,
+        };
+      }
       const capped = capChildText(args.summary);
       capture.capture(
         {

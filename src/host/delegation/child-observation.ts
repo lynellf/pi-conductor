@@ -13,20 +13,27 @@ import type { DelegationManager } from "./manager.js";
 export interface ReportCapture {
   readonly report: () => LegacyChildReport | null;
   readonly summaryTruncated: () => boolean;
+  readonly isClosed: () => boolean;
   capture(report: LegacyChildReport, truncated: boolean): void;
+  close(): void;
 }
 
 /** Make the host-owned capture buffer for one legacy report_result tool. */
 export function createReportCapture(): ReportCapture {
   let value: LegacyChildReport | null = null;
   let truncated = false;
+  let closed = false;
   return {
     report: () => value,
     summaryTruncated: () => truncated,
+    isClosed: () => closed,
     capture(report, didTruncate) {
-      if (value !== null) return;
+      if (closed || value !== null) return;
       value = report;
       truncated = didTruncate;
+    },
+    close() {
+      closed = true;
     },
   };
 }
