@@ -3,6 +3,7 @@
 import type { WorkspaceGuarantee } from "../core/types.js";
 import { assertPrewalkRecord } from "./prewalk-records.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
+import { assertToolExecutionRecord } from "./tool-execution.js";
 import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
 /** Typed rejection of an unavailable workspace guarantee at the persistence boundary. */
@@ -76,6 +77,10 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
       const guarantee = isRecord(workspace) ? workspace.guarantee : undefined;
       assertWorkspaceGuarantee(guarantee);
     }
+  }
+
+  if (record.type === "tool_execution_started" || record.type === "tool_execution_finished") {
+    assertToolExecutionRecord(record);
   }
 }
 

@@ -210,6 +210,20 @@ export {
   RoleTurnRunMismatchError,
   RoleTurnTelemetryLogError,
 } from "./persistence/role-turn.js";
+export type {
+  ToolExecutionFinishedRecord,
+  ToolExecutionRecord,
+  ToolExecutionStartedRecord,
+  ToolExecutionTimeline,
+  ToolExecutionTimelineEntry,
+} from "./persistence/tool-execution.js";
+export {
+  assertToolExecutionRecord,
+  reconstructToolExecutionTimeline,
+  ToolExecutionRecordError,
+  toolExecutionFinishedSchema,
+  toolExecutionStartedSchema,
+} from "./persistence/tool-execution.js";
 
 // ─── Run memory artifact (§8.4) ───────────────────────────────────────
 // Phase 3 Task 12. The orchestrator's externalized memory: a single
