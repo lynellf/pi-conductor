@@ -285,6 +285,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
         notifyListeners(record);
       },
       lookupRoleConfig: (role) => this.lookupRoleConfig(role),
+      sessionStates: this.sessionStates,
     };
   }
 

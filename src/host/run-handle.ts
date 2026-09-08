@@ -43,6 +43,8 @@
 
 import { buildRunMemory, type RunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
+import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
+import { rollup } from "../cost/rollup.js";
 import type { RecordLog } from "../persistence/log.js";
 import { applyRunConfigOverride } from "./config.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -297,13 +299,9 @@ export class RunHandle {
   private computeRunCostSoFar(
     records: readonly import("../persistence/log.js").PersistedRecord[],
   ): number {
-    let total = 0;
-    for (const r of records) {
-      if ((r.type === "session_ended" || r.type === "session_failed") && r.usage !== undefined) {
-        total += r.usage.cost;
-      }
-    }
-    return total;
+    assertKnownCompactionUsage(records, this.runId);
+    const result = rollup(records, this.runId, this.def.orchestrator);
+    return result.perRun.cost;
   }
 }
 

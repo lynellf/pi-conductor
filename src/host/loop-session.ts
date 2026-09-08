@@ -9,6 +9,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import { artifactDelivery } from "../persistence/log.js";
+import type { ContextBoundaryReference } from "../persistence/orchestrator-context.js";
 import type { Host, RoleSession, SessionTerminalReason } from "./host.js";
 import {
   appendArtifactSeedSection,
@@ -84,6 +85,7 @@ export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopRe
     trajectorySeedDeliveryRecorded: false,
     delegationSettled: false,
     delegationSettlementError: null,
+    terminalPersisted: false,
   };
   ctx.nextSeed =
     ctx.artifactSeedForVisit === null
@@ -229,6 +231,7 @@ export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopRe
       });
       ctx.checkpoint = failed.checkpoint;
       host.persistRecord(withRoleSessionIdentity(failed.record, session));
+      state.terminalPersisted = true;
       host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
       await collectSessionArtifacts(host, session, {
         role,
@@ -256,6 +259,7 @@ export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopRe
       });
       ctx.checkpoint = failed.checkpoint;
       host.persistRecord(withRoleSessionIdentity(failed.record, session));
+      state.terminalPersisted = true;
       host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
       await collectSessionArtifacts(host, session, {
         role,
@@ -307,13 +311,49 @@ export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopRe
         state.delegationSettlementError = cause;
       }
     }
+    let retainedBoundary: ContextBoundaryReference | null = null;
+    let retentionError: unknown = null;
+    const terminalPersisted = state.terminalPersisted;
+    if (
+      session.retainedContext !== undefined &&
+      terminalPersisted &&
+      state.delegationSettlementError === null
+    ) {
+      try {
+        retainedBoundary = await session.retainedContext.captureBoundary();
+      } catch (cause) {
+        retentionError = cause;
+      }
+    }
+
     opts.runControl?.releaseActiveSession(session);
-    await session.dispose().catch((disposeError) => {
-      void disposeError;
-    });
+    let disposalSucceeded = false;
+    await session.dispose().then(
+      () => {
+        disposalSucceeded = true;
+      },
+      (disposeError) => {
+        if (session.retainedContext !== undefined && retentionError === null) {
+          retentionError = disposeError;
+        }
+      },
+    );
     if (opts.runControl === undefined) await opts.abortControl?.setActiveSession(null);
+    if (
+      retainedBoundary !== null &&
+      disposalSucceeded &&
+      state.delegationSettlementError === null &&
+      session.retainedContext !== undefined
+    ) {
+      try {
+        await session.retainedContext.commitBoundary(retainedBoundary);
+      } catch (cause) {
+        retentionError = cause;
+      }
+    }
     if (state.delegationSettlementError !== null)
       await Promise.reject(state.delegationSettlementError);
+    if (retentionError !== null) await Promise.reject(retentionError);
   }
 
   return {

@@ -102,6 +102,15 @@ describe("aggregateUnsettledCompactionUsage", () => {
     expect(result.unknown.map((entry) => entry.request_id)).toEqual(["request-a", "after-reset"]);
   });
 
+  it("keeps known usage after a synthesized crash terminal", () => {
+    const result = aggregateUnsettledCompactionUsage(
+      [invocation(), started(), compaction(), terminal({ failure_reason: "crashed" })],
+      { runId: RUN },
+    );
+    expect(result.totalUsage.cost).toBe(1);
+    expect(result.unknown).toEqual([]);
+  });
+
   it("resolves a started compaction when its outcome arrives and charges it once", () => {
     const result = aggregateUnsettledCompactionUsage([invocation(), started(), compaction()], {
       runId: RUN,

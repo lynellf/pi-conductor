@@ -85,7 +85,7 @@ export function aggregateUnsettledCompactionUsage(
       continue;
     }
     if (!isTerminal(record) || record.run_id !== options.runId) continue;
-    if (record.role_session_id !== undefined) {
+    if (record.role_session_id !== undefined && record.failure_reason !== "crashed") {
       terminalInvocationIds.add(invocationKey(record.role, record.role_session_id));
     }
   }

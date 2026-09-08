@@ -3,7 +3,10 @@
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
+import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
+import { rollup } from "../cost/rollup.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import type { SessionState } from "./cost.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { RoleSession, SessionTerminalReason } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -19,6 +22,8 @@ export interface StateHostContext {
   readonly runId: string;
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly lookupRoleConfig: (role: Role) => import("../manifest/types.js").RoleConfig | undefined;
+  /** Live role-session usage state, used to exclude in-memory compaction charges. */
+  readonly sessionStates?: ReadonlyMap<string, SessionState>;
 }
 /** Capture the latest usage record from a role session. */
 export function captureUsage(host: StateHostContext, session: RoleSession): UsageRecord {
@@ -109,20 +114,15 @@ export function getNextModel(
   return next?.model ?? null;
 }
 
-/** Sum terminal usage costs for the run, including delegated child terminals. */
 /** Return accumulated run cost from persisted usage records. */
 export function runCostSoFar(host: StateHostContext): number {
-  let total = 0;
-  for (const record of host.log.records(host.runId)) {
-    if ((record.type === "session_ended" || record.type === "session_failed") && record.usage) {
-      total += record.usage.cost;
-    }
-    if (
-      (record.type === "subagent_completed" || record.type === "subagent_failed") &&
-      record.usage
-    ) {
-      total += record.usage.cost;
-    }
-  }
-  return total;
+  const records = host.log.records(host.runId);
+  assertKnownCompactionUsage(records, host.runId);
+  const liveSessionIds = host.sessionStates === undefined ? [] : [...host.sessionStates.keys()];
+  const excludedLiveInvocationIds =
+    liveSessionIds.length === 0 ? undefined : new Set(liveSessionIds);
+  const result = rollup(records, host.runId, host.loadedManifest.def.orchestrator, {
+    ...(excludedLiveInvocationIds === undefined ? {} : { excludedLiveInvocationIds }),
+  });
+  return result.perRun.cost;
 }

@@ -36,6 +36,7 @@ export interface SessionTurnState {
   trajectorySeedDeliveryRecorded: boolean;
   delegationSettled: boolean;
   delegationSettlementError: unknown;
+  terminalPersisted: boolean;
 }
 
 /** Host and lifecycle callbacks required by the turn processor. */
@@ -184,6 +185,7 @@ export async function runSessionTurn(
       });
       ctx.checkpoint = failed.checkpoint;
       host.persistRecord(withRoleSessionIdentity(failed.record, session));
+      state.terminalPersisted = true;
       // §11.1: each transition produces a new full ctx.checkpoint
       // snapshot. session_failed clears active_role_session;
       // persist a fresh snapshot so latestCheckpoint reflects
@@ -235,6 +237,7 @@ export async function runSessionTurn(
       });
       ctx.checkpoint = ended.checkpoint;
       host.persistRecord(withRoleSessionIdentity(ended.record, session));
+      state.terminalPersisted = true;
       host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
       await collectSessionArtifacts(host, session, {
         role,
@@ -306,6 +309,7 @@ export async function runSessionTurn(
       });
       ctx.checkpoint = failed.checkpoint;
       host.persistRecord(withRoleSessionIdentity(failed.record, session));
+      state.terminalPersisted = true;
       host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
       await collectSessionArtifacts(host, session, {
         role,
