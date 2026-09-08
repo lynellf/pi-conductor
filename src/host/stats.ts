@@ -24,10 +24,9 @@
  * clean per-run number (cache reuse is provider-dependent across
  * sessions). The function does not add such a synthesized field.
  *
- * **No synthesis of timing-derived fields.** Run-start, current
- * elapsed time, ETA — all deliberately absent. A live status
- * surface is a host-emitted `stats` event concern (out of scope
- * under the SDK host per §9.5 / §11.8).
+ * Tool execution status is projected from durable start/finish records. The
+ * projection stores the start timestamp only; live elapsed seconds are
+ * calculated by the extension formatter when it renders a status tick.
  *
  * Host-agnostic. No SDK runtime imports.
  */
@@ -37,6 +36,10 @@ import { DEFAULT_MODEL_EFFORT, type ModelEffort, type Role } from "../core/types
 import { type RunRollup, rollup } from "../cost/rollup.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { projectToolExecutionStats, type ToolExecutionStats } from "./execution/execution-stats.js";
+
+export type { ToolExecutionStats } from "./execution/execution-stats.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -120,6 +123,8 @@ export interface RunStats {
   readonly recordsCount: number;
   readonly activeSession?: ActiveSessionStats | null;
   readonly subagents: SubagentLifecycleStats;
+  /** Durable executable-tool projection used by live operator status. */
+  readonly toolExecution?: ToolExecutionStats;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -149,6 +154,12 @@ export function runStats(
   const recordsCount = countRecordsForRun(records, runId);
   const activeSession = findActiveSession(records, runId, latestCheckpoint);
   const subagents = projectSubagentLifecycle(records, runId);
+  const toolRecords = records.filter(
+    (record): record is ToolExecutionRecord =>
+      (record.type === "tool_execution_started" || record.type === "tool_execution_finished") &&
+      record.run_id === runId,
+  );
+  const toolExecution = projectToolExecutionStats(toolRecords);
 
   // §11.8: `state` is the current role from the latest checkpoint.
   // If no checkpoint exists yet (the run hasn't started), fall
@@ -167,6 +178,7 @@ export function runStats(
     recordsCount,
     activeSession,
     subagents,
+    toolExecution,
   }) as RunStats;
 }
 

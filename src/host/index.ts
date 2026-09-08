@@ -148,6 +148,7 @@ export type {
   RunStats,
   SubagentLifecycleStats,
   SubagentProtocolLifecycleStats,
+  ToolExecutionStats,
   TransitionRecord,
 } from "./run-handle.js";
 export { RunHandle } from "./run-handle.js";
