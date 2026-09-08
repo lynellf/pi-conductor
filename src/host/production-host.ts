@@ -479,8 +479,7 @@ export class ProductionHost implements Host {
                 ),
             }
           : {}),
-        ...(this.loadedManifest.legacyDelegationMode === true ||
-        this.loadedManifest.legacyDelegationRoles?.includes(role) === true
+        ...(this.loadedManifest.legacyDelegationRoles?.includes(role) === true
           ? { legacyDelegationMode: true }
           : {}),
         visitIndex: opts.visitIndex,
@@ -797,8 +796,7 @@ export class ProductionHost implements Host {
       },
       ...(onTaskTerminal === undefined ? {} : { onTaskTerminal }),
       ...(onFatal === undefined ? {} : { onFatal }),
-      ...(this.loadedManifest.legacyDelegationMode === true ||
-      this.loadedManifest.legacyDelegationRoles?.includes(role) === true
+      ...(this.loadedManifest.legacyDelegationRoles?.includes(role) === true
         ? { legacyDelegationMode: true }
         : {}),
     };

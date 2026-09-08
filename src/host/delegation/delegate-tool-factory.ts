@@ -66,7 +66,7 @@ export interface DelegateToolFactoryOptions {
 export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefinition {
   const policy = delegationPolicy(opts.role);
   const configuredMode =
-    opts.legacyDelegationMode === true && policy.mode === undefined
+    opts.legacyDelegationMode === true
       ? undefined
       : (opts.delegationMode ?? resolveDelegationMode(policy));
   const parameters =
