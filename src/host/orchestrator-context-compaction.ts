@@ -63,6 +63,8 @@ export interface OrchestratorCompactionController {
   getStickyError(): OrchestratorCompactionError | undefined;
   assertHealthy(): void;
   settle(): Promise<void>;
+  /** Return all provider usage observed by this controller so far. */
+  getCompactionUsage(): UsageRecord;
 }
 
 interface ActiveOperation {
@@ -80,6 +82,7 @@ export function createOrchestratorCompactionController(
   let stickyError: OrchestratorCompactionError | undefined;
   let abortCurrent = (): void => undefined;
   let active: ActiveOperation | undefined;
+  let compactionUsage: UsageRecord = ZERO_USAGE;
 
   const fail = (
     context: { abort(): void },
@@ -125,8 +128,10 @@ export function createOrchestratorCompactionController(
         rawUsages.push(usage);
         if (usage === null) {
           knownUsage = null;
-        } else if (knownUsage !== null) {
-          knownUsage = addUsage(knownUsage, normalizeUsage(usage));
+        } else {
+          const normalized = normalizeUsage(usage);
+          compactionUsage = addUsage(compactionUsage, normalized);
+          if (knownUsage !== null) knownUsage = addUsage(knownUsage, normalized);
         }
         try {
           options.onUsage(`${requestId}:${ordinal}`, usage);
@@ -250,6 +255,7 @@ export function createOrchestratorCompactionController(
       }
       active = undefined;
     },
+    getCompactionUsage: () => compactionUsage,
   };
 }
 

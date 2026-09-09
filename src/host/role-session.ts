@@ -30,6 +30,8 @@ export function createRoleSessionAdapter(opts: {
   readonly onDispose: () => Promise<void> | void;
   /** Whether this logical adapter still owns physical SDK disposal. */
   readonly disposeNative?: () => boolean;
+  readonly retainedContext?: RoleSessionAdapter["retainedContext"];
+  readonly prompt?: (text: string) => Promise<void>;
 }): RoleSessionAdapter {
   const { session, seam } = opts;
   const workspace =
@@ -55,7 +57,10 @@ export function createRoleSessionAdapter(opts: {
     clearQueue: () => session.clearQueue(),
     isSealed: () => seam.isSealed,
     subscribeSealed: (listener: () => void) => seam.subscribeSealed(listener),
-    prompt: (text: string) => session.prompt(text),
+    ...(opts.prompt === undefined
+      ? { prompt: (text: string) => session.prompt(text) }
+      : { prompt: opts.prompt }),
+    ...(opts.retainedContext === undefined ? {} : { retainedContext: opts.retainedContext }),
     getTrajectoryContext: () => ({
       tokens: session.getContextUsage()?.tokens,
       hasCompaction: session.sessionManager

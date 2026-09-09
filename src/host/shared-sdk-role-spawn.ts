@@ -9,8 +9,7 @@ import { randomUUID } from "node:crypto";
 
 import type { Model } from "@earendil-works/pi-ai";
 import {
-  createAgentSession,
-  DefaultResourceLoader,
+  type createAgentSession,
   type ExtensionUIContext,
   type ModelRegistry,
   SessionManager,
@@ -30,6 +29,10 @@ import type { ToolExecutionController } from "./execution/tool-execution-control
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
+import type {
+  OrchestratorContextCoordinator,
+  PreparedOrchestratorContext,
+} from "./orchestrator-context-coordinator.js";
 import { createPrewalkPhaseSessionAdapter } from "./prewalk-phase-session.js";
 import { createSdkPrewalkPhase, type SdkPrewalkPhase } from "./prewalk-sdk-phase.js";
 import { buildToolsAllowlist, resolveModel } from "./production-host-resolve.js";
@@ -41,6 +44,17 @@ import {
   type SessionCostCapDeferral,
   type SessionEventSource,
 } from "./session-event-handler.js";
+import { createSharedCompactionWiring } from "./shared-sdk-compaction-wiring.js";
+import {
+  createSharedSdkRetainedPrompt,
+  createSharedSdkSession,
+} from "./shared-sdk-context-session.js";
+import { createSharedRoleResourceLoader } from "./shared-sdk-role-loader.js";
+import { bindSharedSdkStartupRole } from "./shared-sdk-startup-binding.js";
+import {
+  createSharedSdkStartupCleanup,
+  runSharedSdkStartupStep,
+} from "./shared-sdk-startup-cleanup.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
 import { createTrajectorySettingsManager } from "./trajectory-settings.js";
 
@@ -89,38 +103,45 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly executionControllerRef?: { current: ToolExecutionController | null };
   readonly prewalk?: SdkPrewalkPhase;
   readonly deferSessionCostCapAbort?: SessionCostCapDeferral;
+  readonly contextRetention?: {
+    readonly coordinator: OrchestratorContextCoordinator;
+    readonly prepared: PreparedOrchestratorContext;
+  };
 }): Promise<RoleSession> {
   // The session retains one public extension hook for its lifetime. The host
   // changes this controller only while idle so trajectory roles replace, not
   // append, instructions on their next native turn.
   let activeSystemPrompt = options.systemPrompt ?? undefined;
   const settingsManager =
-    options.disableAutoCompaction === true || options.isTrajectory === true
+    options.contextRetention?.prepared.settingsManager ??
+    (options.disableAutoCompaction === true || options.isTrajectory === true
       ? createTrajectorySettingsManager({ cwd: options.cwd, agentDir: options.agentDir })
-      : undefined;
-  const loader = new DefaultResourceLoader({
+      : undefined);
+  const retainedCompactionSettings =
+    options.contextRetention === undefined
+      ? undefined
+      : options.contextRetention.prepared.settingsManager.getCompactionSettings();
+  let sdkSession: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
+  let activeState: SessionState | null = null;
+  const compactionWiring =
+    options.contextRetention === undefined
+      ? undefined
+      : createSharedCompactionWiring({
+          runId: options.runId,
+          role: options.role,
+          persistRecord: options.persistRecord,
+          getState: () => activeState,
+          getSession: () => sdkSession,
+        });
+  const compactionController = compactionWiring?.controller;
+  const loader = createSharedRoleResourceLoader({
     cwd: options.cwd,
     agentDir: options.agentDir,
-    ...(settingsManager !== undefined && { settingsManager }),
-    systemPromptOverride: () => activeSystemPrompt,
-    extensionFactories: [
-      {
-        name: "conductor-trajectory-role-environment",
-        factory: (pi) => {
-          // Pi 0.80.6 exposes this public hook but its factory generic is
-          // inferred narrowly from the empty resource set.
-          const roleEnvironment = pi as unknown as {
-            on(
-              event: "before_agent_start",
-              handler: () => Promise<{ systemPrompt: string | undefined }>,
-            ): void;
-          };
-          roleEnvironment.on("before_agent_start", async () => ({
-            systemPrompt: activeSystemPrompt,
-          }));
-        },
-      },
-    ],
+    settingsManager,
+    getSystemPrompt: () => activeSystemPrompt,
+    ...(compactionController === undefined
+      ? {}
+      : { extensionFactories: [compactionController.extensionFactory] }),
   });
   await loader.reload();
 
@@ -159,8 +180,6 @@ export async function spawnSharedSdkRoleSession(options: {
   const askUser = createAskUserTool() as ToolDefinition;
   const checkpointTool = prewalkPhase.checkpointTool;
   let controller: ToolExecutionController | null = null;
-  let activeState: SessionState | null = null;
-  let sdkSession: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
   let activePolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
   const executionRecords = [...(options.priorToolExecutionRecords ?? [])];
   const persistExecutionRecord = (record: PersistedRecord): void => {
@@ -199,7 +218,9 @@ export async function spawnSharedSdkRoleSession(options: {
     resourceLoader: loader,
     ...(settingsManager !== undefined && { settingsManager }),
     sessionManager:
-      options.sessionManager ?? SessionManager.create(options.cwd, options.sessionDir),
+      options.contextRetention?.prepared.sessionManager ??
+      options.sessionManager ??
+      SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
       ...supervisedTools,
       handoff,
@@ -221,91 +242,105 @@ export async function spawnSharedSdkRoleSession(options: {
       ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
     ].filter((name, index, names) => names.indexOf(name) === index),
   };
-  if (options.model !== undefined) {
-    (createOpts as { model?: Model<never> }).model = options.model;
-  }
-  (createOpts as { thinkingLevel?: ModelEffort }).thinkingLevel = options.effort;
-  const { session } = await createAgentSession(createOpts);
+  const { session } = await createSharedSdkSession({
+    createOptions: createOpts,
+    model: options.model,
+    effort: options.effort,
+    retainedContext: options.contextRetention !== undefined,
+    restoredActiveToolNames,
+    initialActiveToolNames: prewalkPhase.initialActiveToolNames,
+    ...(options.isTrajectory === undefined ? {} : { isTrajectory: options.isTrajectory }),
+    ...(options.expectedTrajectoryConversation === undefined
+      ? {}
+      : { expectedTrajectoryConversation: options.expectedTrajectoryConversation }),
+    ...(options.activeToolNames === undefined ? {} : { activeToolNames: options.activeToolNames }),
+    ...(options.uiContext === undefined ? {} : { uiContext: options.uiContext }),
+    ...(options.isUiContextCurrent === undefined
+      ? {}
+      : { isUiContextCurrent: options.isUiContextCurrent }),
+    cwd: options.cwd,
+  });
   sdkSession = session;
-  try {
-    session.setActiveToolsByName([...restoredActiveToolNames]);
-    if (prewalkPhase.initialActiveToolNames !== null) {
-      session.setActiveToolsByName([...prewalkPhase.initialActiveToolNames]);
-    }
-    assertExactResumedTrajectoryEnvironment(session, options);
-    if (options.activeToolNames !== undefined) {
-      const activeNames = session.getActiveToolNames();
-      if (
-        activeNames.length !== options.activeToolNames.length ||
-        activeNames.some((name, index) => name !== options.activeToolNames?.[index])
-      ) {
-        throw new Error("trajectory target active tool allowlist was not applied exactly");
-      }
-    }
-    if (
-      options.uiContext !== undefined &&
-      (options.isUiContextCurrent === undefined || options.isUiContextCurrent())
-    ) {
-      await session.bindExtensions({ uiContext: options.uiContext });
-    }
-  } catch (error) {
-    try {
-      session.dispose();
-    } catch {
-      // Preserve the startup error; disposal is best effort.
-    }
-    throw error;
-  }
 
   const nativeSessionId = session.sessionId;
-  const sessionId = options.roleSessionId ?? nativeSessionId;
+  const sessionId =
+    options.contextRetention === undefined
+      ? (options.roleSessionId ?? nativeSessionId)
+      : randomUUID();
   const sessionFile = session.sessionFile ?? `${options.sessionDir}/${nativeSessionId}.jsonl`;
+  const cleanupStartupFailure = createSharedSdkStartupCleanup({
+    session,
+    roleSessionId: sessionId,
+    sessionStates: options.sessionStates,
+    agentsBySessionId: options.agentsBySessionId,
+    executionControllerRef: options.executionControllerRef,
+  });
+  const retainedAttachment = runSharedSdkStartupStep(cleanupStartupFailure, () => {
+    const attachment = options.contextRetention?.coordinator.attach(
+      options.contextRetention.prepared,
+      {
+        roleSessionId: sessionId,
+        conversationId: nativeSessionId,
+        sessionFile,
+        model: options.logicalModel,
+      },
+    );
+    if (attachment !== undefined && options.contextRetention !== undefined) {
+      compactionWiring?.setIdentity({
+        roleSessionId: sessionId,
+        conversationId: nativeSessionId,
+        sessionFile,
+        epoch: options.contextRetention.prepared.epoch,
+      });
+    }
+    return attachment;
+  });
+  let retainedPrompt: ((text: string) => Promise<void>) | undefined;
+  if (retainedAttachment !== undefined) {
+    if (compactionWiring === undefined || retainedCompactionSettings === undefined) {
+      const error = new Error("retained context wiring is incomplete");
+      cleanupStartupFailure();
+      throw error;
+    }
+    retainedPrompt = createSharedSdkRetainedPrompt({
+      session,
+      attachment: retainedAttachment,
+      settings: retainedCompactionSettings,
+      compactionController: compactionWiring.controller,
+    });
+  }
   const state = new SessionState({
     cap: options.roleConfig?.max_session_cost_usd ?? null,
     model: options.logicalModel,
   });
   activeState = state;
-  const sourceBinding = bindLiveRoleToolExecution({
-    runId: options.runId,
-    role: options.role,
-    visitIndex: options.executionVisitIndex ?? options.visitIndex ?? 1,
-    roleSessionId: sessionId,
-    policy: activePolicy,
-    ...(options.priorToolExecutionRecords === undefined
-      ? {}
-      : { priorRecords: options.priorToolExecutionRecords }),
-    persist: persistExecutionRecord,
-    session,
-    state,
-    sessionFile,
-    sessionStates: options.sessionStates,
-    agentsBySessionId: options.agentsBySessionId,
-    rejector,
-    roleTurn: {
-      producer: options.roleTurnProducer,
-      context: {
-        runId: options.runId,
-        role: options.role,
-        roleSessionId: sessionId,
-        conversationId: nativeSessionId,
-        sessionFile,
-        persist: options.persistRecord,
-      },
-    },
-    ...(options.deferSessionCostCapAbort === undefined
-      ? {}
-      : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
-    ...(options.displaySink === undefined ? {} : { displaySink: options.displaySink }),
-    onFatal: (error) => {
-      activeState?.setTerminalReason(
-        error.code === "tool_timeout_exhausted"
-          ? "tool_timeout_exhausted"
-          : "tool_cleanup_unconfirmed",
-        error.message,
-      );
-      void sdkSession?.abort();
-    },
-  });
+  const sourceBinding = runSharedSdkStartupStep(cleanupStartupFailure, () =>
+    bindSharedSdkStartupRole({
+      runId: options.runId,
+      role: options.role,
+      visitIndex: options.executionVisitIndex ?? options.visitIndex ?? 1,
+      roleSessionId: sessionId,
+      policy: activePolicy,
+      ...(options.priorToolExecutionRecords === undefined
+        ? {}
+        : { priorRecords: options.priorToolExecutionRecords }),
+      persist: persistExecutionRecord,
+      session,
+      state,
+      sessionFile,
+      sessionStates: options.sessionStates,
+      agentsBySessionId: options.agentsBySessionId,
+      rejector,
+      roleTurnProducer: options.roleTurnProducer,
+      conversationId: nativeSessionId,
+      ...(options.deferSessionCostCapAbort === undefined
+        ? {}
+        : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
+      ...(options.displaySink === undefined ? {} : { displaySink: options.displaySink }),
+      getActiveState: () => activeState,
+      abort: () => sdkSession?.abort() ?? Promise.resolve(),
+    }),
+  );
   controller = sourceBinding.controller;
   if (options.executionControllerRef !== undefined) {
     options.executionControllerRef.current = controller;
@@ -436,6 +471,12 @@ export async function spawnSharedSdkRoleSession(options: {
     ...(options.isTrajectory === true && { isTrajectory: true }),
     continueTrajectory,
     disposeNative: () => !nativeRetained,
+    ...(retainedAttachment === undefined || retainedPrompt === undefined
+      ? {}
+      : {
+          retainedContext: retainedAttachment.retainedContext,
+          prompt: retainedPrompt,
+        }),
     onDispose: () => {
       sourceEventUnsubscribe();
       options.sessionStates.delete(sessionId);
@@ -454,35 +495,4 @@ export async function spawnSharedSdkRoleSession(options: {
     resolveModel: (logical) => resolveModel(options.role, logical, options.modelRegistry).model,
     setExecutorPhase: prewalkPhase.setExecutorPhase,
   });
-}
-
-function assertExactResumedTrajectoryEnvironment(
-  session: Awaited<ReturnType<typeof createAgentSession>>["session"],
-  options: {
-    readonly isTrajectory?: boolean;
-    readonly model: Model<never> | undefined;
-    readonly effort: ModelEffort;
-    readonly expectedTrajectoryConversation?: { readonly id: string; readonly file: string };
-  },
-): void {
-  const expectedConversation = options.expectedTrajectoryConversation;
-  if (expectedConversation !== undefined) {
-    if (
-      session.sessionId !== expectedConversation.id ||
-      session.sessionFile !== expectedConversation.file
-    ) {
-      throw new Error(
-        `resumed trajectory conversation identity does not match its selector: expected ${expectedConversation.id} (${expectedConversation.file}), received ${session.sessionId} (${session.sessionFile})`,
-      );
-    }
-  }
-  if (options.isTrajectory !== true) return;
-  if (
-    options.model === undefined ||
-    session.model?.provider !== options.model.provider ||
-    session.model.id !== options.model.id ||
-    session.thinkingLevel !== options.effort
-  ) {
-    throw new Error("resumed trajectory target model or effort was not applied exactly");
-  }
 }

@@ -47,22 +47,29 @@ export function bindLiveRoleToolExecution(options: LiveRoleToolExecutionBindingO
   options.sessionStates.set(options.roleSessionId, options.state);
   options.agentsBySessionId.set(options.roleSessionId, options.session);
   options.rejector.bindState(options.state);
-  const unsubscribe = attachSessionEventHandler({
-    session: options.session,
-    state: options.state,
-    role: options.role,
-    fileMutation: {
-      runId: options.runId,
-      sessionId: options.roleSessionId,
-      sessionFile: options.sessionFile,
-      persist: options.persist,
-    },
-    roleTurn: options.roleTurn,
-    ...(options.deferSessionCostCapAbort === undefined
-      ? {}
-      : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
-    ...(options.displaySink === undefined ? {} : { onDisplay: options.displaySink }),
-  });
+  let unsubscribe: () => void;
+  try {
+    unsubscribe = attachSessionEventHandler({
+      session: options.session,
+      state: options.state,
+      role: options.role,
+      fileMutation: {
+        runId: options.runId,
+        sessionId: options.roleSessionId,
+        sessionFile: options.sessionFile,
+        persist: options.persist,
+      },
+      roleTurn: options.roleTurn,
+      ...(options.deferSessionCostCapAbort === undefined
+        ? {}
+        : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
+      ...(options.displaySink === undefined ? {} : { onDisplay: options.displaySink }),
+    });
+  } catch (error) {
+    options.sessionStates.delete(options.roleSessionId);
+    options.agentsBySessionId.delete(options.roleSessionId);
+    throw error;
+  }
   return { controller, unsubscribe };
 }
 
