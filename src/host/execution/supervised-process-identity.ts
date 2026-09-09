@@ -95,9 +95,12 @@ export async function findProcessesByOwnerToken(
         let status: string;
         try {
           status = await readFile(`/proc/${entry}/status`, "utf8");
-        } catch {
+        } catch (statusError) {
+          if (isGone(statusError)) continue;
           throw error;
         }
+        // Exit can race both the identity recheck and this permission probe.
+        if (/^State:\s+Z\b/m.test(status)) continue;
         const uid = /^Uid:\s+(\d+)/m.exec(status)?.[1];
         const currentUid =
           typeof process.getuid === "function" ? String(process.getuid()) : undefined;

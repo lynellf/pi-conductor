@@ -4,6 +4,9 @@
 
 ### Bug fixes
 
+- Handle processes disappearing or becoming zombies during cleanup permission
+  checks, avoiding stale permission errors after a worker exits. Live processes
+  whose ownership cannot be verified still stop cleanup as unconfirmed.
 - Restore extension loading and command registration by rolling back Prewalk. The packed
   rollback was verified with unpatched Pi 0.85.1; no local Pi patch is required.
   This verifies extension loading, not all provider-backed workflows.
