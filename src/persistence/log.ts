@@ -49,7 +49,6 @@ import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
-import type { PrewalkRecord } from "./prewalk-records.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
 import type { ToolExecutionFinishedRecord, ToolExecutionStartedRecord } from "./tool-execution.js";
@@ -393,7 +392,6 @@ export type PersistedRecord =
   | RoleTurnRecord
   | ToolExecutionStartedRecord
   | ToolExecutionFinishedRecord
-  | PrewalkRecord
   | EndGuardRecord
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord;

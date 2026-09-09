@@ -71,8 +71,10 @@ Both shared SDK sessions and isolated RPC sessions support retention. Local
 source checkouts need `pnpm build` before using the compiled RPC child bootstrap.
 
 Only the designated orchestrator may declare `context_retention`, including
-`none`. A manifest with retention enabled cannot use trajectory handoffs or a
-Prewalk orchestrator. Prewalk workers remain supported. Existing runs whose
+`none`. A manifest with retention enabled cannot use trajectory handoffs.
+Prewalk has been rolled back for all roles due to Pi extension-loading
+compatibility (issue #94).
+Existing runs whose
 pinned manifests omit retention continue with `none`; current YAML cannot enable
 retention retroactively for a historical run without a manifest snapshot.
 

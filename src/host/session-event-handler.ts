@@ -87,12 +87,6 @@ export interface SessionEventSource {
   abort(): Promise<void>;
 }
 
-/** Prewalk-only decision for deferring an otherwise terminal monetary cap. */
-export type SessionCostCapDeferral = (attempt: {
-  readonly hasToolCall: boolean;
-  readonly machineEmissionAttempted: boolean;
-}) => boolean;
-
 export function attachSessionEventHandler(args: {
   session: SessionEventSource;
   state: SessionState;
@@ -103,8 +97,6 @@ export function attachSessionEventHandler(args: {
   fileMutation?: FileMutationTelemetry;
   /** Issue #68: bounded role-turn telemetry for eligible assistant `message_end`. */
   roleTurn?: RoleTurnTelemetryAttachment;
-  /** Prewalk-only bounded exception for post-budget terminal validation/correction. */
-  deferSessionCostCapAbort?: SessionCostCapDeferral;
 }): () => void {
   // Per-session buffer: toolCallId → { summary, args, writeHunks }.
   // The args are needed at `tool_execution_end` to populate
@@ -148,7 +140,6 @@ export function attachSessionEventHandler(args: {
       args.origin,
       args.fileMutation,
       args.roleTurn,
-      args.deferSessionCostCapAbort,
       event,
       pending,
       seenMessages,
@@ -220,7 +211,6 @@ function onSessionEvent(
   origin: ChildDisplayOrigin | undefined,
   fileMutation: FileMutationTelemetry | undefined,
   roleTurn: RoleTurnTelemetryAttachment | undefined,
-  deferSessionCostCapAbort: SessionCostCapDeferral | undefined,
   event: AgentSessionEvent,
   pending: Map<
     string,
@@ -350,21 +340,10 @@ function onSessionEvent(
     state.addMessageUsage(key, message.usage);
   }
 
-  const toolNames = message.content.flatMap((block) =>
-    block.type === "toolCall" ? [block.name] : [],
-  );
-  const deferCostCapAbort =
-    message.stopReason !== "error" &&
-    (deferSessionCostCapAbort?.({
-      hasToolCall: toolNames.length > 0,
-      machineEmissionAttempted: toolNames.includes("handoff") || toolNames.includes("end"),
-    }) ??
-      false);
-
   // A failed provider response can still consume enough usage to hit the
   // session cap. Classify that terminal before `model_error` so the retry
   // loop cannot start another session after the per-session budget is spent.
-  if (message.usage && state.isSessionCapExceeded() && !state.aborted && !deferCostCapAbort) {
+  if (message.usage && state.isSessionCapExceeded() && !state.aborted) {
     state.markAborted();
     state.setTerminalReason("session_cost_cap_exceeded");
     void session.abort();
@@ -410,7 +389,7 @@ function onSessionEvent(
     // write to the capture buffer, leaving it empty. The loop
     // then records `session_failed(session_cost_cap_exceeded)`
     // with no captured handoff to reduce.
-    if (state.isSessionCapExceeded() && !state.aborted && !deferCostCapAbort) {
+    if (state.isSessionCapExceeded() && !state.aborted) {
       state.markAborted();
       state.setTerminalReason("session_cost_cap_exceeded");
       void session.abort();

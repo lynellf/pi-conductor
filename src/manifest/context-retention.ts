@@ -1,10 +1,7 @@
 import type { RoleConfig } from "./types.js";
 
 /** Role-local Issue #87 validation codes. */
-export type ContextRetentionErrorCode =
-  | "invalid-context-retention"
-  | "context-retention-on-worker"
-  | "context-retention-prewalk-conflict";
+export type ContextRetentionErrorCode = "invalid-context-retention" | "context-retention-on-worker";
 
 /** Structured role-local Issue #87 validation failure. */
 export interface ContextRetentionError {
@@ -31,13 +28,6 @@ export function validateContextRetention(role: RoleConfig): readonly ContextRete
     errors.push({
       code: "context-retention-on-worker",
       message: `role '${role.name}' cannot declare context retention because it is a worker`,
-      role: role.name,
-    });
-  }
-  if (role.context_retention === "run" && role.prewalk !== undefined) {
-    errors.push({
-      code: "context-retention-prewalk-conflict",
-      message: `orchestrator '${role.name}' cannot combine \`context_retention: run\` with prewalk`,
       role: role.name,
     });
   }

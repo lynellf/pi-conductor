@@ -18,7 +18,7 @@ import { spawnIsolatedRoleSession } from "./isolated-role-spawn.js";
 import type { LoadedManifest } from "./manifest.js";
 import { OrchestratorContextCoordinator } from "./orchestrator-context-coordinator.js";
 import { loadSystemPrompt, resolveModel, selectModelEntry } from "./production-host-resolve.js";
-import type { ProductionPrewalkHost } from "./production-prewalk-host.js";
+import type { ProductionSessionState } from "./production-session-state.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import type { DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
 import type { NodeRoleSession, NodeRoleSessionOptions } from "./rpc/node-role-session.js";
@@ -43,7 +43,7 @@ export interface SpawnRoleContext {
   readonly delegationSessionKeys: Map<string, string>;
   readonly inactiveDelegationSessions: Set<string>;
   unavailableRole: Role | null;
-  readonly prewalk: ProductionPrewalkHost;
+  readonly sessionState: ProductionSessionState;
   readonly lookupRoleConfig: (role: Role) => RoleConfig | undefined;
   readonly latestTrajectoryTransport: (role: Role) =>
     | {
@@ -200,19 +200,6 @@ export async function spawnRole(
     host.loadedManifest.manifestVersion,
   );
 
-  const prewalk = await host.prewalk.dispatch(host, {
-    role,
-    roleConfig,
-    entry,
-    executorModel: model,
-    executorLogical: logical,
-    baseSystemPrompt: rolePrompt,
-    visitIndex: opts.visitIndex ?? 1,
-    executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-    roleTurnProducer: host.roleTurnProducer,
-  });
-  if (prewalk !== null) return prewalk;
-
   if (workspaceBackend === "worktree" || workspaceBackend === "copy") {
     if (roleWorkspaceConfig === undefined) {
       throw new Error("isolated role requires a workspace configuration");
@@ -236,7 +223,8 @@ export async function spawnRole(
         .catch(() => undefined);
     };
     const fatalDelegation = (cause: unknown): void => {
-      if (isolatedParent !== null) void host.prewalk.abort(isolatedParent).catch(() => undefined);
+      if (isolatedParent !== null)
+        void host.sessionState.abort(isolatedParent).catch(() => undefined);
       void cause;
     };
     const isolatedSession = await spawnIsolatedRoleSession({
@@ -314,7 +302,7 @@ export async function spawnRole(
       .catch(() => undefined);
   };
   const fatalDelegation = (cause: unknown): void => {
-    if (sharedParent !== null) void host.prewalk.abort(sharedParent).catch(() => undefined);
+    if (sharedParent !== null) void host.sessionState.abort(sharedParent).catch(() => undefined);
     void cause;
   };
   const delegateTool = hasDelegateConfiguration(roleConfig)

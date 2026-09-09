@@ -4,7 +4,6 @@ import type { WorkspaceGuarantee } from "../core/types.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
-import { assertPrewalkRecord } from "./prewalk-records.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { assertToolExecutionRecord } from "./tool-execution.js";
 import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
@@ -49,7 +48,7 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   if (!isRecord(record)) return;
 
   if (typeof record.type === "string" && record.type.startsWith("prewalk_")) {
-    assertPrewalkRecord(record);
+    throw new Error("Prewalk run records cannot be resumed by this release: see issue #94");
   }
 
   if (record.type === "role_turn") {

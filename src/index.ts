@@ -84,26 +84,12 @@ export {
 } from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
 export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
-export type { PrewalkManifestErrorCode } from "./manifest/prewalk.js";
-export { deriveGuideTranscriptBudget } from "./manifest/prewalk.js";
-export type {
-  PrewalkTransferBudget,
-  PrewalkTransferPreflight,
-  TransferMode,
-} from "./manifest/prewalk-transfer.js";
-export {
-  PrewalkTransformUnsupportedError,
-  selectTransferMode,
-} from "./manifest/prewalk-transfer.js";
 export type {
   ContextRetention,
   DelegationMode,
   DelegationPolicy,
   Manifest,
   ModelConfig,
-  PrewalkConfig,
-  PrewalkExecutorConfig,
-  PrewalkGuideConfig,
   RoleConfig,
   SubagentProfile,
 } from "./manifest/types.js";
@@ -119,10 +105,8 @@ export type {
   ManifestError,
   ManifestErrorCode,
   ManifestReport,
-  ManifestValidationContext,
   ManifestWarning,
   ManifestWarningCode,
-  PrewalkRoleValidationContext,
 } from "./manifest/validate.js";
 export { validateManifest } from "./manifest/validate.js";
 
@@ -233,24 +217,6 @@ export type {
   OrchestratorContextUnknownCompactionInspection,
 } from "./persistence/orchestrator-context-inspection.js";
 export { inspectOrchestratorContext } from "./persistence/orchestrator-context-inspection.js";
-export type {
-  ExecutionCheckpointArgs,
-  ExecutionCheckpointTodo,
-  MaterializedPrewalkRecord,
-  PrewalkAdmission,
-  PrewalkExecutorSeedDeliveredRecord,
-  PrewalkFailureCode,
-  PrewalkPhaseUsageRecord,
-  PrewalkRecord,
-  PrewalkSwitchFailedRecord,
-  PrewalkSwitchSelectedRecord,
-  PrewalkValidationRunRecord,
-} from "./persistence/prewalk-records.js";
-export {
-  assertPrewalkRecord,
-  materializePrewalkRecord,
-  PrewalkRecordError,
-} from "./persistence/prewalk-records.js";
 // ─── Issue #68: bounded structured role-turn telemetry record + option ───
 // Additive `role_turn` persisted record and the host-only partial limits option.
 // Pure, host-agnostic; see docs/issue-68-role-turn-telemetry/spec.md.

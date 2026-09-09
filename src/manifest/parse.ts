@@ -28,7 +28,6 @@ import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
-import { parsePrewalkConfig } from "./prewalk.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
@@ -271,6 +270,11 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     `${path}.context_retention`,
     entry.is_orchestrator === true,
   );
+  if ("prewalk" in entry) {
+    throw new ManifestParseError(
+      `${path}.prewalk is unavailable: Prewalk was rolled back due to Pi extension compatibility (issue #94)`,
+    );
+  }
   const role: RoleConfig = Object.freeze({
     name,
     ...(contextRetention === undefined ? {} : { context_retention: contextRetention }),
@@ -309,9 +313,6 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
     }),
     ...(entry.artifacts !== undefined && {
       artifacts: parseArtifactConfig(entry.artifacts, index),
-    }),
-    ...(entry.prewalk !== undefined && {
-      prewalk: parsePrewalkConfig(entry.prewalk, `${path}.prewalk`),
     }),
   }) as RoleConfig;
 

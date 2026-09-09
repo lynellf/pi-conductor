@@ -12,7 +12,6 @@ export interface SharedSdkStartupResources {
   readonly agentsBySessionId: Map<string, SessionEventSource>;
   readonly unsubscribe?: () => void;
   readonly controller?: ToolExecutionController;
-  readonly executionControllerRef: { current: ToolExecutionController | null } | undefined;
 }
 
 /** Create the cleanup callback shared by startup steps after native creation. */
@@ -39,12 +38,6 @@ export function cleanupSharedSdkStartupFailure(resources: SharedSdkStartupResour
   }
   resources.sessionStates.delete(resources.roleSessionId);
   resources.agentsBySessionId.delete(resources.roleSessionId);
-  if (
-    resources.executionControllerRef !== undefined &&
-    resources.executionControllerRef.current === resources.controller
-  ) {
-    resources.executionControllerRef.current = null;
-  }
   try {
     resources.session.dispose();
   } catch {

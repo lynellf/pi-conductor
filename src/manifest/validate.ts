@@ -22,15 +22,8 @@ import type { ModelEffort, Role } from "../core/types.js";
 import { validateContextRetention } from "./context-retention.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
-import {
-  type ManifestValidationContext,
-  type PrewalkManifestErrorCode,
-  validatePrewalkRole,
-} from "./prewalk.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
 import type { Manifest } from "./types.js";
-
-export type { ManifestValidationContext, PrewalkRoleValidationContext } from "./prewalk.js";
 
 // ─── Result types ─────────────────────────────────────────────────────
 
@@ -75,8 +68,6 @@ export type ManifestErrorCode =
   | "context-retention-on-worker"
   /** Issue #87: retained orchestrator context cannot use trajectory handoff. */
   | "context-retention-trajectory-conflict"
-  /** Issue #87: Prewalk orchestrators cannot retain their conversation. */
-  | "context-retention-prewalk-conflict"
   /** Issue #63: policy source does not name a declared role. */
   | "handoff-policy-from-undeclared"
   /** Issue #63: policy target does not name a declared role. */
@@ -99,8 +90,8 @@ export type ManifestErrorCode =
   | "invalid-tool-execution-policy"
   /** Issue #75: end guard contains malformed values or keys. */
   | "invalid-end-guard"
-  /** Experimental Prewalk manifest and derived-admission failures. */
-  | PrewalkManifestErrorCode;
+  /** Prewalk is unavailable until Pi extension loading is supported (issue #94). */
+  | "prewalk-unavailable";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -210,12 +201,10 @@ function isSafeProgressiveDisclosurePath(path: string): boolean {
  *
  * Returns a report with errors and warnings distinctly. The caller
  * decides what to do: `toMachineDefinition` throws if `errors.length > 0`;
- * warnings are surfaced to the user but do not block. A manifest containing
- * `prewalk` requires runtime-resolved context facts; omission fails closed
- * before guide spend because its derived budget and Git requirement cannot be
- * proven from YAML alone (Prewalk spec §R6/§R11).
+ * warnings are surfaced to the user but do not block. Rolled-back Prewalk
+ * configuration is rejected explicitly, including in pinned snapshots (issue #94).
  */
-export function validateManifest(m: Manifest, context?: ManifestValidationContext): ManifestReport {
+export function validateManifest(m: Manifest): ManifestReport {
   const errors: ManifestError[] = [];
   const warnings: ManifestWarning[] = [];
 
@@ -328,9 +317,13 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
     )) {
       errors.push({ code: "invalid-tool-execution-policy", message, role: role.name });
     }
-    validatePrewalkRole(role, context, (code, message) => {
-      errors.push({ code, message, role: role.name });
-    });
+    if ("prewalk" in role) {
+      errors.push({
+        code: "prewalk-unavailable",
+        message: `role '${role.name}' uses Prewalk, which was rolled back because of Pi extension compatibility (issue #94)`,
+        role: role.name,
+      });
+    }
 
     // §13: `max_run_cost_usd` only on the orchestrator.
     if (role.max_run_cost_usd !== undefined && !role.is_orchestrator) {

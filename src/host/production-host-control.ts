@@ -3,7 +3,7 @@
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 import type { RoleSession } from "./host.js";
-import type { ProductionPrewalkHost } from "./production-prewalk-host.js";
+import type { ProductionSessionState } from "./production-session-state.js";
 /** Dependencies for terminal, abort, and delegation control operations. */
 export interface ControlHostContext {
   readonly endGuardRunner: {
@@ -13,7 +13,7 @@ export interface ControlHostContext {
   readonly delegation: ProductionDelegationCoordinator;
   readonly delegationSessionKeys: Map<string, string>;
   readonly inactiveDelegationSessions: Set<string>;
-  readonly prewalk: ProductionPrewalkHost;
+  readonly sessionState: ProductionSessionState;
 }
 /** Abort a live role session and record its terminal state. */
 export async function abortSession(
@@ -26,7 +26,7 @@ export async function abortSession(
   if (key !== undefined) {
     ctx.inactiveDelegationSessions.add(session.sessionId);
     let parentAbortFailure: unknown;
-    const parentAbort = ctx.prewalk.abort(session).catch((error: unknown) => {
+    const parentAbort = ctx.sessionState.abort(session).catch((error: unknown) => {
       parentAbortFailure = error;
     });
     let childCloseFailure: unknown;
@@ -44,7 +44,7 @@ export async function abortSession(
     if (parentAbortFailure !== undefined) throw parentAbortFailure;
     return;
   }
-  await ctx.prewalk.abort(session);
+  await ctx.sessionState.abort(session);
 }
 
 /** Return delegation tasks that still require settlement. */

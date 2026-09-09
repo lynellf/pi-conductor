@@ -33,17 +33,11 @@ import type {
   OrchestratorContextCoordinator,
   PreparedOrchestratorContext,
 } from "./orchestrator-context-coordinator.js";
-import { createPrewalkPhaseSessionAdapter } from "./prewalk-phase-session.js";
-import { createSdkPrewalkPhase, type SdkPrewalkPhase } from "./prewalk-sdk-phase.js";
-import { buildToolsAllowlist, resolveModel } from "./production-host-resolve.js";
+import { buildToolsAllowlist } from "./production-host-resolve.js";
 import { createRoleSessionAdapter } from "./role-session.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { SessionSeam } from "./seam.js";
-import {
-  createCaptureRejector,
-  type SessionCostCapDeferral,
-  type SessionEventSource,
-} from "./session-event-handler.js";
+import { createCaptureRejector, type SessionEventSource } from "./session-event-handler.js";
 import { createSharedCompactionWiring } from "./shared-sdk-compaction-wiring.js";
 import {
   createSharedSdkRetainedPrompt,
@@ -99,10 +93,6 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly visitIndex?: number;
   readonly executionVisitIndex?: number;
   readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
-  /** Mutable binding used by Prewalk validation while a phase session is live. */
-  readonly executionControllerRef?: { current: ToolExecutionController | null };
-  readonly prewalk?: SdkPrewalkPhase;
-  readonly deferSessionCostCapAbort?: SessionCostCapDeferral;
   readonly contextRetention?: {
     readonly coordinator: OrchestratorContextCoordinator;
     readonly prepared: PreparedOrchestratorContext;
@@ -155,30 +145,14 @@ export async function spawnSharedSdkRoleSession(options: {
     def: options.machineDefinition,
   };
   const rejector = createCaptureRejector();
-  const prewalkPhase = createSdkPrewalkPhase(options.prewalk, {
-    workspaceRoot: options.cwd,
-    roleSessionId: options.roleSessionId ?? "",
-    ordinaryActiveToolNames: buildToolsAllowlist(options.roleConfig?.tools, false),
-  });
-  const beforeMachineEmission = prewalkPhase.beforeMachineEmission;
   const handoff = createHandoffTool(
     () => activeSeam,
     rejector.shouldRejectCapture,
     () => activeHandoffContext,
     options.disableAutoCompaction === true || options.isTrajectory === true,
-    beforeMachineEmission === undefined
-      ? undefined
-      : (signal, context) => beforeMachineEmission(signal, context),
   );
-  const end = createEndTool(
-    () => activeSeam,
-    rejector.shouldRejectCapture,
-    beforeMachineEmission === undefined
-      ? undefined
-      : (signal, context) => beforeMachineEmission(signal, context),
-  );
+  const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
   const askUser = createAskUserTool() as ToolDefinition;
-  const checkpointTool = prewalkPhase.checkpointTool;
   let controller: ToolExecutionController | null = null;
   let activePolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
   const executionRecords = [...(options.priorToolExecutionRecords ?? [])];
@@ -198,7 +172,6 @@ export async function spawnSharedSdkRoleSession(options: {
       ? [
           ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
           ...(options.delegateTool === null ? [] : ["delegate"]),
-          ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
         ]
       : [...options.activeToolNames];
   // The parent registry owns the runtime that carries extension-registered
@@ -228,7 +201,6 @@ export async function spawnSharedSdkRoleSession(options: {
       askUser,
       ...(handoffContext === null ? [] : [handoffContext]),
       ...(options.delegateTool === null ? [] : [options.delegateTool]),
-      ...(checkpointTool === null ? [] : [checkpointTool]),
     ],
     // Pi registers custom tools only when their names are present in `tools`.
     // Register the complete supervised executable surface, then immediately
@@ -239,7 +211,6 @@ export async function spawnSharedSdkRoleSession(options: {
       ...restoredActiveToolNames,
       ...supervisedTools.map((candidate) => candidate.name),
       ...(options.delegateTool === null ? [] : ["delegate"]),
-      ...(checkpointTool === null ? [] : ["execution_checkpoint"]),
     ].filter((name, index, names) => names.indexOf(name) === index),
   };
   const { session } = await createSharedSdkSession({
@@ -248,7 +219,6 @@ export async function spawnSharedSdkRoleSession(options: {
     effort: options.effort,
     retainedContext: options.contextRetention !== undefined,
     restoredActiveToolNames,
-    initialActiveToolNames: prewalkPhase.initialActiveToolNames,
     ...(options.isTrajectory === undefined ? {} : { isTrajectory: options.isTrajectory }),
     ...(options.expectedTrajectoryConversation === undefined
       ? {}
@@ -273,7 +243,6 @@ export async function spawnSharedSdkRoleSession(options: {
     roleSessionId: sessionId,
     sessionStates: options.sessionStates,
     agentsBySessionId: options.agentsBySessionId,
-    executionControllerRef: options.executionControllerRef,
   });
   const retainedAttachment = runSharedSdkStartupStep(cleanupStartupFailure, () => {
     const attachment = options.contextRetention?.coordinator.attach(
@@ -333,18 +302,12 @@ export async function spawnSharedSdkRoleSession(options: {
       rejector,
       roleTurnProducer: options.roleTurnProducer,
       conversationId: nativeSessionId,
-      ...(options.deferSessionCostCapAbort === undefined
-        ? {}
-        : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
       ...(options.displaySink === undefined ? {} : { displaySink: options.displaySink }),
       getActiveState: () => activeState,
       abort: () => sdkSession?.abort() ?? Promise.resolve(),
     }),
   );
   controller = sourceBinding.controller;
-  if (options.executionControllerRef !== undefined) {
-    options.executionControllerRef.current = controller;
-  }
   const sourceEventUnsubscribe = sourceBinding.unsubscribe;
 
   let nativeRetained = false;
@@ -425,9 +388,6 @@ export async function spawnSharedSdkRoleSession(options: {
       },
     });
     controller = targetBinding.controller;
-    if (options.executionControllerRef !== undefined) {
-      options.executionControllerRef.current = controller;
-    }
     const targetEventUnsubscribe = targetBinding.unsubscribe;
 
     let targetRetained = false;
@@ -483,16 +443,5 @@ export async function spawnSharedSdkRoleSession(options: {
       options.agentsBySessionId.delete(sessionId);
     },
   });
-  if (options.prewalk === undefined || options.logicalModel === null) return adapter;
-  return createPrewalkPhaseSessionAdapter({
-    adapter,
-    session,
-    initialLogicalModel: options.logicalModel,
-    getSystemPrompt: () => activeSystemPrompt ?? session.systemPrompt,
-    setSystemPrompt: (prompt) => {
-      activeSystemPrompt = prompt;
-    },
-    resolveModel: (logical) => resolveModel(options.role, logical, options.modelRegistry).model,
-    setExecutorPhase: prewalkPhase.setExecutorPhase,
-  });
+  return adapter;
 }

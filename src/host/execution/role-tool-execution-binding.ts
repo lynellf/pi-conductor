@@ -5,11 +5,7 @@ import type { ToolExecutionRecord } from "../../persistence/tool-execution.js";
 import type { SessionState } from "../cost.js";
 import type { DisplaySink } from "../display-sink.js";
 import type { RoleTurnTelemetryAttachment } from "../role-turn-producer.js";
-import type {
-  CaptureRejector,
-  SessionCostCapDeferral,
-  SessionEventSource,
-} from "../session-event-handler.js";
+import type { CaptureRejector, SessionEventSource } from "../session-event-handler.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
 import { ToolExecutionController, type ToolExecutionError } from "./tool-execution-controller.js";
 
@@ -34,7 +30,6 @@ export interface LiveRoleToolExecutionBindingOptions extends RoleToolExecutionBi
   readonly agentsBySessionId: Map<string, SessionEventSource>;
   readonly rejector: CaptureRejector;
   readonly roleTurn: RoleTurnTelemetryAttachment;
-  readonly deferSessionCostCapAbort?: SessionCostCapDeferral;
   readonly displaySink?: DisplaySink;
 }
 
@@ -60,9 +55,6 @@ export function bindLiveRoleToolExecution(options: LiveRoleToolExecutionBindingO
         persist: options.persist,
       },
       roleTurn: options.roleTurn,
-      ...(options.deferSessionCostCapAbort === undefined
-        ? {}
-        : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
       ...(options.displaySink === undefined ? {} : { onDisplay: options.displaySink }),
     });
   } catch (error) {
