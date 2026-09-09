@@ -51,7 +51,11 @@ import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
-import type { ToolExecutionFinishedRecord, ToolExecutionStartedRecord } from "./tool-execution.js";
+import type {
+  ToolExecutionCleanupConfirmedRecord,
+  ToolExecutionFinishedRecord,
+  ToolExecutionStartedRecord,
+} from "./tool-execution.js";
 import type {
   HandoffTransportSelectedRecord,
   ManifestSnapshotRecord,
@@ -117,6 +121,7 @@ export {
 } from "./record-materialization.js";
 export type { RoleTurnRecord } from "./role-turn.js";
 export type {
+  ToolExecutionCleanupConfirmedRecord,
   ToolExecutionFinishedRecord,
   ToolExecutionRecord,
   ToolExecutionStartedRecord,
@@ -125,8 +130,10 @@ export type {
 } from "./tool-execution.js";
 export {
   assertToolExecutionRecord,
+  isToolExecutionRecord,
   reconstructToolExecutionTimeline,
   ToolExecutionRecordError,
+  toolExecutionCleanupConfirmedSchema,
   toolExecutionFinishedSchema,
   toolExecutionStartedSchema,
 } from "./tool-execution.js";
@@ -392,6 +399,7 @@ export type PersistedRecord =
   | RoleTurnRecord
   | ToolExecutionStartedRecord
   | ToolExecutionFinishedRecord
+  | ToolExecutionCleanupConfirmedRecord
   | EndGuardRecord
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord;
