@@ -1,6 +1,6 @@
 # Orchestrator context retention — Issue #87
 
-Status: acknowledged on 2026-09-08; implemented and verified on 2026-09-09; awaiting merge.
+Status: acknowledged on 2026-09-08; implemented, verified and merged in PR #91 on 2026-09-09.
 Implementation baseline: origin/main `7592fa4` (after delegation policy and host module refactors). Extends the fresh-session memory contract in
 `docs/archive/orchestrator-fsm-spec.md` §8.4 without changing the FSM.
 

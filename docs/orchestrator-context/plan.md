@@ -94,7 +94,7 @@ transport tests, typecheck, build, Biome; independent transport review.
 - [x] Independent final review; resolve findings without unrelated cleanup.
 - [x] Run `pnpm typecheck`, `pnpm build`, `pnpm test`, `pnpm lint`,
   `pnpm format:check`, and `pnpm audit --prod`; mandatory pre-push hooks remain on.
-- [ ] Create and merge the reviewed PR, close #87, and assess the resulting main.
+- [x] Create and merge the reviewed PR, close #87, and assess the resulting main.
 
 ## Risks and implementation constraints
 
@@ -109,3 +109,15 @@ TypeScript, named exports and public JSDoc. Keep new modules around 400 lines;
 documented coherent exceptions stay below 500. Existing large adapters may need
 small responsibility-based extraction when this feature would exceed the ceiling.
 No paid provider run, cross-run memory, or unrelated #88 refactors are included.
+
+## Post-merge assessment
+
+PR #91 merged on 2026-09-09 at `3f2e959`; #87 closed automatically. The merged
+source tree exactly matches the verified PR head. Mandatory pre-push hooks passed
+all 2,263 tests across 208 files, plus lint and typechecking. Build, formatting and
+the production dependency audit also passed.
+
+Remaining open work is #88 (the separately tracked oversized modules) and #67
+(the broader public Pi runtime migration). No SDK or dependency versions changed.
+The original dirty working tree remains preserved; implementation and verification
+used the isolated context-retention worktree.

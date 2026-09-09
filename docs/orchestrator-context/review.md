@@ -56,3 +56,7 @@ typechecking and the full test suite again.
 The remaining general module-size work is tracked separately in #88. The public
 Pi runtime migration in #67 is not part of this change. Source checkouts require
 `pnpm build` before launching the retained RPC child.
+
+PR #91 merged on 2026-09-09 at `3f2e959`. Its source tree matches the reviewed
+head exactly. The final pre-push run passed 2,263 tests across 208 files, lint and
+typechecking; #87 is closed.
