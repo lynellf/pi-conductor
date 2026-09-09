@@ -1,0 +1,30 @@
+import { type Static, Type } from "typebox";
+
+const observedIdentity = Type.Object(
+  {
+    pid: Type.Integer({ minimum: 1 }),
+    start_time: Type.String({ pattern: "^[0-9]+$", minLength: 1, maxLength: 64 }),
+    process_group_id: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Bounded process cleanup evidence; it never carries commands, markers, or output. */
+export const toolExecutionDiagnosticSchema = Type.Object(
+  {
+    cleanup_cause: Type.Union([
+      Type.Literal("leader_exited_with_owned_descendants"),
+      Type.Literal("leader_identity_unobserved"),
+      Type.Literal("cleanup_observation_failed"),
+      Type.Literal("cleanup_signal_failed"),
+      Type.Literal("group_remained_live"),
+      Type.Literal("escaped_owned_processes"),
+    ]),
+    leader_observed: Type.Boolean(),
+    observed_members: Type.Array(observedIdentity, { maxItems: 32 }),
+  },
+  { additionalProperties: false },
+);
+
+/** Safe bounded evidence for an executable cleanup failure. */
+export type ToolExecutionDiagnostic = Readonly<Static<typeof toolExecutionDiagnosticSchema>>;

@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { toolExecutionDiagnosticSchema } from "./tool-execution-diagnostic.js";
 
 const id = Type.String({ minLength: 1 });
 const nonNegativeInteger = Type.Integer({ minimum: 0 });
@@ -48,6 +49,7 @@ export const toolExecutionFinishedSchema = Type.Object(
       Type.Literal("interrupted"),
     ]),
     cleanup: Type.Union([Type.Literal("confirmed"), Type.Literal("unconfirmed")]),
+    diagnostic: Type.Optional(toolExecutionDiagnosticSchema),
     ts: Type.Number({ minimum: 0 }),
   },
   { additionalProperties: false },
@@ -78,6 +80,7 @@ export const toolExecutionCleanupConfirmedSchema = Type.Object(
 export type ToolExecutionStartedRecord = Readonly<Static<typeof toolExecutionStartedSchema>>;
 /** Durable terminal result correlated with one started executable tool. */
 export type ToolExecutionFinishedRecord = Readonly<Static<typeof toolExecutionFinishedSchema>>;
+export type { ToolExecutionDiagnostic } from "./tool-execution-diagnostic.js";
 /** Durable operator attestation that an unconfirmed execution is now settled. */
 export type ToolExecutionCleanupConfirmedRecord = Readonly<
   Static<typeof toolExecutionCleanupConfirmedSchema>

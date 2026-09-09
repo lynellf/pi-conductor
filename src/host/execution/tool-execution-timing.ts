@@ -23,16 +23,22 @@ export async function settleWithinCleanupWindow<T>(
   operation: Promise<T>,
   graceSeconds: number,
   setTimer: (timer: ReturnType<typeof setTimeout>) => void,
-): Promise<{ readonly settled: boolean; readonly cleanup: "confirmed" | "unconfirmed" }> {
+): Promise<{
+  readonly settled: boolean;
+  readonly cleanup: "confirmed" | "unconfirmed";
+  readonly error?: unknown;
+}> {
   let settled = false;
   let cleanup: "confirmed" | "unconfirmed" = "confirmed";
+  let error: unknown;
   const observed = operation.then(
     () => {
       settled = true;
     },
-    (error: unknown) => {
+    (reason: unknown) => {
       settled = true;
-      if (hasUnconfirmedCleanup(error)) {
+      error = reason;
+      if (hasUnconfirmedCleanup(reason)) {
         cleanup = "unconfirmed";
       }
     },
@@ -46,7 +52,7 @@ export async function settleWithinCleanupWindow<T>(
     setTimer(timer);
   });
   await Promise.race([observed, timeout]);
-  return { settled, cleanup: settled ? cleanup : "unconfirmed" };
+  return { settled, cleanup: settled ? cleanup : "unconfirmed", ...(settled ? { error } : {}) };
 }
 
 function boundedMilliseconds(seconds: number): number {

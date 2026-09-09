@@ -64,7 +64,15 @@ describe("supervised process ownership review", () => {
             parentPid = pid;
           },
         }),
-      ).rejects.toMatchObject({ code: "supervised-process-spawn-failed", cleanup: "unconfirmed" });
+      ).rejects.toMatchObject({
+        code: "supervised-process-spawn-failed",
+        cleanup: "unconfirmed",
+        diagnostic: {
+          cleanup_cause: "escaped_owned_processes",
+          leader_observed: true,
+          observed_members: expect.any(Array),
+        },
+      });
     } finally {
       killTestProcess(parentPid);
       try {
@@ -80,15 +88,17 @@ describe("supervised process ownership review", () => {
     const scanStarted = deferred<void>();
     const scanResult = deferred<boolean>();
     const cleanupStarted = deferred<void>();
-    const cleanupResult = deferred<"confirmed">();
+    const cleanupResult = deferred<{ cleanup: "confirmed" }>();
     vi.spyOn(identity, "processGroupHasLiveMembers").mockImplementation(async () => {
       scanStarted.resolve();
       return scanResult.promise;
     });
-    const terminate = vi.spyOn(cleanup, "safeTerminateOwnedGroup").mockImplementation(async () => {
-      cleanupStarted.resolve();
-      return cleanupResult.promise;
-    });
+    const terminate = vi
+      .spyOn(cleanup, "safeTerminateOwnedGroupDetailed")
+      .mockImplementation(async () => {
+        cleanupStarted.resolve();
+        return cleanupResult.promise;
+      });
     let parentPid: number | undefined;
     const execution = runSupervisedProcess({
       executionId: `review-close-timeout-${process.pid}`,
@@ -111,14 +121,14 @@ describe("supervised process ownership review", () => {
       scanResult.resolve(true);
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(terminate).toHaveBeenCalledTimes(1);
-      cleanupResult.resolve("confirmed");
+      cleanupResult.resolve({ cleanup: "confirmed" });
       await expect(bounded(execution)).resolves.toMatchObject({
         code: "supervised-process-timeout",
         cleanup: "confirmed",
       });
     } finally {
       scanResult.resolve(false);
-      cleanupResult.resolve("confirmed");
+      cleanupResult.resolve({ cleanup: "confirmed" });
       await bounded(execution);
       killTestProcess(parentPid);
     }
@@ -128,12 +138,12 @@ describe("supervised process ownership review", () => {
     const scanStarted = deferred<void>();
     const scanResult = deferred<boolean>();
     const cleanupStarted = deferred<void>();
-    const cleanupResult = deferred<"confirmed">();
+    const cleanupResult = deferred<{ cleanup: "confirmed" }>();
     vi.spyOn(identity, "processGroupHasLiveMembers").mockImplementation(async () => {
       scanStarted.resolve();
       return scanResult.promise;
     });
-    vi.spyOn(cleanup, "safeTerminateOwnedGroup").mockImplementation(async () => {
+    vi.spyOn(cleanup, "safeTerminateOwnedGroupDetailed").mockImplementation(async () => {
       cleanupStarted.resolve();
       return cleanupResult.promise;
     });
@@ -165,14 +175,14 @@ describe("supervised process ownership review", () => {
       scanResult.reject(new Error("process namespace became unreadable"));
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(executionSettled).toBe(false);
-      cleanupResult.resolve("confirmed");
+      cleanupResult.resolve({ cleanup: "confirmed" });
       await expect(bounded(execution)).resolves.toMatchObject({
         code: "supervised-process-timeout",
         cleanup: "confirmed",
       });
     } finally {
       scanResult.resolve(false);
-      cleanupResult.resolve("confirmed");
+      cleanupResult.resolve({ cleanup: "confirmed" });
       await bounded(execution);
       killTestProcess(parentPid);
     }

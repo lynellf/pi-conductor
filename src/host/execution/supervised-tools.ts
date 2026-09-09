@@ -279,8 +279,14 @@ function supervisedFileDefinition(
 
 function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefinition {
   const metadata = createBashToolDefinition(options.cwd) as unknown as ToolDefinition;
+  const pinnedDeadline = policyFor(options).timeout_seconds;
+  const guidance = `Keep the full workload in the foreground and finish it within the pinned ${pinnedDeadline}-second limit. Do not use nohup, &, setsid, or disown to evade the deadline; detached/background jobs are unsupported. Set timeout to the full allowed window when needed; it may shorten a call or raise a shorter per-call timeout, but cannot exceed ${pinnedDeadline} seconds. This is guidance rather than enforcement: a background launch may still end with cleanup unconfirmed. If the workload needs longer, split it into bounded foreground calls or ask the owner to configure a finite higher limit for a new run. After a timeout, inspect partial effects before manually retrying; the host never automatically replays a command.`;
+  const description = `${metadata.description ?? "Execute a bash command."} ${guidance}`;
   return {
     ...metadata,
+    description,
+    promptSnippet: `${metadata.promptSnippet ?? "Execute bash commands."} Pinned max: ${pinnedDeadline}s; keep work foreground.`,
+    promptGuidelines: [...(metadata.promptGuidelines ?? []), guidance],
     execute: async (toolCallId, params, signal, onUpdate, ctx) => {
       if (options.isSealed?.() === true) return sealedResult();
       const bashParams = params as BashParams;

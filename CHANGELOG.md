@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.21.4] - 2026-09-09
+
+### Bug fixes
+
+- Add pinned bash-tool guidance for foreground execution, bounded timeout
+  selection, partial-effect inspection and manual recovery without automatic
+  replay (Issue #100).
+- Document process-identity checks required for safe executable-tool
+  reconciliation, including PID reuse, process groups and `/proc` visibility.
+- Persist cleanup causes and observed process identities, and add packed
+  regression coverage for supervised bash execution (Issue #100).
+
 ## [0.21.3] - 2026-09-09
 
 ### Bug fixes

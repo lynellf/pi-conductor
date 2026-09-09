@@ -28,6 +28,17 @@ After confirmed cleanup, the model receives a structured `tool_timeout` error
 and can inspect or repair the workspace. The host never replays the tool call.
 Two timeouts are recoverable by default; the third stops the invocation with
 `tool_timeout_exhausted`. Recovery counts survive model fallback.
+
+The bash tool tells the model to keep the complete workload in the foreground.
+Detached or background jobs (`nohup`, `&`, `setsid`, and `disown`) are
+unsupported because they evade the owned deadline and process-group cleanup.
+The model may set a timeout up to the pinned limit, including raising a shorter
+per-call timeout, but it cannot exceed that limit. This guidance does not
+enforce background-job behavior; a background launch may still end with
+cleanup unconfirmed. An owner must configure a finite higher limit for a new
+run, or the model should split the work into bounded foreground calls. After a
+timeout, inspect partial effects before manually retrying. The host does not
+automatically replay a timed-out command.
 An explicit operator resume starts a fresh invocation budget while preserving
 the workspace and any materialized artifact inventory.
 
@@ -35,6 +46,18 @@ If process ownership or cleanup cannot be confirmed, the invocation stops with
 `tool_cleanup_unconfirmed`. Do not assume a timed-out write or edit was rolled
 back: inspect the affected workspace before continuing. A file whose mutation
 has unconfirmed cleanup remains unavailable to other mutations in that host.
+
+A finished execution may include an optional persisted diagnostic, with a
+model-visible copy, containing `cleanup_cause` and an `observed_members`
+snapshot. The cause distinguishes a surviving process group, escaped
+descendants, lost identity, and process-observation or termination-signal
+failures. `leader_observed` means only that the leader identity was admitted
+historically; it does not mean the leader is alive now. Each observation
+contains a Linux PID, `start_time` in Linux start ticks, and process group ID.
+At most 32 members are recorded, with no command arguments, environment values,
+marker contents, or output. Observations can age, and group membership alone
+does not prove execution ownership. Before operator action, revalidate the
+current start ticks, owner marker and process group.
 
 Intentional owner waits through `ask_user` and delegation result waits are
 exempt. Isolated roles and delegated children retain their existing file
@@ -72,6 +95,16 @@ The production marker scan requires sufficient `/proc` visibility in the
 original host and PID/network namespaces; a permission denial while inspecting
 any process is not evidence that it exited and causes reconciliation to fail
 closed. Resolve that visibility issue before confirming cleanup.
+
+Do not trust a historical PID by itself: correlate the run ID, execution ID,
+tool-call ID and tool name, then verify the current process start ticks, process
+group and ownership in the original host namespace. Stop only processes that
+are currently verified as belonging to that execution, including verified
+descendants. Never blind-kill a reused PID, kill the whole conductor, elevate
+privileges merely to suppress an observation error, or hide a failed check.
+If a read-only `/proc` or namespace observation is denied, perform the same
+actionable observation from the original host with sufficient visibility and
+leave reconciliation unconfirmed until it succeeds.
 
 Reconciliation refuses a log with an incomplete trailing record and leaves its
 bytes untouched; repair that persistence issue separately. After confirming

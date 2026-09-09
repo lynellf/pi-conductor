@@ -16,6 +16,7 @@ import {
   type ToolExecutionRecord,
   type ToolExecutionStartedRecord,
 } from "../../persistence/tool-execution.js";
+import type { ToolExecutionDiagnostic } from "../../persistence/tool-execution-diagnostic.js";
 import { SupervisedProcessError } from "./supervised-process.js";
 import {
   hasUnconfirmedCleanup,
@@ -39,6 +40,7 @@ export class ToolExecutionError extends Error {
   readonly code: ToolExecutionErrorCode;
   readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
   readonly executionId: string | undefined;
+  readonly diagnostic: ToolExecutionDiagnostic | undefined;
 
   constructor(
     code: ToolExecutionErrorCode,
@@ -46,6 +48,7 @@ export class ToolExecutionError extends Error {
     options?: {
       readonly cleanup?: "confirmed" | "unconfirmed" | "not-started";
       readonly executionId?: string;
+      readonly diagnostic?: ToolExecutionDiagnostic;
       readonly cause?: unknown;
     },
   ) {
@@ -54,6 +57,7 @@ export class ToolExecutionError extends Error {
     this.code = code;
     this.cleanup = options?.cleanup ?? "not-started";
     this.executionId = options?.executionId;
+    this.diagnostic = options?.diagnostic;
   }
 }
 
@@ -257,12 +261,12 @@ export class ToolExecutionController {
       );
       const cleanupConfirmed = settled.settled && settled.cleanup !== "unconfirmed";
       if (!cleanupConfirmed) {
-        return this.finishUnconfirmed(started, executionId, recoveryCount, error);
+        return this.finishUnconfirmed(started, executionId, recoveryCount, settled.error ?? error);
       }
       if (aborted && !timedOut) {
-        return this.finishAborted(started, executionId, recoveryCount, error);
+        return this.finishAborted(started, executionId, recoveryCount, settled.error ?? error);
       }
-      return this.finishTimeout(started, executionId, recoveryCount, error);
+      return this.finishTimeout(started, executionId, recoveryCount, settled.error ?? error);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       if (cleanupTimer !== undefined) clearTimeout(cleanupTimer);
@@ -321,7 +325,8 @@ export class ToolExecutionController {
     cause: unknown,
   ): never {
     const priorTimeouts = this.timeoutCountForSession();
-    this.appendFinished(started, "timed_out", "confirmed");
+    const diagnostic = diagnosticFrom(cause);
+    this.appendFinished(started, "timed_out", "confirmed", diagnostic);
     const code =
       priorTimeouts >= this.options.policy.max_recoverable_timeouts
         ? "tool_timeout_exhausted"
@@ -330,6 +335,7 @@ export class ToolExecutionController {
       cleanup: "confirmed",
       executionId,
       cause,
+      ...(diagnostic === undefined ? {} : { diagnostic }),
     });
     if (code === "tool_timeout_exhausted") {
       this.closeOnFatal(error);
@@ -343,11 +349,13 @@ export class ToolExecutionController {
     _recoveryCount: number,
     cause: unknown,
   ): never {
-    this.appendFinished(started, "aborted", "confirmed");
+    const diagnostic = diagnosticFrom(cause);
+    this.appendFinished(started, "aborted", "confirmed", diagnostic);
     throw new ToolExecutionError("tool_aborted", "tool execution was aborted", {
       cleanup: "confirmed",
       executionId,
       cause,
+      ...(diagnostic === undefined ? {} : { diagnostic }),
     });
   }
 
@@ -357,11 +365,17 @@ export class ToolExecutionController {
     _recoveryCount: number,
     cause: unknown,
   ): never {
-    this.appendFinished(started, "cleanup_unconfirmed", "unconfirmed");
+    const diagnostic = diagnosticFrom(cause);
+    this.appendFinished(started, "cleanup_unconfirmed", "unconfirmed", diagnostic);
     const error = new ToolExecutionError(
       "tool_cleanup_unconfirmed",
       "tool execution cleanup could not be confirmed",
-      { cleanup: "unconfirmed", executionId, cause },
+      {
+        cleanup: "unconfirmed",
+        executionId,
+        cause,
+        ...(diagnostic === undefined ? {} : { diagnostic }),
+      },
     );
     this.closeOnFatal(error);
     throw error;
@@ -390,6 +404,7 @@ export class ToolExecutionController {
     started: ToolExecutionStartedRecord,
     outcome: ToolExecutionFinishedRecord["outcome"],
     cleanup: ToolExecutionFinishedRecord["cleanup"],
+    diagnostic?: ToolExecutionFinishedRecord["diagnostic"],
   ): void {
     if (this.finishedIds.has(started.execution_id)) return;
     this.append({
@@ -406,6 +421,7 @@ export class ToolExecutionController {
       recovery_count: started.recovery_count,
       outcome,
       cleanup,
+      ...(diagnostic === undefined ? {} : { diagnostic }),
       ts: Date.now(),
     });
     this.finishedIds.add(started.execution_id);
@@ -417,6 +433,10 @@ export class ToolExecutionController {
     for (const abort of this.activeAborts) abort.abort();
     this.onFatal?.(error);
   }
+}
+
+function diagnosticFrom(cause: unknown): ToolExecutionFinishedRecord["diagnostic"] {
+  return cause instanceof SupervisedProcessError ? cause.diagnostic : undefined;
 }
 
 function isSupervisedTimeout(error: unknown): boolean {

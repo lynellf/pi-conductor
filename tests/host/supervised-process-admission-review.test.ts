@@ -229,7 +229,13 @@ describe("supervised process admission ordering review", () => {
           graceMs: 20,
           onStart: () => undefined,
         }),
-      ).rejects.toMatchObject({ cleanup: "unconfirmed" });
+      ).rejects.toMatchObject({
+        cleanup: "unconfirmed",
+        diagnostic: {
+          cleanup_cause: "leader_identity_unobserved",
+          leader_observed: false,
+        },
+      });
     } finally {
       if (child !== undefined && child.exitCode === null && child.signalCode === null) {
         const closed = new Promise<void>((resolve) => child?.once("close", () => resolve()));

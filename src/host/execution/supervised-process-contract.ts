@@ -1,4 +1,7 @@
+import type { ToolExecutionDiagnostic } from "../../persistence/tool-execution-diagnostic.js";
 import type { ProcessIdentity } from "./supervised-process-identity.js";
+
+export type SupervisedProcessDiagnostic = ToolExecutionDiagnostic;
 
 /** Inputs for one Linux process-group-supervised executable invocation. */
 export interface SupervisedProcessOptions {
@@ -51,12 +54,14 @@ export class SupervisedProcessError extends Error {
   readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
   readonly identity: ProcessIdentity | null;
   readonly elapsedMs: number | null;
+  readonly diagnostic: SupervisedProcessDiagnostic | undefined;
   constructor(
     code: SupervisedProcessFailureCode,
     message: string,
     cleanup: "confirmed" | "unconfirmed" | "not-started",
     identity: ProcessIdentity | null,
     elapsedMs: number | null = null,
+    diagnostic?: SupervisedProcessDiagnostic,
   ) {
     super(message);
     this.name = "SupervisedProcessError";
@@ -64,6 +69,7 @@ export class SupervisedProcessError extends Error {
     this.cleanup = cleanup;
     this.identity = identity;
     this.elapsedMs = elapsedMs;
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -73,6 +79,7 @@ export class SupervisedProcessTimeoutError extends SupervisedProcessError {
     cleanup: "confirmed" | "unconfirmed" | "not-started",
     identity: ProcessIdentity | null,
     elapsedMs: number,
+    diagnostic?: SupervisedProcessDiagnostic,
   ) {
     super(
       "supervised-process-timeout",
@@ -80,6 +87,7 @@ export class SupervisedProcessTimeoutError extends SupervisedProcessError {
       cleanup,
       identity,
       elapsedMs,
+      diagnostic,
     );
     this.name = "SupervisedProcessTimeoutError";
   }
@@ -91,6 +99,7 @@ export class SupervisedProcessAbortError extends SupervisedProcessError {
     cleanup: "confirmed" | "unconfirmed" | "not-started",
     identity: ProcessIdentity | null,
     elapsedMs: number,
+    diagnostic?: SupervisedProcessDiagnostic,
   ) {
     super(
       "supervised-process-aborted",
@@ -98,6 +107,7 @@ export class SupervisedProcessAbortError extends SupervisedProcessError {
       cleanup,
       identity,
       elapsedMs,
+      diagnostic,
     );
     this.name = "SupervisedProcessAbortError";
   }

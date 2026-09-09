@@ -1,9 +1,10 @@
-/** Spawn/identity/admission/close share one settlement boundary; helpers are split out. */
-
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { hrtime } from "node:process";
 import { waitForAdmissionSettlement } from "./supervised-process-admission.js";
-import { safeTerminateOwnedGroup } from "./supervised-process-cleanup.js";
+import {
+  type SupervisedCleanupResult,
+  safeTerminateOwnedGroupDetailed,
+} from "./supervised-process-cleanup.js";
 import {
   isSupervisedProcessSupported,
   SupervisedProcessAbortError,
@@ -16,72 +17,32 @@ import {
   findProcessesByOwnerToken,
   type ProcessIdentity,
   processGroupHasLiveMembers,
+  readProcessGroupMembers,
   readProcessIdentity,
 } from "./supervised-process-identity.js";
 import {
-  appendOutput,
-  createOutputCapture,
-  finishOutput,
-  type OutputCapture,
-} from "./supervised-process-output.js";
+  assertUnobservedAdmissionActive,
+  cleanupObservationFailure,
+  DEFAULT_OUTPUT_LIMIT_BYTES,
+  elapsedMs,
+  leaderIdentityUnobserved,
+  observeProcessClose,
+  ownedObservationFailure,
+  validateSupervisedProcessOptions,
+} from "./supervised-process-lifecycle.js";
+import { appendOutput, createOutputCapture, finishOutput } from "./supervised-process-output.js";
 
 export {
   isSupervisedProcessSupported,
   SupervisedProcessAbortError,
+  type SupervisedProcessDiagnostic,
   SupervisedProcessError,
   type SupervisedProcessFailureCode,
   type SupervisedProcessOptions,
   type SupervisedProcessResult,
   SupervisedProcessTimeoutError,
 } from "./supervised-process-contract.js";
-
-const DEFAULT_OUTPUT_LIMIT_BYTES = 64 * 1024;
-
-function elapsedMs(startedAt: bigint): number {
-  return Number(hrtime.bigint() - startedAt) / 1_000_000;
-}
-
-function validateOptions(options: SupervisedProcessOptions): void {
-  if ((options.command === undefined) === (options.file === undefined)) {
-    throw new RangeError("exactly one of command or file must be provided");
-  }
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)
-    throw new RangeError("timeoutMs must be positive");
-  if (options.graceMs !== undefined && (!Number.isFinite(options.graceMs) || options.graceMs < 0)) {
-    throw new RangeError("graceMs must be non-negative");
-  }
-  if (
-    options.outputLimitBytes !== undefined &&
-    (!Number.isFinite(options.outputLimitBytes) || options.outputLimitBytes < 0)
-  ) {
-    throw new RangeError("outputLimitBytes must be non-negative");
-  }
-}
-
-function closeResult(
-  child: ChildProcess,
-  startedAt: bigint,
-  stdout: OutputCapture,
-  stderr: OutputCapture,
-  closed: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined,
-  resolve: (result: SupervisedProcessResult) => void | Promise<void>,
-): void {
-  const onClose = (exitCode: number | null, signal: NodeJS.Signals | null) => {
-    void resolve({
-      outcome: "exited",
-      exitCode,
-      signal,
-      stdout: finishOutput(stdout),
-      stderr: finishOutput(stderr),
-      truncated: stdout.truncated || stderr.truncated,
-      elapsedMs: Number(hrtime.bigint() - startedAt) / 1_000_000,
-      pid: child.pid ?? -1,
-    });
-  };
-  if (closed) onClose(closed.exitCode, closed.signal);
-  else child.once("close", onClose);
-}
-
+/** Spawn/identity/admission/close share one settlement boundary; helpers are split out. */
 /** Run an executable with a deadline and owned Linux process-group cleanup. */
 export async function runSupervisedProcess(
   options: SupervisedProcessOptions,
@@ -94,7 +55,7 @@ export async function runSupervisedProcess(
       null,
     );
   }
-  validateOptions(options);
+  validateSupervisedProcessOptions(options);
   if (!options.executionId) throw new RangeError("executionId must be non-empty");
   await options.onStart({
     executionId: options.executionId,
@@ -139,7 +100,6 @@ export async function runSupervisedProcess(
         stdio: ["pipe", "pipe", "pipe"],
       });
   let spawnError: Error | undefined;
-  const readSpawnError = (): Error | undefined => spawnError;
   let closed: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
   let resolveClose!: () => void;
   const closeObserved = new Promise<void>((resolve) => {
@@ -172,10 +132,12 @@ export async function runSupervisedProcess(
       error instanceof Error ? error.message : "could not observe process ownership",
       "unconfirmed",
       null,
+      0,
+      cleanupObservationFailure,
     );
   }
   if (!identity) {
-    const observedSpawnError = readSpawnError();
+    const observedSpawnError = spawnError;
     if (observedSpawnError !== undefined) {
       throw new SupervisedProcessError(
         "supervised-process-spawn-failed",
@@ -191,11 +153,21 @@ export async function runSupervisedProcess(
         deadlineMs: processDeadline,
       });
       if (admission === "aborted")
-        throw new SupervisedProcessAbortError("unconfirmed", null, elapsedMs(startedAt));
+        throw new SupervisedProcessAbortError(
+          "unconfirmed",
+          null,
+          elapsedMs(startedAt),
+          leaderIdentityUnobserved,
+        );
       if (admission === "deadline")
-        throw new SupervisedProcessTimeoutError("unconfirmed", null, elapsedMs(startedAt));
+        throw new SupervisedProcessTimeoutError(
+          "unconfirmed",
+          null,
+          elapsedMs(startedAt),
+          leaderIdentityUnobserved,
+        );
     }
-    const afterAdmissionSpawnError = readSpawnError();
+    const afterAdmissionSpawnError = spawnError;
     if (afterAdmissionSpawnError !== undefined) {
       throw new SupervisedProcessError(
         "supervised-process-spawn-failed",
@@ -204,11 +176,8 @@ export async function runSupervisedProcess(
         null,
       );
     }
-    if (options.signal?.aborted)
-      throw new SupervisedProcessAbortError("unconfirmed", null, elapsedMs(startedAt));
-    if (Date.now() >= processDeadline)
-      throw new SupervisedProcessTimeoutError("unconfirmed", null, elapsedMs(startedAt));
-    if (closed !== undefined && readSpawnError() === undefined) {
+    assertUnobservedAdmissionActive(options.signal, processDeadline, startedAt);
+    if (closed !== undefined && spawnError === undefined) {
       let groupLive: boolean;
       let escaped: readonly ProcessIdentity[];
       try {
@@ -220,18 +189,46 @@ export async function runSupervisedProcess(
           error instanceof Error ? error.message : "could not observe process ownership",
           "unconfirmed",
           null,
+          elapsedMs(startedAt),
+          cleanupObservationFailure,
         );
       }
-      if (options.signal?.aborted)
-        throw new SupervisedProcessAbortError("unconfirmed", null, elapsedMs(startedAt));
-      if (Date.now() >= processDeadline)
-        throw new SupervisedProcessTimeoutError("unconfirmed", null, elapsedMs(startedAt));
+      assertUnobservedAdmissionActive(options.signal, processDeadline, startedAt);
       if (groupLive || escaped.length > 0) {
+        let observedMembers: readonly ProcessIdentity[];
+        try {
+          observedMembers = groupLive ? await readProcessGroupMembers(child.pid ?? -1) : [];
+        } catch {
+          throw new SupervisedProcessError(
+            "supervised-process-spawn-failed",
+            "process ownership evidence could not be observed",
+            "unconfirmed",
+            null,
+            elapsedMs(startedAt),
+            {
+              cleanup_cause: "cleanup_observation_failed",
+              leader_observed: false,
+              observed_members: [],
+            },
+          );
+        }
         throw new SupervisedProcessError(
           "supervised-process-spawn-failed",
           "process exited but owned descendants remain",
           "unconfirmed",
           null,
+          elapsedMs(startedAt),
+          {
+            cleanup_cause: "leader_exited_with_owned_descendants",
+            leader_observed: false,
+            observed_members: [...observedMembers, ...escaped]
+              .slice(0, 32)
+              .map(({ pid, startTime, processGroupId }) => ({
+                pid,
+                start_time: startTime,
+                process_group_id: processGroupId,
+              })),
+          },
         );
       }
       return {
@@ -260,12 +257,12 @@ export async function runSupervisedProcess(
       identity,
     );
   }
-  let admissionCleanup: Promise<"confirmed" | "unconfirmed"> | undefined;
+  let admissionCleanup: Promise<SupervisedCleanupResult> | undefined;
   let admissionTimer: ReturnType<typeof setTimeout> | undefined;
   let abortAdmission: (() => void) | undefined;
   let admissionReason: "timeout" | "aborted" | undefined;
-  const startCleanup = (): Promise<"confirmed" | "unconfirmed"> => {
-    admissionCleanup ??= safeTerminateOwnedGroup(identity, graceMs);
+  const startCleanup = (): Promise<SupervisedCleanupResult> => {
+    admissionCleanup ??= safeTerminateOwnedGroupDetailed(identity, graceMs);
     return admissionCleanup;
   };
   const admissionControl = new Promise<never>((_, reject) => {
@@ -295,12 +292,14 @@ export async function runSupervisedProcess(
   } catch (error) {
     if (admissionTimer !== undefined) clearTimeout(admissionTimer);
     if (abortAdmission !== undefined) options.signal?.removeEventListener("abort", abortAdmission);
-    const cleanup = await startCleanup();
+    const cleanupResult = await startCleanup();
+    const cleanup = cleanupResult.cleanup;
     if (admissionReason === "timeout") {
       throw new SupervisedProcessTimeoutError(
         cleanup,
         identity,
         Number(hrtime.bigint() - startedAt) / 1_000_000,
+        cleanupResult.diagnostic,
       );
     }
     if (admissionReason === "aborted") {
@@ -308,6 +307,7 @@ export async function runSupervisedProcess(
         cleanup,
         identity,
         Number(hrtime.bigint() - startedAt) / 1_000_000,
+        cleanupResult.diagnostic,
       );
     }
     throw new SupervisedProcessError(
@@ -315,51 +315,62 @@ export async function runSupervisedProcess(
       error instanceof Error ? error.message : "failed to persist process ownership",
       cleanup,
       identity,
+      Number(hrtime.bigint() - startedAt) / 1_000_000,
+      cleanupResult.diagnostic,
     );
   }
   if (admissionTimer !== undefined) clearTimeout(admissionTimer);
   if (abortAdmission !== undefined) options.signal?.removeEventListener("abort", abortAdmission);
   if (admissionCleanup !== undefined) {
-    const cleanup = await admissionCleanup;
+    const cleanupResult = await admissionCleanup;
+    const cleanup = cleanupResult.cleanup;
     const elapsedMs = Number(hrtime.bigint() - startedAt) / 1_000_000;
     if (admissionReason === "aborted") {
-      throw new SupervisedProcessAbortError(cleanup, identity, elapsedMs);
+      throw new SupervisedProcessAbortError(cleanup, identity, elapsedMs, cleanupResult.diagnostic);
     }
-    throw new SupervisedProcessTimeoutError(cleanup, identity, elapsedMs);
+    throw new SupervisedProcessTimeoutError(cleanup, identity, elapsedMs, cleanupResult.diagnostic);
   }
   if (Date.now() >= processDeadline) {
-    const cleanup = await safeTerminateOwnedGroup(identity, graceMs);
+    const cleanupResult = await safeTerminateOwnedGroupDetailed(identity, graceMs);
     throw new SupervisedProcessTimeoutError(
-      cleanup,
+      cleanupResult.cleanup,
       identity,
       Number(hrtime.bigint() - startedAt) / 1_000_000,
+      cleanupResult.diagnostic,
     );
   }
   if (options.signal?.aborted) {
-    const cleanup = await safeTerminateOwnedGroup(identity, graceMs);
+    const cleanupResult = await safeTerminateOwnedGroupDetailed(identity, graceMs);
     throw new SupervisedProcessAbortError(
-      cleanup,
+      cleanupResult.cleanup,
       identity,
       Number(hrtime.bigint() - startedAt) / 1_000_000,
+      cleanupResult.diagnostic,
     );
   }
   return await new Promise<SupervisedProcessResult>((resolve, reject) => {
     let settled = false;
-    let cleanupPromise: Promise<"confirmed" | "unconfirmed"> | undefined;
-    const cleanupOwned = (): Promise<"confirmed" | "unconfirmed"> =>
-      (cleanupPromise ??= safeTerminateOwnedGroup(identity, graceMs));
+    let cleanupPromise: Promise<SupervisedCleanupResult> | undefined;
+    const cleanupOwned = (): Promise<SupervisedCleanupResult> =>
+      (cleanupPromise ??= safeTerminateOwnedGroupDetailed(identity, graceMs));
     const finishFailure = async (
       code: "supervised-process-timeout" | "supervised-process-aborted",
     ) => {
       if (settled) return;
       settled = true;
-      const cleanup = await cleanupOwned();
+      const cleanupResult = await cleanupOwned();
+      const cleanup = cleanupResult.cleanup;
       options.signal?.removeEventListener("abort", onAbort);
       const elapsedMs = Number(hrtime.bigint() - startedAt) / 1_000_000;
       const error =
         code === "supervised-process-timeout"
-          ? new SupervisedProcessTimeoutError(cleanup, identity, elapsedMs)
-          : new SupervisedProcessAbortError(cleanup, identity, elapsedMs);
+          ? new SupervisedProcessTimeoutError(
+              cleanup,
+              identity,
+              elapsedMs,
+              cleanupResult.diagnostic,
+            )
+          : new SupervisedProcessAbortError(cleanup, identity, elapsedMs, cleanupResult.diagnostic);
       clearTimeout(timer);
       reject(error);
     };
@@ -387,12 +398,12 @@ export async function runSupervisedProcess(
         ),
       );
     });
-    closeResult(child, startedAt, stdout, stderr, closed, async (result) => {
+    observeProcessClose(child, startedAt, stdout, stderr, closed, async (result) => {
       if (settled) return;
       try {
         if (await processGroupHasLiveMembers(identity.processGroupId)) {
-          const cleanup = await cleanupOwned();
-          if (cleanup !== "confirmed") {
+          const cleanupResult = await cleanupOwned();
+          if (cleanupResult.cleanup !== "confirmed") {
             settled = true;
             clearTimeout(timer);
             options.signal?.removeEventListener("abort", onAbort);
@@ -400,16 +411,18 @@ export async function runSupervisedProcess(
               new SupervisedProcessError(
                 "supervised-process-spawn-failed",
                 "process group remained active after child exit",
-                cleanup,
+                cleanupResult.cleanup,
                 identity,
                 result.elapsedMs,
+                cleanupResult.diagnostic,
               ),
             );
             return;
           }
         }
-        if ((await findProcessesByOwnerToken(options.executionId, identity.startTime)).length > 0) {
-          await cleanupOwned();
+        const escaped = await findProcessesByOwnerToken(options.executionId, identity.startTime);
+        if (escaped.length > 0) {
+          const cleanupResult = await cleanupOwned();
           settled = true;
           clearTimeout(timer);
           options.signal?.removeEventListener("abort", onAbort);
@@ -420,6 +433,17 @@ export async function runSupervisedProcess(
               "unconfirmed",
               identity,
               result.elapsedMs,
+              cleanupResult.diagnostic ?? {
+                cleanup_cause: "escaped_owned_processes",
+                leader_observed: true,
+                observed_members: escaped
+                  .slice(0, 32)
+                  .map(({ pid, startTime, processGroupId }) => ({
+                    pid,
+                    start_time: startTime,
+                    process_group_id: processGroupId,
+                  })),
+              },
             ),
           );
           return;
@@ -439,6 +463,7 @@ export async function runSupervisedProcess(
             "unconfirmed",
             identity,
             result.elapsedMs,
+            ownedObservationFailure,
           ),
         );
         return;
