@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.7] - 2026-09-09
+
+### Tests
+
+- Add timeout headroom for the partial-clone Git integration test that verifies
+  missing over-cap blobs fail closed without contacting a promisor remote.
+
 ## [0.21.6] - 2026-09-09
 
 ### Bug fixes

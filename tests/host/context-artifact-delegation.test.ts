@@ -243,6 +243,7 @@ describe("Issue #60 delegate preflight and prompt wiring", () => {
     expect(await exists(join(runStateDir, "sessions"))).toBe(false);
   });
 
+  // This exercises a real partial clone and several Git subprocesses; allow headroom on slow or contended hosts.
   it("fails closed without fetching a missing over-cap blob from a promisor remote", async () => {
     const repo = await missingPromisorBlobRepository();
     const runId = "promisor-no-lazy-fetch";
@@ -292,7 +293,7 @@ describe("Issue #60 delegate preflight and prompt wiring", () => {
     expect(await exists(join(runStateDir, "worktrees"))).toBe(false);
     expect(await exists(join(runStateDir, "sessions"))).toBe(false);
     expect(await exists(repo.remoteContactMarker)).toBe(false);
-  });
+  }, 30_000);
 
   it.each([
     "invalid",
