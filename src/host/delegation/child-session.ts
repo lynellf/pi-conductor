@@ -10,6 +10,7 @@ import { resolveToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { SubagentStartedRecord } from "../../persistence/log.js";
 import { SessionState } from "../cost.js";
 import { ToolExecutionController } from "../execution/tool-execution-controller.js";
+import { toToolExecutionModelError } from "../execution/tool-execution-model-error.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
 import {
   createReportCapture,
@@ -187,7 +188,7 @@ export async function createChildSession(
           error.code === "tool_timeout_exhausted"
             ? "tool_timeout_exhausted"
             : "tool_cleanup_unconfirmed",
-          error.message,
+          toToolExecutionModelError(error).message,
         );
         state.markAborted();
         void session.abort();

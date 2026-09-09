@@ -295,6 +295,53 @@ describe("role-turn capture — redacted-thinking exclusion (spec §4.2)", () =>
 });
 
 describe("role-turn capture — stopReason: error (spec §4.3)", () => {
+  it.each([
+    ["tool_cleanup_unconfirmed", "tool process could not be confirmed stopped (pid 42)"],
+    ["tool_timeout_exhausted", "tool timed out after cleanup grace period (pid 43)"],
+  ] as const)("preserves unresolved %s and detail when a later abort is reported as model_error", (reason, detail) => {
+    const log = new InMemoryRecordLog();
+    const producer = makeProducer(log, "run-cleanup-reason");
+    const session = makeSession();
+    const state = new SessionState({ cap: null, model: null });
+    state.setTerminalReason(reason, detail);
+    attachSessionEventHandler({
+      session: session as never,
+      state,
+      role: "worker",
+      roleTurn: {
+        producer,
+        context: {
+          runId: "run-cleanup-reason",
+          role: "worker",
+          roleSessionId: "logical-1",
+          conversationId: "physical-1",
+          sessionFile: "/tmp/physical-1.jsonl",
+          persist: (record: PersistedRecord) => log.append(record),
+        },
+      },
+    });
+
+    session.emit({
+      type: "message_end",
+      message: {
+        ...assistantMessage([], "error"),
+        errorMessage: "This operation was aborted",
+      },
+    });
+
+    expect(state.terminalReason).toBe(reason);
+    expect(state.failureDetail).toBe(detail);
+  });
+
+  it("upgrades timeout exhaustion when a later cleanup result is unconfirmed", () => {
+    const state = new SessionState({ cap: null, model: null });
+    state.setTerminalReason("tool_timeout_exhausted", "timeout detail");
+    state.setTerminalReason("tool_cleanup_unconfirmed", "unconfirmed cleanup detail");
+
+    expect(state.terminalReason).toBe("tool_cleanup_unconfirmed");
+    expect(state.failureDetail).toBe("unconfirmed cleanup detail");
+  });
+
   it("still emits one bounded record with no error body, then the loop keeps its own failure path", () => {
     const log = new InMemoryRecordLog();
     const producer = makeProducer(log, "run-error");

@@ -223,6 +223,8 @@ class FakeHost implements Host {
   spawnedById = new Map<string, FakeSession>();
   aborted: Array<{ sessionId: string; reason: string }> = [];
   terminalReasons = new Map<string, SessionTerminalReason>();
+  failureDetails = new Map<string, string>();
+  nextModel: string | null = null;
   sealed: string[] = [];
   // Captures for assertions about what was called.
   seedRunMemoryCalls: number = 0;
@@ -303,6 +305,10 @@ class FakeHost implements Host {
     return this.terminalReasons.get(session.sessionId) ?? null;
   }
 
+  sessionFailureDetail(session: RoleSession): string | null {
+    return this.failureDetails.get(session.sessionId) ?? null;
+  }
+
   runCostSoFar(): number {
     // Loop-test default: zero. Cost tests assert a non-zero
     // runCostSoFar against a real cap.
@@ -312,7 +318,7 @@ class FakeHost implements Host {
   getNextModel(_role: Role, _currentModelIndex: number): string | null {
     // Loop-test default: no next model. Fallback tests (Task 18)
     // override FakeHost to return configured models per role.
-    return null;
+    return this.nextModel;
   }
 
   nextVisitIndex(role: Role): number {
@@ -1203,6 +1209,37 @@ describe("runLoop — session disposal (§12.1 step 7)", () => {
 });
 
 describe("runLoop — host hook usage", () => {
+  it("persists cleanup failure detail and does not retry or dispatch after provider abort", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    host.nextModel = "stub:fallback";
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const session = new FakeSession("orchestrator", "sess-cleanup", [{ kind: "no_emission" }]);
+    session.afterPrompt = () => {
+      host.terminalReasons.set(session.sessionId, "tool_cleanup_unconfirmed");
+      host.failureDetails.set(session.sessionId, "cleanup could not confirm process exit (pid 42)");
+    };
+    host.enqueue(session);
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(host.spawnedSessions).toHaveLength(1);
+    const failed = log
+      .records(initialCheckpoint.run_id)
+      .find((record): record is SessionLifecycleEvent => record.type === "session_failed");
+    expect(failed).toMatchObject({
+      failure_reason: "tool_cleanup_unconfirmed",
+      failure_detail: "cleanup could not confirm process exit (pid 42)",
+    });
+    expect(
+      log.records(initialCheckpoint.run_id).some((record) => record.type === "model_retry"),
+    ).toBe(false);
+    expect(
+      log.records(initialCheckpoint.run_id).some((record) => record.type === "model_fallback"),
+    ).toBe(false);
+  });
+
   it("does not call sealSession or abortSession on the happy path", async () => {
     // The loop never directly calls sealSession (Task 15.5's wrapper
     // does, via the tool wrapper); it doesn't call abortSession either

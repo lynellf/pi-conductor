@@ -9,6 +9,7 @@ import type {
   ToolExecutionController,
   ToolExecutionError,
 } from "./execution/tool-execution-controller.js";
+import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import type { CaptureRejector, SessionEventSource } from "./session-event-handler.js";
 
@@ -72,7 +73,7 @@ export function bindSharedSdkStartupRole(options: SharedSdkStartupBindingOptions
           error.code === "tool_timeout_exhausted"
             ? "tool_timeout_exhausted"
             : "tool_cleanup_unconfirmed",
-          error.message,
+          toToolExecutionModelError(error).message,
         );
       void options.abort();
     },

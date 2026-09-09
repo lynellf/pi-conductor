@@ -99,6 +99,9 @@ describe("shared SDK supervised executable tools", () => {
       expect(host.sessionTerminalReason(session)).toBe(null);
       await session.prompt("second supervised operation");
       expect(host.sessionTerminalReason(session)).toBe("tool_timeout_exhausted");
+      const detail = host.sessionFailureDetail(session);
+      expect(detail).toContain('"executionId":"');
+      expect(detail).toContain("The operation was not replayed");
       expect(session.readCaptureBuffer()).toHaveLength(0);
       expect(log.records("shared-host-run").some((record) => record.type === "session_ended")).toBe(
         false,

@@ -19,6 +19,7 @@ import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { createSupervisedTools } from "./execution/supervised-tools.js";
 import { ToolExecutionController } from "./execution/tool-execution-controller.js";
+import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import type { RoleSession } from "./host.js";
 import {
   type PreparedIsolatedContextRetention,
@@ -382,7 +383,7 @@ export async function spawnIsolatedRoleSession(options: {
               error.code === "tool_timeout_exhausted"
                 ? "tool_timeout_exhausted"
                 : "tool_cleanup_unconfirmed",
-              error.message,
+              toToolExecutionModelError(error).message,
             );
             void session.abort().catch(() => undefined);
           },

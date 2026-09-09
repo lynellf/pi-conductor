@@ -162,7 +162,7 @@ export async function runSessionTurn(
       }
       const failureReason: string = hostReason ?? promptFailureReason ?? validated.reason;
       const failureDetail =
-        hostReason === "model_error" || hostReason === "delegation_failed"
+        hostReason !== null
           ? (host.sessionFailureDetail?.(session) ?? null)
           : hostReason === null &&
               promptFailureReason === null &&
@@ -290,9 +290,7 @@ export async function runSessionTurn(
     if (terminalReasonOnOk !== null) {
       state.sessionHostReason = hostReasonOnOk;
       const failureDetail =
-        hostReasonOnOk === "model_error" || hostReasonOnOk === "delegation_failed"
-          ? (host.sessionFailureDetail?.(session) ?? null)
-          : null;
+        hostReasonOnOk !== null ? (host.sessionFailureDetail?.(session) ?? null) : null;
       await settleDelegationBeforeLifecycle(terminalReasonOnOk);
       const failed = reduceLifecycle(ctx.checkpoint, "session_failed", def, {
         role,

@@ -199,6 +199,16 @@ export class SessionState {
    * buffer-derived breach reason on the `session_failed` record.
    */
   setTerminalReason(reason: SessionTerminalReason, failureDetail?: string): void {
+    // Tool cleanup failures are authoritative until reconciliation confirms
+    // the process is gone. A provider abort commonly arrives afterward as
+    // `stopReason: "error"`; allowing it to replace the cleanup reason makes
+    // the loop incorrectly enter model retry/fallback handling.
+    if (
+      this._terminalReason === "tool_cleanup_unconfirmed" ||
+      (this._terminalReason === "tool_timeout_exhausted" && reason !== "tool_cleanup_unconfirmed")
+    ) {
+      return;
+    }
     this._terminalReason = reason;
     if (failureDetail !== undefined && failureDetail.length > 0) {
       this._failureDetail = failureDetail;
