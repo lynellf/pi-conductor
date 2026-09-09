@@ -1,9 +1,18 @@
 /** Isolated public-SDK file-tool execution — September controls issue #76. */
 
-import { readFileSync, realpathSync } from "node:fs";
-import { findPackageJSON } from "node:module";
-import { dirname, resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  getPackageDir,
+  VERSION as PI_SDK_VERSION,
+} from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 
@@ -49,7 +58,8 @@ export interface FileToolWorkerInput {
 type WorkerErrorCode =
   | "file-tool-worker-failed"
   | "file-tool-worker-output-truncated"
-  | "file-tool-worker-protocol";
+  | "file-tool-worker-protocol"
+  | "file-tool-worker-runtime";
 
 /** Typed failure returned when an isolated SDK file-tool call cannot produce a result. */
 export class FileToolWorkerError extends Error {
@@ -101,11 +111,32 @@ try {
 }
 `;
 
-function resolveSdkFromPackageExports(): string {
-  const packageJsonPath = findPackageJSON("@earendil-works/pi-coding-agent", import.meta.url);
-  if (packageJsonPath === undefined) throw new Error("Pi SDK package was not found");
-  const packageRoot = dirname(realpathSync(packageJsonPath));
+/** Resolve the SDK entry point from Pi's host-owned package directory. */
+export function resolvePublicSdkUrl(): string {
+  // Pi aliases SDK root imports to the running host; getPackageDir() from that
+  // public import therefore identifies its package (unless asset-overridden).
+  // See https://github.com/earendil-works/pi/blob/v0.80.6/packages/coding-agent/src/core/extensions/loader.ts.
+  const packageRoot = realpathSync(getPackageDir());
+  const packageJsonPath = resolve(packageRoot, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    throw new Error(`Pi SDK package metadata is missing under ${packageRoot}`);
+  }
   const packageJson: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+  if (
+    typeof packageJson !== "object" ||
+    packageJson === null ||
+    !("name" in packageJson) ||
+    packageJson.name !== "@earendil-works/pi-coding-agent"
+  ) {
+    throw new Error(
+      `Pi host package directory is not @earendil-works/pi-coding-agent: ${packageRoot}`,
+    );
+  }
+  if (!("version" in packageJson) || packageJson.version !== PI_SDK_VERSION) {
+    throw new Error(
+      `Pi host SDK version mismatch: host reports ${PI_SDK_VERSION}, package metadata reports ${String("version" in packageJson ? packageJson.version : "missing")} at ${packageRoot}`,
+    );
+  }
   if (typeof packageJson !== "object" || packageJson === null || !("exports" in packageJson)) {
     throw new Error("Pi SDK package has no exports map");
   }
@@ -121,7 +152,49 @@ function resolveSdkFromPackageExports(): string {
         ? rootExport.import
         : undefined;
   if (typeof importTarget !== "string") throw new Error("Pi SDK root import export is missing");
-  return pathToFileURL(resolve(packageRoot, importTarget)).href;
+  if (!importTarget.startsWith("./")) {
+    throw new Error("Pi SDK root export must be a relative package path");
+  }
+  const entry = resolve(packageRoot, importTarget);
+  if (relative(packageRoot, entry).startsWith("..")) {
+    throw new Error("Pi SDK root export escapes its package directory");
+  }
+  if (!existsSync(entry)) throw new Error(`Pi SDK root export is missing: ${entry}`);
+  const canonicalEntry = realpathSync(entry);
+  if (relative(packageRoot, canonicalEntry).startsWith("..")) {
+    throw new Error("Pi SDK root export symlink escapes its package directory");
+  }
+  if (!statSync(canonicalEntry).isFile()) {
+    throw new Error(`Pi SDK root export is not a file: ${canonicalEntry}`);
+  }
+  return pathToFileURL(canonicalEntry).href;
+}
+
+/** Validate the host SDK seam before any supervised worker can be admitted. */
+export function assertFileToolWorkerRuntime(): void {
+  try {
+    const sdkUrl = resolvePublicSdkUrl();
+    const factories = {
+      read: createReadToolDefinition,
+      write: createWriteToolDefinition,
+      edit: createEditToolDefinition,
+      ls: createLsToolDefinition,
+      find: createFindToolDefinition,
+      grep: createGrepToolDefinition,
+    };
+    const missing = Object.entries(factories)
+      .filter(([, factory]) => typeof factory !== "function")
+      .map(([name]) => name);
+    if (missing.length === 0) return;
+    throw new Error(
+      `Pi SDK ${PI_SDK_VERSION} at ${sdkUrl} is missing file-tool exports: ${missing.join(", ")}; check the Pi installation and PI_PACKAGE_DIR override`,
+    );
+  } catch (error) {
+    throw new FileToolWorkerError(
+      "file-tool-worker-runtime",
+      `public Pi SDK worker preflight failed: ${errorMessage(error)}. Check the running Pi installation and PI_PACKAGE_DIR override, then restart Pi.`,
+    );
+  }
 }
 
 function isFileToolName(value: string): value is FileToolName {
@@ -186,12 +259,9 @@ export async function runFileToolWorker(input: FileToolWorkerInput): Promise<Fil
 
   let sdkUrl: string;
   try {
-    // Node's public ESM resolver is authoritative. Vite's SSR transform omits
-    // import.meta.resolve, so the local package export is a test/build fallback.
-    sdkUrl =
-      typeof import.meta.resolve === "function"
-        ? import.meta.resolve("@earendil-works/pi-coding-agent")
-        : resolveSdkFromPackageExports();
+    // Resolve from Pi's host-owned package directory. Extension-local
+    // import.meta.resolve can select a duplicate or fail for npm peer layouts.
+    sdkUrl = resolvePublicSdkUrl();
   } catch (error) {
     throw new FileToolWorkerError(
       "file-tool-worker-protocol",

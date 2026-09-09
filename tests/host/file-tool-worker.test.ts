@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  assertFileToolWorkerRuntime,
   type FileToolWorkerError,
   runFileToolWorker,
 } from "../../src/host/execution/file-tool-worker.js";
@@ -39,6 +40,37 @@ describe("runFileToolWorker", () => {
       onStart: () => undefined,
     };
   }
+
+  it.each([
+    ["invalid PI_PACKAGE_DIR", "missing", "package metadata"],
+    ["version mismatch", "version", "version mismatch"],
+    ["missing root export entry", "entry", "root export is missing"],
+  ])("rejects %s during worker preflight", async (_name, fixture, expected) => {
+    const root = await workspace();
+    const previous = process.env.PI_PACKAGE_DIR;
+    try {
+      process.env.PI_PACKAGE_DIR = root;
+      if (fixture !== "missing") {
+        await writeFile(
+          join(root, "package.json"),
+          JSON.stringify({
+            name: "@earendil-works/pi-coding-agent",
+            version: fixture === "version" ? "0.0.0" : "0.80.6",
+            exports: { ".": "./dist/index.js" },
+          }),
+        );
+      }
+      await expect(
+        Promise.resolve().then(() => assertFileToolWorkerRuntime()),
+      ).rejects.toMatchObject({
+        code: "file-tool-worker-runtime",
+        message: expect.stringContaining(expected),
+      } satisfies Partial<FileToolWorkerError>);
+    } finally {
+      if (previous === undefined) delete process.env.PI_PACKAGE_DIR;
+      else process.env.PI_PACKAGE_DIR = previous;
+    }
+  });
 
   it("round-trips write and read through the public SDK worker", async () => {
     const cwd = await workspace();

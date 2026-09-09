@@ -80,3 +80,32 @@ mutation admission state cannot retain the old ownership decision.
 
 See the [approved specification](open-issues-september/spec.md) for the complete
 execution and restart contract.
+
+## Pi and Node compatibility
+
+The worker resolves the public Pi SDK from the package directory owned by the
+running Pi host. This supports npm-installed extensions where Pi and
+`pi-conductor` use separate package trees; it does not search for or install a
+second SDK. The verified ordinary file-tool matrix is Linux, with Pi and
+`pi-conductor` in separate npm package trees and no local peer SDK in the
+packed package:
+
+| Node | Pi 0.80.6 | Pi 0.85.1 |
+| --- | --- | --- |
+| 22.19.0 | Pass | Pass |
+| 26.5.0 | Pass | Pass |
+
+The credential-free packed smoke uses Pi's real extension loader and exercises
+all six confined shared file tools through the supervised child path. It does
+not cover provider-backed campaigns or trajectory workflows. Run it with
+`pnpm exec vitest run tests/packed-file-tools.test.ts`;
+`CONDUCTOR_SMOKE_NODE` and `CONDUCTOR_SMOKE_PI_ROOT` optionally select the Node
+binary and host Pi package root.
+
+The supported runtime is a Node npm installation with an importable, on-disk
+Pi SDK. Linux is required for supervised workers. Preflight validates the host
+package name, version, export, and file-tool factories before a file-tool or
+delegation campaign starts. Repair the Pi installation or `PI_PACKAGE_DIR`
+override and restart Pi when preflight fails. Standalone bundled installations
+without an importable on-disk SDK fail preflight; Bun is not covered by this
+matrix.

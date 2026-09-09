@@ -7,6 +7,7 @@ import type { RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
 import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { EndGuardRunner } from "./end-guard-runner.js";
+import { assertFileToolWorkerRuntime } from "./execution/file-tool-worker.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { ProductionHostOptions } from "./production-host-options.js";
@@ -44,6 +45,17 @@ export class ProductionHostContext {
   protected snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   constructor(opts: ProductionHostOptions) {
+    // Fail before the orchestration loop admits a role session. The worker
+    // cannot recover from a host/package mismatch by retrying a model.
+    const usesSupervisedFileTools = opts.loadedManifest.manifest.roles.some(
+      (role) =>
+        role.tools?.some((tool) =>
+          ["read", "write", "edit", "ls", "find", "grep"].includes(tool),
+        ) === true || role.delegation !== undefined,
+    );
+    if (usesSupervisedFileTools) {
+      assertFileToolWorkerRuntime();
+    }
     assertTrajectorySdkSupportedForHandoffs(opts.loadedManifest.manifest.handoffs);
     this.modelRegistry = opts.modelRegistry;
     this.cwd = resolve(opts.cwd);
