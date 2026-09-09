@@ -270,9 +270,8 @@ export function reconcileCrash(
       })
     | null = null;
   let sessionStartedIndex = -1;
-  // A durable Prewalk executor recovery intentionally retains the logical role-session
-  // identity. Select the latest start so a second process crash cannot be mistaken for
-  // the terminal of its earlier guide attempt.
+  // Select the latest matching start so a terminal from an earlier recovery
+  // attempt cannot make the current invocation appear settled.
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const r = records[index];
     if (r?.type !== "session_started") continue;

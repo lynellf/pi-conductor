@@ -130,10 +130,6 @@ export function rollup(
   const perModel = new Map<string, UsageAggregate>();
   const perSubagent = new Map<string, UsageAggregate>();
   const perChildProtocol = new Map<ChildCompletionProtocol, UsageAggregate>();
-  const prewalkSwitches = new Map<
-    string,
-    Extract<PersistedRecord, { readonly type: "prewalk_switch_selected" }>
-  >();
 
   for (const record of records) {
     // run_id filter (§11.6: roll-up is keyed by run_id).
@@ -141,11 +137,6 @@ export function rollup(
     const recordRunId =
       record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
     if (recordRunId !== runId) {
-      continue;
-    }
-
-    if (record.type === "prewalk_switch_selected") {
-      prewalkSwitches.set(record.role_session_id, record);
       continue;
     }
 
@@ -185,25 +176,7 @@ export function rollup(
 
     const modelKey = record.model ?? SYSTEM_DEFAULT_MODEL_KEY;
     const modelAgg = perModel.get(modelKey) ?? ZERO_AGGREGATE;
-    const modelTotal = addUsage(modelAgg, usage);
-    perModel.set(modelKey, modelTotal);
-
-    // Prewalk §R13: lifecycle totals stay untouched. Only move the guide's
-    // provider-reported phase usage out of the executor model bucket.
-    const roleSessionId = record.role_session_id;
-    const selected = roleSessionId === undefined ? undefined : prewalkSwitches.get(roleSessionId);
-    if (
-      roleSessionId !== undefined &&
-      selected !== undefined &&
-      selected.role === record.role &&
-      selected.executor.model === modelKey &&
-      selected.guide.model !== modelKey
-    ) {
-      perModel.set(modelKey, subtractUsage(modelTotal, selected.guide_usage));
-      const guideAgg = perModel.get(selected.guide.model) ?? ZERO_AGGREGATE;
-      perModel.set(selected.guide.model, addUsage(guideAgg, selected.guide_usage));
-      prewalkSwitches.delete(roleSessionId);
-    }
+    perModel.set(modelKey, addUsage(modelAgg, usage));
   }
 
   const hasContextCompaction = records.some(
@@ -269,18 +242,6 @@ function addUsage(a: UsageAggregate, u: SubagentUsage | UsageRecord): UsageAggre
 
 function addUsageWithoutSession(a: UsageAggregate, u: UsageRecord): UsageAggregate {
   return { ...addUsage(a, u), sessions: a.sessions };
-}
-
-function subtractUsage(a: UsageAggregate, u: UsageRecord): UsageAggregate {
-  return {
-    input: a.input - u.input,
-    output: a.output - u.output,
-    cache_read: a.cache_read - u.cache_read,
-    cache_write: a.cache_write - u.cache_write,
-    tokens: a.tokens - u.tokens,
-    cost: a.cost - u.cost,
-    sessions: a.sessions,
-  };
 }
 
 function finalize(

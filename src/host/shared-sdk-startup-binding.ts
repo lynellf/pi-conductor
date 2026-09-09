@@ -10,11 +10,7 @@ import type {
   ToolExecutionError,
 } from "./execution/tool-execution-controller.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
-import type {
-  CaptureRejector,
-  SessionCostCapDeferral,
-  SessionEventSource,
-} from "./session-event-handler.js";
+import type { CaptureRejector, SessionEventSource } from "./session-event-handler.js";
 
 /** Inputs needed to bind the first live shared SDK role invocation. */
 export interface SharedSdkStartupBindingOptions {
@@ -33,7 +29,6 @@ export interface SharedSdkStartupBindingOptions {
   readonly rejector: CaptureRejector;
   readonly roleTurnProducer: RoleTurnProducer;
   readonly conversationId: string;
-  readonly deferSessionCostCapAbort?: SessionCostCapDeferral;
   readonly displaySink?: DisplaySink;
   readonly getActiveState: () => SessionState | null;
   readonly abort: () => Promise<void>;
@@ -69,9 +64,6 @@ export function bindSharedSdkStartupRole(options: SharedSdkStartupBindingOptions
         persist: options.persist,
       },
     },
-    ...(options.deferSessionCostCapAbort === undefined
-      ? {}
-      : { deferSessionCostCapAbort: options.deferSessionCostCapAbort }),
     ...(options.displaySink === undefined ? {} : { displaySink: options.displaySink }),
     onFatal: (error: ToolExecutionError) => {
       options

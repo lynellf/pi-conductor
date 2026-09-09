@@ -10,11 +10,11 @@ import type { SessionState } from "./cost.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { RoleSession, SessionTerminalReason } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
-import type { ProductionPrewalkHost } from "./production-prewalk-host.js";
+import type { ProductionSessionState } from "./production-session-state.js";
 import { notifyListeners } from "./record-emitter.js";
 /** Dependencies for state inspection and record persistence helpers. */
 export interface StateHostContext {
-  readonly prewalk: ProductionPrewalkHost;
+  readonly sessionState: ProductionSessionState;
   readonly delegationSessionKeys: Map<string, string>;
   readonly delegation: ProductionDelegationCoordinator;
   readonly loadedManifest: LoadedManifest;
@@ -27,7 +27,7 @@ export interface StateHostContext {
 }
 /** Capture the latest usage record from a role session. */
 export function captureUsage(host: StateHostContext, session: RoleSession): UsageRecord {
-  return host.prewalk.captureUsage(session);
+  return host.sessionState.captureUsage(session);
 }
 
 /** Read the terminal reason recorded for a role session. */
@@ -38,7 +38,7 @@ export function sessionTerminalReason(
   const delegationKey = host.delegationSessionKeys.get(session.sessionId);
   if (delegationKey !== undefined && host.delegation.failure(delegationKey) !== undefined)
     return "delegation_failed";
-  return host.prewalk.sessionTerminalReason(session);
+  return host.sessionState.sessionTerminalReason(session);
 }
 
 /** Read the failure detail recorded for a role session, if any. */
@@ -48,7 +48,7 @@ export function sessionFailureDetail(host: StateHostContext, session: RoleSessio
     const detail = host.delegation.failureDetail(delegationKey);
     if (detail !== null) return detail;
   }
-  return host.prewalk.sessionFailureDetail(session);
+  return host.sessionState.sessionFailureDetail(session);
 }
 
 /** Append a host-owned record to the run log. */

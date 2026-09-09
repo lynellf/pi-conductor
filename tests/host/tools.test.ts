@@ -28,7 +28,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { MachineDefinition } from "../../src/core/types.js";
-import { toToolExecutionModelError } from "../../src/host/execution/tool-execution-model-error.js";
 import {
   createEndTool,
   createHandoffTool,
@@ -266,38 +265,6 @@ describe("emission tools — valid first call", () => {
 
     expect(result.content[0]?.text).toContain('"target_role":"lead"');
     expect(result.content[0]?.text).not.toContain('"target_role":"orchestrator"');
-  });
-});
-
-describe("emission tools — supervised validation boundary", () => {
-  it("converts validation failures into structured model-facing errors", async () => {
-    const seam = new SessionSeam();
-    const tool = createHandoffTool(seam, undefined, undefined, false, async (_signal, context) => {
-      expect(context?.toolCallId).toBe("test-call-id");
-      throw toToolExecutionModelError(
-        Object.assign(new Error("validation command timed out"), {
-          code: "supervised-process-timeout",
-          cleanup: "confirmed",
-          executionId: "execution-validation-1",
-        }),
-      );
-    });
-
-    await expect(
-      invoke(tool, {
-        target_role: "implementer",
-        reason: "validated",
-        suggests_next: "reviewer",
-        status: "ready",
-        objective: "Implement the approved plan.",
-        summary: "Validation should complete before capture.",
-        requested_action: "Continue.",
-      }),
-    ).rejects.toMatchObject({
-      name: "ToolExecutionModelError",
-      message: expect.stringContaining('"code":"supervised-process-timeout"'),
-    });
-    expect(seam.read()).toHaveLength(0);
   });
 });
 

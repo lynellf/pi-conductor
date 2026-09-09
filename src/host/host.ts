@@ -51,7 +51,6 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import type { PrewalkFailureCode } from "../persistence/prewalk-records.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 
@@ -373,5 +372,4 @@ export type SessionTerminalReason =
   | "tool_timeout_exhausted"
   | "tool_cleanup_unconfirmed"
   | "delegation_failed"
-  | PrewalkFailureCode
   | null;

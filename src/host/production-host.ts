@@ -132,7 +132,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
       delegationSessionKeys: this.delegationSessionKeys,
       inactiveDelegationSessions: this.inactiveDelegationSessions,
       unavailableRole: this.unavailableRole,
-      prewalk: this.prewalk,
+      sessionState: this.sessionState,
       lookupRoleConfig: (targetRole) => this.lookupRoleConfig(targetRole),
       latestTrajectoryTransport: (targetRole) => this.latestTrajectoryTransport(targetRole),
       resumeTrajectoryRole: (targetRole, config, selected, executionVisitIndex) =>
@@ -274,7 +274,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
 
   private stateContext(): StateHostContext {
     return {
-      prewalk: this.prewalk,
+      sessionState: this.sessionState,
       delegationSessionKeys: this.delegationSessionKeys,
       delegation: this.delegation,
       loadedManifest: this.loadedManifest,
@@ -356,7 +356,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
       delegation: this.delegation,
       delegationSessionKeys: this.delegationSessionKeys,
       inactiveDelegationSessions: this.inactiveDelegationSessions,
-      prewalk: this.prewalk,
+      sessionState: this.sessionState,
     };
   }
 

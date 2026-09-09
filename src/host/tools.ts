@@ -63,7 +63,6 @@ import type { TSchema } from "typebox";
 
 import { endArgsSchema, type HandoffCandidate, handoffArgsSchema } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
-import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import {
   formatHandoffCorrection,
   formatHandoffDescription,
@@ -84,11 +83,7 @@ import type { SessionSeam } from "./seam.js";
  */
 export interface EmissionToolDetails {
   readonly ok: boolean;
-  readonly reason?:
-    | "schema_invalid"
-    | "extra_emission"
-    | "handoff_incomplete"
-    | "prewalk_validation";
+  readonly reason?: "schema_invalid" | "extra_emission" | "handoff_incomplete";
   readonly target_role?: string;
   readonly missing_fields?: readonly string[];
   readonly invalid_fields?: readonly string[];
@@ -125,27 +120,10 @@ interface EmissionToolFactoryOptions {
    * compat with Phase 4 / Task 14 behavior).
    */
   readonly shouldRejectCapture?: () => boolean;
-  /** Opt-in Prewalk gate run after schema/actionability checks and before capture/seal. */
-  readonly beforeValidCapture?: (
-    signal: AbortSignal | undefined,
-    context?: { readonly toolCallId: string },
-  ) => Promise<
-    | { readonly allow: true }
-    | { readonly allow: false; readonly terminate: false; readonly correction: string }
-  >;
 }
 
 function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
-  const {
-    seam,
-    toolName,
-    schema,
-    description,
-    label,
-    handoffContext,
-    shouldRejectCapture,
-    beforeValidCapture,
-  } = opts;
+  const { seam, toolName, schema, description, label, handoffContext, shouldRejectCapture } = opts;
   const activeSeam = (): SessionSeam => (typeof seam === "function" ? seam() : seam);
   const activeHandoffContext = (): HandoffContractContext | undefined =>
     typeof handoffContext === "function" ? handoffContext() : handoffContext;
@@ -260,25 +238,6 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // ── First machine-event call: validate at the seam ───────────
       const validated = validateEmission([{ toolName, args: params }]);
 
-      if (validated.kind === "ok" && beforeValidCapture !== undefined) {
-        let decision: Awaited<ReturnType<NonNullable<typeof beforeValidCapture>>>;
-        try {
-          decision = await beforeValidCapture(signal, { toolCallId: _toolCallId });
-        } catch (error) {
-          throw toToolExecutionModelError(error);
-        }
-        if (!decision.allow) {
-          return {
-            content: [{ type: "text" as const, text: decision.correction }],
-            details: {
-              ok: false,
-              reason: "prewalk_validation",
-            } satisfies EmissionToolDetails,
-            terminate: false,
-          };
-        }
-      }
-
       // Always push the call's args to the buffer — both valid and
       // schema-invalid captures are recorded. The loop's
       // `validateEmission` re-derives the breach reason from the
@@ -348,7 +307,6 @@ export function createHandoffTool(
   context?: HandoffContractContext | (() => HandoffContractContext),
   /** Use when a shared session may later change roles; no source authority leaks into the schema description. */
   transportNeutralDescription = false,
-  beforeValidCapture?: EmissionToolFactoryOptions["beforeValidCapture"],
 ): ToolDefinition {
   return createEmissionTool({
     seam,
@@ -360,7 +318,6 @@ export function createHandoffTool(
     ),
     ...(context !== undefined && { handoffContext: context }),
     ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
-    ...(beforeValidCapture !== undefined && { beforeValidCapture }),
   });
 }
 
@@ -378,7 +335,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function createEndTool(
   seam: SessionSeam | (() => SessionSeam),
   shouldRejectCapture?: () => boolean,
-  beforeValidCapture?: EmissionToolFactoryOptions["beforeValidCapture"],
 ): ToolDefinition {
   return createEmissionTool({
     seam,
@@ -388,6 +344,5 @@ export function createEndTool(
     description:
       "Terminate this role's session and declare the run complete. Only legal from the orchestrator (§7.2); workers calling this tool produce a transition_rejected record with legal_targets surfaced.",
     ...(shouldRejectCapture !== undefined && { shouldRejectCapture }),
-    ...(beforeValidCapture !== undefined && { beforeValidCapture }),
   });
 }

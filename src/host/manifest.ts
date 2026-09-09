@@ -49,7 +49,6 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { MachineDefinition, Role } from "../core/types.js";
 import { toMachineDefinition } from "../manifest/definition.js";
 import { parseManifest } from "../manifest/parse.js";
-import type { ManifestValidationContext } from "../manifest/prewalk.js";
 import type { Manifest } from "../manifest/types.js";
 import {
   type ManifestError,
@@ -58,7 +57,6 @@ import {
   type ManifestWarningCode,
   validateManifest,
 } from "../manifest/validate.js";
-import { resolvePrewalkManifestContext } from "./prewalk-manifest-context.js";
 
 /**
  * Typed error for hard manifest validation failures.
@@ -115,8 +113,6 @@ export interface LoadedManifest {
   readonly legacyDelegationMode?: boolean;
   /** Roles whose durable snapshot predates Issue #86 and has no mode field. */
   readonly legacyDelegationRoles?: readonly Role[];
-  /** Runtime facts used to admit opt-in Prewalk roles before guide spend. */
-  readonly prewalkValidationContext?: ManifestValidationContext;
 }
 
 /**
@@ -193,13 +189,7 @@ export async function loadManifest(
   const raw = await readFile(path, "utf8");
   const manifest = parseManifest(raw);
   const manifestDir = dirname(path);
-  const context = await resolvePrewalkManifestContext({
-    manifest,
-    modelRegistry: opts?.modelRegistry,
-    workspaceCwd: opts?.cwd ?? manifestDir,
-    manifestDir,
-  });
-  return loadParsedManifest(manifest, manifestDir, opts?.modelRegistry, context);
+  return loadParsedManifest(manifest, manifestDir, opts?.modelRegistry);
 }
 
 /**
@@ -225,27 +215,25 @@ export function loadManifestFromString(
   rawYaml: string,
   manifestDir: string | null = null,
   modelRegistry?: ModelRegistry,
-  validationContext?: ManifestValidationContext,
 ): LoadedManifest {
   // Phase 1 Task 3 — throws ManifestParseError on shape violations.
   // Pass through unchanged: parse errors are a different failure mode
   // (malformed input) than validation errors (semantically broken).
   const manifest: Manifest = parseManifest(rawYaml);
-  return loadParsedManifest(manifest, manifestDir, modelRegistry, validationContext);
+  return loadParsedManifest(manifest, manifestDir, modelRegistry);
 }
 
 function loadParsedManifest(
   manifest: Manifest,
   manifestDir: string | null,
   modelRegistry: ModelRegistry | undefined,
-  validationContext: ManifestValidationContext | undefined,
 ): LoadedManifest {
   // Phase 1 Task 4 — produces a ManifestReport with errors (hard) +
   // warnings (soft). We call it ourselves (rather than relying on
   // `toMachineDefinition`'s internal re-validation) so we can both
   // surface warnings to the caller AND throw a typed error with
   // structured codes on hard failures.
-  const report: ManifestReport = validateManifest(manifest, validationContext);
+  const report: ManifestReport = validateManifest(manifest);
 
   if (report.errors.length > 0) {
     // Throw typed so callers can switch on `e.errors[i].code` instead
@@ -261,7 +249,7 @@ function loadParsedManifest(
   // Derive the pinned snapshot. By construction this cannot throw
   // (we just verified errors.length === 0; toMachineDefinition's
   // internal re-validation will agree).
-  const def: MachineDefinition = toMachineDefinition(manifest, validationContext);
+  const def: MachineDefinition = toMachineDefinition(manifest);
 
   // Run the host-side provider-registration check when a registry is
   // provided. This is strictly post-validation and advisory.
@@ -277,6 +265,5 @@ function loadParsedManifest(
     warnings: Object.freeze(warnings),
     manifestDir,
     manifestVersion: manifest.version,
-    ...(validationContext !== undefined ? { prewalkValidationContext: validationContext } : {}),
   }) as LoadedManifest;
 }

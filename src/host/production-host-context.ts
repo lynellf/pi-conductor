@@ -10,7 +10,7 @@ import { EndGuardRunner } from "./end-guard-runner.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { ProductionHostOptions } from "./production-host-options.js";
-import { ProductionPrewalkHost } from "./production-prewalk-host.js";
+import { ProductionSessionState } from "./production-session-state.js";
 import { RoleTurnProducer } from "./role-turn-producer.js";
 import type { NodeRoleSession } from "./rpc/node-role-session.js";
 import { createNodeRoleSession } from "./rpc/node-role-session-factory.js";
@@ -40,7 +40,7 @@ export class ProductionHostContext {
   // observe usage and terminal state without making extracted helpers owners.
   protected readonly sessionStates: Map<string, SessionState> = new Map();
   protected readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
-  protected readonly prewalk: ProductionPrewalkHost;
+  protected readonly sessionState: ProductionSessionState;
   protected snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
 
   constructor(opts: ProductionHostOptions) {
@@ -72,7 +72,7 @@ export class ProductionHostContext {
       throw new Error("end_guard requires a platform with supervised process cleanup");
     }
     this.endGuardRunner = new EndGuardRunner(this.cwd);
-    this.prewalk = new ProductionPrewalkHost(this.sessionStates, this.agentsBySessionId);
+    this.sessionState = new ProductionSessionState(this.sessionStates, this.agentsBySessionId);
     // SessionManager writes JSONL directly and does not create its parent.
     mkdirSync(this.sessionDir, { recursive: true });
   }

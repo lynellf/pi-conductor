@@ -105,7 +105,7 @@ export interface RoleSession {
   /** Subscribe to false-to-true machine-emission seal transitions. */
   subscribeSealed?(listener: () => void): () => void;
 
-  /** Abort host-owned work before the SDK session is aborted (Prewalk). */
+  /** Abort host-owned work before the SDK session is aborted. */
   abortOwnedWork?(): Promise<void>;
 
   /** Send a prompt and await completion of the role's turn. The

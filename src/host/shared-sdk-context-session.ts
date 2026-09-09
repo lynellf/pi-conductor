@@ -71,7 +71,6 @@ export interface SharedSdkSessionStartupOptions {
   readonly effort: ModelEffort;
   readonly retainedContext: boolean;
   readonly restoredActiveToolNames: readonly string[];
-  readonly initialActiveToolNames: readonly string[] | null;
   readonly isTrajectory?: boolean;
   readonly expectedTrajectoryConversation?: { readonly id: string; readonly file: string };
   readonly activeToolNames?: readonly string[];
@@ -111,9 +110,6 @@ export async function createSharedSdkSession(
       }
     }
     session.setActiveToolsByName([...options.restoredActiveToolNames]);
-    if (options.initialActiveToolNames !== null) {
-      session.setActiveToolsByName([...options.initialActiveToolNames]);
-    }
     assertExactResumedTrajectoryEnvironment(session, options);
     if (options.activeToolNames !== undefined) {
       const activeNames = session.getActiveToolNames();

@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- Roll back experimental Prewalk (PR #78) because its static Pi API subpath import
+  prevents the entire extension from loading, even when Prewalk is unused
+  (issue #94). Ordinary
+  orchestration, retained context, delegation, and execution controls remain.
+  Manifests containing `prewalk` and persisted Prewalk records are rejected with
+  an explicit error; remove the configuration and start a new ordinary run.
+  Existing Prewalk logs are not deleted or migrated. Archive them for future
+  recovery; this release cannot resume those runs.
+
+### Tests
+
+- Exercise command registration through Pi's real extension loader in a fresh
+  process, rather than relying solely on development-time module imports.
+
 ## [0.21.0] - 2026-09-09
 
 ### Features
