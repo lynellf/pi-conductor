@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.6] - 2026-09-09
+
+### Bug fixes
+
+- Keep unrelated same-user processes with inaccessible `/proc` environments from
+  preventing fast foreground tools from settling, using a call-scoped pre-spawn
+  process snapshot while retaining fail-closed behavior for unresolved or owned
+  descendants (Issue #102).
+
 ## [0.21.5] - 2026-09-09
 
 ### Bug fixes

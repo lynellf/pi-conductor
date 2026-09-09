@@ -1,4 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ProcessObservationScope } from "../../src/host/execution/supervised-process-identity.js";
+
+const stat = (pid: number, sessionId: number, startTime: number, state = "S") =>
+  `${pid} (worker) ${state} 0 ${pid} ${sessionId} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ${startTime}`;
+
+async function findWithMock(
+  readFileMock: ReturnType<typeof vi.fn>,
+  scope: ProcessObservationScope,
+  entries = ["123"],
+) {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  vi.resetModules();
+  vi.doMock("node:fs/promises", () => ({
+    ...actual,
+    readFile: readFileMock,
+    readdir: vi.fn().mockResolvedValue(entries),
+  }));
+  try {
+    const { findProcessesByOwnerToken } = await import(
+      "../../src/host/execution/supervised-process-identity.js"
+    );
+    return await findProcessesByOwnerToken("execution", "100", scope);
+  } finally {
+    vi.doUnmock("node:fs/promises");
+    vi.resetModules();
+  }
+}
 
 describe("readProcessIdentity permission races", () => {
   it("treats permission denied on a dying zombie as absent", async () => {
@@ -188,5 +215,80 @@ describe("findProcessesByOwnerToken permission races", () => {
       vi.doUnmock("node:fs/promises");
       vi.resetModules();
     }
+  });
+});
+
+describe("findProcessesByOwnerToken scoped permission exclusions", () => {
+  it("skips an inaccessible PID proven present before the invocation", async () => {
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    const readFileMock = vi.fn(async (path: string) => {
+      if (path.endsWith("/stat")) return stat(123, 123, 200);
+      if (path.endsWith("/environ")) throw denied;
+      throw new Error(`unexpected read: ${path}`);
+    });
+    const scope: ProcessObservationScope = {
+      preexisting: new Map([
+        [123, { pid: 123, startTime: "200", processGroupId: 123, sessionId: 123 }],
+      ]),
+    };
+    await expect(findWithMock(readFileMock, scope)).resolves.toEqual([]);
+  });
+
+  it("skips an inaccessible process in a verified pre-existing session", async () => {
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    const readFileMock = vi.fn(async (path: string) => {
+      if (path.endsWith("/123/stat")) return stat(123, 700, 200);
+      if (path.endsWith("/700/stat")) return stat(700, 700, 150);
+      if (path.endsWith("/environ")) throw denied;
+      throw new Error(`unexpected read: ${path}`);
+    });
+    const scope: ProcessObservationScope = {
+      preexisting: new Map([
+        [700, { pid: 700, startTime: "150", processGroupId: 700, sessionId: 700 }],
+      ]),
+    };
+    await expect(findWithMock(readFileMock, scope)).resolves.toEqual([]);
+  });
+
+  it("fails closed for an inaccessible process in a new session", async () => {
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    const readFileMock = vi.fn(async (path: string) => {
+      if (path.endsWith("/stat")) return stat(123, 700, 200);
+      if (path.endsWith("/environ")) throw denied;
+      if (path.endsWith("/status")) {
+        const uid = process.getuid?.() ?? 1000;
+        return `State:\tS (sleeping)\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
+      }
+      throw new Error(`unexpected read: ${path}`);
+    });
+    const scope: ProcessObservationScope = { preexisting: new Map() };
+    await expect(findWithMock(readFileMock, scope)).rejects.toMatchObject({
+      operation: "read_environ",
+      code: "EACCES",
+      pid: 123,
+    });
+  });
+
+  it("fails closed when the PID changes identity during permission recovery", async () => {
+    const denied = Object.assign(new Error("denied"), { code: "EACCES" });
+    let statReads = 0;
+    const readFileMock = vi.fn(async (path: string) => {
+      if (path.endsWith("/stat")) {
+        statReads += 1;
+        return stat(123, 123, statReads === 1 ? 200 : 201);
+      }
+      if (path.endsWith("/environ")) throw denied;
+      throw new Error(`unexpected read: ${path}`);
+    });
+    const scope: ProcessObservationScope = {
+      preexisting: new Map([
+        [123, { pid: 123, startTime: "200", processGroupId: 123, sessionId: 123 }],
+      ]),
+    };
+    await expect(findWithMock(readFileMock, scope)).rejects.toMatchObject({
+      operation: "read_environ",
+      code: "EACCES",
+      pid: 123,
+    });
   });
 });

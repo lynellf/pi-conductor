@@ -1,5 +1,28 @@
 /** Bounded arbitration for process identity races at the spawn boundary. */
 
+import { SupervisedProcessError } from "./supervised-process-contract.js";
+import {
+  type ProcessObservationScope,
+  snapshotProcessNamespace,
+} from "./supervised-process-identity.js";
+import { observationFailure } from "./supervised-process-lifecycle.js";
+
+/** Capture pre-existing process identities before a supervised child is spawned. */
+export async function snapshotAdmissionScope(): Promise<ProcessObservationScope> {
+  try {
+    return await snapshotProcessNamespace();
+  } catch (error) {
+    throw new SupervisedProcessError(
+      "supervised-process-spawn-failed",
+      error instanceof Error ? error.message : "could not snapshot process ownership",
+      "not-started",
+      null,
+      0,
+      observationFailure(error, "list_processes", null),
+    );
+  }
+}
+
 /** Result of bounded admission arbitration. */
 export type AdmissionWaitResult = "closed" | "aborted" | "deadline";
 

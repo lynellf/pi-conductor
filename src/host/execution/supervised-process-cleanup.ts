@@ -6,6 +6,7 @@ import {
   ownsProcessGroup,
   ownsProcessIdentity,
   type ProcessIdentity,
+  type ProcessObservationScope,
   processGroupHasLiveMembers,
   readProcessGroupMembers,
   readProcessIdentity,
@@ -81,18 +82,22 @@ async function waitForGroupGone(identity: ProcessIdentity, deadlineMs: number): 
   return !(await processGroupHasLiveMembers(identity.processGroupId));
 }
 
-async function escapedProcesses(identity: ProcessIdentity): Promise<readonly ProcessIdentity[]> {
+async function escapedProcesses(
+  identity: ProcessIdentity,
+  scope?: ProcessObservationScope,
+): Promise<readonly ProcessIdentity[]> {
   return identity.ownerToken === undefined
     ? []
-    : findProcessesByOwnerToken(identity.ownerToken, identity.startTime);
+    : findProcessesByOwnerToken(identity.ownerToken, identity.startTime, scope);
 }
 
 async function terminateOwnedGroup(
   identity: ProcessIdentity,
   graceMs: number,
+  scope?: ProcessObservationScope,
 ): Promise<SupervisedCleanupResult> {
   if (!(await processGroupHasLiveMembers(identity.processGroupId))) {
-    const escaped = await escapedProcesses(identity);
+    const escaped = await escapedProcesses(identity, scope);
     return escaped.length === 0
       ? { cleanup: "confirmed" }
       : unconfirmed("escaped_owned_processes", escaped);
@@ -108,7 +113,7 @@ async function terminateOwnedGroup(
       return unconfirmed("cleanup_signal_failed", members);
   }
   if (await waitForGroupGone(identity, graceMs)) {
-    const escaped = await escapedProcesses(identity);
+    const escaped = await escapedProcesses(identity, scope);
     return escaped.length === 0
       ? { cleanup: "confirmed" }
       : unconfirmed("escaped_owned_processes", escaped);
@@ -134,7 +139,7 @@ async function terminateOwnedGroup(
   }
   if (!(await waitForGroupGone(identity, graceMs)))
     return unconfirmed("group_remained_live", members);
-  const escaped = await escapedProcesses(identity);
+  const escaped = await escapedProcesses(identity, scope);
   return escaped.length === 0
     ? { cleanup: "confirmed" }
     : unconfirmed("escaped_owned_processes", escaped);
@@ -162,9 +167,10 @@ function unconfirmed(
 export async function safeTerminateOwnedGroupDetailed(
   identity: ProcessIdentity,
   graceMs: number,
+  scope?: ProcessObservationScope,
 ): Promise<SupervisedCleanupResult> {
   try {
-    return await terminateOwnedGroup(identity, graceMs);
+    return await terminateOwnedGroup(identity, graceMs, scope);
   } catch (error) {
     return {
       cleanup: "unconfirmed",

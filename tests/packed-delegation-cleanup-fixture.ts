@@ -85,12 +85,21 @@ subagents:
   writeFileSync(
     preload,
     `const fs = require("node:fs/promises");
+const childProcess = require("node:child_process");
 const { syncBuiltinESMExports } = require("node:module");
 const readdir = fs.readdir;
+const spawn = childProcess.spawn;
 let injected = false;
+let supervisedSpawned = false;
 if (!process.execArgv.includes("--eval")) {
+  childProcess.spawn = function patchedSpawn(file, args, options) {
+    if (options && options.env && options.env.PI_CONDUCTOR_EXECUTION_ID) {
+      supervisedSpawned = true;
+    }
+    return spawn.call(this, file, args, options);
+  };
   fs.readdir = async function patchedReaddir(path, ...rest) {
-    if (!injected && path === "/proc") {
+    if (!injected && supervisedSpawned && path === "/proc") {
       injected = true;
       const error = new Error("fixture observation EACCES");
       error.code = "EACCES";

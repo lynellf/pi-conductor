@@ -42,7 +42,13 @@ export interface ProcessIdentity {
   readonly pid: number;
   readonly startTime: string;
   readonly processGroupId: number;
+  readonly sessionId?: number;
   readonly ownerToken?: string;
+}
+
+/** Read-only process identities captured before one supervised invocation. */
+export interface ProcessObservationScope {
+  readonly preexisting: ReadonlyMap<number, ProcessIdentity>;
 }
 
 function isGone(error: unknown): boolean {
@@ -64,17 +70,82 @@ function observationError(
 function parseStat(stat: string): {
   readonly state: string;
   readonly processGroupId: number;
+  readonly sessionId: number;
   readonly startTime: string;
 } {
   const closing = stat.lastIndexOf(") ");
   if (closing < 0) throw new Error("invalid /proc stat");
   const fields = stat.slice(closing + 2).split(" ");
   const processGroupId = Number(fields[2]);
+  const sessionId = Number(fields[3]);
   const startTime = fields[19];
   const state = fields[0];
-  if (!state || !Number.isInteger(processGroupId) || !startTime)
+  if (!state || !Number.isInteger(processGroupId) || !Number.isInteger(sessionId) || !startTime)
     throw new Error("invalid /proc stat fields");
-  return { state, processGroupId, startTime };
+  return { state, processGroupId, sessionId, startTime };
+}
+
+/** Capture process identities before spawning; this scope is never shared between calls. */
+export async function snapshotProcessNamespace(): Promise<ProcessObservationScope> {
+  let entries: string[];
+  try {
+    entries = await readdir("/proc");
+  } catch (error) {
+    throw observationError("list_processes", error);
+  }
+  const preexisting = new Map<number, ProcessIdentity>();
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      const parsed = parseStat(await readFile(`/proc/${entry}/stat`, "utf8"));
+      if (parsed.state !== "Z") {
+        preexisting.set(Number(entry), {
+          pid: Number(entry),
+          startTime: parsed.startTime,
+          processGroupId: parsed.processGroupId,
+          sessionId: parsed.sessionId,
+        });
+      }
+    } catch (error) {
+      if (!isGone(error)) throw observationError("read_stat", error, Number(entry));
+    }
+  }
+  return { preexisting };
+}
+
+function sameIdentity(left: ProcessIdentity, right: ProcessIdentity): boolean {
+  return left.pid === right.pid && left.startTime === right.startTime;
+}
+
+async function isProvenPreexisting(
+  candidate: ProcessIdentity,
+  scope: ProcessObservationScope,
+): Promise<boolean> {
+  const existing = scope.preexisting.get(candidate.pid);
+  if (existing !== undefined && sameIdentity(existing, candidate)) return true;
+  if (candidate.sessionId === undefined) return false;
+  const leader = scope.preexisting.get(candidate.sessionId);
+  if (leader === undefined || leader.sessionId !== leader.pid) return false;
+  try {
+    const current = parseStat(await readFile(`/proc/${candidate.sessionId}/stat`, "utf8"));
+    if (
+      current.state === "Z" ||
+      current.startTime !== leader.startTime ||
+      current.sessionId !== candidate.sessionId
+    )
+      return false;
+    const candidateCurrent = parseStat(await readFile(`/proc/${candidate.pid}/stat`, "utf8"));
+    if (
+      candidateCurrent.state === "Z" ||
+      candidateCurrent.startTime !== candidate.startTime ||
+      candidateCurrent.sessionId !== candidate.sessionId
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Read PID/start-ticks/group identity, optionally proving the execution marker. */
@@ -141,8 +212,19 @@ export async function readProcessIdentity(
       }
     }
     return ownerToken === undefined
-      ? { pid, startTime: parsed.startTime, processGroupId: parsed.processGroupId }
-      : { pid, startTime: parsed.startTime, processGroupId: parsed.processGroupId, ownerToken };
+      ? {
+          pid,
+          startTime: parsed.startTime,
+          processGroupId: parsed.processGroupId,
+          sessionId: parsed.sessionId,
+        }
+      : {
+          pid,
+          startTime: parsed.startTime,
+          processGroupId: parsed.processGroupId,
+          sessionId: parsed.sessionId,
+          ownerToken,
+        };
   } catch (error) {
     if (!isGone(error)) throw observationError("read_stat", error, pid);
     return null;
@@ -153,6 +235,7 @@ export async function readProcessIdentity(
 export async function findProcessesByOwnerToken(
   ownerToken: string,
   minimumStartTime?: string,
+  scope?: ProcessObservationScope,
 ): Promise<readonly ProcessIdentity[]> {
   let entries: string[];
   try {
@@ -163,10 +246,11 @@ export async function findProcessesByOwnerToken(
   const matches: ProcessIdentity[] = [];
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
+    let initial: ReturnType<typeof parseStat>;
     try {
-      const stat = parseStat(await readFile(`/proc/${entry}/stat`, "utf8"));
-      if (stat.state === "Z") continue;
-      if (minimumStartTime !== undefined && BigInt(stat.startTime) < BigInt(minimumStartTime)) {
+      initial = parseStat(await readFile(`/proc/${entry}/stat`, "utf8"));
+      if (initial.state === "Z") continue;
+      if (minimumStartTime !== undefined && BigInt(initial.startTime) < BigInt(minimumStartTime)) {
         continue;
       }
     } catch (error) {
@@ -179,6 +263,31 @@ export async function findProcessesByOwnerToken(
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "EACCES" || code === "EPERM") {
+        let current: ReturnType<typeof parseStat>;
+        try {
+          current = parseStat(await readFile(`/proc/${entry}/stat`, "utf8"));
+        } catch (currentError) {
+          if (isGone(currentError)) continue;
+          throw observationError("read_stat", currentError, Number(entry));
+        }
+        if (current.startTime !== initial.startTime || current.sessionId !== initial.sessionId) {
+          throw error;
+        }
+        if (current.state === "Z") continue;
+        if (
+          scope !== undefined &&
+          (await isProvenPreexisting(
+            {
+              pid: Number(entry),
+              startTime: current.startTime,
+              processGroupId: current.processGroupId,
+              sessionId: current.sessionId,
+            },
+            scope,
+          ))
+        ) {
+          continue;
+        }
         let status: string;
         try {
           status = await readFile(`/proc/${entry}/status`, "utf8");

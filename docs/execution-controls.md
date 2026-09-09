@@ -64,7 +64,11 @@ barrier as mutating tools. Concurrent worker exit can make process observation
 fail; the host makes one permission-only retry after 5 ms, with the retry
 bounded by the cleanup operation rather than promising a wall-clock duration.
 Preserve the detailed OS error and actual observation when available;
-persistent failure remains unconfirmed. An `observation_error` may include the
+persistent failure remains unconfirmed unless a call-scoped pre-spawn PID/start
+snapshot, or a freshly verified pre-existing session, proves the inaccessible
+process is unrelated. Genuinely unresolved or owned candidates remain
+unconfirmed. The snapshot exists only for the live invocation; restart has no
+original snapshot and remains conservative. An `observation_error` may include the
 actual operation, errno, and optional target PID, observed start ticks, and
 process group. Namespace failures may have no PID. An empty
 `observed_members` list is not cleanup confirmation, and a finished execution
