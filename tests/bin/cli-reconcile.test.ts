@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { runCli } from "../../src/bin/cli-main.js";
 import { runReconcileCli } from "../../src/bin/cli-reconcile.js";
-import { runCli } from "../../src/bin/conduct.js";
 import * as identity from "../../src/host/execution/supervised-process-identity.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import type {

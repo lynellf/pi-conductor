@@ -66,6 +66,13 @@ scripted runs:
 node dist/bin/conduct.js .pi/conductor.yaml "ship the changelog"
 ```
 
+The CLI resolves its Pi SDK from `PI_PACKAGE_DIR` when set, otherwise from
+locally installed peers, then from the npm Pi installation behind `pi` on
+`PATH`. This supports `pi install npm:pi-conductor`, which omits host-provided
+peer dependencies. If `pi` is a shell wrapper or its SDK cannot be discovered,
+set `PI_PACKAGE_DIR` to the directory containing Pi's `package.json` and its
+importable SDK. An invalid override is reported as an error.
+
 The CLI also provides a machine-safe mode for benchmark adapters and other
 noninteractive callers:
 

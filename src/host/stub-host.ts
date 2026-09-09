@@ -38,9 +38,9 @@
 import { randomUUID } from "node:crypto";
 
 import type { Usage } from "@earendil-works/pi-ai";
+import * as pi from "@earendil-works/pi-coding-agent";
 import {
   type AgentSession,
-  AuthStorage,
   createAgentSession,
   ModelRegistry,
   SessionManager,
@@ -146,7 +146,10 @@ export class StubHost implements Host {
     this.runId = opts.runId;
     this.loadedManifestValue = opts.loadedManifest;
 
-    const authStorage = AuthStorage.inMemory();
+    // AuthStorage belongs to the pinned test SDK; newer Pi versions omit its
+    // public export. A namespace access keeps the shared barrel importable
+    // without requiring production consumers to instantiate this test host.
+    const authStorage = pi.AuthStorage.inMemory();
     this.modelRegistry = ModelRegistry.inMemory(authStorage);
     const streamFn = makeStubStreamFunction({
       steps: opts.steps,

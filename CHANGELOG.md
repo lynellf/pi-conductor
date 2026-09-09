@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug fixes
+
+- Resolve host-provided Pi SDK peers before loading the standalone `conduct`
+  CLI, including installations made with `pi install` and npm bin symlinks.
+  Report missing or invalid SDK installations with repair guidance.
+- Initialize the CLI model registry through Pi's newer `ModelRuntime` API
+  while retaining compatibility with the pinned older SDK.
+
 ## [0.21.7] - 2026-09-09
 
 ### Tests

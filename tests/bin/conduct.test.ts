@@ -16,9 +16,10 @@
  * parse argv, build the host factory, call `startRun`, and report
  * the outcome on stderr/stdout/exit code.
  *
- * We exercise `runCli(argv, deps)` directly so tests don't spawn
- * a subprocess. `runCli` is exported from `src/bin/conduct.ts`
- * with injectable deps (`startRun`, `console`, `exit`, `cwd`).
+ * We exercise the `runCli(argv, deps)` implementation directly with
+ * injectable deps (`startRun`, `console`, `exit`, `cwd`). The public
+ * bootstrap and native Node resolution hooks run in packed-cli.test.ts;
+ * Vitest's transformed import.meta does not provide Node's resolve().
  */
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -29,7 +30,7 @@ import { Readable, Writable } from "node:stream";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
-import { runCli } from "../../src/bin/conduct.js";
+import { runCli } from "../../src/bin/cli-main.js";
 import type {
   HostFactoryContext,
   LoadedManifest,
