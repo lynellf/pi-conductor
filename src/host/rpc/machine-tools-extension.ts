@@ -147,7 +147,12 @@ function createRequestFilesBridgeTool(directory: string): ToolDefinition {
           args,
           ...(signal === undefined ? {} : { signal }),
         });
-        if (result.terminate === true) ctx.shutdown();
+        if (
+          result.terminate === true &&
+          process.env.PI_CONDUCTOR_CONTEXT_CHILD_CONFIG === undefined
+        ) {
+          ctx.shutdown();
+        }
         return result;
       } catch (error) {
         return {
@@ -183,7 +188,10 @@ function createTerminatingMachineTool(
       // RPC mode performs the requested shutdown after this tool execution ends.
       // The adapter sends its final statistics command at that boundary, which
       // makes the shutdown observable and drops the child's native guidance queues.
-      ctx.shutdown();
+      // Context-retention children must finish their host ACK in the prompt
+      // wrapper before the RPC process exits; ordinary RPC roles retain the
+      // existing immediate shutdown behavior.
+      if (process.env.PI_CONDUCTOR_CONTEXT_CHILD_CONFIG === undefined) ctx.shutdown();
       return {
         content: [
           {

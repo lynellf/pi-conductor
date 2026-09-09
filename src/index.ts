@@ -96,6 +96,7 @@ export {
   selectTransferMode,
 } from "./manifest/prewalk-transfer.js";
 export type {
+  ContextRetention,
   DelegationMode,
   DelegationPolicy,
   Manifest,
@@ -222,6 +223,16 @@ export type {
   RunSeededRecord,
 } from "./persistence/log.js";
 export { InMemoryRecordLog } from "./persistence/log.js";
+export type {
+  OrchestratorContextBoundaryInspection,
+  OrchestratorContextCompactionInspection,
+  OrchestratorContextInspection,
+  OrchestratorContextInspectionStatus,
+  OrchestratorContextInvocationInspection,
+  OrchestratorContextPendingCompactionInspection,
+  OrchestratorContextUnknownCompactionInspection,
+} from "./persistence/orchestrator-context-inspection.js";
+export { inspectOrchestratorContext } from "./persistence/orchestrator-context-inspection.js";
 export type {
   ExecutionCheckpointArgs,
   ExecutionCheckpointTodo,

@@ -9,6 +9,7 @@ import type {
   UsageRecord,
 } from "../../core/types.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
+import type { RpcContextRetentionBridge } from "./context-retention-bridge.js";
 import type { DelegateBridgeHandler, RequestFilesBridgeHandler } from "./delegate-bridge.js";
 import type { ExecutionBridgeToolDefinition } from "./execution-bridge.js";
 
@@ -79,6 +80,12 @@ export interface NodeRoleSessionOptions {
   readonly systemPrompt: string | null;
   /** Absolute path to the mandatory host-written machine-tools configuration file. */
   readonly machineToolsConfigPath: string;
+  /** Absolute trusted serialized context-child config path. */
+  readonly contextConfigPath?: string;
+  /** Host-minted logical role-session identity, distinct from Pi conversation ID. */
+  readonly roleSessionId?: string;
+  /** Explicit trusted context-retention extension path, when this role retains context. */
+  readonly contextExtensionPath?: string;
   readonly retries?: number;
   readonly retryDelayMs?: number;
   readonly workspace?: SessionWorkspaceDescriptor;
@@ -105,6 +112,8 @@ export interface NodeRoleSessionOptions {
   readonly onDispose?: () => Promise<void> | void;
   /** Test-only process factory. Omit to spawn the package-local pi CLI. */
   readonly spawn?: RpcChildSpawner;
+  /** Optional host-owned context retention ACK bridge. */
+  readonly contextRetention?: RpcContextRetentionBridge;
 }
 
 /** Base error for failures at the isolated pi RPC boundary. */

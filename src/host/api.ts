@@ -19,38 +19,6 @@
  *  - `listRuns(baseDir)` — enumerate the `run_id`s known to the
  *    file log (for a future TUI viewer; spec §11.9).
  *
- * ## Host construction
- *
- * `startRun` and `resumeRun` accept a `hostFactory` callback that
- * builds the `Host` for the run. The factory receives the run's
- * `runId`, log, and def so it can wire everything before the loop
- * begins. Tests pass a `StubHost` factory (Task 16); production
- * passes an SDK-backed `Host` factory (Task 15's sibling, not yet
- * built).
- *
- * ## Crash reconciliation
- *
- * Per §11.1: "A snapshot whose `active_role_session` references a
- * session that never reached a terminal lifecycle record is
- * treated as a crash mid-session." The reconciler:
- *
- *   1. Finds the `session_started` record for the active session
- *      by `session_file`.
- *   2. If no `session_ended` or `session_failed` follows it,
- *      records `session_failed("crashed")` via `reduceLifecycle`
- *      (clearing `active_role_session`).
- *   3. Persists a fresh `CheckpointSnapshot` reflecting the
- *      cleared session.
- *   4. The loop then resumes from `current_role` with a fresh
- *      `active_role_session = null`.
- *
- * ## Why the reducer is unchanged
- *
- * The reconciler calls `reduceLifecycle(session_failed, …)` —
- * the same path the loop uses for contract breaches (Task 15).
- * The reducer doesn't know about crash reconciliation; it sees a
- * `session_failed` lifecycle event and produces the canonical
- * record + checkpoint transition.
  */
 
 // This facade intentionally keeps start/resume lease admission together: both
@@ -98,6 +66,10 @@ import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-con
 import type { Host } from "./host.js";
 import { FileRecordLog } from "./log-file.js";
 import { type LoadedManifest, loadManifest } from "./manifest.js";
+import {
+  admitOrchestratorContextResume,
+  resetOrchestratorContext,
+} from "./orchestrator-context-resume.js";
 import type { RunHandle } from "./run-handle.js";
 
 // Public crash-recovery seams remain exported from this entry module while
@@ -144,6 +116,8 @@ export interface ResumeRunOptions {
    * `resumeRun` returns. When omitted, the check is skipped.
    */
   readonly modelRegistry?: ModelRegistry;
+  /** Reset retained orchestrator history after crash reconciliation. */
+  readonly resetOrchestratorContext?: boolean;
 }
 
 /** Context passed to the host factory on each run start / resume. */
@@ -361,6 +335,14 @@ export async function resumeRun(
       );
     }
     const def = resumedLoaded.def;
+    const resumeRecords = log.records(runId);
+    const effectiveLoaded = await admitOrchestratorContextResume({
+      runId,
+      records: resumeRecords,
+      log,
+      loadedManifest: resumedLoaded,
+      reset: opts.resetOrchestratorContext === true,
+    });
 
     let endGuardEpoch = endGuardRecords.reduce(
       (highest, record) =>
@@ -395,12 +377,20 @@ export async function resumeRun(
 
     // Crash reconciliation (§11.1).
     const reconciledCheckpoint = reconcileCrash(runId, checkpoint, def, log);
+    if (opts.resetOrchestratorContext === true) {
+      resetOrchestratorContext({
+        runId,
+        records: log.records(runId),
+        log,
+        loadedManifest: effectiveLoaded,
+      });
+    }
     const resumedRecords = log.records(runId);
     assertNoUnselectedTrajectoryHandoff(
       resumedRecords,
       runId,
       reconciledCheckpoint,
-      resumedLoaded.manifest.handoffs,
+      effectiveLoaded.manifest.handoffs,
       log,
     );
     // Validate the selected receiver's persisted environment at the public
@@ -450,7 +440,7 @@ export async function resumeRun(
       });
     }
 
-    const host = opts.hostFactory({ runId, def, log, loadedManifest: resumedLoaded });
+    const host = opts.hostFactory({ runId, def, log, loadedManifest: effectiveLoaded });
 
     // Restore the original goal from the run log (if available).
     // Falls back to opts.goal (which may be "") for runs that
@@ -465,7 +455,7 @@ export async function resumeRun(
       host,
       initialCheckpoint: reconciledCheckpoint,
       goal,
-      loadedManifest: resumedLoaded,
+      loadedManifest: effectiveLoaded,
       lease,
       initialArtifactDelivery,
       initialParentSessionId,

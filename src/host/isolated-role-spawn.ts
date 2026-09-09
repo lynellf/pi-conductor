@@ -1,5 +1,12 @@
-/** Isolated worktree/copy role spawning — Issue #48 remediation R2/R3. */
+/**
+ * Isolated worktree/copy role spawning — Issue #48 remediation R2/R3.
+ *
+ * This remains a coherent exception to the module-size guideline: workspace
+ * provisioning, bridge setup, child lifecycle cleanup, and session registration
+ * must stay ordered in one owner to preserve failure and disposal semantics.
+ */
 
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
@@ -13,8 +20,13 @@ import type { DisplaySink } from "./display-sink.js";
 import { createSupervisedTools } from "./execution/supervised-tools.js";
 import { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import type { RoleSession } from "./host.js";
+import {
+  type PreparedIsolatedContextRetention,
+  prepareIsolatedContextRetention,
+} from "./isolated-context-retention.js";
 import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
+import type { RpcContextRetentionBridge } from "./rpc/context-retention-bridge.js";
 import { DelegateBridgeConfigError, type DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
 import type { ExecutionBridgeToolDefinition } from "./rpc/execution-bridge.js";
 import {
@@ -69,6 +81,10 @@ export async function spawnIsolatedRoleSession(options: {
   readonly displaySink?: DisplaySink;
   /** Issue #68: run-owned producer shared across every logical invocation. */
   readonly roleTurnProducer: RoleTurnProducer;
+  /** Optional host-owned context-retention bridge or parent log configuration. */
+  readonly contextRetention?:
+    | RpcContextRetentionBridge
+    | { readonly log: import("../persistence/log.js").RecordLog };
 }): Promise<RoleSession> {
   const { visitIndex, executionVisitIndex = visitIndex } = options;
   const source = options.workspaceConfig.source ?? "snapshot";
@@ -238,33 +254,120 @@ export async function spawnIsolatedRoleSession(options: {
     };
   }
   let sessionId: string | null = null;
-  const session = await options.nodeRoleSessionFactory({
-    role: options.role,
-    model: options.model,
-    effort: options.effort,
-    cwd: workspaceResult.workspacePath,
-    sessionDir: options.sessionDir,
-    agentDir: options.agentDir,
-    systemPrompt: options.systemPrompt,
-    machineToolsConfigPath,
-    ...(delegateBridge === undefined ? {} : { delegateBridge }),
-    ...(requestFilesBridge === undefined ? {} : { requestFilesBridge }),
-    ...(executionBridge === undefined ? {} : { executionBridge }),
-    retries: options.retries,
-    retryDelayMs: options.retryDelayMs,
-    workspace,
-    artifactCollection,
-    onDispose: () => {
-      if (sessionId === null) return;
-      options.sessionStates.delete(sessionId);
-      options.agentsBySessionId.delete(sessionId);
-    },
-  });
+  let retentionState: SessionState | undefined;
+  let retentionSession: NodeRoleSession | undefined;
+  let preparedRetention: PreparedIsolatedContextRetention | undefined;
+  if (options.contextRetention !== undefined && "log" in options.contextRetention) {
+    preparedRetention = await prepareIsolatedContextRetention({
+      log: options.contextRetention.log,
+      persistRecord: options.persistRecord,
+      runId: options.runId,
+      role: options.role,
+      visitIndex,
+      cwd: options.cwd,
+      agentDir: options.agentDir,
+      sessionDir: options.sessionDir,
+      childCwd: workspaceResult.workspacePath,
+      childSessionDir: options.sessionDir,
+      childAgentDir: options.agentDir,
+      machineToolsConfigPath,
+      model: options.model,
+      effort: options.effort,
+      systemPrompt: options.systemPrompt,
+      onUsage: (chargeId, usage) => {
+        if (usage !== null) {
+          retentionState?.addCompactionUsage(chargeId, usage);
+          if (retentionState?.isSessionCapExceeded() === true) {
+            retentionState.setTerminalReason("session_cost_cap_exceeded");
+            retentionState.markAborted();
+            void retentionSession?.abort().catch(() => undefined);
+          }
+        }
+      },
+    });
+  }
+  let session: NodeRoleSession;
+  try {
+    session = await options.nodeRoleSessionFactory({
+      role: options.role,
+      model: options.model,
+      effort: options.effort,
+      cwd: workspaceResult.workspacePath,
+      sessionDir: options.sessionDir,
+      agentDir: options.agentDir,
+      systemPrompt: options.systemPrompt,
+      machineToolsConfigPath,
+      ...(delegateBridge === undefined ? {} : { delegateBridge }),
+      ...(requestFilesBridge === undefined ? {} : { requestFilesBridge }),
+      ...(executionBridge === undefined ? {} : { executionBridge }),
+      retries: options.retries,
+      retryDelayMs: options.retryDelayMs,
+      workspace,
+      artifactCollection,
+      onDispose: () => {
+        if (sessionId === null) return;
+        options.sessionStates.delete(sessionId);
+        options.agentsBySessionId.delete(sessionId);
+      },
+      ...(preparedRetention === undefined
+        ? options.contextRetention === undefined || "log" in options.contextRetention
+          ? {}
+          : { contextRetention: options.contextRetention }
+        : {
+            contextRetention: preparedRetention.contextRetention,
+            contextConfigPath: preparedRetention.contextConfigPath,
+            roleSessionId: JSON.stringify([
+              options.runId,
+              options.role,
+              executionVisitIndex,
+              randomUUID(),
+            ]),
+          }),
+    });
+  } catch (error) {
+    await preparedRetention?.close().catch(() => undefined);
+    throw error;
+  }
+  try {
+    if (preparedRetention !== undefined) {
+      preparedRetention.attach({
+        roleSessionId: session.sessionId,
+        physicalSessionId:
+          (session as RoleSession & { readonly conversationId?: string }).conversationId ??
+          session.sessionId,
+        conversationId:
+          (session as RoleSession & { readonly conversationId?: string }).conversationId ??
+          session.sessionId,
+        sessionFile: session.sessionFile,
+      });
+      const prompt = session.prompt.bind(session);
+      session.prompt = preparedRetention.wrapPrompt(prompt);
+      Object.defineProperty(session, "retainedContext", {
+        configurable: true,
+        enumerable: true,
+        get: () => preparedRetention?.retainedContext,
+      });
+      const dispose = session.dispose.bind(session);
+      session.dispose = async () => {
+        try {
+          await dispose();
+        } finally {
+          await preparedRetention?.close();
+        }
+      };
+    }
+  } catch (error) {
+    await session.dispose().catch(() => undefined);
+    await preparedRetention?.close().catch(() => undefined);
+    throw error;
+  }
   sessionId = session.sessionId;
+  retentionSession = session;
   const state = new SessionState({
     cap: options.roleConfig?.max_session_cost_usd ?? null,
     model: options.model,
   });
+  retentionState = state;
   executionController =
     confinedTools.activeNames.length === 0
       ? null
@@ -299,7 +402,9 @@ export async function spawnIsolatedRoleSession(options: {
         runId: options.runId,
         role: options.role,
         roleSessionId: sessionId ?? session.sessionId,
-        conversationId: session.sessionId,
+        conversationId:
+          (session as RoleSession & { readonly conversationId?: string }).conversationId ??
+          session.sessionId,
         sessionFile: session.sessionFile,
         persist: options.persistRecord,
       },

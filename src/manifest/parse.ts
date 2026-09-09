@@ -32,6 +32,7 @@ import { parsePrewalkConfig } from "./prewalk.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
+  ContextRetention,
   DelegationPolicy,
   HandoffMode,
   HandoffPolicy,
@@ -265,8 +266,14 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
   }
 
   const path = `roles[${index}]`;
+  const contextRetention = parseContextRetention(
+    entry.context_retention,
+    `${path}.context_retention`,
+    entry.is_orchestrator === true,
+  );
   const role: RoleConfig = Object.freeze({
     name,
+    ...(contextRetention === undefined ? {} : { context_retention: contextRetention }),
     ...(entry.is_orchestrator !== undefined && {
       is_orchestrator: toBool(entry.is_orchestrator, `${path}.is_orchestrator`),
     }),
@@ -309,6 +316,16 @@ function parseRoleConfig(raw: unknown, index: number): RoleConfig {
   }) as RoleConfig;
 
   return role;
+}
+
+function parseContextRetention(
+  value: unknown,
+  path: string,
+  isOrchestrator: boolean,
+): ContextRetention | undefined {
+  if (value === undefined) return isOrchestrator ? "none" : undefined;
+  if (value === "none" || value === "run") return value;
+  throw new ManifestParseError(`${path} must be "none" or "run"`);
 }
 
 // ─── Field coercion helpers ───────────────────────────────────────────

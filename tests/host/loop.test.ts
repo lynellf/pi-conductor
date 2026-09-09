@@ -49,6 +49,7 @@ import {
   type TransitionRejected,
   type UsageRecord,
 } from "../../src/index.js";
+import type { ContextBoundaryReference } from "../../src/persistence/orchestrator-context.js";
 
 // ─── Test fakes ────────────────────────────────────────────────────────
 
@@ -93,6 +94,8 @@ class FakeSession {
   disposed = false;
   afterPrompt: (() => Promise<void> | void) | null = null;
   beforeSeal: (() => Promise<void> | void) | null = null;
+  retainedContextMode: "enabled" | "capture-fails" | "dispose-fails" | null = null;
+  retentionEvents: string[] = [];
 
   constructor(role: Role, sessionId: string, script: ScriptedEmission[]) {
     this.role = role;
@@ -133,6 +136,28 @@ class FakeSession {
         this.sealSubscribers.add(listener);
         return () => this.sealSubscribers.delete(listener);
       },
+      ...(this.retainedContextMode === null
+        ? {}
+        : {
+            retainedContext: {
+              captureBoundary: async (): Promise<ContextBoundaryReference> => {
+                this.retentionEvents.push("capture");
+                if (this.retainedContextMode === "capture-fails") {
+                  throw new Error("capture failed");
+                }
+                return {
+                  role_session_id: this.sessionId,
+                  conversation_id: `${this.sessionId}-conversation`,
+                  session_file: this.sessionFile,
+                  leaf_id: `${this.sessionId}-leaf`,
+                  history_sha256: "a".repeat(64),
+                };
+              },
+              commitBoundary: async (_reference: ContextBoundaryReference): Promise<void> => {
+                this.retentionEvents.push("commit");
+              },
+            },
+          }),
       prompt: async (text) => {
         this.prompts.push(text);
         await Promise.resolve();
@@ -179,7 +204,11 @@ class FakeSession {
         await this.afterPrompt?.();
       },
       dispose: async () => {
+        this.retentionEvents.push("dispose");
         this.disposed = true;
+        if (this.retainedContextMode === "dispose-fails") {
+          throw new Error("dispose failed");
+        }
       },
     };
   }
@@ -1113,6 +1142,44 @@ describe("runLoop — session disposal (§12.1 step 7)", () => {
     // happens once, after the accepted end — not between prompts.
     expect(host.spawnedSessions[0]?.disposed).toBe(true);
     expect(host.spawnedSessions[0]?.prompts).toHaveLength(2);
+  });
+
+  it("captures before disposal and commits only after disposal", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const session = new FakeSession("orchestrator", "retained-1", [{ kind: "emit_end" }]);
+    session.retainedContextMode = "enabled";
+    host.enqueue(session);
+
+    await makeRun(createInitialCheckpoint(makeDef()), host);
+
+    expect(session.retentionEvents).toEqual(["capture", "dispose", "commit"]);
+  });
+
+  it("disposes after capture failure and does not commit", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const session = new FakeSession("orchestrator", "retained-2", [{ kind: "emit_end" }]);
+    session.retainedContextMode = "capture-fails";
+    host.enqueue(session);
+
+    await expect(makeRun(createInitialCheckpoint(makeDef()), host)).rejects.toThrow(
+      "capture failed",
+    );
+    expect(session.retentionEvents).toEqual(["capture", "dispose"]);
+  });
+
+  it("surfaces disposal failure and does not commit", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const session = new FakeSession("orchestrator", "retained-3", [{ kind: "emit_end" }]);
+    session.retainedContextMode = "dispose-fails";
+    host.enqueue(session);
+
+    await expect(makeRun(createInitialCheckpoint(makeDef()), host)).rejects.toThrow(
+      "dispose failed",
+    );
+    expect(session.retentionEvents).toEqual(["capture", "dispose"]);
   });
 
   it("disposes the session when a reducer-rejected retry breaches", async () => {

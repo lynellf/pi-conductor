@@ -38,7 +38,11 @@ export interface AcceptedTransitionArgs {
   readonly sessionId: string;
   readonly sessionFile: string;
   readonly sessionParentId: string | null;
-  readonly state: { inner: InnerOutcome; capturedUsage: UsageRecord };
+  readonly state: {
+    inner: InnerOutcome;
+    capturedUsage: UsageRecord;
+    terminalPersisted: boolean;
+  };
   readonly reduceResult: AcceptedReduction;
   readonly enrichedRecord: PersistedRecord;
   readonly event: AcceptedEmission;
@@ -163,6 +167,7 @@ export async function persistAcceptedTransition(
   });
   ctx.checkpoint = ended.checkpoint;
   host.persistRecord(withRoleSessionIdentity(ended.record, session));
+  state.terminalPersisted = true;
   // §11.1: each transition produces a new full ctx.checkpoint
   // snapshot. session_ended clears active_role_session;
   // persist a fresh snapshot so latestCheckpoint reflects

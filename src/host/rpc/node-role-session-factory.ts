@@ -2,6 +2,7 @@
 
 import { MACHINE_TOOLS_CONFIG_ENV } from "./machine-tools-config.js";
 import {
+  resolveContextChildEntryPath,
   resolveMachineToolsExtensionPath,
   resolvePackageLocalPiCli,
   spawnPackageLocalPi,
@@ -19,27 +20,36 @@ export async function createNodeRoleSession(
   }
   const spawnOptions: RpcSpawnOptions = {
     command: process.execPath,
-    args: [
-      resolvePackageLocalPiCli(),
-      "--mode",
-      "rpc",
-      "--no-extensions",
-      "--no-builtin-tools",
-      "--extension",
-      resolveMachineToolsExtensionPath(),
-      ...(options.model === null ? [] : ["--model", toPiModelArgument(options.model)]),
-      "--thinking",
-      options.effort,
-      ...(options.systemPrompt === null ? [] : ["--system-prompt", options.systemPrompt]),
-      "--session-dir",
-      options.sessionDir,
-    ],
+    args:
+      options.contextConfigPath === undefined
+        ? [
+            resolvePackageLocalPiCli(),
+            "--mode",
+            "rpc",
+            "--no-extensions",
+            "--no-builtin-tools",
+            "--extension",
+            resolveMachineToolsExtensionPath(),
+            ...(options.contextExtensionPath === undefined
+              ? []
+              : ["--extension", options.contextExtensionPath]),
+            ...(options.model === null ? [] : ["--model", toPiModelArgument(options.model)]),
+            "--thinking",
+            options.effort,
+            ...(options.systemPrompt === null ? [] : ["--system-prompt", options.systemPrompt]),
+            "--session-dir",
+            options.sessionDir,
+          ]
+        : [resolveContextChildEntryPath()],
     cwd: options.cwd,
     env: {
       ...process.env,
       ...options.env,
       PI_CODING_AGENT_DIR: options.agentDir,
       [MACHINE_TOOLS_CONFIG_ENV]: options.machineToolsConfigPath,
+      ...(options.contextConfigPath === undefined
+        ? {}
+        : { PI_CONDUCTOR_CONTEXT_CHILD_CONFIG: options.contextConfigPath }),
     },
   };
   const child = options.spawn?.(spawnOptions) ?? spawnPackageLocalPi(spawnOptions);

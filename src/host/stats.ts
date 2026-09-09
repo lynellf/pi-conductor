@@ -36,9 +36,22 @@ import { DEFAULT_MODEL_EFFORT, type ModelEffort, type Role } from "../core/types
 import { type RunRollup, rollup } from "../cost/rollup.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import {
+  inspectOrchestratorContext,
+  type OrchestratorContextInspection,
+} from "../persistence/orchestrator-context-inspection.js";
 import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { projectToolExecutionStats, type ToolExecutionStats } from "./execution/execution-stats.js";
 
+export type {
+  OrchestratorContextBoundaryInspection,
+  OrchestratorContextCompactionInspection,
+  OrchestratorContextInspection,
+  OrchestratorContextInspectionStatus,
+  OrchestratorContextInvocationInspection,
+  OrchestratorContextPendingCompactionInspection,
+  OrchestratorContextUnknownCompactionInspection,
+} from "../persistence/orchestrator-context-inspection.js";
 export type { ToolExecutionStats } from "./execution/execution-stats.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
@@ -125,6 +138,8 @@ export interface RunStats {
   readonly subagents: SubagentLifecycleStats;
   /** Durable executable-tool projection used by live operator status. */
   readonly toolExecution?: ToolExecutionStats;
+  /** Bounded retained orchestrator context state; omitted for context_retention: none. */
+  readonly context?: OrchestratorContextInspection;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -149,6 +164,7 @@ export function runStats(
   exitReason: RunExecutionStatus,
 ): RunStats {
   const latestCheckpoint = findLatestCheckpoint(records, runId);
+  const context = inspectOrchestratorContext(records, runId, def.orchestrator);
   const costRollup = rollup(records, runId, def.orchestrator);
   const transitionHistory = extractTransitionHistory(records, runId);
   const recordsCount = countRecordsForRun(records, runId);
@@ -167,7 +183,7 @@ export function runStats(
   // `def.orchestrator` (§7.2).
   const state: Role | "done" = latestCheckpoint?.current_role ?? def.orchestrator;
 
-  return Object.freeze({
+  const result = {
     runId,
     manifestVersion: def.manifest_version,
     state,
@@ -179,7 +195,9 @@ export function runStats(
     activeSession,
     subagents,
     toolExecution,
-  }) as RunStats;
+    ...(context === null ? {} : { context }),
+  } as RunStats;
+  return Object.freeze(result);
 }
 
 // ─── Internals ─────────────────────────────────────────────────────────

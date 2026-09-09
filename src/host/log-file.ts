@@ -460,6 +460,12 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "end_guard_finished",
   "end_guard_budget_reset",
   "delegation_submission_accepted",
+  "context_epoch_started",
+  "context_invocation_started",
+  "context_delivery_committed",
+  "context_boundary_committed",
+  "context_compaction_started",
+  "context_compaction",
 ]);
 
 /** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */

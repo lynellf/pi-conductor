@@ -47,6 +47,12 @@ console.log(latest?.role, latest?.text);
 `latestResponse()` returns assistant text and readable displayed reasoning while
 excluding tool summaries. Clipboard access remains a UI concern.
 
+For an idle run configured with `context_retention: run`, pass
+`resetOrchestratorContext: true` in the existing `resumeRun` options to begin a
+fresh context epoch. Reset preserves run progress and costs and requires the
+normal run lease and cleanup checks. See [Retained orchestrator
+context](orchestrator-context.md) for recovery restrictions.
+
 `Host` is the seam between the pure loop and the pi SDK. It owns session
 creation, event subscription + usage accumulation, the run-keyed log, and
 per-session state. You can also implement a custom `Host` against the interface

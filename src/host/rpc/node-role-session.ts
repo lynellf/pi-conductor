@@ -6,8 +6,6 @@
  * ProductionHost selection and machine-tools configuration are separate.
  */
 
-import { realpathSync } from "node:fs";
-
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type {
   ModelEffort,
@@ -18,12 +16,12 @@ import type {
 import { type EmissionCapture, validateEmission } from "../../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
 import type { RoleSession } from "../host.js";
-
-import { DelegateBridgeHost } from "./delegate-bridge.js";
-import { ExecutionBridgeHost } from "./execution-bridge.js";
-import { loadMachineToolsConfig, MACHINE_TOOLS_CONFIG_ENV } from "./machine-tools-config.js";
+import type { DelegateBridgeHost } from "./delegate-bridge.js";
+import type { ExecutionBridgeHost } from "./execution-bridge.js";
+import { createDelegateBridge, createExecutionBridge } from "./node-role-bridges.js";
 import { RpcChildTerminator } from "./node-role-process.js";
 import { RpcChildTransport } from "./node-role-transport.js";
+import { addUsageRecord, subtractUsage } from "./node-role-usage.js";
 import {
   asRpcError,
   type NodeRoleSessionOptions,
@@ -33,7 +31,6 @@ import {
   RpcAbortTimeoutError,
   RpcChildExitError,
   type RpcChildProcess,
-  RpcChildProcessError,
   type RpcCommand,
   RpcProtocolError,
   type RpcResponseFrame,
@@ -45,6 +42,7 @@ import {
 } from "./protocol.js";
 
 export {
+  resolveContextChildEntryPath,
   resolveMachineToolsExtensionPath,
   resolvePackageLocalPiCli,
   spawnPackageLocalPi,
@@ -94,6 +92,8 @@ export class NodeRoleSession implements RoleSession {
   private readonly executionBridge: ExecutionBridgeHost | null;
   private readonly executionBridgeCloseTimeoutMs: number | undefined;
   private readonly onDispose: (() => Promise<void> | void) | undefined;
+  private readonly contextRetention: NodeRoleSessionOptions["contextRetention"];
+  private readonly optionsRoleSessionId: string | undefined;
   private readonly captures: EmissionCapture[] = [];
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly sealedListeners = new Set<() => void>();
@@ -107,8 +107,10 @@ export class NodeRoleSession implements RoleSession {
   private disposed = false;
   private disposePromise: Promise<void> | null = null;
   private _sessionId = "";
+  private _conversationId = "";
   private _sessionFile = "";
   private usage: UsageRecord = ZERO_USAGE;
+  private baselineUsage: UsageRecord = ZERO_USAGE;
 
   constructor(options: NodeRoleSessionOptions, child: RpcChildProcess) {
     this.role = options.role;
@@ -141,6 +143,8 @@ export class NodeRoleSession implements RoleSession {
       options.executionBridge === undefined ? null : createExecutionBridge(options);
     this.executionBridgeCloseTimeoutMs = options.executionBridge?.closeTimeoutMs;
     this.onDispose = options.onDispose;
+    this.contextRetention = options.contextRetention;
+    this.optionsRoleSessionId = options.roleSessionId;
     this.transport = new RpcChildTransport(child, {
       onEvent: (value) => this.acceptEvent(value),
       onFailure: (error) => this.fail(error),
@@ -171,7 +175,22 @@ export class NodeRoleSession implements RoleSession {
     const response = await this.request({ type: "get_state" });
     const state = objectData(response.data, "get_state");
     this._sessionId = requiredString(state, "sessionId", "get_state");
+    this._conversationId = this._sessionId;
+    if (this.contextRetention !== undefined && this._sessionId.length === 0) {
+      throw new RpcStateError("context-retention child returned an empty conversation ID");
+    }
+    if (this.optionsRoleSessionId !== undefined) this._sessionId = this.optionsRoleSessionId;
     this._sessionFile = requiredString(state, "sessionFile", "get_state");
+    if (this.contextRetention !== undefined) {
+      const stats = await this.request({ type: "get_session_stats" });
+      this.baselineUsage = normalizeStats(stats.data);
+      this.usage = this.baselineUsage;
+    }
+  }
+
+  /** Physical Pi conversation identity reported by the child. */
+  get conversationId(): string {
+    return this._conversationId;
   }
 
   readCaptureBuffer(): readonly EmissionCapture[] {
@@ -222,11 +241,17 @@ export class NodeRoleSession implements RoleSession {
 
   /** Return cumulative usage normalized from the most recently settled turn's session stats. */
   captureUsage(): UsageRecord {
-    return this.usage;
+    const current =
+      this.contextRetention === undefined
+        ? this.usage
+        : subtractUsage(this.usage, this.baselineUsage);
+    const compaction = this.contextRetention?.getCompactionUsage?.() ?? ZERO_USAGE;
+    return addUsageRecord(current, compaction);
   }
 
   prompt(text: string): Promise<void> {
     this.assertOpen();
+    this.contextRetention?.assertHealthy();
     if (this.pendingTurn !== null) {
       throw new RpcStateError("cannot issue a prompt while a prior RPC turn is unsettled");
     }
@@ -332,7 +357,12 @@ export class NodeRoleSession implements RoleSession {
       return;
     }
     for (const listener of this.listeners) listener(value as unknown as AgentSessionEvent);
-    if (value.type === "agent_end" && value.willRetry === false) {
+    if (
+      value.type === "agent_settled" ||
+      (this.contextRetention === undefined &&
+        value.type === "agent_end" &&
+        value.willRetry === false)
+    ) {
       const turn = this.pendingTurn;
       if (turn !== null) {
         turn.ended = true;
@@ -386,8 +416,20 @@ export class NodeRoleSession implements RoleSession {
       return;
     }
     if (this.pendingTurn !== turn) return;
-    this.pendingTurn = null;
-    turn.resolve();
+    void this.finishTurn(turn);
+  }
+
+  private async finishTurn(turn: PendingTurn): Promise<void> {
+    if (this.pendingTurn !== turn) return;
+    try {
+      await this.contextRetention?.settle();
+      this.contextRetention?.assertHealthy();
+      if (this.pendingTurn !== turn) return;
+      this.pendingTurn = null;
+      turn.resolve();
+    } catch (error) {
+      this.rejectTurn(turn, asRpcError(error));
+    }
   }
 
   private requestTurnStats(turn: PendingTurn): void {
@@ -437,100 +479,6 @@ export class NodeRoleSession implements RoleSession {
     if (this.disposed || (this.disposing && !allowDisposing)) {
       throw new RpcSessionDisposedError();
     }
-  }
-}
-
-function createExecutionBridge(options: NodeRoleSessionOptions): ExecutionBridgeHost {
-  const bridge = options.executionBridge;
-  if (bridge === undefined || bridge.tools.length === 0) {
-    throw new RpcChildProcessError("RPC execution bridge requires host tool definitions");
-  }
-  try {
-    const config = loadMachineToolsConfig({
-      [MACHINE_TOOLS_CONFIG_ENV]: options.machineToolsConfigPath,
-    });
-    if (
-      config.executionBridge === undefined ||
-      realpathSync(bridge.directory) !== config.executionBridge.directory
-    ) {
-      throw new RpcChildProcessError(
-        "RPC execution bridge directory does not match the machine-tools configuration",
-      );
-    }
-    const declared = new Set(config.declaredToolNames);
-    if (bridge.tools.some((tool) => !declared.has(tool.name))) {
-      throw new RpcChildProcessError("RPC execution bridge tool is not declared for this role");
-    }
-    return new ExecutionBridgeHost(bridge);
-  } catch (error) {
-    if (error instanceof RpcChildProcessError) throw error;
-    throw new RpcChildProcessError(
-      `RPC execution bridge configuration is invalid: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
-function createDelegateBridge(options: NodeRoleSessionOptions): DelegateBridgeHost {
-  const delegateBridge = options.delegateBridge;
-  const requestFilesBridge = options.requestFilesBridge;
-  if (delegateBridge === undefined && requestFilesBridge === undefined) {
-    throw new RpcChildProcessError("RPC machine tool bridge options are missing");
-  }
-  try {
-    const config = loadMachineToolsConfig({
-      [MACHINE_TOOLS_CONFIG_ENV]: options.machineToolsConfigPath,
-    });
-    if (delegateBridge !== undefined) {
-      if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
-        throw new RpcChildProcessError(
-          "RPC delegate bridge requires a delegate-enabled machine-tools configuration",
-        );
-      }
-      if (realpathSync(delegateBridge.directory) !== config.delegateBridge.directory) {
-        throw new RpcChildProcessError(
-          "RPC delegate bridge directory does not match the machine-tools configuration",
-        );
-      }
-    }
-    if (requestFilesBridge !== undefined) {
-      if (
-        config.requestFilesBridge === undefined ||
-        !config.declaredToolNames.includes("request_files")
-      ) {
-        throw new RpcChildProcessError(
-          "RPC request_files bridge requires a request_files-enabled machine-tools configuration",
-        );
-      }
-      if (realpathSync(requestFilesBridge.directory) !== config.requestFilesBridge.directory) {
-        throw new RpcChildProcessError(
-          "RPC request_files bridge directory does not match the machine-tools configuration",
-        );
-      }
-    }
-    const directory = delegateBridge?.directory ?? requestFilesBridge?.directory;
-    if (directory === undefined) {
-      throw new RpcChildProcessError("RPC machine tool bridge directory is missing");
-    }
-    if (
-      delegateBridge !== undefined &&
-      requestFilesBridge !== undefined &&
-      realpathSync(delegateBridge.directory) !== realpathSync(requestFilesBridge.directory)
-    ) {
-      throw new RpcChildProcessError("RPC machine tool bridge handlers must share one directory");
-    }
-    return new DelegateBridgeHost({
-      sessionDir: options.sessionDir,
-      directory,
-      ...(delegateBridge === undefined ? {} : { delegate: delegateBridge.delegate }),
-      ...(requestFilesBridge === undefined
-        ? {}
-        : { requestFiles: requestFilesBridge.requestFiles }),
-    });
-  } catch (error) {
-    if (error instanceof RpcChildProcessError) throw error;
-    throw new RpcChildProcessError(
-      `RPC machine tool bridge configuration is invalid: ${error instanceof Error ? error.message : String(error)}`,
-    );
   }
 }
 

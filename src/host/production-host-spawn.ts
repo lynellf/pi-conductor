@@ -16,6 +16,7 @@ import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-con
 import type { RoleSession, SpawnRoleOptions } from "./host.js";
 import { spawnIsolatedRoleSession } from "./isolated-role-spawn.js";
 import type { LoadedManifest } from "./manifest.js";
+import { OrchestratorContextCoordinator } from "./orchestrator-context-coordinator.js";
 import { loadSystemPrompt, resolveModel, selectModelEntry } from "./production-host-resolve.js";
 import type { ProductionPrewalkHost } from "./production-prewalk-host.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
@@ -286,6 +287,7 @@ export async function spawnRole(
       sessionStates: host.sessionStates,
       agentsBySessionId: host.agentsBySessionId,
       roleTurnProducer: host.roleTurnProducer,
+      ...(roleConfig?.context_retention === "run" ? { contextRetention: { log: host.log } } : {}),
       ...(host.displaySink !== undefined && { displaySink: host.displaySink }),
     });
     isolatedParent = isolatedSession;
@@ -329,6 +331,22 @@ export async function spawnRole(
       )
     : null;
 
+  const contextRetention =
+    roleConfig?.context_retention === "run"
+      ? await (async () => {
+          const coordinator = new OrchestratorContextCoordinator({
+            log: host.log,
+            persistRecord: host.persistRecord,
+            runId: host.runId,
+            role,
+            sessionDir: host.sessionDir,
+            cwd: host.cwd,
+            agentDir: host.agentDir,
+          });
+          return { coordinator, prepared: await coordinator.prepare() };
+        })()
+      : undefined;
+
   const sharedSession = await spawnSharedSdkRoleSession({
     role,
     roleConfig,
@@ -367,6 +385,7 @@ export async function spawnRole(
     sessionStates: host.sessionStates,
     agentsBySessionId: host.agentsBySessionId,
     roleTurnProducer: host.roleTurnProducer,
+    ...(contextRetention === undefined ? {} : { contextRetention }),
   });
   sharedParent = sharedSession;
   host.delegationSessionKeys.set(

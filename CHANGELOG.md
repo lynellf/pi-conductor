@@ -13,6 +13,8 @@
   across parent replacement (Issue #77).
 - Enforce manifest-controlled delegation mode for new runs, with blocking as the
   default and explicit historical compatibility for legacy snapshots (Issue #86).
+- Add opt-in run-scoped orchestrator conversation retention, exact history
+  restoration, metered compaction and explicit idle context reset (Issue #87).
 
 ### Bug fixes
 

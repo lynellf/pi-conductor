@@ -19,6 +19,7 @@
  */
 
 import type { ModelEffort, Role } from "../core/types.js";
+import { validateContextRetention } from "./context-retention.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
 import {
@@ -68,6 +69,14 @@ export type ManifestErrorCode =
   | "delegation-duplicate-allowed-subagent"
   /** Issue #86: delegation mode must be one of the trusted literals. */
   | "invalid-delegation-mode"
+  /** Issue #87: context retention must be a trusted literal. */
+  | "invalid-context-retention"
+  /** Issue #87: only the designated orchestrator may retain context. */
+  | "context-retention-on-worker"
+  /** Issue #87: retained orchestrator context cannot use trajectory handoff. */
+  | "context-retention-trajectory-conflict"
+  /** Issue #87: Prewalk orchestrators cannot retain their conversation. */
+  | "context-retention-prewalk-conflict"
   /** Issue #63: policy source does not name a declared role. */
   | "handoff-policy-from-undeclared"
   /** Issue #63: policy target does not name a declared role. */
@@ -94,6 +103,8 @@ export type ManifestErrorCode =
   | PrewalkManifestErrorCode;
 
 export type ManifestWarningCode =
+  /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
+  | "legacy-context-retention-unproven"
   /** Issue #86: legacy resume has no durable manifest snapshot proving mode. */
   | "legacy-delegation-mode-unproven"
   /** `max_session_cost_usd` set but `models:` has no fallback (§13). */
@@ -228,7 +239,13 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
 
   // ─── Delegation lite §3: collect role and subagent names ───────────
   const roleNames = new Set(m.roles.map((r) => r.name));
-  validateHandoffPolicies(m, roleNames, orchestrators, errors);
+  validateHandoffPolicies(
+    m,
+    roleNames,
+    orchestrators,
+    orchestrators.some((role) => role.context_retention === "run"),
+    errors,
+  );
 
   if (m.end_request_roles !== undefined) {
     if (m.end_request_roles.length === 0) {
@@ -304,6 +321,7 @@ export function validateManifest(m: Manifest, context?: ManifestValidationContex
   }
 
   for (const role of m.roles) {
+    errors.push(...validateContextRetention(role));
     for (const message of validateToolExecutionPolicy(
       role.tool_execution,
       `role '${role.name}'.tool_execution`,
@@ -587,6 +605,7 @@ function validateHandoffPolicies(
   manifest: Manifest,
   roleNames: ReadonlySet<Role>,
   orchestrators: readonly { readonly name: Role }[],
+  hasRetainedOrchestrator: boolean,
   errors: ManifestError[],
 ): void {
   const seen = new Set<string>();
@@ -622,6 +641,12 @@ function validateHandoffPolicies(
     seen.add(edge);
 
     if (!fromDeclared || !toDeclared || policy.from === policy.to) continue;
+    if (policy.mode === "trajectory" && hasRetainedOrchestrator) {
+      errors.push({
+        code: "context-retention-trajectory-conflict",
+        message: `trajectory policy '${policy.from}' → '${policy.to}' cannot combine with orchestrator context retention`,
+      });
+    }
     const legal =
       (orchestratorNames.has(policy.from) && !orchestratorNames.has(policy.to)) ||
       (!orchestratorNames.has(policy.from) && orchestratorNames.has(policy.to));

@@ -43,6 +43,8 @@
 import type { Role, UsageRecord } from "../core/types.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { PersistedRecord, SubagentUsage } from "../persistence/log.js";
+import type { UnknownCompactionUsage } from "./context-compaction.js";
+import { aggregateUnsettledCompactionUsage } from "./context-compaction.js";
 
 /**
  * Stable sentinel key for sessions that ran on the system default model
@@ -89,6 +91,16 @@ export interface RunRollup {
   readonly perSubagent: Readonly<Record<string, UsageAggregate>>;
   /** Issue #57: totals grouped by profile-pinned completion protocol. */
   readonly perChildProtocol?: Readonly<Record<ChildCompletionProtocol, UsageAggregate>>;
+  /** Present only when this run contains context-compaction records. */
+  readonly contextCompactionUsageComplete?: boolean;
+  /** Explicitly unavailable compaction charges, never represented as zero. */
+  readonly unknownContextCompactionUsage?: readonly UnknownCompactionUsage[];
+}
+
+/** Options for including live context-compaction accounting in a roll-up. */
+export interface RollupOptions {
+  /** Known live invocation IDs whose compaction usage is already in memory. */
+  readonly excludedLiveInvocationIds?: ReadonlySet<string>;
 }
 
 /**
@@ -104,12 +116,14 @@ export interface RunRollup {
  *                  manifest; the host passes this in.
  *
  * Records without `usage` are skipped (zero contribution across all
- * dimensions). Records from other `run_id`s are skipped.
+ * dimensions). Records from other `run_id`s are skipped. Context compaction
+ * records add known unsettled charges without incrementing terminal sessions.
  */
 export function rollup(
   records: readonly PersistedRecord[],
   runId: string,
   orchestratorRole: Role,
+  options: RollupOptions = {},
 ): RunRollup {
   let perRun: UsageAggregate = ZERO_AGGREGATE;
   const perRole = new Map<Role, UsageAggregate>();
@@ -192,6 +206,32 @@ export function rollup(
     }
   }
 
+  const hasContextCompaction = records.some(
+    (record) =>
+      (record.type === "context_compaction" || record.type === "context_compaction_started") &&
+      record.run_id === runId,
+  );
+  const contextAccounting = hasContextCompaction
+    ? aggregateUnsettledCompactionUsage(records, {
+        runId,
+        ...(options.excludedLiveInvocationIds === undefined
+          ? {}
+          : { excludedLiveInvocationIds: options.excludedLiveInvocationIds }),
+      })
+    : null;
+  if (contextAccounting !== null) {
+    perRun = addUsageWithoutSession(perRun, contextAccounting.totalUsage);
+    for (const [role, usage] of Object.entries(contextAccounting.usageByRole)) {
+      const roleAgg = perRole.get(role) ?? ZERO_AGGREGATE;
+      perRole.set(role, addUsageWithoutSession(roleAgg, usage));
+    }
+    for (const [model, usage] of contextAccounting.usageByModel) {
+      const modelKey = model ?? SYSTEM_DEFAULT_MODEL_KEY;
+      const modelAgg = perModel.get(modelKey) ?? ZERO_AGGREGATE;
+      perModel.set(modelKey, addUsageWithoutSession(modelAgg, usage));
+    }
+  }
+
   // §11.6 isolation: orchestrator overhead is the orchestrator's entry
   // labeled separately. Numbers equal perRole[orchestratorRole]; the
   // isolation is a *consumer* concern (routing cost should not be
@@ -199,8 +239,20 @@ export function rollup(
   // but possible if the run ended before the first orchestrator
   // session terminated), this is ZERO_AGGREGATE.
   const orchestratorOverhead: UsageAggregate = perRole.get(orchestratorRole) ?? ZERO_AGGREGATE;
-
-  return finalize(perRun, perRole, perModel, perSubagent, perChildProtocol, orchestratorOverhead);
+  const result = finalize(
+    perRun,
+    perRole,
+    perModel,
+    perSubagent,
+    perChildProtocol,
+    orchestratorOverhead,
+  );
+  if (contextAccounting === null) return result;
+  return {
+    ...result,
+    contextCompactionUsageComplete: contextAccounting.unknown.length === 0,
+    unknownContextCompactionUsage: contextAccounting.unknown,
+  };
 }
 
 function addUsage(a: UsageAggregate, u: SubagentUsage | UsageRecord): UsageAggregate {
@@ -213,6 +265,10 @@ function addUsage(a: UsageAggregate, u: SubagentUsage | UsageRecord): UsageAggre
     cost: a.cost + u.cost,
     sessions: a.sessions + 1,
   };
+}
+
+function addUsageWithoutSession(a: UsageAggregate, u: UsageRecord): UsageAggregate {
+  return { ...addUsage(a, u), sessions: a.sessions };
 }
 
 function subtractUsage(a: UsageAggregate, u: UsageRecord): UsageAggregate {

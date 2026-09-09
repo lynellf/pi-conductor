@@ -23,6 +23,15 @@ export function resolveMachineToolsExtensionPath(): string {
   return join(dirname(modulePath), `machine-tools-extension${extname(modulePath)}`);
 }
 
+/** Resolve the compiled context child entrypoint for an isolated role process. */
+export function resolveContextChildEntryPath(): string {
+  const modulePath = fileURLToPath(import.meta.url);
+  if (extname(modulePath) === ".js") {
+    return join(dirname(modulePath), "context-child-entry.js");
+  }
+  return join(dirname(modulePath), "../../../dist/host/rpc/context-child-entry.js");
+}
+
 /** Spawn the package-local pi CLI under the current Node executable in RPC mode. */
 export function spawnPackageLocalPi(options: RpcSpawnOptions): RpcChildProcess {
   return spawn(options.command, [...options.args], {

@@ -74,6 +74,16 @@ function formatToolExecutionTokens(stats: RunStats, now: number): string {
   return tokens.length > 0 ? ` · ${tokens.join(" · ")}` : "";
 }
 
+function formatContextToken(stats: RunStats): string {
+  const context = stats.context;
+  return context === undefined ? "" : ` · context=${context.status}`;
+}
+
+function formatCostToken(stats: RunStats): string {
+  const cost = `$${stats.costRollup.perRun.cost.toFixed(3)}`;
+  return stats.costRollup.contextCompactionUsageComplete === false ? `${cost} + unknown` : cost;
+}
+
 /** The status-line key used by `ctx.ui.setStatus`. The
  *  extension is the single owner of this key — no other
  *  extension in this package should `setStatus` under
@@ -88,7 +98,7 @@ export function formatConductStatus(stats: RunStats, now = Date.now()): string {
   const state = stats.state;
   const reason = stats.exitReason;
   const handoffs = countHandoffs(stats.transitionHistory);
-  const cost = stats.costRollup.perRun.cost.toFixed(3);
+  const cost = formatCostToken(stats);
   const activeSession = stats.activeSession;
   const modelPart =
     activeSession === undefined || activeSession === null
@@ -96,8 +106,9 @@ export function formatConductStatus(stats: RunStats, now = Date.now()): string {
       : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
   const subagentTokens = formatSubagentTokens(stats);
   const toolExecutionTokens = formatToolExecutionTokens(stats, now);
+  const contextToken = formatContextToken(stats);
   const escapeHint = reason === "running" ? " · Esc abort" : "";
-  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens} · handoffs=${handoffs} · $${cost}${escapeHint}`;
+  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens}${contextToken} · handoffs=${handoffs} · ${cost}${escapeHint}`;
 }
 
 /**
