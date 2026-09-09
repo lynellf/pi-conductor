@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PersistedRecord } from "../../src/persistence/log.js";
-import { inspectOrchestratorContext } from "../../src/persistence/orchestrator-context-inspection.js";
+import {
+  inspectOrchestratorContext,
+  type OrchestratorContextInspection,
+} from "../../src/persistence/orchestrator-context-inspection.js";
 
 const base = { run_id: "run-1", role: "orchestrator", epoch: 1 };
 const epoch = {
@@ -75,6 +78,13 @@ const compacted = {
 
 const settled: readonly PersistedRecord[] = [epoch, invocation, started, delivery, ended, boundary];
 
+function requireInspection(
+  result: OrchestratorContextInspection | null,
+): OrchestratorContextInspection {
+  if (result === null) throw new Error("expected retained context inspection");
+  return result;
+}
+
 describe("inspectOrchestratorContext", () => {
   it("reports an active invocation without transcript data", () => {
     const result = inspectOrchestratorContext(
@@ -105,10 +115,12 @@ describe("inspectOrchestratorContext", () => {
       before_leaf_id: "tip-1",
       ts: 5,
     };
-    const result = inspectOrchestratorContext(
-      [epoch, invocation, started, delivery, compactionStarted, compacted, ended, boundary],
-      "run-1",
-      "orchestrator",
+    const result = requireInspection(
+      inspectOrchestratorContext(
+        [epoch, invocation, started, delivery, compactionStarted, compacted, ended, boundary],
+        "run-1",
+        "orchestrator",
+      ),
     );
     expect(result.status).toBe("committed");
     expect(result.committedBoundary).toEqual({
@@ -148,10 +160,12 @@ describe("inspectOrchestratorContext", () => {
       before_leaf_id: "tip-1",
       ts: 7,
     };
-    const result = inspectOrchestratorContext(
-      [epoch, invocation, started, delivery, pending],
-      "run-1",
-      "orchestrator",
+    const result = requireInspection(
+      inspectOrchestratorContext(
+        [epoch, invocation, started, delivery, pending],
+        "run-1",
+        "orchestrator",
+      ),
     );
     expect(result.status).toBe("pending_compaction");
     expect(result.pendingCompactions[0]?.requestId).toBe("request-pending");
@@ -175,10 +189,22 @@ describe("inspectOrchestratorContext", () => {
       before_leaf_id: "tip-1",
       ts: 5,
     };
-    const result = inspectOrchestratorContext(
-      [epoch, invocation, started, delivery, compactionStarted, failed, ended, boundary, otherRun],
-      "run-1",
-      "orchestrator",
+    const result = requireInspection(
+      inspectOrchestratorContext(
+        [
+          epoch,
+          invocation,
+          started,
+          delivery,
+          compactionStarted,
+          failed,
+          ended,
+          boundary,
+          otherRun,
+        ],
+        "run-1",
+        "orchestrator",
+      ),
     );
     expect(result.status).toBe("unknown");
     expect(result.unknownCompactions).toHaveLength(1);
@@ -196,17 +222,21 @@ describe("inspectOrchestratorContext", () => {
       ts: 5,
     };
     const reset = { ...epoch, epoch: 2, reason: "reset" as const, previous_epoch: 1, ts: 6 };
-    const result = inspectOrchestratorContext(
-      [epoch, invocation, started, delivery, pendingBeforeReset, reset],
-      "run-1",
-      "orchestrator",
+    const result = requireInspection(
+      inspectOrchestratorContext(
+        [epoch, invocation, started, delivery, pendingBeforeReset, reset],
+        "run-1",
+        "orchestrator",
+      ),
     );
     expect(result.status).toBe("unknown");
     expect(result.unknownCompactions[0]?.requestId).toBe("request-old-pending");
   });
 
   it("surfaces malformed timelines as a diagnosis", () => {
-    const result = inspectOrchestratorContext([epoch, delivery], "run-1", "orchestrator");
+    const result = requireInspection(
+      inspectOrchestratorContext([epoch, delivery], "run-1", "orchestrator"),
+    );
     expect(result.status).toBe("unknown");
     expect(result.diagnostic).toMatch(/delivery|invocation/i);
   });
