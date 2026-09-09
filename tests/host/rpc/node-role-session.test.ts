@@ -334,7 +334,7 @@ describe("createNodeRoleSession", () => {
 
     expect(session.readCaptureBuffer()).toEqual([{ toolName: "handoff", args: handoffArgs }]);
     expect(Object.isFrozen(session.readCaptureBuffer())).toBe(true);
-    expect(session.captureUsage()).toEqual({
+    expect(session.captureUsage()).toMatchObject({
       input: 11,
       output: 7,
       cache_read: 3,
@@ -356,6 +356,79 @@ describe("createNodeRoleSession", () => {
     expect(session.readCaptureBuffer()).toEqual([
       { toolName: "end", args: { reason: "complete" } },
     ]);
+  });
+
+  it("subtracts imported context history and adds compaction usage once", async () => {
+    const child = new FakeChild();
+    let compactionUsage = {
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_write: 0,
+      tokens: 0,
+      cost: 0,
+    };
+    const session = new NodeRoleSession(
+      {
+        role: "implementer",
+        model: "stub:isolated",
+        effort: "medium",
+        cwd: "/role-worktree",
+        sessionDir: "/host-run/sessions",
+        agentDir: "/host-agent",
+        systemPrompt: null,
+        machineToolsConfigPath: "/role-worktree/machine-tools.json",
+        contextRetention: {
+          onStart: async () => undefined,
+          onUsage: () => undefined,
+          onObservation: async () => undefined,
+          settle: async () => undefined,
+          assertHealthy: () => undefined,
+          getCompactionUsage: () => compactionUsage,
+        },
+      },
+      child,
+    );
+    const initializing = session.initialize();
+    child.success(child.command("get_state"), {
+      sessionId: "physical-session",
+      sessionFile: "/role-worktree/session.jsonl",
+    });
+    await Promise.resolve();
+    child.success(child.command("get_session_stats"), {
+      tokens: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, total: 100 },
+      cost: 1,
+    });
+    await initializing;
+    expect(session.captureUsage()).toEqual({
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_write: 0,
+      tokens: 0,
+      cost: 0,
+    });
+
+    const prompt = session.prompt("continue");
+    const promptCommand = child.command("prompt");
+    child.success(promptCommand);
+    child.event({ type: "agent_settled" });
+    await Promise.resolve();
+    child.success(child.command("get_session_stats", 1), {
+      tokens: { input: 103, output: 0, cacheRead: 0, cacheWrite: 0, total: 103 },
+      cost: 1.03,
+    });
+    await prompt;
+    compactionUsage = { input: 2, output: 0, cache_read: 0, cache_write: 0, tokens: 2, cost: 0.02 };
+
+    expect(session.captureUsage()).toMatchObject({
+      input: 5,
+      output: 0,
+      cache_read: 0,
+      cache_write: 0,
+      tokens: 5,
+    });
+    expect(session.captureUsage().cost).toBeCloseTo(0.05, 10);
   });
 
   it("omits model and system-prompt flags when the host selected Pi defaults", async () => {
