@@ -199,6 +199,8 @@ The reference material is split into focused pages:
 
 - [`RoleConfig` fields](docs/role-config.md) — manifest fields, gated completion,
   and versioning.
+- [Retained orchestrator context](docs/orchestrator-context.md) — conversation
+  continuity, compaction and recovery within a run.
 - [Tools available to roles](docs/role-tools.md) — machine tools, SDK tools, and
   the explicit `tools:` allowlist.
 - [Worktree subagent delegation](docs/delegation.md) — child profiles,

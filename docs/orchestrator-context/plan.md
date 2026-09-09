@@ -42,11 +42,11 @@ review before adapter integration.
 
 Depends on increment 2. Implement as separate small commits:
 
-- [ ] Restore the exact committed branch through supported SessionManager APIs;
+- [x] Restore the exact committed branch through supported SessionManager APIs;
   validate file/conversation/tip integrity and complete tool exchanges first.
-- [ ] Bind the current role prompt, tools, model and thinking level, preserving
+- [x] Bind the current role prompt, tools, model and thinking level, preserving
   historical context without importing historical charges or worker transcripts.
-- [ ] Pin effective compaction settings, account every compaction request, and
+- [x] Pin effective compaction settings, account every compaction request, and
   surface disabled/failed/insufficient compaction before an oversized prompt.
 
 Each helper receives explicit inputs. Tests use real temporary session files and
@@ -57,15 +57,15 @@ stub providers. Verification per commit: focused tests, typecheck, build, Biome.
 Depends on increment 3. Split adapter wiring, lifecycle boundaries and API resume
 into separately verified commits.
 
-- [ ] Start empty epochs durably; select retained context for each orchestrator
+- [x] Start empty epochs durably; select retained context for each orchestrator
   invocation and record seed delivery once with a fresh logical invocation ID.
-- [ ] Commit a reusable boundary only after tools, delegated children and process
+- [x] Commit a reusable boundary only after tools, delegated children and process
   cleanup settle. Preserve append/reduce/terminal ordering and error precedence.
-- [ ] Prove orchestrator/worker/orchestrator continuity, fresh independent runs,
+- [x] Prove orchestrator/worker/orchestrator continuity, fresh independent runs,
   current authority, and absence of repeated tool side effects.
-- [ ] Prove restart, model fallback and child allowance persistence. Diagnose
+- [x] Prove restart, model fallback and child allowance persistence. Diagnose
   unresolved or ambiguous execution before prompting.
-- [ ] Add idle-run reset to the existing extension resume and library API; enforce
+- [x] Add idle-run reset to the existing extension resume and library API; enforce
   the run lease and preserve FSM, costs, visits and accepted work.
 
 Verification: focused host/resume/fallback/delegation/abort/end-guard tests,
@@ -76,11 +76,11 @@ strict typecheck, build, Biome; independent lifecycle review.
 Depends on the shared lifecycle contract. Separate trusted configuration and
 session startup from child metering/settlement implementation.
 
-- [ ] Carry only trusted context references/settings into the RPC process; restore
+- [x] Carry only trusted context references/settings into the RPC process; restore
   the exact host-selected history and retain current model/tool authority.
-- [ ] Report invocation-only usage plus compaction usage, including failures;
+- [x] Report invocation-only usage plus compaction usage, including failures;
   persist context only after child tools and processes are settled.
-- [ ] Prove actual process restart and context continuity, corrupted selections,
+- [x] Prove actual process restart and context continuity, corrupted selections,
   fallback, and cleanup/accounting parity with the shared path.
 
 Verification: real package-local RPC child tests with stub providers, focused
@@ -88,11 +88,11 @@ transport tests, typecheck, build, Biome; independent transport review.
 
 ### 6. Operator surfaces and completion
 
-- [ ] Expose references and compaction/reset status without ordinary transcript
+- [x] Expose references and compaction/reset status without ordinary transcript
   dumps; document configuration, reset and transport restrictions with examples.
-- [ ] Update changelog and the spec checklist using only completed evidence.
-- [ ] Independent final review; resolve findings without unrelated cleanup.
-- [ ] Run `pnpm typecheck`, `pnpm build`, `pnpm test`, `pnpm lint`,
+- [x] Update changelog and the spec checklist using only completed evidence.
+- [x] Independent final review; resolve findings without unrelated cleanup.
+- [x] Run `pnpm typecheck`, `pnpm build`, `pnpm test`, `pnpm lint`,
   `pnpm format:check`, and `pnpm audit --prod`; mandatory pre-push hooks remain on.
 - [ ] Create and merge the reviewed PR, close #87, and assess the resulting main.
 

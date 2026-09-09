@@ -26,7 +26,7 @@ provider or require a paid API.
 - When the hook throws, the extension runner emits an actionable
   `extension_error`, the native compaction fallback completes successfully,
   and the child remains usable. This fallback is intentionally unmetered by
-  the fixture, matching the unresolved accounting gap below.
+  the fixture; production accounting is covered by the later integration.
 - A caught failed assistant response records nonzero usage from the failed
   stream's `result()` and returns
   `{ cancel: true }`; the RPC response is unsuccessful and the native provider
@@ -34,17 +34,20 @@ provider or require a paid API.
   explicit `unknown-usage` diagnosis after the stream throws before producing
   an assistant message, instead of treating it as zero.
 
-## Remaining gap
+## Scope of the initial spike
 
 This spike proves the public hook and exported-compaction path in an actual RPC
 child, but it does not integrate context-retention lifecycle records, restart
 provenance records, model fallback, or host-owned cost accounting. The restart
 proof covers exact session-file reopening and imported history visibility, not
-the future conductor resume protocol. The throwing-hook
+the conductor resume protocol implemented subsequently. The throwing-hook
 case confirms native fallback behavior and error visibility; production code
 must return `{ cancel: true }` when metered compaction fails or its usage is
 unknown. Native fallback is only demonstrated here for a hook that throws
 before the host-owned cancellation decision.
+
+The completed lifecycle and accounting integration is described in
+[review.md](review.md), with separate real-child continuity and fallback tests.
 
 The API evidence is based on the pinned package-local documentation:
 

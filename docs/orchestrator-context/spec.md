@@ -1,6 +1,6 @@
 # Orchestrator context retention — Issue #87
 
-Status: acknowledged by the repository owner on 2026-09-08; implementation in progress.
+Status: acknowledged on 2026-09-08; implemented and verified on 2026-09-09; awaiting merge.
 Implementation baseline: origin/main `7592fa4` (after delegation policy and host module refactors). Extends the fresh-session memory contract in
 `docs/archive/orchestrator-fsm-spec.md` §8.4 without changing the FSM.
 
@@ -110,20 +110,20 @@ Implementation uses Luna in dependency-ordered, reviewable increments.
 
 - [x] Manifest contract: parse/validate both policies, orchestrator-only restriction,
   explicit new-run pinning and historical default. Test invalid/programmatic input.
-- [ ] Durable context boundaries and epochs: define records and restoration queries;
+- [x] Durable context boundaries and epochs: define records and restoration queries;
   test round trips, run/role isolation, missing/corrupt history, crash boundaries,
   reset, restart in an empty epoch, and duplicate delivery. Keep pure record validation separate from host I/O.
 - [x] Metered compaction spike: prove public-hook/stream interception and SDK/RPC
   cost parity, including failures and exclusion of imported historical charges.
-- [ ] Shared SDK lifecycle: retain own history across A/B worker round trips with
+- [x] Shared SDK lifecycle: retain own history across A/B worker round trips with
   current role authority, no repeated side effects, and fresh logical identities.
-- [ ] Resume/fallback and compaction: prove restart continuity, context admission,
+- [x] Resume/fallback and compaction: prove restart continuity, context admission,
   compaction observability/accounting, model changes and spent-limit preservation.
-- [ ] Isolated RPC parity: trusted context selection, process restart, cleanup,
+- [x] Isolated RPC parity: trusted context selection, process restart, cleanup,
   error reporting and the same conversation continuity contract.
-- [ ] User surfaces: reset, context-reference inspection, configuration guide,
+- [x] User surfaces: reset, context-reference inspection, configuration guide,
   examples and changelog; verify extension/CLI/library behavior.
-- [ ] Independent review and all repository gates; update checked items only when
+- [x] Independent review and all repository gates; update checked items only when
   their acceptance and verification have actually completed.
 
 Vitest tests belong in `tests/manifest`, `tests/host`, `tests/host/rpc`, and relevant
