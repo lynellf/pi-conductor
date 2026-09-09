@@ -8,6 +8,7 @@ import type { DelegateSubmissionArgs } from "../../seam/schema.js";
 import { assertNoUnfinishedToolExecutions } from "../execution/tool-execution-controller.js";
 import { prepareDelegateSubmission } from "./admission.js";
 import { isPoolCompleted } from "./child-result-mapping.js";
+import { DelegationChildSafetyError } from "./child-safety-error.js";
 import { buildSpawnCallback } from "./child-session.js";
 import { runPreparedChild } from "./delegate-tool.js";
 import type { DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
@@ -69,11 +70,15 @@ export function createDelegateScheduler(
           isAdmissionClosed: () =>
             opts.manager.isClosed() || opts.manager.wasCancelled(task.childId) || signal.aborted,
         });
-        assertNoUnfinishedToolExecutions(
-          requiredRecords(opts)().filter(
-            (record) => isToolExecutionRecord(record) && record.role_session_id === task.childId,
-          ) as readonly ToolExecutionRecord[],
-        );
+        try {
+          assertNoUnfinishedToolExecutions(
+            requiredRecords(opts)().filter(
+              (record) => isToolExecutionRecord(record) && record.role_session_id === task.childId,
+            ) as readonly ToolExecutionRecord[],
+          );
+        } catch (cause) {
+          throw new DelegationChildSafetyError(result, cause);
+        }
         return result;
       } finally {
         signal.removeEventListener("abort", abort);

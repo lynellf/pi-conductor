@@ -16,6 +16,62 @@ export interface SupervisedCleanupResult {
   readonly diagnostic?: SupervisedProcessDiagnostic;
 }
 
+function observationDiagnostic(
+  error: unknown,
+  operation: "read_stat" | "read_environ" | "read_status" | "list_processes",
+  identity: ProcessIdentity,
+  members: readonly ProcessIdentity[],
+): SupervisedProcessDiagnostic {
+  const observed = error as {
+    readonly operation?: string;
+    readonly code?: string;
+    readonly pid?: number;
+    readonly startTime?: string;
+    readonly processGroupId?: number;
+  };
+  const code =
+    typeof observed.code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(observed.code)
+      ? observed.code
+      : "UNKNOWN";
+  const actualOperation =
+    observed.operation === "read_stat" ||
+    observed.operation === "read_environ" ||
+    observed.operation === "read_status" ||
+    observed.operation === "list_processes"
+      ? observed.operation
+      : operation;
+  const targetPid =
+    typeof observed.pid === "number" && Number.isInteger(observed.pid) && observed.pid > 0
+      ? observed.pid
+      : undefined;
+  return {
+    cleanup_cause: "cleanup_observation_failed",
+    leader_observed: true,
+    observed_members: members.slice(0, 32).map(({ pid, startTime, processGroupId }) => ({
+      pid,
+      start_time: startTime,
+      process_group_id: processGroupId,
+    })),
+    observation_error: {
+      operation: actualOperation,
+      code,
+      ...(targetPid === undefined ? {} : { pid: targetPid }),
+      ...(typeof observed.startTime === "string"
+        ? { start_time: observed.startTime }
+        : targetPid === identity.pid
+          ? { start_time: identity.startTime }
+          : {}),
+      ...(typeof observed.processGroupId === "number" &&
+      Number.isInteger(observed.processGroupId) &&
+      observed.processGroupId > 0
+        ? { process_group_id: observed.processGroupId }
+        : targetPid === identity.pid
+          ? { process_group_id: identity.processGroupId }
+          : {}),
+    },
+  };
+}
+
 async function waitForGroupGone(identity: ProcessIdentity, deadlineMs: number): Promise<boolean> {
   const deadline = Date.now() + deadlineMs;
   while (Date.now() <= deadline) {
@@ -109,14 +165,10 @@ export async function safeTerminateOwnedGroupDetailed(
 ): Promise<SupervisedCleanupResult> {
   try {
     return await terminateOwnedGroup(identity, graceMs);
-  } catch {
+  } catch (error) {
     return {
       cleanup: "unconfirmed",
-      diagnostic: {
-        cleanup_cause: "cleanup_observation_failed",
-        leader_observed: true,
-        observed_members: [],
-      },
+      diagnostic: observationDiagnostic(error, "read_stat", identity, []),
     };
   }
 }

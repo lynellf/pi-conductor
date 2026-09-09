@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.21.5] - 2026-09-09
+
+### Bug fixes
+
+- Add a bounded permission-only observation retry with fresh ownership evidence
+  and preserve the actual OS diagnostic when observation still fails (Issue
+  #101).
+- Settle a failed child after SDK execution has settled while preserving usage
+  and the unresolved-cleanup barrier, and keep shutdown lease/reconciliation
+  state safe until an operator can act (Issue #101).
+
+### Compatibility
+
+- Forward the parent registry's model runtime to scoped child sessions on Pi
+  0.84 and newer, matching the existing parent compatibility path (Issue #101).
+
 ## [0.21.4] - 2026-09-09
 
 ### Bug fixes

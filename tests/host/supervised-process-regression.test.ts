@@ -2,11 +2,13 @@ import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runSupervisedProcess,
   type SupervisedProcessError,
 } from "../../src/host/execution/supervised-process.js";
+import * as identity from "../../src/host/execution/supervised-process-identity.js";
+import { observationFailure } from "../../src/host/execution/supervised-process-lifecycle.js";
 
 const quote = (value: string): string => `'${value.replaceAll("'", "'\\''")}'`;
 const shellNode = (source: string): string => `${quote(process.execPath)} -e ${quote(source)}`;
@@ -37,9 +39,72 @@ describe("runSupervisedProcess regression gates", () => {
   const directories: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(
       directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
     );
+  });
+
+  it("retains bounded errno evidence when the owned-process scan races", async () => {
+    vi.spyOn(identity, "findProcessesByOwnerToken").mockRejectedValueOnce(
+      Object.assign(new Error("/proc/123 secret"), { code: "EACCES" }),
+    );
+
+    await expect(
+      runSupervisedProcess({
+        executionId: `regression-scan-race-${process.pid}`,
+        file: process.execPath,
+        args: ["-e", "process.exit(0)"],
+        cwd: process.cwd(),
+        timeoutMs: 1_000,
+        onStart: () => undefined,
+      }),
+    ).rejects.toMatchObject({
+      code: "supervised-process-spawn-failed",
+      cleanup: "unconfirmed",
+      diagnostic: {
+        cleanup_cause: "cleanup_observation_failed",
+        leader_observed: true,
+        observation_error: {
+          operation: "list_processes",
+          code: "EACCES",
+        },
+      },
+    });
+  });
+
+  it("does not pair another scanned PID with the leader identity", () => {
+    expect(
+      observationFailure(
+        {
+          operation: "read_stat",
+          code: "EIO",
+          pid: 200,
+        },
+        "list_processes",
+        { pid: 100, startTime: "500", processGroupId: 100 },
+      ),
+    ).toEqual({
+      cleanup_cause: "cleanup_observation_failed",
+      leader_observed: true,
+      observed_members: [],
+      observation_error: { operation: "read_stat", code: "EIO", pid: 200 },
+    });
+  });
+
+  it("omits identity fields when a namespace listing has no target PID", () => {
+    expect(
+      observationFailure({ operation: "list_processes", code: "EIO" }, "list_processes", {
+        pid: 100,
+        startTime: "500",
+        processGroupId: 100,
+      }),
+    ).toEqual({
+      cleanup_cause: "cleanup_observation_failed",
+      leader_observed: true,
+      observed_members: [],
+      observation_error: { operation: "list_processes", code: "EIO" },
+    });
   });
 
   it("returns successfully for /bin/true", async () => {

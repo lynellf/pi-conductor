@@ -147,10 +147,18 @@ export async function createChildSession(
     config.profile.completion_protocol === "report_result"
       ? [buildReportResultTool(reportCapture)]
       : [];
-  const { session } = await createAgentSession({
+  // Global Pi runtimes >=0.84 resolve providers through `modelRuntime` and
+  // ignore `modelRegistry`; older SDKs accept the registry directly. Forward
+  // the registry's own runtime by identity when available, matching the
+  // shared role-session compatibility path.
+  const runtime = Object.getOwnPropertyDescriptor(opts.modelRegistry, "runtime")?.value;
+  const createOpts: NonNullable<Parameters<typeof createAgentSession>[0]> & {
+    modelRuntime?: unknown;
+  } = {
     cwd: config.worktreePath,
     model,
     modelRegistry: opts.modelRegistry,
+    ...(runtime !== undefined && { modelRuntime: runtime }),
     resourceLoader: loader,
     sessionManager: SessionManager.create(config.worktreePath, opts.sessionDir),
     customTools: [
@@ -163,7 +171,8 @@ export async function createChildSession(
     ],
     tools: childToolNames(config.profile.completion_protocol),
     thinkingLevel: entry.effort as never,
-  });
+  };
+  const { session } = await createAgentSession(createOpts);
   try {
     const state = new SessionState({
       cap: config.profile.max_session_cost_usd,

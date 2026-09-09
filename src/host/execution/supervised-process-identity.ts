@@ -2,6 +2,41 @@
 
 import { readdir, readFile } from "node:fs/promises";
 
+/** Names the sanitized `/proc` operation that produced observation evidence. */
+export type ProcessObservationOperation =
+  | "read_stat"
+  | "read_environ"
+  | "read_status"
+  | "list_processes";
+
+/** Sanitized evidence for one process-namespace read. */
+export class ProcessObservationError extends Error {
+  readonly operation: ProcessObservationOperation;
+  readonly code: string;
+  readonly pid: number | undefined;
+  readonly startTime: string | undefined;
+  readonly processGroupId: number | undefined;
+
+  constructor(
+    operation: ProcessObservationOperation,
+    error: unknown,
+    pid?: number,
+    identity?: { readonly startTime: string; readonly processGroupId: number },
+  ) {
+    super("process observation failed");
+    this.name = "ProcessObservationError";
+    this.operation = operation;
+    const candidate = (error as NodeJS.ErrnoException).code;
+    this.code =
+      typeof candidate === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(candidate)
+        ? candidate
+        : "UNKNOWN";
+    this.pid = pid;
+    this.startTime = identity?.startTime;
+    this.processGroupId = identity?.processGroupId;
+  }
+}
+
 /** PID identity plus the optional execution marker used to detect escaped descendants. */
 export interface ProcessIdentity {
   readonly pid: number;
@@ -13,6 +48,17 @@ export interface ProcessIdentity {
 function isGone(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code;
   return code === "ENOENT" || code === "ESRCH";
+}
+
+function observationError(
+  operation: ProcessObservationOperation,
+  error: unknown,
+  pid?: number,
+  identity?: { readonly startTime: string; readonly processGroupId: number },
+): ProcessObservationError {
+  return error instanceof ProcessObservationError
+    ? error
+    : new ProcessObservationError(operation, error, pid, identity);
 }
 
 function parseStat(stat: string): {
@@ -37,32 +83,68 @@ export async function readProcessIdentity(
   ownerToken?: string,
 ): Promise<ProcessIdentity | null> {
   try {
-    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-    const parsed = parseStat(stat);
+    let parsed: ReturnType<typeof parseStat>;
+    try {
+      parsed = parseStat(await readFile(`/proc/${pid}/stat`, "utf8"));
+    } catch (error) {
+      if (isGone(error)) return null;
+      throw observationError("read_stat", error, pid);
+    }
     if (ownerToken !== undefined) {
-      let environ: string;
-      try {
-        environ = await readFile(`/proc/${pid}/environ`, "utf8");
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EACCES" && code !== "EPERM") throw error;
+      let environ: string | undefined;
+      let environError: unknown;
+      let retriedEnvironment = false;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let current: ReturnType<typeof parseStat>;
         try {
-          const current = parseStat(await readFile(`/proc/${pid}/stat`, "utf8"));
-          if (current.state !== "Z") throw error;
-        } catch (recheckError) {
-          if (isGone(recheckError)) return null;
-          throw recheckError;
+          environ = await readFile(`/proc/${pid}/environ`, "utf8");
+          break;
+        } catch (error) {
+          environError = error;
+          const code = (error as NodeJS.ErrnoException).code;
+          if (isGone(error)) return null;
+          if (code !== "EACCES" && code !== "EPERM")
+            throw observationError("read_environ", error, pid, parsed);
+          if (attempt === 0) {
+            retriedEnvironment = true;
+            await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            continue;
+          }
+          try {
+            current = parseStat(await readFile(`/proc/${pid}/stat`, "utf8"));
+          } catch (recheckError) {
+            if (isGone(recheckError)) return null;
+            throw observationError("read_stat", recheckError, pid);
+          }
+          if (current.state === "Z") return null;
+          throw observationError("read_environ", environError, pid, parsed);
         }
-        return null;
       }
+      if (environ === undefined) throw observationError("read_environ", environError, pid, parsed);
       const marker = `PI_CONDUCTOR_EXECUTION_ID=${ownerToken}`;
       if (!environ.split("\0").includes(marker)) return null;
+      if (retriedEnvironment) {
+        let current: ReturnType<typeof parseStat>;
+        try {
+          current = parseStat(await readFile(`/proc/${pid}/stat`, "utf8"));
+        } catch (error) {
+          if (isGone(error)) return null;
+          throw observationError("read_stat", error, pid);
+        }
+        if (current.state === "Z") return null;
+        if (current.startTime !== parsed.startTime) {
+          throw observationError("read_stat", { code: "UNKNOWN" }, pid, current);
+        }
+        // Keep the latest verified group: a setsid transition during the retry is
+        // valid ownership evidence and must not be mistaken for process absence.
+        parsed = current;
+      }
     }
     return ownerToken === undefined
       ? { pid, startTime: parsed.startTime, processGroupId: parsed.processGroupId }
       : { pid, startTime: parsed.startTime, processGroupId: parsed.processGroupId, ownerToken };
   } catch (error) {
-    if (!isGone(error)) throw error;
+    if (!isGone(error)) throw observationError("read_stat", error, pid);
     return null;
   }
 }
@@ -72,7 +154,12 @@ export async function findProcessesByOwnerToken(
   ownerToken: string,
   minimumStartTime?: string,
 ): Promise<readonly ProcessIdentity[]> {
-  const entries = await readdir("/proc");
+  let entries: string[];
+  try {
+    entries = await readdir("/proc");
+  } catch (error) {
+    throw observationError("list_processes", error);
+  }
   const matches: ProcessIdentity[] = [];
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
@@ -83,7 +170,7 @@ export async function findProcessesByOwnerToken(
         continue;
       }
     } catch (error) {
-      if (!isGone(error)) throw error;
+      if (!isGone(error)) throw observationError("read_stat", error, Number(entry));
       continue;
     }
     try {
@@ -97,7 +184,7 @@ export async function findProcessesByOwnerToken(
           status = await readFile(`/proc/${entry}/status`, "utf8");
         } catch (statusError) {
           if (isGone(statusError)) continue;
-          throw error;
+          throw observationError("read_status", statusError, Number(entry));
         }
         // Exit can race both the identity recheck and this permission probe.
         if (/^State:\s+Z\b/m.test(status)) continue;
@@ -107,7 +194,7 @@ export async function findProcessesByOwnerToken(
         if (uid !== undefined && currentUid !== undefined && uid !== currentUid) continue;
       }
       if (code !== "ENOENT" && code !== "ESRCH") {
-        throw error;
+        throw observationError("read_environ", error, Number(entry));
       }
     }
   }
@@ -119,8 +206,8 @@ export async function processGroupHasLiveMembers(processGroupId: number): Promis
   let entries: string[];
   try {
     entries = await readdir("/proc");
-  } catch {
-    return true;
+  } catch (error) {
+    throw observationError("list_processes", error);
   }
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
@@ -128,7 +215,7 @@ export async function processGroupHasLiveMembers(processGroupId: number): Promis
       const parsed = parseStat(await readFile(`/proc/${entry}/stat`, "utf8"));
       if (parsed.processGroupId === processGroupId && parsed.state !== "Z") return true;
     } catch (error) {
-      if (!isGone(error)) throw error;
+      if (!isGone(error)) throw observationError("read_stat", error, Number(entry));
       // A process can disappear between directory enumeration and stat read.
     }
   }
@@ -140,7 +227,11 @@ export async function readProcessGroupMembers(
   processGroupId: number,
 ): Promise<readonly ProcessIdentity[]> {
   let entries: string[];
-  entries = await readdir("/proc");
+  try {
+    entries = await readdir("/proc");
+  } catch (error) {
+    throw observationError("list_processes", error);
+  }
   const members: ProcessIdentity[] = [];
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
@@ -151,7 +242,7 @@ export async function readProcessGroupMembers(
         members.push({ pid, startTime: parsed.startTime, processGroupId });
       }
     } catch (error) {
-      if (!isGone(error)) throw error;
+      if (!isGone(error)) throw observationError("read_stat", error, pid);
       // A process can disappear during enumeration.
     }
   }

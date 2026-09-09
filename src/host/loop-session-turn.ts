@@ -226,39 +226,46 @@ export async function runSessionTurn(
       // usage — both terminals cost, §11.4), then the
       // synthesized transition_accepted ends the run.
       await settleDelegationBeforeLifecycle("run cost cap forced close");
-      const ended = reduceLifecycle(ctx.checkpoint, "session_ended", def, {
-        role,
-        sessionId,
-        sessionFile,
-        ts: Date.now(),
-        visit_index: visitIndex,
-        parent_session: sessionParentId,
-        usage: state.capturedUsage,
-      });
-      ctx.checkpoint = ended.checkpoint;
-      host.persistRecord(withRoleSessionIdentity(ended.record, session));
-      state.terminalPersisted = true;
-      host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
-      await collectSessionArtifacts(host, session, {
-        role,
-        visitIndex,
-        terminal: "session_ended",
-      });
+      // Known-settled delegation safety failures use the common
+      // session_failed path below; never synthesize an accepted end.
+      if (host.sessionTerminalReason(session) !== "delegation_failed") {
+        const ended = reduceLifecycle(ctx.checkpoint, "session_ended", def, {
+          role,
+          sessionId,
+          sessionFile,
+          ts: Date.now(),
+          visit_index: visitIndex,
+          parent_session: sessionParentId,
+          usage: state.capturedUsage,
+        });
+        ctx.checkpoint = ended.checkpoint;
+        host.persistRecord(withRoleSessionIdentity(ended.record, session));
+        state.terminalPersisted = true;
+        host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
+        await collectSessionArtifacts(host, session, {
+          role,
+          visitIndex,
+          terminal: "session_ended",
+        });
 
-      const synthesized: MachineEvent = {
-        type: "end",
-        authority: "run_cost_cap",
-        payload: { reason: "run_cost_cap_exceeded" },
-      };
-      const result = reduce(ctx.checkpoint, synthesized, def, {
-        role: def.orchestrator,
-        sessionFile: SYNTHESIZED_SESSION_FILE,
-        ts: Date.now(),
-      });
-      host.persistRecord(result.record);
-      ctx.checkpoint = result.checkpoint;
-      host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
-      return { kind: "terminal", result: { finalCheckpoint: ctx.checkpoint, exitReason: "done" } };
+        const synthesized: MachineEvent = {
+          type: "end",
+          authority: "run_cost_cap",
+          payload: { reason: "run_cost_cap_exceeded" },
+        };
+        const result = reduce(ctx.checkpoint, synthesized, def, {
+          role: def.orchestrator,
+          sessionFile: SYNTHESIZED_SESSION_FILE,
+          ts: Date.now(),
+        });
+        host.persistRecord(result.record);
+        ctx.checkpoint = result.checkpoint;
+        host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
+        return {
+          kind: "terminal",
+          result: { finalCheckpoint: ctx.checkpoint, exitReason: "done" },
+        };
+      }
     }
     if (runCapBreached && role !== def.orchestrator && capturedIsHandoff) {
       // ── Worker current: defer the synthesized end.
@@ -269,8 +276,8 @@ export async function runSessionTurn(
       // branch above synthesizes the end. The cap is still a
       // hard stop — no further dispatch, no orchestrator
       // session in between.
-      ctx.pendingForcedEnd = true;
       await settleDelegationBeforeLifecycle("run cost cap forced close");
+      if (host.sessionTerminalReason(session) !== "delegation_failed") ctx.pendingForcedEnd = true;
     }
 
     // ── Host-driven session termination (Task 17 / Task 18) ──────

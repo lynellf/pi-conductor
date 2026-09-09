@@ -59,6 +59,20 @@ marker contents, or output. Observations can age, and group membership alone
 does not prove execution ownership. Before operator action, revalidate the
 current start ticks, owner marker and process group.
 
+Read-only `read`, `ls`, and `find` workers use the same fail-closed cleanup
+barrier as mutating tools. Concurrent worker exit can make process observation
+fail; the host makes one permission-only retry after 5 ms, with the retry
+bounded by the cleanup operation rather than promising a wall-clock duration.
+Preserve the detailed OS error and actual observation when available;
+persistent failure remains unconfirmed. An `observation_error` may include the
+actual operation, errno, and optional target PID, observed start ticks, and
+process group. Namespace failures may have no PID. An empty
+`observed_members` list is not cleanup confirmation, and a finished execution
+record with `cleanup_unconfirmed` does not clear the cleanup barrier.
+After a failed child has settled, preserve its usage and expose the unresolved
+cleanup state so sibling cancellation and new admission cannot silently bypass
+the barrier.
+
 Intentional owner waits through `ask_user` and delegation result waits are
 exempt. Isolated roles and delegated children retain their existing file
 confinement; executable controls do not grant them a shell.
@@ -106,10 +120,16 @@ If a read-only `/proc` or namespace observation is denied, perform the same
 actionable observation from the original host with sufficient visibility and
 leave reconciliation unconfirmed until it succeeds.
 
+Wait for the active run lease to end through its normal completion or abort
+boundary before reconciling; do not force-delete the lease or claim cleanup to
+make resume available. Inspect the correlated execution and child state, then
+use `reconcile-tools` with an explicit operator attestation from the original
+host and namespaces. If a write or edit remains uncertain, restart pi after
+confirmed cleanup before resuming. A permanent permission failure remains
+closed until observations are possible.
+
 Reconciliation refuses a log with an incomplete trailing record and leaves its
-bytes untouched; repair that persistence issue separately. After confirming
-cleanup for a write or edit, restart pi before resuming so stale in-process
-mutation admission state cannot retain the old ownership decision.
+bytes untouched; repair that persistence issue separately.
 
 See the [approved specification](open-issues-september/spec.md) for the complete
 execution and restart contract.

@@ -22,12 +22,11 @@ import {
 } from "./supervised-process-identity.js";
 import {
   assertUnobservedAdmissionActive,
-  cleanupObservationFailure,
   DEFAULT_OUTPUT_LIMIT_BYTES,
   elapsedMs,
   leaderIdentityUnobserved,
+  observationFailure,
   observeProcessClose,
-  ownedObservationFailure,
   validateSupervisedProcessOptions,
 } from "./supervised-process-lifecycle.js";
 import { appendOutput, createOutputCapture, finishOutput } from "./supervised-process-output.js";
@@ -133,7 +132,7 @@ export async function runSupervisedProcess(
       "unconfirmed",
       null,
       0,
-      cleanupObservationFailure,
+      observationFailure(error, "read_stat", null),
     );
   }
   if (!identity) {
@@ -190,7 +189,7 @@ export async function runSupervisedProcess(
           "unconfirmed",
           null,
           elapsedMs(startedAt),
-          cleanupObservationFailure,
+          observationFailure(error, "list_processes", null),
         );
       }
       assertUnobservedAdmissionActive(options.signal, processDeadline, startedAt);
@@ -198,18 +197,14 @@ export async function runSupervisedProcess(
         let observedMembers: readonly ProcessIdentity[];
         try {
           observedMembers = groupLive ? await readProcessGroupMembers(child.pid ?? -1) : [];
-        } catch {
+        } catch (error) {
           throw new SupervisedProcessError(
             "supervised-process-spawn-failed",
             "process ownership evidence could not be observed",
             "unconfirmed",
             null,
             elapsedMs(startedAt),
-            {
-              cleanup_cause: "cleanup_observation_failed",
-              leader_observed: false,
-              observed_members: [],
-            },
+            observationFailure(error, "read_stat", null),
           );
         }
         throw new SupervisedProcessError(
@@ -463,7 +458,7 @@ export async function runSupervisedProcess(
             "unconfirmed",
             identity,
             result.elapsedMs,
-            ownedObservationFailure,
+            observationFailure(error, "list_processes", identity),
           ),
         );
         return;

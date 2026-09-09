@@ -16,6 +16,7 @@ import type { PersistedRecord } from "../../persistence/log.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import type { DelegateSubmissionArgs } from "../../seam/schema.js";
 import type { PreparedDelegateChild, PreparedDelegateSubmission } from "./admission.js";
+import { DelegationChildSafetyError, failedSafetyResult } from "./child-safety-error.js";
 import type { PoolChildResult } from "./pool.js";
 import { cancelledResult, resultState, terminalToPoolResult } from "./scheduler-results.js";
 
@@ -309,7 +310,15 @@ export class DelegationScheduler {
           state.runPromise === undefined ? [] : [state.runPromise],
         ),
       );
-      if (this.terminalFailure !== undefined) throw this.terminalFailure;
+      // A child safety failure is retained by the coordinator as a run
+      // blocker, but all SDK child promises are known settled by this point.
+      // Let the parent lifecycle record its own failure and release the run
+      // lease. Unknown ownership and persistence failures still propagate.
+      if (
+        this.terminalFailure !== undefined &&
+        (!this.allTasksSettled() || !(this.terminalFailure instanceof DelegationChildSafetyError))
+      )
+        throw this.terminalFailure;
     })();
     return this.settling;
   }
@@ -340,7 +349,21 @@ export class DelegationScheduler {
         state.controller?.signal ?? new AbortController().signal,
       );
     } catch (cause) {
-      this.fail(cause, state);
+      if (cause instanceof DelegationChildSafetyError) {
+        // The factory raises this only after the SDK child has returned and
+        // disposed. Poison before resolving waiters so no follow-up admission
+        // can race the unresolved cleanup barrier.
+        this.fail(cause);
+        try {
+          await this.finish(state, failedSafetyResult(cause));
+        } catch (terminalCause) {
+          this.fail(terminalCause, state);
+        }
+      } else {
+        // Other throws may mean the child never started or its ownership is
+        // ambiguous. Preserve the existing unknown-ownership behavior.
+        this.fail(cause, state);
+      }
       this.running -= 1;
       state.controller = undefined;
       setTimeout(
@@ -376,21 +399,33 @@ export class DelegationScheduler {
   }
 
   private fail(cause: unknown, state?: TaskState): void {
+    const failure = cause instanceof Error ? cause : new Error(String(cause));
     this.poisoned = true;
     this.permanentlyClosed = true;
-    if (this.terminalFailure === undefined) this.terminalFailure = cause;
+    if (
+      this.terminalFailure === undefined ||
+      (this.terminalFailure instanceof DelegationChildSafetyError &&
+        !(cause instanceof DelegationChildSafetyError))
+    )
+      this.terminalFailure = failure;
     if (state !== undefined) {
-      state.fatalError = cause;
-      for (const waiter of state.waiters.splice(0)) waiter.reject(cause);
+      state.fatalError = failure;
+      for (const waiter of state.waiters.splice(0)) waiter.reject(failure);
     }
     try {
-      this.options.onFatal?.(cause);
+      this.options.onFatal?.(failure);
     } catch {
       // Notification failure cannot prevent owned cleanup and closure.
     }
     setTimeout(
       () => void this.close("delegation persistence is ambiguous").catch(() => undefined),
       0,
+    );
+  }
+
+  private allTasksSettled(): boolean {
+    return [...this.tasks.values()].every(
+      (task) => task.result !== undefined && task.fatalError === undefined,
     );
   }
 

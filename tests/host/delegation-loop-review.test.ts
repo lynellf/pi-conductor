@@ -17,6 +17,48 @@ const DEF: MachineDefinition = {
 };
 
 describe("delegation cross-layer forced closure", () => {
+  it("records parent failure when cap settlement reports known unsafe cleanup", async () => {
+    const checkpoint = createInitialCheckpoint(DEF);
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: checkpoint.run_id,
+      log,
+      steps: [{ kind: "emit_handoff", target_role: "worker" }],
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-cap-safety-review-"),
+    });
+    let settled = false;
+    host.pendingDelegationTasks = () => (settled ? [] : ["active-child"]);
+    host.settleDelegation = async () => {
+      settled = true;
+    };
+    host.sessionTerminalReason = () => (settled ? "delegation_failed" : null);
+    host.sessionFailureDetail = () => "tool_cleanup_unconfirmed execution_id=cap-child";
+
+    const result = await runLoop({
+      def: DEF,
+      initialCheckpoint: checkpoint,
+      host,
+      initialGoal: "finish",
+      runCostCap: 0,
+    });
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(
+      log
+        .records(checkpoint.run_id)
+        .some((record) => record.type === "session_ended" || record.type === "transition_accepted"),
+    ).toBe(false);
+    expect(log.records(checkpoint.run_id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "session_failed",
+          failure_reason: "delegation_failed",
+          failure_detail: "tool_cleanup_unconfirmed execution_id=cap-child",
+        }),
+      ]),
+    );
+  });
+
   it.each([
     "end",
     "handoff",
@@ -68,6 +110,44 @@ describe("delegation cross-layer forced closure", () => {
     expect(
       log.records(checkpoint.run_id).filter((record) => record.type === "transition_accepted"),
     ).toEqual([expect.objectContaining({ event: "end", end_authority: "run_cost_cap" })]);
+  });
+
+  it.each([
+    "model_error",
+    "session_cost_cap_exceeded",
+  ] as const)("keeps run-cap forced end precedence over %s", async (terminalReason) => {
+    const checkpoint = createInitialCheckpoint(DEF);
+    const log = new InMemoryRecordLog();
+    const host = new StubHost({
+      runId: checkpoint.run_id,
+      log,
+      steps: [{ kind: "emit_handoff", target_role: "worker" }],
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-cap-precedence-review-"),
+    });
+    let settled = false;
+    host.settleDelegation = async () => {
+      settled = true;
+    };
+    host.sessionTerminalReason = () => (settled ? terminalReason : null);
+
+    const result = await runLoop({
+      def: DEF,
+      initialCheckpoint: checkpoint,
+      host,
+      initialGoal: "finish",
+      runCostCap: 0,
+    });
+
+    expect(result.exitReason).toBe("done");
+    expect(log.records(checkpoint.run_id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "session_ended" }),
+        expect.objectContaining({ type: "transition_accepted", end_authority: "run_cost_cap" }),
+      ]),
+    );
+    expect(log.records(checkpoint.run_id).some((record) => record.type === "session_failed")).toBe(
+      false,
+    );
   });
 });
 

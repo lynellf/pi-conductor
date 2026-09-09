@@ -59,6 +59,10 @@ describe("safe supervised cleanup diagnostics", () => {
         cleanup_cause: "cleanup_observation_failed",
         leader_observed: true,
         observed_members: [],
+        observation_error: {
+          operation: "read_stat",
+          code: "EACCES",
+        },
       },
     });
     expect(JSON.stringify(result)).not.toContain("private");

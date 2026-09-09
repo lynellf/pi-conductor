@@ -32,7 +32,8 @@ export async function abortSession(
     let childCloseFailure: unknown;
     try {
       await ctx.delegation.closeScope(key, _reason);
-      ctx.delegationSessionKeys.delete(session.sessionId);
+      if (ctx.delegation.failure(key) === undefined)
+        ctx.delegationSessionKeys.delete(session.sessionId);
     } catch (error) {
       childCloseFailure = error;
     } finally {
@@ -67,7 +68,8 @@ export async function settleDelegation(
   ctx.inactiveDelegationSessions.add(session.sessionId);
   try {
     await ctx.delegation.closeScope(key, reason);
-    ctx.delegationSessionKeys.delete(session.sessionId);
+    if (ctx.delegation.failure(key) === undefined)
+      ctx.delegationSessionKeys.delete(session.sessionId);
   } finally {
     if (ctx.delegationSessionKeys.get(session.sessionId) === undefined)
       ctx.inactiveDelegationSessions.delete(session.sessionId);

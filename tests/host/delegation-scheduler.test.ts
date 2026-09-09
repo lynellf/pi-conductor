@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { PreparedDelegateChild } from "../../src/host/delegation/admission.js";
+import {
+  DelegationChildSafetyError,
+  safetyFailureReason,
+} from "../../src/host/delegation/child-safety-error.js";
 import type { PoolChildResult } from "../../src/host/delegation/pool.js";
 import { DelegationScheduler } from "../../src/host/delegation/scheduler.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
@@ -57,6 +61,7 @@ function makeScheduler(
   runTask: (task: PreparedDelegateChild, signal: AbortSignal) => Promise<PoolChildResult>,
   records: PersistedRecord[] = [],
   maxParallel = 2,
+  onTerminal?: (result: PoolChildResult) => void,
 ) {
   return new DelegationScheduler({
     identity: {
@@ -93,11 +98,165 @@ function makeScheduler(
         usage: terminal.usage,
         ts: Date.now(),
       } as PersistedRecord);
+      onTerminal?.(terminal);
     },
   });
 }
 
 describe("DelegationScheduler", () => {
+  it("settles a child after post-session safety failure while preserving the poison", async () => {
+    const failure = new Error("tool_cleanup_unconfirmed: ls cleanup observation failed");
+    const scheduler = makeScheduler(async (task) => {
+      throw new DelegationChildSafetyError(
+        {
+          ...result(task),
+          usage: { input: 3, output: 5, cache_read: 7, cache_write: 11, tokens: 26, cost: 0.42 },
+        },
+        failure,
+      );
+    });
+    const ids = await scheduler.submit("call-fatal", {
+      tasks: [{ id: "fatal", subagent: "worker", objective: "fatal", expected_output: "done" }],
+    });
+    const childId = ids[0];
+    if (childId === undefined) throw new Error("child handle missing");
+
+    await expect(scheduler.wait(childId)).resolves.toMatchObject({
+      status: "failed",
+      sessionFile: "session",
+      usage: { cost: 0.42, input: 3, output: 5, cache_read: 7, cache_write: 11, tokens: 26 },
+    });
+    expect(scheduler.status([childId])[0]?.status).toBe("failed");
+    expect(scheduler.isClosed()).toBe(true);
+    expect(scheduler.pendingChildIds()).toEqual([]);
+    const terminal = scheduler.status([childId])[0]?.result;
+    expect(terminal?.status).toBe("failed");
+    if (terminal?.status !== "failed") throw new Error("failed child terminal missing");
+    expect(terminal.failureReason).toContain(failure.message);
+    await expect(scheduler.close()).resolves.toBeUndefined();
+  });
+
+  it("settles an active sibling when the first child poisons admission", async () => {
+    const failure = new Error("cleanup observation failed");
+    const scheduler = makeScheduler(
+      async (task, signal) => {
+        if (task.taskId === "fatal") throw new DelegationChildSafetyError(result(task), failure);
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        return result(task, "cancelled");
+      },
+      [],
+      2,
+    );
+    const ids = await scheduler.submit("call-siblings", {
+      tasks: [
+        { id: "fatal", subagent: "worker", objective: "fatal", expected_output: "done" },
+        { id: "sibling", subagent: "worker", objective: "sibling", expected_output: "done" },
+      ],
+    });
+
+    await expect(scheduler.wait(ids[0] ?? "")).resolves.toMatchObject({ status: "failed" });
+    await expect(scheduler.wait(ids[1] ?? "")).resolves.toMatchObject({ status: "cancelled" });
+    expect(scheduler.pendingChildIds()).toEqual([]);
+    await expect(scheduler.close()).resolves.toBeUndefined();
+  });
+
+  it("keeps unknown ownership failures unsettled", async () => {
+    const failure = new Error("child SDK ownership became ambiguous");
+    const scheduler = makeScheduler(async () => {
+      throw failure;
+    });
+    const ids = await scheduler.submit("call-unknown", {
+      tasks: [{ id: "unknown", subagent: "worker", objective: "unknown", expected_output: "done" }],
+    });
+    const childId = ids[0];
+    if (childId === undefined) throw new Error("child handle missing");
+
+    await expect(scheduler.wait(childId)).rejects.toBe(failure);
+    expect(scheduler.status([childId])[0]?.status).toBe("running");
+    expect(scheduler.status([childId])[0]?.result).toBeUndefined();
+    await expect(scheduler.close()).rejects.toBe(failure);
+  });
+
+  it("normalizes an undefined unknown failure into a close error", async () => {
+    const scheduler = makeScheduler(async () => {
+      throw undefined;
+    });
+    const ids = await scheduler.submit("call-undefined", {
+      tasks: [
+        { id: "undefined", subagent: "worker", objective: "undefined", expected_output: "done" },
+      ],
+    });
+    await expect(scheduler.wait(ids[0] ?? "")).rejects.toThrow("undefined");
+    await expect(scheduler.close()).rejects.toThrow("undefined");
+  });
+
+  it("keeps the safety cause visible when the child diagnostic is long", () => {
+    const original = `original-child-diagnostic-${"x".repeat(2_000)}`;
+    const error = new DelegationChildSafetyError(
+      {
+        ...result(child("long")),
+        status: "failed",
+        summary: original,
+        failureReason: original,
+        headCommit: null,
+        sessionFile: "session",
+        usage: { input: 1, output: 2, cache_read: 3, cache_write: 4, tokens: 10, cost: 0.1 },
+        lifecycleStarted: true,
+      },
+      new Error("tool_cleanup_unconfirmed execution_id=exec-long"),
+    );
+    const reason = safetyFailureReason(error);
+    expect(reason).toContain("tool_cleanup_unconfirmed execution_id=exec-long");
+    expect(reason).toContain("original-child-diagnostic-");
+  });
+
+  it("propagates a later unknown ownership failure after an earlier safety failure", async () => {
+    const safety = new Error("cleanup observation failed");
+    const ownership = new Error("child SDK ownership became ambiguous");
+    const scheduler = makeScheduler(
+      async (task, signal) => {
+        if (task.taskId === "fatal") throw new DelegationChildSafetyError(result(task), safety);
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        throw ownership;
+      },
+      [],
+      2,
+    );
+    const ids = await scheduler.submit("call-mixed", {
+      tasks: [
+        { id: "fatal", subagent: "worker", objective: "fatal", expected_output: "done" },
+        { id: "unknown", subagent: "worker", objective: "unknown", expected_output: "done" },
+      ],
+    });
+    await expect(scheduler.wait(ids[0] ?? "")).resolves.toMatchObject({ status: "failed" });
+    await expect(scheduler.wait(ids[1] ?? "")).rejects.toBe(ownership);
+    await expect(scheduler.close()).rejects.toBe(ownership);
+  });
+
+  it("propagates terminal persistence failure after a safety failure", async () => {
+    const safety = new Error("cleanup observation failed");
+    const persistence = new Error("terminal append failed");
+    const scheduler = makeScheduler(
+      async (task) => {
+        throw new DelegationChildSafetyError(result(task), safety);
+      },
+      [],
+      2,
+      () => {
+        throw persistence;
+      },
+    );
+    const ids = await scheduler.submit("call-persist", {
+      tasks: [{ id: "persist", subagent: "worker", objective: "persist", expected_output: "done" }],
+    });
+    await expect(scheduler.wait(ids[0] ?? "")).rejects.toBe(persistence);
+    await expect(scheduler.close()).rejects.toBe(persistence);
+  });
+
   it("shares one maxParallel queue and returns idempotent handles", async () => {
     let active = 0;
     let peak = 0;

@@ -9,6 +9,22 @@ const observedIdentity = Type.Object(
   { additionalProperties: false },
 );
 
+const observationError = Type.Object(
+  {
+    operation: Type.Union([
+      Type.Literal("read_stat"),
+      Type.Literal("read_environ"),
+      Type.Literal("read_status"),
+      Type.Literal("list_processes"),
+    ]),
+    code: Type.String({ pattern: "^[A-Z][A-Z0-9_]{0,31}$", minLength: 1, maxLength: 32 }),
+    pid: Type.Optional(Type.Integer({ minimum: 1 })),
+    start_time: Type.Optional(Type.String({ pattern: "^[0-9]+$", minLength: 1, maxLength: 64 })),
+    process_group_id: Type.Optional(Type.Integer({ minimum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
 /** Bounded process cleanup evidence; it never carries commands, markers, or output. */
 export const toolExecutionDiagnosticSchema = Type.Object(
   {
@@ -22,6 +38,7 @@ export const toolExecutionDiagnosticSchema = Type.Object(
     ]),
     leader_observed: Type.Boolean(),
     observed_members: Type.Array(observedIdentity, { maxItems: 32 }),
+    observation_error: Type.Optional(observationError),
   },
   { additionalProperties: false },
 );
