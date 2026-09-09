@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/bin/cli-main.js";
-import { runReconcileCli } from "../../src/bin/cli-reconcile.js";
+import { RECONCILE_USAGE, runReconcileCli } from "../../src/bin/cli-reconcile.js";
 import * as identity from "../../src/host/execution/supervised-process-identity.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import type {
@@ -143,6 +143,7 @@ describe("reconcile-tools CLI", () => {
     expect(
       await runReconcileCli(["reconcile-tools", "--log-dir", dir, "run-reconcile", ...args], out),
     ).toBe(1);
+    expect(out.errors).toEqual([RECONCILE_USAGE]);
     await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
   });
 
@@ -151,5 +152,110 @@ describe("reconcile-tools CLI", () => {
     const out = output();
     expect(await runReconcileCli(["reconcile-tools", "--log-dir", dir, "typo-run"], out)).toBe(1);
     expect(new FileRecordLog({ baseDir: dir }).records("run-reconcile")).toHaveLength(2);
+    expect(out.errors.join("\n")).not.toContain("Usage:");
+  });
+
+  it.each([
+    ["read_environ", "EACCES", 123, { startTime: "98765", processGroupId: 120 }],
+    ["read_status", "EPERM", 123, undefined],
+    ["read_stat", "EIO", 123, undefined],
+    ["list_processes", "EACCES", undefined, undefined],
+  ] as const)("reports safe %s evidence and recovery steps", async (operation, code, pid, details) => {
+    const dir = await fixture();
+    const before = await readFile(join(dir, "run-reconcile.jsonl"), "utf8");
+    const error = new identity.ProcessObservationError(operation, { code }, pid, details);
+    Object.assign(error, {
+      message: "PRIVATE raw error",
+      stack: "PRIVATE stack",
+      ownerToken: "PRIVATE marker",
+      environ: "PRIVATE credentials",
+      command: "PRIVATE arguments",
+    });
+    vi.mocked(identity.findProcessesByOwnerToken).mockRejectedValue(error);
+    const out = output();
+    expect(await runReconcileCli(["reconcile-tools", "--log-dir", dir, "run-reconcile"], out)).toBe(
+      1,
+    );
+    const diagnostic = out.errors.join("\n");
+    expect(diagnostic).toContain(`operation=${operation}`);
+    expect(diagnostic).toContain(`code=${code}`);
+    if (pid !== undefined) {
+      expect(diagnostic).toContain(`pid=${pid}`);
+      expect(diagnostic).toContain(`ps -p ${pid} -o pid=,ppid=,pgid=,sid=,uid=,stat=`);
+    } else {
+      expect(diagnostic).not.toContain("ps -p");
+    }
+    if (details !== undefined) {
+      expect(diagnostic).toContain(`start_time=${details.startTime}`);
+      expect(diagnostic).toContain(`process_group_id=${details.processGroupId}`);
+    }
+    expect(diagnostic).toContain("ownership is unverified");
+    expect(diagnostic).toContain("original Linux host");
+    expect(diagnostic).toContain("conduct reconcile-tools --log-dir <path> <run-id>");
+    expect(diagnostic).not.toContain("PRIVATE");
+    expect(diagnostic).not.toContain("Usage:");
+    expect(out.lines).toEqual([]);
+    await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
+    vi.mocked(identity.findProcessesByOwnerToken).mockResolvedValue([]);
+    expect(
+      await runReconcileCli(["reconcile-tools", "--log-dir", dir, "run-reconcile"], output()),
+    ).toBe(0);
+  });
+
+  it("keeps confirmation blocked and the log untouched when observation fails", async () => {
+    const dir = await fixture();
+    const before = await readFile(join(dir, "run-reconcile.jsonl"), "utf8");
+    vi.mocked(identity.findProcessesByOwnerToken).mockRejectedValue(
+      new identity.ProcessObservationError("read_environ", { code: "EACCES" }, 123),
+    );
+    const out = output();
+    expect(
+      await runReconcileCli(
+        [
+          "reconcile-tools",
+          "--log-dir",
+          dir,
+          "run-reconcile",
+          "--execution",
+          "execution-1",
+          "--confirm-cleanup",
+          "--note",
+          "operator note",
+        ],
+        out,
+      ),
+    ).toBe(1);
+    expect(out.errors.join("\n")).toContain("Cleanup remains unconfirmed");
+    expect(out.errors.join("\n")).toContain("Omit --execution, --confirm-cleanup, and --note.");
+    expect(out.lines).toEqual([]);
+    await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
+    vi.mocked(identity.findProcessesByOwnerToken).mockResolvedValue([]);
+    const retry = output();
+    expect(
+      await runReconcileCli(["reconcile-tools", "--log-dir", dir, "run-reconcile"], retry),
+    ).toBe(0);
+    expect(retry.errors).toEqual([]);
+    await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
+  });
+
+  it("omits malformed process fields rather than rendering unsafe identity text", async () => {
+    const dir = await fixture();
+    const error = new identity.ProcessObservationError(
+      "read_stat",
+      { code: "PRIVATE_SECRET" },
+      -1,
+      {
+        startTime: "PRIVATE\nstart",
+        processGroupId: Number.NaN,
+      },
+    );
+    vi.mocked(identity.findProcessesByOwnerToken).mockRejectedValue(error);
+    const out = output();
+    expect(await runReconcileCli(["reconcile-tools", "--log-dir", dir, "run-reconcile"], out)).toBe(
+      1,
+    );
+    const diagnostic = out.errors.join("\n");
+    expect(diagnostic).toContain("code=UNKNOWN");
+    expect(diagnostic).not.toMatch(/PRIVATE|NaN|pid=-1|start_time=|ps -p/);
   });
 });

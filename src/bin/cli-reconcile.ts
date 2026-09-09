@@ -1,10 +1,12 @@
 /** CLI for inspecting and operator-confirming executable-tool cleanup (issue #97). */
 
+import { ProcessObservationError } from "../host/execution/supervised-process-identity.js";
 import {
   inspectToolExecutionCleanup,
   reconcileToolExecutionCleanup,
   type ToolExecutionCleanupInspection,
 } from "../host/execution/tool-execution-reconciliation.js";
+import { formatObservationDiagnostic } from "./cli-observation-diagnostic.js";
 
 /** Usage and acknowledgment semantics for the reconciliation CLI. */
 export const RECONCILE_USAGE =
@@ -75,8 +77,14 @@ export async function runReconcileCli(
     output.log(RECONCILE_USAGE);
     return 0;
   }
+  let args: Parsed;
   try {
-    const args = parse(argv);
+    args = parse(argv);
+  } catch {
+    output.error(RECONCILE_USAGE);
+    return 1;
+  }
+  try {
     if (args.executionId !== undefined && args.note !== undefined) {
       const record = await reconcileToolExecutionCleanup(args.runId, args.executionId, {
         baseDir: args.baseDir,
@@ -93,7 +101,13 @@ export async function runReconcileCli(
     }
     return 0;
   } catch (error) {
-    output.error(`${error instanceof Error ? error.message : String(error)}\n${RECONCILE_USAGE}`);
+    output.error(
+      error instanceof ProcessObservationError
+        ? formatObservationDiagnostic(error)
+        : error instanceof Error
+          ? error.message
+          : String(error),
+    );
     return 1;
   }
 }

@@ -114,6 +114,26 @@ original host and PID/network namespaces; a permission denial while inspecting
 any process is not evidence that it exited and causes reconciliation to fail
 closed. Resolve that visibility issue before confirming cleanup.
 
+Observation failures report `operation`, `code`, and the observed `pid`,
+`start_time` (ticks since boot), and `process_group_id` when available. They
+identify the failed `/proc` path and provide `ps`/`ls` commands restricted to
+metadata. These diagnostics omit command lines, environment contents, owner
+markers, raw errors, and stack traces. Runtime failures do not print syntax
+usage; use `conduct reconcile-tools --help` for argument help.
+
+For `read_environ code=EACCES`, the scanner could not read a process's
+environment to check its marker. The PID may be unrelated to the run; its
+ownership is unverified. Inspect the suggested metadata, then check the
+observing account and procfs/process inspection restrictions with the original
+host's administrator. Restore the required visibility without weakening host
+security settings or dumping environment contents. Repeat the inspection
+form `conduct reconcile-tools --log-dir <path> <run-id>`, omitting `--execution`,
+`--confirm-cleanup`, and `--note`. Only after inspection succeeds and all
+original processes and partial effects have been checked should an operator
+confirm an execution. A missing PID or a successful `ps`/`ls` alone does not
+establish cleanup. See the [Linux procfs reference](https://www.kernel.org/doc/html/latest/filesystems/proc.html#process-specific-subdirectories)
+for process metadata and access constraints.
+
 Do not trust a historical PID by itself: correlate the run ID, execution ID,
 tool-call ID and tool name, then verify the current process start ticks, process
 group and ownership in the original host namespace. Stop only processes that

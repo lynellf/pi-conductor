@@ -4,6 +4,10 @@
 
 ### Bug fixes
 
+- Show failed process-observation operations, error codes, and safe process
+  identities in `conduct reconcile-tools`, with metadata-only inspection steps
+  and recovery guidance. Keep cleanup unconfirmed on observation failures and
+  reserve usage text for argument errors.
 - Resolve host-provided Pi SDK peers before loading the standalone `conduct`
   CLI, including installations made with `pi install` and npm bin symlinks.
   Report missing or invalid SDK installations with repair guidance.
