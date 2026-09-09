@@ -2,8 +2,14 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-09-09
+
 ### Features
 
+- Add experimental Prewalk guide/executor sessions within one worker visit. The
+  host enforces guide turns and cost, validates the executor switch, and uses
+  native preflight or a bounded projection fallback with durable recovery.
+  Prewalk remains experimental and supports shared workspaces (PR #78).
 - Enforce pinned executable deadlines, bounded timeout recovery and confirmed
   process cleanup across shared, isolated and delegated tools (Issue #76).
 - Support an optional deterministic end guard with durable attempts and bounded
@@ -38,6 +44,18 @@
 - Move role, tool, delegation, workspace, library, record-stream and architecture
   reference material into linked pages, with a shorter README and contributor
   guide (Issue #74).
+
+### Maintenance
+
+- Split host lifecycle responsibilities into focused modules while preserving
+  the public host and run APIs (Issue #85).
+
+### Compatibility
+
+- New delegation runs default to blocking; configure
+  `delegation.mode: nonblocking` explicitly when needed. Orchestrator context
+  retention remains disabled by default and is enabled on the designated
+  orchestrator with `context_retention: run`.
 
 ## [0.20.1] - 2026-08-30
 
