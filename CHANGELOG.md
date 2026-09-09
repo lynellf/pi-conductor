@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.3] - 2026-09-09
+
+### Bug fixes
+
+- Resolve supervised file-tool workers from Pi's host-owned public SDK package
+  directory and preflight the runtime before file-tool/delegation admission
+  when Pi is installed separately (Issue #99).
+
+### Compatibility
+
+- The credential-free ordinary file-tool smoke passes on Linux for Node
+  22.19.0 and 26.5.0 with Pi SDK 0.80.6 and 0.85.1; see the [execution controls](docs/execution-controls.md) matrix.
+
 ## [0.21.2] - 2026-09-09
 
 ### Bug fixes

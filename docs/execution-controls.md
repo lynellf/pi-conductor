@@ -109,3 +109,9 @@ delegation campaign starts. Repair the Pi installation or `PI_PACKAGE_DIR`
 override and restart Pi when preflight fails. Standalone bundled installations
 without an importable on-disk SDK fail preflight; Bun is not covered by this
 matrix.
+
+The historical extension-relative resolver produced `ERR_MODULE_NOT_FOUND` in
+the published npm layout, although the current Pi 0.80.6 and 0.85.1 loaders
+also pass with the prior worker implementation. The packed smoke validates
+those current installations; the host-root resolver removes dependence on
+extension-relative loader resolution.
