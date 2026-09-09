@@ -159,6 +159,18 @@ export class SessionState {
   /** Cumulative §11.4 usage for the session. Read by
    *  `host.captureUsage(session)` and surfaced to the loop as the
    *  `usage` field on `session_ended` / `session_failed` records. */
+  /** Accumulate a normalized context-compaction charge exactly once. */
+  addCompactionUsage(chargeId: string, usage: UsageRecord): UsageRecord {
+    const key = `context-compaction:${chargeId}`;
+    if (this._seenMessageIds.has(key)) return this._usage;
+    this._seenMessageIds.add(key);
+    this._usage = addUsage(this._usage, usage);
+    return this._usage;
+  }
+
+  /** Cumulative §11.4 usage for the session. Read by
+   *  `host.captureUsage` and surfaced to the loop as the
+   *  `usage` field on `session_ended` / `session_failed` records. */
   usage(): UsageRecord {
     return this._usage;
   }
