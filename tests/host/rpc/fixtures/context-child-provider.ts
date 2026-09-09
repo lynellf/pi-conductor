@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   type AssistantMessage,
   createAssistantMessageEventStream,
@@ -6,18 +7,32 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
-const model: Model<"anthropic-messages"> = {
-  id: "context-child-model",
-  name: "Context child model",
-  api: "anthropic-messages",
-  provider: "context-child",
-  baseUrl: "context-child://local",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 100_000,
-  maxTokens: 1024,
-};
+const models: readonly Model<"anthropic-messages">[] = [
+  {
+    id: "context-child-model",
+    name: "Context child model",
+    api: "anthropic-messages",
+    provider: "context-child",
+    baseUrl: "context-child://local",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 1024,
+  },
+  {
+    id: "context-child-next",
+    name: "Context child fallback model",
+    api: "anthropic-messages",
+    provider: "context-child",
+    baseUrl: "context-child://local",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 1024,
+  },
+];
 
 const usage = {
   input: 3,
@@ -25,25 +40,39 @@ const usage = {
   cacheRead: 0,
   cacheWrite: 0,
   totalTokens: 5,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.25 },
 };
 
-const streamSimple: StreamFunction = (_model, _context, _options) => {
+const streamSimple: StreamFunction = (model, context) => {
   const stream = createAssistantMessageEventStream();
-  const message: AssistantMessage = {
+  const failed =
+    model.id === "context-child-model" && JSON.stringify(context).includes("fail-first");
+  const message = {
     role: "assistant",
-    content: [
-      { type: "toolCall", id: `end-${randomUUID()}`, name: "end", arguments: { reason: "done" } },
-    ],
+    content: failed
+      ? []
+      : [
+          {
+            type: "toolCall",
+            id: `end-${randomUUID()}`,
+            name: "end",
+            arguments: { reason: "done" },
+          },
+        ],
     api: "anthropic-messages",
     provider: "context-child",
-    model: "context-child-model",
+    model: model.id,
     usage,
-    stopReason: "toolUse",
+    stopReason: failed ? "error" : "toolUse",
     timestamp: Date.now(),
-  };
+    ...(failed ? { errorMessage: "first model failed after partial usage" } : {}),
+  } as AssistantMessage;
   stream.push({ type: "start", partial: message });
-  stream.push({ type: "done", reason: "toolUse", message });
+  if (failed) {
+    stream.push({ type: "error", reason: "error", error: message });
+  } else {
+    stream.push({ type: "done", reason: "toolUse", message });
+  }
   stream.end();
   return stream;
 };
@@ -55,10 +84,8 @@ const extension: ExtensionFactory = (pi) => {
     apiKey: "context-child-key",
     baseUrl: "context-child://local",
     streamSimple,
-    models: [model],
+    models: [...models],
   });
 };
 
 export default extension;
-
-import { randomUUID } from "node:crypto";
