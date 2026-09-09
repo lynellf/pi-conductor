@@ -19,6 +19,7 @@ import {
   type RpcChildProcess,
   RpcProtocolError,
   type RpcSpawnOptions,
+  resolveContextChildEntryPath,
   resolveMachineToolsExtensionPath,
   resolvePackageLocalPiCli,
 } from "../../../src/host/rpc/node-role-session.js";
@@ -304,6 +305,13 @@ describe("createNodeRoleSession", () => {
 
     expect(resolvePackageLocalPiCli()).toBe(expectedCli);
     expect(existsSync(resolvePackageLocalPiCli())).toBe(true);
+  });
+
+  it("resolves the compiled context child entry from source modules", () => {
+    expect(resolveContextChildEntryPath()).toMatch(
+      /dist[\\/]host[\\/]rpc[\\/]context-child-entry\.js$/,
+    );
+    expect(existsSync(resolveContextChildEntryPath())).toBe(true);
   });
 
   it("uses LF-only JSONL, maps child identity and usage, and captures handoff/end events", async () => {
