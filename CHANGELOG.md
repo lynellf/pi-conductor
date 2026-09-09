@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.21.2] - 2026-09-09
+
+### Bug fixes
+
+- Add audited operator reconciliation through `conduct reconcile-tools`, allowing
+  runs to resume after confirmed cleanup without replaying the tool. Preserve the
+  cleanup reason and execution ID across later SDK aborts, and avoid futile model
+  fallback (Issue #97).
+
+### Compatibility
+
+- Cleanup confirmation requires all original processes to be stopped, partial
+  effects inspected, and the original host, namespaces, and sufficiently visible
+  `/proc` state available. Write/edit confirmations require a Pi restart. See
+  [execution controls](docs/execution-controls.md) for the recovery procedure.
+
 ## [0.21.1] - 2026-09-09
 
 ### Bug fixes
