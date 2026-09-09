@@ -4,16 +4,14 @@
 
 ### Bug fixes
 
-- Restore extension loading and command registration by rolling back Prewalk
-  (PR #95). The packed
+- Restore extension loading and command registration by rolling back Prewalk. The packed
   rollback was verified with unpatched Pi 0.85.1; no local Pi patch is required.
   This verifies extension loading, not all provider-backed workflows.
 
 ### Removed
 
 - Roll back experimental Prewalk (PR #78) because its static Pi API subpath import
-  prevented the entire extension from loading, even when Prewalk was unused
-  (issue #94). Ordinary
+  prevented the entire extension from loading, even when Prewalk was unused. Ordinary
   orchestration, retained context, delegation, and execution controls remain.
   Manifests containing `prewalk` and persisted Prewalk records are rejected with
   an explicit error; remove the configuration and start a new ordinary run.

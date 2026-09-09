@@ -223,6 +223,10 @@ those exactly. The grep guard is part of `pnpm test`, not an afterthought.
   reference the section you're implementing at the top of each file/PR.
 - **Touch only what the task asks for.** No unsolicited refactors of adjacent
   code. If you spot a problem, file it as a note, don't fix it inline.
+- **Keep public history free of private hosting details.** Published files and
+  commit messages may link only to the public GitHub repository or public upstream
+  sources. Use plain issue/PR numbers when no public URL exists. Omit private
+  hosting names, addresses, and automatically generated review-origin trailers.
 - **Surface assumptions before implementing.** State them; don't silently fill
   gaps.
 - **One phase at a time.** Phases gate each other (Checkpoint A before reducer
