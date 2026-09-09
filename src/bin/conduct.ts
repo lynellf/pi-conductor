@@ -61,6 +61,7 @@ import {
   type StartRunOptions,
   startRun,
 } from "../index.js";
+import { runReconcileCli } from "./cli-reconcile.js";
 import {
   type CliSignalSource,
   installCliSignalHandlers,
@@ -223,6 +224,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     signals = processSignalSource,
   } = deps;
 
+  if (argv[0] === "reconcile-tools") {
+    return runReconcileCli(argv, out);
+  }
+
   const parseResult = parseArgv(argv);
   if (!parseResult.ok) {
     if (parseResult.message !== undefined) out.error(parseResult.message);
@@ -352,6 +357,9 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
  * this entirely by calling `runCli(argv, deps)` directly.
  */
 async function main(): Promise<number> {
+  if (process.argv[2] === "reconcile-tools") {
+    return runReconcileCli(process.argv.slice(2), globalThis.console);
+  }
   return runCli(process.argv.slice(2), {
     startRun,
     modelRegistry: ModelRegistry.create(AuthStorage.create()),

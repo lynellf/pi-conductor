@@ -51,5 +51,32 @@ Run status includes the active tool, elapsed time, deadline, active execution
 count, and timeout recovery state. Completed execution records remain available
 for diagnosis after the invocation stops.
 
+Operators can inspect and reconcile unresolved executable tools with:
+
+```text
+conduct reconcile-tools --log-dir <path> <run-id>
+conduct reconcile-tools --log-dir <path> <run-id> --execution <execution-id> --confirm-cleanup --note "<operator note>"
+```
+
+The confirmation command never kills a process or replays a tool. The explicit
+acknowledgment attests that the operator ran the command on the original Linux
+host and PID/network namespaces and canonical storage, stopped all original
+processes (including unmarked descendants), and inspected workspace partial
+effects. Owner-marker absence supports the attestation but is not independent
+proof. Live marked processes, unsupported or
+unreadable observations, malformed requests, and an active run lease refuse
+confirmation. Original records remain unchanged; a correlated confirmation is
+appended only after verification. Then use `/conduct:resume <run-id>` (with the
+usual manifest resolution), repeating reconciliation for each unresolved ID.
+The production marker scan requires sufficient `/proc` visibility in the
+original host and PID/network namespaces; a permission denial while inspecting
+any process is not evidence that it exited and causes reconciliation to fail
+closed. Resolve that visibility issue before confirming cleanup.
+
+Reconciliation refuses a log with an incomplete trailing record and leaves its
+bytes untouched; repair that persistence issue separately. After confirming
+cleanup for a write or edit, restart pi before resuming so stale in-process
+mutation admission state cannot retain the old ownership decision.
+
 See the [approved specification](open-issues-september/spec.md) for the complete
 execution and restart contract.

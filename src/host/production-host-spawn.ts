@@ -5,7 +5,7 @@ import type { ModelEffort, Role } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { TrajectoryResumeError } from "../persistence/trajectory-records.js";
 import type { createDelegateTool as createDelegateToolFactory } from "./delegation/delegate-tool-factory.js";
 import type { PoolChildResult } from "./delegation/pool.js";
@@ -123,14 +123,7 @@ export async function spawnRole(
   // A replacement or trajectory successor must not begin while a prior
   // executable still has unknown ownership. Resume applies the same guard;
   // keeping it here also covers same-process fallback after disposal.
-  assertNoUnfinishedToolExecutions(
-    host.log
-      .records(host.runId)
-      .filter(
-        (record) =>
-          record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-      ),
-  );
+  assertNoUnfinishedToolExecutions(host.log.records(host.runId).filter(isToolExecutionRecord));
   const resumedTransport = host.latestTrajectoryTransport(role);
   if (resumedTransport?.type === "failed") {
     throw new TrajectoryResumeError(
@@ -265,12 +258,7 @@ export async function spawnRole(
         : {}),
       visitIndex: opts.visitIndex,
       executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-      priorToolExecutionRecords: host.log
-        .records(host.runId)
-        .filter(
-          (record): record is ToolExecutionRecord =>
-            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-        ),
+      priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
       persistRecord: (record) => host.persistRecord(record),
       sessionStates: host.sessionStates,
       agentsBySessionId: host.agentsBySessionId,
@@ -351,12 +339,7 @@ export async function spawnRole(
     runId: host.runId,
     visitIndex: opts.visitIndex ?? 1,
     executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-    priorToolExecutionRecords: host.log
-      .records(host.runId)
-      .filter(
-        (record): record is ToolExecutionRecord =>
-          record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-      ),
+    priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
     machineDefinition: host.loadedManifest.def,
     disableAutoCompaction:
       host.loadedManifest.manifest.handoffs?.some(

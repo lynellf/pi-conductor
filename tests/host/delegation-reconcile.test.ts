@@ -149,4 +149,58 @@ describe("delegation reconciliation", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("retains delegated cleanup confirmations when checking child execution ownership", () => {
+    const { log, dir } = withLog([
+      accepted,
+      started,
+      {
+        ...unfinishedTool,
+        role_session_id: child.child_id,
+        tool_call_id: "call-tool-1",
+        tool_name: "read",
+      },
+      {
+        type: "tool_execution_finished",
+        schema_version: 1,
+        run_id: "run-1",
+        execution_id: "execution-1",
+        supervision_id: "supervision-1",
+        logical_session_id: "logical-1",
+        role_session_id: child.child_id,
+        tool_call_id: "call-tool-1",
+        tool_name: "read",
+        elapsed_ms: 1,
+        recovery_count: 0,
+        outcome: "cleanup_unconfirmed",
+        cleanup: "unconfirmed",
+        ts: 3,
+      },
+      {
+        type: "tool_execution_cleanup_confirmed",
+        schema_version: 1,
+        run_id: "run-1",
+        execution_id: "execution-1",
+        supervision_id: "supervision-1",
+        logical_session_id: "logical-1",
+        role_session_id: child.child_id,
+        tool_call_id: "call-tool-1",
+        tool_name: "read",
+        cleanup: "confirmed",
+        verification: "operator_confirmed_owner_marker_absent",
+        operator_note: "inspected original host and namespace",
+        operator: "operator",
+        ts: 4,
+      },
+    ]);
+    try {
+      reconcileDelegationChildren("run-1", log);
+      expect(log.records("run-1").at(-1)).toMatchObject({
+        type: "subagent_failed",
+        failure_reason: "delegation_interrupted",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

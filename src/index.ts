@@ -235,6 +235,7 @@ export {
   RoleTurnTelemetryLogError,
 } from "./persistence/role-turn.js";
 export type {
+  ToolExecutionCleanupConfirmedRecord,
   ToolExecutionFinishedRecord,
   ToolExecutionRecord,
   ToolExecutionStartedRecord,
@@ -243,8 +244,10 @@ export type {
 } from "./persistence/tool-execution.js";
 export {
   assertToolExecutionRecord,
+  isToolExecutionRecord,
   reconstructToolExecutionTimeline,
   ToolExecutionRecordError,
+  toolExecutionCleanupConfirmedSchema,
   toolExecutionFinishedSchema,
   toolExecutionStartedSchema,
 } from "./persistence/tool-execution.js";
@@ -317,6 +320,9 @@ export type {
   StubHostOptions,
   SubagentLifecycleStats,
   SubagentProtocolLifecycleStats,
+  ToolExecutionCleanupInspection,
+  ToolExecutionCleanupOptions,
+  ToolExecutionUnresolvedEntry,
   TransitionRecord,
 } from "./host/index.js";
 export {
@@ -329,6 +335,7 @@ export {
   formatRunMemorySeed,
   HostManifestError,
   handoffContextArgsSchema,
+  inspectToolExecutionCleanup,
   listRuns,
   loadManifest,
   loadManifestFromString,
@@ -343,6 +350,7 @@ export {
   RunHandle,
   RunInProgressError,
   RunLeaseUnavailableError,
+  reconcileToolExecutionCleanup,
   resolveModel,
   resumeRun,
   StubHost,
@@ -350,4 +358,5 @@ export {
   selectModelEntry,
   startRun,
   subscribeToRecords,
+  ToolExecutionReconciliationError,
 } from "./host/index.js";

@@ -19,7 +19,7 @@ import type { HandoffContextRef, MachineDefinition, ModelEffort, Role } from "..
 import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { isToolExecutionRecord, type ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
@@ -27,6 +27,7 @@ import { bindLiveRoleToolExecution } from "./execution/role-tool-execution-bindi
 import { createSupervisedTools } from "./execution/supervised-tools.js";
 import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
+import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
 import type {
@@ -157,7 +158,7 @@ export async function spawnSharedSdkRoleSession(options: {
   let activePolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
   const executionRecords = [...(options.priorToolExecutionRecords ?? [])];
   const persistExecutionRecord = (record: PersistedRecord): void => {
-    if (record.type === "tool_execution_started" || record.type === "tool_execution_finished") {
+    if (isToolExecutionRecord(record)) {
       executionRecords.push(record);
     }
     options.persistRecord(record);
@@ -382,7 +383,7 @@ export async function spawnSharedSdkRoleSession(options: {
           error.code === "tool_timeout_exhausted"
             ? "tool_timeout_exhausted"
             : "tool_cleanup_unconfirmed",
-          error.message,
+          toToolExecutionModelError(error).message,
         );
         void sdkSession?.abort();
       },

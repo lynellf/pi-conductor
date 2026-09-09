@@ -227,4 +227,15 @@ export { createProductionHost } from "./production-host-factory.js";
 // is the chokepoint; the loop is unchanged. Fire-and-forget, best-
 // effort; the durable JSONL log is the system of record.
 
+export type {
+  ToolExecutionCleanupInspection,
+  ToolExecutionCleanupOptions,
+  ToolExecutionUnresolvedEntry,
+} from "./execution/tool-execution-reconciliation.js";
+
+export {
+  inspectToolExecutionCleanup,
+  reconcileToolExecutionCleanup,
+  ToolExecutionReconciliationError,
+} from "./execution/tool-execution-reconciliation.js";
 export { subscribeToRecords } from "./record-emitter.js";

@@ -202,6 +202,84 @@ describe("runSupervisedProcess regression gates", () => {
     }
   });
 
+  it("reproduces nohup background work surviving the shell leader", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-supervised-regression-"));
+    directories.push(directory);
+    const pidFile = join(directory, "nohup-pid");
+    let childPid: number | null = null;
+    try {
+      await expect(
+        runSupervisedProcess({
+          executionId: "regression-nohup-background",
+          command: `nohup ${shellNode("setInterval(()=>{},1000)")} >${quote(join(directory, "nohup.log"))} 2>&1 </dev/null & echo $! >${quote(pidFile)}`,
+          cwd: directory,
+          timeoutMs: 1_000,
+          graceMs: 200,
+          onStart: () => undefined,
+        }),
+      ).rejects.toMatchObject({
+        code: "supervised-process-spawn-failed",
+        cleanup: "unconfirmed",
+      });
+      childPid = Number(await readFile(pidFile, "utf8"));
+      expect(await processIsLive(childPid)).toBe(true);
+    } finally {
+      if (childPid === null) {
+        try {
+          childPid = Number(await readFile(pidFile, "utf8"));
+        } catch {
+          // The shell may have failed before writing its background PID.
+        }
+      }
+      if (childPid !== null && Number.isInteger(childPid)) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The test-owned process may already have exited.
+        }
+      }
+    }
+  });
+
+  it("reproduces an accidental shell descendant retaining the owner marker", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-supervised-regression-"));
+    directories.push(directory);
+    const pidFile = join(directory, "descendant-pid");
+    let childPid: number | null = null;
+    try {
+      await expect(
+        runSupervisedProcess({
+          executionId: "regression-accidental-descendant",
+          command: `${shellNode(`const { spawn } = require("node:child_process"); const { writeFileSync } = require("node:fs"); const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { detached: true, stdio: "ignore" }); writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); child.unref(); setTimeout(() => process.exit(0), 100);`)}`,
+          cwd: directory,
+          timeoutMs: 1_000,
+          graceMs: 200,
+          onStart: () => undefined,
+        }),
+      ).rejects.toMatchObject({
+        code: "supervised-process-spawn-failed",
+        cleanup: "unconfirmed",
+      });
+      childPid = Number(await readFile(pidFile, "utf8"));
+      expect(await processIsLive(childPid)).toBe(true);
+    } finally {
+      if (childPid === null) {
+        try {
+          childPid = Number(await readFile(pidFile, "utf8"));
+        } catch {
+          // The parent may have failed before writing its descendant PID.
+        }
+      }
+      if (childPid !== null && Number.isInteger(childPid)) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The test-owned process may already have exited.
+        }
+      }
+    }
+  });
+
   it("preserves UTF-8 characters split across output chunks", async () => {
     const result = await runSupervisedProcess({
       executionId: "regression-utf8",

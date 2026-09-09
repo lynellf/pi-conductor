@@ -6,7 +6,7 @@ import {
   type DelegationSubmissionAcceptedRecord,
 } from "../../persistence/delegation-task.js";
 import type { PersistedRecord, RecordLog, SubagentStartedRecord } from "../../persistence/log.js";
-import type { ToolExecutionRecord } from "../../persistence/tool-execution.js";
+import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import { assertNoUnfinishedToolExecutions } from "../execution/tool-execution-controller.js";
 
 function isAccepted(record: PersistedRecord): record is DelegationSubmissionAcceptedRecord {
@@ -29,12 +29,7 @@ export function reconcileDelegationChildren(
 ): void {
   const records = log.records(runId);
   assertDelegationTaskTimeline(records);
-  assertNoUnfinishedToolExecutions(
-    records.filter(
-      (record): record is ToolExecutionRecord =>
-        record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-    ),
-  );
+  assertNoUnfinishedToolExecutions(records.filter(isToolExecutionRecord));
   const accepted = new Map<string, DelegationAcceptedChild>();
   const started = new Map<string, SubagentStartedRecord>();
   const terminalIds = new Set<string>();

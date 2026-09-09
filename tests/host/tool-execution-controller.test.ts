@@ -336,8 +336,60 @@ describe("ToolExecutionController", () => {
       },
     ] satisfies ToolExecutionRecord[];
     expect(() => assertNoUnfinishedToolExecutions(records)).toThrow(
-      "unfinished tool execution has unknown ownership",
+      /unfinished tool execution has unknown ownership.*execution_id=.*tool_call_id=.*supervision_id=/,
     );
+  });
+
+  it("allows resume after an audited cleanup confirmation", () => {
+    const records = [
+      {
+        type: "tool_execution_started",
+        schema_version: 1,
+        run_id: "run",
+        execution_id: "execution",
+        supervision_id: "supervision",
+        logical_session_id: "logical",
+        role_session_id: "role",
+        tool_call_id: "call",
+        tool_name: "bash",
+        timeout_ms: 1_000,
+        recovery_count: 0,
+        ts: 1,
+      },
+      {
+        type: "tool_execution_finished",
+        schema_version: 1,
+        run_id: "run",
+        execution_id: "execution",
+        supervision_id: "supervision",
+        logical_session_id: "logical",
+        role_session_id: "role",
+        tool_call_id: "call",
+        tool_name: "bash",
+        elapsed_ms: 1,
+        recovery_count: 0,
+        outcome: "cleanup_unconfirmed",
+        cleanup: "unconfirmed",
+        ts: 2,
+      },
+      {
+        type: "tool_execution_cleanup_confirmed",
+        schema_version: 1,
+        run_id: "run",
+        execution_id: "execution",
+        supervision_id: "supervision",
+        logical_session_id: "logical",
+        role_session_id: "role",
+        tool_call_id: "call",
+        tool_name: "bash",
+        cleanup: "confirmed",
+        verification: "operator_confirmed_owner_marker_absent",
+        operator_note: "stopped",
+        operator: "operator",
+        ts: 3,
+      },
+    ] satisfies ToolExecutionRecord[];
+    expect(() => assertNoUnfinishedToolExecutions(records)).not.toThrow();
   });
 
   it("does not invoke an operation for a pre-aborted signal", async () => {

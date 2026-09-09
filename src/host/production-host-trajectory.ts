@@ -8,7 +8,7 @@ import {
 import type { MachineDefinition, Role } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
 import {
   sha256Canonical,
@@ -86,12 +86,7 @@ export async function resumeTrajectoryRole(
       runId: host.runId,
       visitIndex: 1,
       executionVisitIndex,
-      priorToolExecutionRecords: host.log
-        .records(host.runId)
-        .filter(
-          (record): record is ToolExecutionRecord =>
-            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-        ),
+      priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
       machineDefinition: host.loadedManifest.def,
       delegateTool: null,
       ...(host.uiContext !== undefined && { uiContext: host.uiContext }),

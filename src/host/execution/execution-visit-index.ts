@@ -1,4 +1,5 @@
 import type { PersistedRecord } from "../../persistence/log.js";
+import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 
 /** Reconstruct fresh executable invocation indexes independently of workspace visits. */
 export function nextExecutionVisitIndexes(
@@ -10,9 +11,7 @@ export function nextExecutionVisitIndexes(
   const knownRoles = new Set(Object.keys(lifecycleIndexes));
   for (const record of records) {
     if (!("run_id" in record) || record.run_id !== runId) continue;
-    if (record.type !== "tool_execution_started" && record.type !== "tool_execution_finished") {
-      continue;
-    }
+    if (!isToolExecutionRecord(record)) continue;
     let identity: unknown;
     try {
       identity = JSON.parse(record.logical_session_id);

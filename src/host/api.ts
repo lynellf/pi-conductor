@@ -48,6 +48,7 @@ import type {
   RunContextRecord,
   RunSeededRecord,
 } from "../persistence/log.js";
+import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { createManifestSnapshot } from "../persistence/trajectory-records.js";
 import { assertManifestWorkspaceBackendsSupported } from "./api-admission.js";
 import { runWithCompletion } from "./api-completion.js";
@@ -263,14 +264,7 @@ export async function resumeRun(
           )))
         : await loadPinnedManifest(manifestSnapshot, manifestPath, opts.modelRegistry);
     assertManifestWorkspaceBackendsSupported(loaded);
-    assertNoUnfinishedToolExecutions(
-      log
-        .records(runId)
-        .filter(
-          (record) =>
-            record.type === "tool_execution_started" || record.type === "tool_execution_finished",
-        ),
-    );
+    assertNoUnfinishedToolExecutions(log.records(runId).filter(isToolExecutionRecord));
     const endGuardRecords = log
       .records(runId)
       .filter(

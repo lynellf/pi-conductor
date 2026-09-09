@@ -1,6 +1,9 @@
 /** Host-owned scheduler construction for shared delegate tools. */
 
-import type { ToolExecutionRecord } from "../../persistence/tool-execution.js";
+import {
+  isToolExecutionRecord,
+  type ToolExecutionRecord,
+} from "../../persistence/tool-execution.js";
 import type { DelegateSubmissionArgs } from "../../seam/schema.js";
 import { assertNoUnfinishedToolExecutions } from "../execution/tool-execution-controller.js";
 import { prepareDelegateSubmission } from "./admission.js";
@@ -68,10 +71,7 @@ export function createDelegateScheduler(
         });
         assertNoUnfinishedToolExecutions(
           requiredRecords(opts)().filter(
-            (record) =>
-              (record.type === "tool_execution_started" ||
-                record.type === "tool_execution_finished") &&
-              record.role_session_id === task.childId,
+            (record) => isToolExecutionRecord(record) && record.role_session_id === task.childId,
           ) as readonly ToolExecutionRecord[],
         );
         return result;

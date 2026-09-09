@@ -40,7 +40,7 @@ import {
   inspectOrchestratorContext,
   type OrchestratorContextInspection,
 } from "../persistence/orchestrator-context-inspection.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { isToolExecutionRecord, type ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { projectToolExecutionStats, type ToolExecutionStats } from "./execution/execution-stats.js";
 
 export type {
@@ -172,8 +172,7 @@ export function runStats(
   const subagents = projectSubagentLifecycle(records, runId);
   const toolRecords = records.filter(
     (record): record is ToolExecutionRecord =>
-      (record.type === "tool_execution_started" || record.type === "tool_execution_finished") &&
-      record.run_id === runId,
+      isToolExecutionRecord(record) && record.run_id === runId,
   );
   const toolExecution = projectToolExecutionStats(toolRecords);
 
