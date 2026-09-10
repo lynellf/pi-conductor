@@ -109,10 +109,26 @@ unreadable observations, malformed requests, and an active run lease refuse
 confirmation. Original records remain unchanged; a correlated confirmation is
 appended only after verification. Then use `/conduct:resume <run-id>` (with the
 usual manifest resolution), repeating reconciliation for each unresolved ID.
-The production marker scan requires sufficient `/proc` visibility in the
-original host and PID/network namespaces; a permission denial while inspecting
-any process is not evidence that it exited and causes reconciliation to fail
-closed. Resolve that visibility issue before confirming cleanup.
+New executable-tool start records retain identity-only admission evidence for
+later `reconcile-tools` inspection (issue #103). Before launching the tool, the
+host saves a conservative start-tick boundary from a completed process snapshot,
+bound to the original boot, PID namespace and its init process, observer time
+namespace, and network namespace. Recovery validates that origin before using
+the evidence; it never substitutes a snapshot taken at recovery time.
+
+After an environment permission denial, a freshly stable process whose own
+start ticks are strictly older than the saved boundary is proven unrelated and
+does not block reconciliation. A readable positive ownership marker always wins.
+Equal/newer ticks and uncertain identities still fail closed; the age of a
+session leader alone does not grant the durable exemption. Live supervision
+retains its separate exact pre-spawn snapshot checks.
+
+Legacy records without admission evidence retain conservative observation.
+Restarting Pi does not retrofit evidence into those logs. Corrupt evidence or a
+different boot/PID/time/network namespace refuses inspection with repair
+guidance. Do not edit old records to manufacture a boundary. Use intact
+canonical storage and the original observation context. A permission denial is
+not evidence that a process exited.
 
 Observation failures report `operation`, `code`, and the observed `pid`,
 `start_time` (ticks since boot), and `process_group_id` when available. They
@@ -125,7 +141,8 @@ For `read_environ code=EACCES`, the scanner could not read a process's
 environment to check its marker. The PID may be unrelated to the run; its
 ownership is unverified. Inspect the suggested metadata, then check the
 observing account and procfs/process inspection restrictions with the original
-host's administrator. Restore the required visibility without weakening host
+host's administrator when no saved admission evidence proves it unrelated.
+Restore the required visibility without weakening host
 security settings or dumping environment contents. Repeat the inspection
 form `conduct reconcile-tools --log-dir <path> <run-id>`, omitting `--execution`,
 `--confirm-cleanup`, and `--note`. Only after inspection succeeds and all

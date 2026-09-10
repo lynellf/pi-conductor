@@ -49,6 +49,8 @@ export interface ProcessIdentity {
 /** Read-only process identities captured before one supervised invocation. */
 export interface ProcessObservationScope {
   readonly preexisting: ReadonlyMap<number, ProcessIdentity>;
+  /** Strict pre-launch cutoff restored only after original-origin validation (#103). */
+  readonly preexistingBefore?: string;
 }
 
 function isGone(error: unknown): boolean {
@@ -121,6 +123,11 @@ async function isProvenPreexisting(
   candidate: ProcessIdentity,
   scope: ProcessObservationScope,
 ): Promise<boolean> {
+  if (
+    scope.preexistingBefore !== undefined &&
+    BigInt(candidate.startTime) < BigInt(scope.preexistingBefore)
+  )
+    return true;
   const existing = scope.preexisting.get(candidate.pid);
   if (existing !== undefined && sameIdentity(existing, candidate)) return true;
   if (candidate.sessionId === undefined) return false;

@@ -10,6 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
+import type { ToolAdmissionEvidence } from "../../persistence/tool-admission.js";
 import {
   reconstructToolExecutionTimeline,
   type ToolExecutionFinishedRecord,
@@ -72,6 +73,8 @@ export interface ToolExecutionScope {
 
 export interface ToolExecutionRunOptions {
   readonly signal?: AbortSignal;
+  /** Capture recovery evidence before persisting the start and admitting side effects (#103). */
+  readonly captureAdmission?: () => Promise<ToolAdmissionEvidence>;
   /** A model-supplied deadline may shorten the pinned policy only. */
   readonly modelTimeoutSeconds?: number;
 }
@@ -145,6 +148,11 @@ export class ToolExecutionController {
     const recoveryCount = this.timeoutCountForSession();
     const startedAt = Date.now();
     const timeoutMs = safeMilliseconds(timeoutSeconds);
+    const admission =
+      runOptions.captureAdmission === undefined ? undefined : await runOptions.captureAdmission();
+    if (this.closed) {
+      throw new ToolExecutionError("tool_closed", "tool execution admission is closed");
+    }
     const started: ToolExecutionStartedRecord = {
       type: "tool_execution_started",
       schema_version: 1,
@@ -157,6 +165,7 @@ export class ToolExecutionController {
       tool_name: toolName,
       timeout_ms: timeoutMs,
       recovery_count: recoveryCount,
+      ...(admission === undefined ? {} : { admission }),
       ts: startedAt,
     };
     this.append(started);

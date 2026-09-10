@@ -4,6 +4,10 @@
 
 ### Bug fixes
 
+- Persist identity-only admission evidence before executable tools launch and
+  reuse it during `reconcile-tools` after observer restarts (#103). Proven older
+  inaccessible processes no longer block new-record recovery; unknown ownership,
+  legacy records, corrupt evidence, and origin mismatches remain conservative.
 - Show failed process-observation operations, error codes, and safe process
   identities in `conduct reconcile-tools`, with metadata-only inspection steps
   and recovery guidance. Keep cleanup unconfirmed on observation failures and

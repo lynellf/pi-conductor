@@ -64,6 +64,12 @@ const cleanupConfirmed: ToolExecutionCleanupConfirmedRecord = {
 };
 
 describe("tool execution persistence contract", () => {
+  it("rejects corrupt admission evidence with recovery guidance", () => {
+    expect(() =>
+      assertToolExecutionRecord({ ...started, admission: { preexisting_before: "PRIVATE" } }),
+    ).toThrow("Admission evidence is invalid; recover an intact canonical log");
+  });
+
   it("round trips starts and terminals through a reopened file log", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-conductor-tool-execution-"));
     try {

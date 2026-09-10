@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { toolAdmissionSchema } from "./tool-admission.js";
 import { toolExecutionDiagnosticSchema } from "./tool-execution-diagnostic.js";
 
 const id = Type.String({ minLength: 1 });
@@ -21,6 +22,7 @@ export const toolExecutionStartedSchema = Type.Object(
     tool_name: id,
     timeout_ms: Type.Integer({ minimum: 1 }),
     recovery_count: nonNegativeInteger,
+    admission: Type.Optional(toolAdmissionSchema),
     ts: Type.Number({ minimum: 0 }),
   },
   { additionalProperties: false },
@@ -101,6 +103,18 @@ export class ToolExecutionRecordError extends Error {
 
 /** Validate one execution record, including terminal cleanup/outcome invariants. */
 export function assertToolExecutionRecord(value: unknown): asserts value is ToolExecutionRecord {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === "tool_execution_started" &&
+    "admission" in value &&
+    !Value.Check(toolAdmissionSchema, value.admission)
+  ) {
+    throw new ToolExecutionRecordError(
+      "Admission evidence is invalid; recover an intact canonical log. Do not manufacture a new baseline or confirm cleanup from corrupt evidence.",
+    );
+  }
   const isStarted = Value.Check(toolExecutionStartedSchema, value);
   const isFinished = Value.Check(toolExecutionFinishedSchema, value);
   const isCleanupConfirmed = Value.Check(toolExecutionCleanupConfirmedSchema, value);

@@ -27,7 +27,10 @@ the runtime deliberately preserves the unresolved-cleanup barrier in that
 case. This follows Linux session rules: `setsid(2)` creates a new session and
 `setpgid(2)` cannot move a process between sessions ([setsid(2)](https://man7.org/linux/man-pages/man2/setsid.2.html),
 [setpgid(2)](https://man7.org/linux/man-pages/man2/setpgid.2.html)). A resumed
-run has no original pre-spawn snapshot and therefore remains conservative.
+run has no original live pre-spawn snapshot. Issue #103 now saves a separate
+conservative admission boundary for new executable-tool records and validates
+its origin during reconciliation. Legacy records remain conservative; see
+`../issue-103-admission-plan.md` and `../execution-controls.md`.
 
 Manual runtime evidence confirms that an inaccessible same-user process in a
 verified pre-existing session does not prevent `date` from returning output and

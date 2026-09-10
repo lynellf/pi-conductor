@@ -19,6 +19,7 @@ import {
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import { type FileToolWorkerModel, runFileToolWorker } from "./file-tool-worker.js";
 import { runSupervisedProcess, SupervisedProcessError } from "./supervised-process.js";
+import { captureToolAdmission } from "./tool-admission.js";
 import type { ToolExecutionController, ToolExecutionScope } from "./tool-execution-controller.js";
 import { ToolExecutionError as RuntimeToolExecutionError } from "./tool-execution-controller.js";
 import { toToolExecutionModelError } from "./tool-execution-model-error.js";
@@ -268,7 +269,7 @@ function supervisedFileDefinition(
             scope.assertOpen();
             return wrapped.execute(toolCallId, params, scope.signal, onUpdate, ctx);
           },
-          signal === undefined ? {} : { signal },
+          { captureAdmission: captureToolAdmission, ...(signal === undefined ? {} : { signal }) },
         );
       } catch (error) {
         throw toToolExecutionModelError(error);
@@ -319,6 +320,7 @@ function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefiniti
             return definition.execute(toolCallId, bashParams, scope.signal, onUpdate, ctx);
           },
           {
+            captureAdmission: captureToolAdmission,
             ...(signal === undefined ? {} : { signal }),
             ...(typeof bashParams.timeout === "number"
               ? { modelTimeoutSeconds: bashParams.timeout }

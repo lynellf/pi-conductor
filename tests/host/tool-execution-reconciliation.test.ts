@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as processIdentity from "../../src/host/execution/supervised-process-identity.js";
+import { captureToolAdmission } from "../../src/host/execution/tool-admission.js";
 import {
   inspectToolExecutionCleanup,
   reconcileToolExecutionCleanup,
@@ -57,6 +58,38 @@ function executionRecords(
 }
 
 describe("tool execution reconciliation API", () => {
+  it("refuses a different admission origin without scanning or changing the log", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-conductor-reconcile-origin-"));
+    const scan = vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);
+    try {
+      const log = new FileRecordLog({ baseDir: dir });
+      const [started, finished] = executionRecords("run-origin", "origin-token");
+      const admission = {
+        ...(await captureToolAdmission()),
+        boot_id: "00000000-0000-0000-0000-000000000000",
+      };
+      log.append({ ...started, admission });
+      log.append(finished);
+      const path = join(dir, "run-origin.jsonl");
+      const before = readFileSync(path, "utf8");
+      await expect(
+        inspectToolExecutionCleanup("run-origin", { baseDir: dir }),
+      ).rejects.toMatchObject({ code: "admission_origin_mismatch" });
+      await expect(
+        reconcileToolExecutionCleanup("run-origin", started.execution_id, {
+          baseDir: dir,
+          acknowledgment: true,
+          operatorNote: "synthetic fixture",
+        }),
+      ).rejects.toMatchObject({ code: "admission_origin_mismatch" });
+      expect(scan).not.toHaveBeenCalled();
+      expect(readFileSync(path, "utf8")).toBe(before);
+    } finally {
+      scan.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects malformed run IDs before creating a run file", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-conductor-reconcile-"));
     try {

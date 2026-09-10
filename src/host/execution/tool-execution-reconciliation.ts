@@ -15,6 +15,7 @@ import {
 import { FileRecordLog } from "../log-file.js";
 import type { ProcessIdentity } from "./supervised-process-identity.js";
 import * as processIdentity from "./supervised-process-identity.js";
+import { restoreToolAdmission } from "./tool-admission.js";
 
 const MAX_ID = 256;
 const MAX_NOTE = 1000;
@@ -104,7 +105,15 @@ async function inspectWithLog(
     const started = entry.started;
     // Record timestamps are wall-clock milliseconds; /proc startTime is a
     // boot-relative tick count, so they cannot be compared directly.
-    const processes = await processIdentity.findProcessesByOwnerToken(started.supervision_id);
+    const scope =
+      started.admission === undefined ? undefined : await restoreToolAdmission(started.admission);
+    // No minimum-start prefilter: marker-positive ownership takes precedence
+    // over durable age evidence, which only resolves denied environment reads.
+    const processes = await processIdentity.findProcessesByOwnerToken(
+      started.supervision_id,
+      undefined,
+      scope,
+    );
     currentProcesses.push(...processes);
     unresolved.push({
       executionId: started.execution_id,

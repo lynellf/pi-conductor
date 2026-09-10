@@ -25,6 +25,59 @@ async function withIdentityModule<T>(
 }
 
 describe("process observation scope", () => {
+  it.each([
+    {
+      label: "older inaccessible",
+      start: 199,
+      marker: false,
+      changes: false,
+      expected: "unrelated",
+    },
+    { label: "equal inaccessible", start: 200, marker: false, changes: false, expected: "unknown" },
+    {
+      label: "newer inaccessible in old session",
+      start: 201,
+      marker: false,
+      changes: false,
+      expected: "unknown",
+    },
+    { label: "older marker-positive", start: 199, marker: true, changes: false, expected: "owned" },
+    {
+      label: "reused PID during observation",
+      start: 199,
+      marker: false,
+      changes: true,
+      expected: "unknown",
+    },
+  ])("restored boundary classifies $label", async ({ start, marker, changes, expected }) => {
+    let reads = 0;
+    const readFile = vi.fn(async (path: string) => {
+      if (path === "/proc/123/stat") return stat(123, 700, changes && reads++ > 0 ? 201 : start);
+      if (path === "/proc/123/environ") {
+        if (marker) return "PI_CONDUCTOR_EXECUTION_ID=execution\0";
+        throw denied;
+      }
+      if (path === "/proc/700/stat") return stat(700, 700, 100);
+      if (path === "/proc/123/status") return `State:\tS\nUid:\t${uid}\n`;
+      throw new Error(`unexpected read: ${path}`);
+    });
+    await withIdentityModule(
+      readFile,
+      vi.fn().mockResolvedValue(["123"]),
+      async ({ findProcessesByOwnerToken }) => {
+        const result = findProcessesByOwnerToken("execution", undefined, {
+          preexisting: new Map(),
+          preexistingBefore: "200",
+        });
+        if (expected === "unknown")
+          await expect(result).rejects.toMatchObject({ code: "EACCES", pid: 123 });
+        else if (expected === "owned")
+          await expect(result).resolves.toMatchObject([{ pid: 123, ownerToken: "execution" }]);
+        else await expect(result).resolves.toEqual([]);
+      },
+    );
+  });
+
   it("captures only non-zombie stat identities and never reads environment", async () => {
     const readFile = vi.fn(async (path: string) => {
       if (path.endsWith("/101/stat")) return stat(101, 101, 10);
