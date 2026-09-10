@@ -218,11 +218,14 @@ export class ToolExecutionController {
     }
 
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        timeoutRequested = true;
-        operationAbort.abort();
-        reject(new Error("controller timeout"));
-      }, timeoutDelay(timeoutMs));
+      timer = setTimeout(
+        () => {
+          timeoutRequested = true;
+          operationAbort.abort();
+          reject(new Error("controller timeout"));
+        },
+        timeoutDelay(Math.max(0, deadline - Date.now())),
+      );
     });
     const abortPromise = new Promise<never>((_, reject) => {
       abortReject = reject;

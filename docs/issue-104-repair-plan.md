@@ -32,15 +32,25 @@ the existing FSM spec §11.1/§11.8 and tool-execution deadline contract (#76).
 
 Depends on slice 1 verification; reproduction tests can be authored independently.
 
-- [ ] Prove delayed admission postpones cancellation with fake timers.
-- [ ] Cancel at the original deadline and prohibit operations after expired admission.
-- [ ] Pass focused admission/controller tests, typecheck, build, and lint.
+- [x] Prove delayed admission postpones cancellation with fake timers.
+- [x] Cancel at the original deadline and prohibit operations after expired admission.
+- [x] Pass focused admission/controller tests, typecheck, build, and lint (27 focused tests).
 
 ## Final verification
 
-- [ ] Independent code review; address findings.
+- [x] Independent code review; address findings.
 - [ ] Full tests, typecheck, build, lint/format checks, and dependency audit.
 - [ ] Repeat preserved-log/installed-SDK read probe with normal status polling.
 - [ ] Verify linked CLI resolves to the rebuilt checkout.
 - [ ] Run a bounded application smoke with fresh logs and report its exact scope/results.
 - [ ] Record measurements and commit the reviewed repair.
+
+## Limits retained
+
+Admission capture itself still awaits read-only observation before the
+controller starts its operation; a capture that never settles is not made
+interruptible by this deadline-accounting fix. An expired capture cannot
+launch an operation. Status snapshots may lag by the adaptive cooldown;
+the spinner and elapsed-tool display continue from the last snapshot.
+One synchronous refresh can still delay the event loop, but refreshes no
+longer consume the entire interval repeatedly.
