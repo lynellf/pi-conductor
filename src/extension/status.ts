@@ -111,14 +111,10 @@ export function formatConductStatus(stats: RunStats, now = Date.now()): string {
   return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens}${contextToken} · handoffs=${handoffs} · ${cost}${escapeHint}`;
 }
 
-/**
- * Interval (ms) between status-line refreshes. The plan
- * calls for "coarse interval (250ms)" — polling more
- * frequently than the loop's transition rate wastes
- * cycles; polling less often stales the footer during
- * long-running role sessions. 250ms is a balance.
- */
+/** Spinner interval and minimum free time between durable stats refreshes. */
 const POLL_INTERVAL_MS = 250;
+// Spend at most about 10% of host time refreshing stats when logs grow (#104).
+const STATS_COOLDOWN_MULTIPLIER = 9;
 
 /**
  * Options the poller accepts on top of the
@@ -215,10 +211,8 @@ export function stopTrackedStatusPoller(options?: StopStatusPollerOptions): void
  * line. The spinner cycles on each tick. Terminal ticks
  * clear the line with no spinner.
  *
- * @param handle - The active `RunHandle`. The poller
- *                 reads `runStats()` on every tick; the
- *                 call is cheap (in-memory projection
- *                 over the run's records).
+ * @param handle - The active `RunHandle`. Durable stats refreshes are spaced
+ *                 according to their cost; spinner ticks reuse the latest stats.
  * @param setStatus - The TUI's status setter. Called
  *                    with the rendered line on every
  *                    non-terminal tick and with
@@ -239,6 +233,8 @@ export function startStatusPoller(
 ): StatusPollerStop {
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let stats: RunStats | undefined;
   // `-1` sentinel: the first tick establishes the
   // baseline (current history length) so historical
   // transitions are not re-notified (AC6). Any
@@ -251,9 +247,10 @@ export function startStatusPoller(
   let spinnerIndex = 0;
   const onNewTransitions = options.onNewTransitions;
 
-  const tick = (): void => {
+  const refresh = (): void => {
     if (stopped) return;
-    const stats = handle.runStats();
+    const started = performance.now();
+    stats = handle.runStats();
     const history = stats.transitionHistory;
 
     // Transition diff (Phase 8). The first tick
@@ -270,6 +267,7 @@ export function startStatusPoller(
       lastSeenLength = history.length;
       onNewTransitions(newEntries);
     }
+    if (stopped) return;
 
     if (
       stats.exitReason === "done" ||
@@ -283,6 +281,18 @@ export function startStatusPoller(
       return;
     }
 
+    // Schedule from completion, never catch up overdue full-log reads. The
+    // spinner has its own cheap timer so process I/O can progress during cooldown.
+    // https://nodejs.org/api/timers.html#scheduling-timers
+    const cooldown = Math.max(
+      POLL_INTERVAL_MS,
+      (performance.now() - started) * STATS_COOLDOWN_MULTIPLIER,
+    );
+    refreshTimer = setTimeout(refresh, Math.min(cooldown, 2_147_483_647));
+  };
+
+  const render = (): void => {
+    if (stopped || stats === undefined) return;
     // Prepend the spinner frame to the status line (C1:
     // poller-level, NOT inside `formatConductStatus`).
     // `formatConductStatus` stays pure — the existing 11
@@ -293,17 +303,16 @@ export function startStatusPoller(
     setStatus(`${frame} ${formatConductStatus(stats)}`);
   };
 
-  // Render the initial line immediately so the user
-  // sees something before the first interval fires.
-  tick();
-  timer = setInterval(tick, POLL_INTERVAL_MS);
-
   const stop: StatusPollerStop = (stopOptions = {}): void => {
     if (stopped) return;
     stopped = true;
     if (timer !== null) {
       clearInterval(timer);
       timer = null;
+    }
+    if (refreshTimer !== null) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
     }
 
     // Session replacement cleanup must not invoke either
@@ -323,5 +332,11 @@ export function startStatusPoller(
     if (stopOptions.clearStatus !== false) setStatus(undefined);
   };
 
+  // Define teardown before the first refresh: the run may already be terminal.
+  refresh();
+  if (!stopped) {
+    render();
+    timer = setInterval(render, POLL_INTERVAL_MS);
+  }
   return stop;
 }

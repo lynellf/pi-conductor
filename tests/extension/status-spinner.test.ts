@@ -106,7 +106,40 @@ describe("startStatusPoller — spinner", () => {
     // Clean up the interval BEFORE restoring real timers so the
     // fake timer queue is empty and no callbacks are orphaned.
     stopPoller?.();
+    vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("keeps rendering while expensive stats refreshes leave time for observation I/O", () => {
+    let measuredTime = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => measuredTime);
+    const runStats = vi.fn(() => {
+      measuredTime += 300;
+      return makeStats();
+    });
+    const lines: Array<string | undefined> = [];
+    stopPoller = startStatusPoller({ runStats } as unknown as RunHandle, (text) =>
+      lines.push(text),
+    );
+
+    // A 300 ms refresh needs 2,700 ms of cooldown for the 10% refresh budget.
+    vi.advanceTimersByTime(2_500);
+    expect(runStats).toHaveBeenCalledTimes(1);
+    expect(lines).toHaveLength(11);
+    expect(new Set(lines).size).toBe(10);
+    vi.advanceTimersByTime(200);
+    expect(runStats).toHaveBeenCalledTimes(2);
+
+    stopPoller();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears an initially terminal run without leaving polling timers", () => {
+    const { handle } = makeFakeHandle([makeStats({ state: "done", exitReason: "done" })]);
+    const setStatus = vi.fn();
+    stopPoller = startStatusPoller(handle, setStatus);
+    expect(setStatus).toHaveBeenLastCalledWith(undefined);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("spinner frame cycles across consecutive running ticks", () => {

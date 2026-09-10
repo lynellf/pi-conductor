@@ -43,6 +43,14 @@ function makeHandleWithControl(runControl: RunControl): RunHandle {
 }
 
 describe("RunHandle operator controls", () => {
+  it("reads one log snapshot for each status result", () => {
+    const handle = makeHandleWithControl({} as RunControl);
+    const reads = vi.spyOn(handle.log, "records");
+
+    expect(handle.runStats()).toMatchObject({ state: "orchestrator", exitReason: "running" });
+    expect(reads).toHaveBeenCalledTimes(1);
+  });
+
   it("delegates steer and followUp to the run-owned control", async () => {
     const steer = vi.fn().mockResolvedValue(undefined);
     const followUp = vi.fn().mockResolvedValue(undefined);

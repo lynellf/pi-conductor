@@ -45,7 +45,7 @@ import { buildRunMemory, type RunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
 import { rollup } from "../cost/rollup.js";
-import type { RecordLog } from "../persistence/log.js";
+import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { applyRunConfigOverride } from "./config.js";
 import type { LoadedManifest } from "./manifest.js";
 import { type RunControl, RunControlError, type RunResponse } from "./run-control.js";
@@ -193,7 +193,8 @@ export class RunHandle {
    */
   runStats(): RunStats {
     const records = this.log.records(this.runId);
-    const exitReason = this.computeExitReason();
+    // Status and exit reason must share one validated snapshot (#104).
+    const exitReason = this.computeExitReason(records);
     return runStats(records, this.runId, this.def, exitReason);
   }
 
@@ -276,11 +277,15 @@ export class RunHandle {
    * us: `session_failed` → "session_failed"; anything else →
    * "running".
    */
-  private computeExitReason(): RunStats["exitReason"] {
+  private computeExitReason(records?: readonly PersistedRecord[]): RunStats["exitReason"] {
     if (this.aborted) return "aborted";
-    const latest = this.log.latestCheckpoint(this.runId);
-    if (latest?.current_role === "done") return "done";
-    const records = this.log.records(this.runId);
+    records ??= this.log.records(this.runId);
+    for (let index = records.length - 1; index >= 0; index--) {
+      const record = records[index];
+      if (record?.type !== "checkpoint_snapshot") continue;
+      if (record.checkpoint.current_role === "done") return "done";
+      break;
+    }
     const lastRecord = records[records.length - 1];
     if (lastRecord !== undefined && lastRecord.type === "session_failed") {
       return "session_failed";
