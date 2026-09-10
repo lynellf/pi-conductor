@@ -4,6 +4,11 @@
 
 ### Bug fixes
 
+- Keep status refreshes from starving supervised process observation as run
+  logs grow (#104). Read one consistent snapshot per refresh, reuse it for
+  spinner updates, and leave observation time between expensive refreshes.
+- Count admission capture against the controller's original cancellation
+  deadline instead of starting a new full-length timer after capture (#104).
 - Persist identity-only admission evidence before executable tools launch and
   reuse it during `reconcile-tools` after observer restarts (#103). Proven older
   inaccessible processes no longer block new-record recovery; unknown ownership,

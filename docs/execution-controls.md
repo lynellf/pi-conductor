@@ -92,6 +92,20 @@ Run status includes the active tool, elapsed time, deadline, active execution
 count, and timeout recovery state. Completed execution records remain available
 for diagnosis after the invocation stops.
 
+The spinner renders every 250 ms using the latest status snapshot. Durable
+stats refreshes use one validated log snapshot, then wait at least 250 ms or
+nine times their measured duration before refreshing again (#104). Expensive
+refreshes therefore leave time for process observation instead of repeatedly
+occupying the event loop. Transition/counter updates can lag by that cooldown;
+elapsed-tool time continues updating between snapshots.
+
+Admission capture consumes the original tool deadline. Once capture returns,
+the controller arms cancellation for only the remaining budget; expired
+admission cannot launch an operation. Capture itself remains a read-only
+observation that must settle before operation admission. Timers and cleanup
+observations still depend on host scheduling, so the deadline is not a promise
+that terminal recording finishes at that exact wall-clock instant.
+
 Operators can inspect and reconcile unresolved executable tools with:
 
 ```text

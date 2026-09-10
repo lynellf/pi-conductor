@@ -39,11 +39,44 @@ Depends on slice 1 verification; reproduction tests can be authored independentl
 ## Final verification
 
 - [x] Independent code review; address findings.
-- [ ] Full tests, typecheck, build, lint/format checks, and dependency audit.
-- [ ] Repeat preserved-log/installed-SDK read probe with normal status polling.
-- [ ] Verify linked CLI resolves to the rebuilt checkout.
-- [ ] Run a bounded application smoke with fresh logs and report its exact scope/results.
-- [ ] Record measurements and commit the reviewed repair.
+- [x] Full tests, typecheck, build, lint/format checks, and dependency audit.
+- [x] Repeat preserved-log/installed-SDK read probe with normal status polling.
+- [x] Verify linked CLI resolves to the rebuilt checkout.
+- [x] Run a bounded application smoke with fresh logs and report its exact scope/results.
+- [x] Record measurements and commit the reviewed repair.
+
+## Verification results (2026-09-10)
+
+- Full suite: **2,197 tests across 210 files passed** in 200 seconds, including
+  the new 2,001-record synthetic status/real-worker integration fixture and
+  all ownership, admission, reconciliation, and package guards.
+- Typecheck, build, lint, and format checks passed. Production dependency
+  audit is clean. The full audit retains the existing one low and two
+  moderate development advisories, with no high/critical findings and no
+  dependency changes.
+- The same preserved-log probe with Pi 0.85.1 and Node 26.5.0 now completes
+  the read with status polling in **669 ms** (670 ms without polling).
+  Before the repair it exceeded the eight-second deadline and settled after
+  10,219 ms. The repaired probe performed one 174 ms initial stats refresh
+  and left the worker's observation path free to progress during cooldown.
+- The linked `conduct` executable resolves to this checkout's rebuilt
+  `dist/bin/conduct.js`; the extension loads the same checkout's source.
+- A fresh production-host smoke used the installed Pi SDK and live
+  `openai-codex:gpt-5.6-sol` at low effort, with the actual status poller,
+  two read-only FSM roles, a $1 run cap, 20-second tool deadlines, and a
+  three-minute abort limit. It completed **orchestrator → checker →
+  orchestrator → done** in **20.0 seconds**, with two reads and one grep
+  completing in **724, 713, and 716 ms**. All three starts retained admission
+  evidence and all three finishes confirmed cleanup. Reported usage cost
+  was **$0.102741**. Both source-file hashes and the original unresolved-run
+  log hash remained unchanged.
+- Live-smoke stats refreshes peaked at 1.63 ms; the handoff notifications
+  arrived within 220 ms of their durable transitions. This small-run result
+  complements the preserved large-log probe; it is not a full campaign or
+  a replay of the original concurrent delegation workload.
+- The preliminary smoke manifest rejected a zero recovery allowance before
+  run creation. The valid smoke used the required positive allowance of one;
+  no tool timed out or retried.
 
 ## Limits retained
 

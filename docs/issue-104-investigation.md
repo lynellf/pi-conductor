@@ -5,6 +5,8 @@ Investigation date: 2026-09-10. Runtime examined: conductor `92e2724`
 References: orchestrator FSM spec §11.1 and §11.8; execution controls
 issues #76, #102, and #103.
 
+Follow-up implementation and validation: [repair plan](issue-104-repair-plan.md).
+
 ## Conclusion and limits
 
 Status polling can make a successful file worker exceed its supervision
@@ -17,7 +19,8 @@ This is a concrete defect and a strong candidate explanation for the reported
 progressive slowdown. It does **not** prove the exact cause of the original
 `leader_identity_unobserved` diagnostic. The reproduction observed the
 leader and eventually confirmed cleanup; the original log lacks spawn,
-admission, output, and exit timings. No production fix is included here.
+admission, output, and exit timings. This note records the initial
+investigation; subsequent implementation results are in the linked repair plan.
 
 ## Historical evidence
 
@@ -167,4 +170,4 @@ markers as confirmed cleanup would not address the reproduced defect.
 - [x] Verify read-only reconciliation and the linked executable target.
 - [x] Obtain independent review of the polling finding and its limitations.
 - [ ] Reproduce the exact historical `leader_identity_unobserved` path.
-- [ ] Implement and verify a production repair.
+- [x] Implement and verify the two reproduced defects (see the repair plan).
