@@ -4,6 +4,8 @@
 
 ### Bug fixes
 
+- Give fresh hosts the same resolved tool policies recorded in the durable
+  manifest snapshot (#106).
 - Report terminal CLI session failures with exit 1 and consistent final JSON
   status, including failures followed by checkpoint/context records (#105).
 - Explain unresolved environment visibility for services activated after tool
@@ -28,6 +30,12 @@
   Report missing or invalid SDK installations with repair guidance.
 - Initialize the CLI model registry through Pi's newer `ModelRuntime` API
   while retaining compatibility with the pinned older SDK.
+
+### In development
+
+- Add strict delegated Bubblewrap policy parsing and static prerequisite
+  assessment foundations (#106). Sandbox profiles fail admission explicitly
+  until real bootstrap/isolation/cleanup gates pass; child Bash is not enabled.
 
 ## [0.21.7] - 2026-09-09
 

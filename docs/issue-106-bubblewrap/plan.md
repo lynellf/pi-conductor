@@ -1,6 +1,7 @@
 # Issue #106 implementation plan
 
-Status: Prepared for spec acknowledgement; implementation has not started.
+Status: Specification acknowledged on 2026-09-12; policy/static prerequisites
+implemented. Real bootstrap proof awaits authorized patched-runtime preparation.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
 integration, and final verification. No stage requires a separate human review
@@ -14,7 +15,7 @@ after the new spec is acknowledged, unless the contract changes.
 - [x] Inspect pinned Bubblewrap source for status, namespace, and control-FD ordering.
 - [x] Reject `--block-fd` as a fail-closed authorization mechanism.
 - [x] Finish independent review of the concrete draft and reconcile findings.
-- [ ] Obtain overseer acknowledgement of the new specification.
+- [x] Obtain overseer acknowledgement of the new specification.
 
 ## Increment A — policy and pinning (Luna)
 
@@ -31,6 +32,20 @@ after the new spec is acknowledged, unless the contract changes.
    Verify: submission/restart tests and schema round trips.
 
 Dependencies: acknowledged spec. No child Bash enabled by this increment.
+
+Progress:
+
+- [x] Parse and validate explicit Bubblewrap policy, omission defaults, literal
+      environment/runtime paths, writable-path syntax, and output limit.
+- [x] Fix fresh-host consumption of the manifest's pinned tool-policy defaults.
+- [x] Reproduce and repair both behaviors with focused tests; review PATH authority.
+- [ ] Resolve writable authority against the exact admitted task projection.
+- [ ] Pin runtime identity and accepted/start records; exercise changed-input restart.
+
+The parser establishes syntax only. Task projection, filesystem provenance,
+runtime capture, and durable sandbox admission are not implemented. Both batch
+admission and direct SDK child creation reject a defined execution block while
+the backend is incomplete; no file-only fallback is used for opted-in profiles.
 
 ## Increment B — prerequisite and bootstrap proof (Terra; Sol reviews)
 
@@ -51,6 +66,18 @@ Dependencies: acknowledged spec. No child Bash enabled by this increment.
 Dependencies: acknowledged spec and a verified patched test runtime. If the
 protocol or its identity proof cannot be implemented as specified, stop this
 increment and revise the contract before exposing Bash.
+
+Progress:
+
+- [x] Static prerequisite assessment and exact approved-build binding pass review.
+- [ ] Collect production filesystem/package/capability observations through a
+      trusted host adapter; no production collector is implemented yet.
+- [ ] Run the real patched-runtime capability and bootstrap proof.
+
+Static assessment accepts host-observed facts and separately approved build
+evidence for evaluation only. It never runs a binary, installs software, or
+claims a capability probe passed. Production delegation does not consume it
+until the collector and real execution gates are complete.
 
 ## Increment C — private execution files (Sol; Terra reviews)
 
@@ -108,14 +135,35 @@ for these deterministic and real-backend acceptance tests.
 
 - [ ] All acceptance boxes in the spec are satisfied with recorded evidence.
 - [ ] Cross-model review findings are reconciled; no security blocker remains.
-- [ ] `pnpm typecheck` and `pnpm build` pass.
+- [x] `pnpm typecheck` and `pnpm build` pass.
 - [ ] `pnpm test` passes, including core import guards and real sandbox tests.
-- [ ] `pnpm lint` and `pnpm format:check` pass.
-- [ ] `pnpm audit --prod` passes; any other advisories are reported accurately.
-- [ ] User-facing docs and changelog describe actual supported configuration.
+- [x] `pnpm lint` and `pnpm format:check` pass.
+- [x] `pnpm audit --prod` passes; any other advisories are reported accurately.
+- [x] User-facing docs and changelog describe actual supported configuration.
 - [ ] Rebuilt linked CLI/extension includes the feature; fixture resources settle.
-- [ ] Changes are committed and the final report distinguishes verified guarantees
+- [x] Changes are committed and the final report distinguishes verified guarantees
       from unsupported platforms, prerequisites, and remaining limitations.
+
+## Foundation verification, 2026-09-12
+
+- [x] Cross-model review of policy, fresh-host pinning, unavailable-backend
+      guards, and static prerequisites; required findings repaired.
+- [x] Full existing-suite coverage followed by affected packaging/static rechecks.
+      The broad run passed 209 files / 2,257 tests. Three packaging suites failed
+      during an in-progress source build; after stabilization, those suites plus
+      the final prerequisite suite passed all 58 tests in four files. No other
+      failures remained. This is not evidence for real Bubblewrap execution.
+- [x] Rebuild and smoke-check linked output: legacy defaults resolve to file-only,
+      configured sandbox dispatch remains unavailable, and `conduct` resolves
+      to this checkout's `dist/bin/conduct.js`.
+- [x] Production audit has no advisories. All-dependency audit still reports the
+      existing two moderate Vitest/mocker and one low esbuild development
+      advisories; no high/critical advisories and no dependency changes.
+
+Implementation commits: `ffa7c91`, `fbe7947`, `6cab9c8`, `4974a09`, `c66c6e5`.
+No live observation collector, prepared runtime, bootstrap, sandbox output,
+ingestion, or delegated command tool is delivered yet. The unchecked feature
+gates remain authoritative; installing prerequisites is not automatic enablement.
 
 ## Current blocker to real execution verification
 
@@ -123,6 +171,8 @@ The installed package is `bubblewrap 0.9.0-1ubuntu0.1`, with no verified fix for
 the required setup-traversal CVE. No replacement was installed and no namespace
 settings were changed. An authorized patched test runtime is required for B4
 and every real sandbox acceptance gate; unit tests alone cannot mark them done.
+The [bounded test-runtime proposal](test-runtime-proposal.md) identifies the
+specific installation/preparation action awaiting operator authorization.
 
 
 ## Review reconciliation

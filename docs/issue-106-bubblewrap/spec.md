@@ -1,6 +1,6 @@
 # Issue #106: delegated command execution through Bubblewrap
 
-Status: Draft for overseer acknowledgement; not implemented.
+Status: Acknowledged by the overseer on 2026-09-12; implementation in progress.
 
 ## 1. Objective and authority
 
@@ -16,7 +16,7 @@ This extends [delegation](../issue-17-delegation-lite/spec.md) and
 Workspace selection and command isolation remain different contracts; the
 unavailable `workspace.backend: container` option is not enabled or repurposed.
 
-Assumptions proposed for approval:
+Approved assumptions:
 
 - Initial platform is Linux with a verified patched, non-setuid Bubblewrap.
 - Initial command networking is always disabled. Broader networking and
@@ -30,7 +30,8 @@ Assumptions proposed for approval:
 
 ## 2. Proposed profile configuration
 
-This syntax is proposed, not currently accepted by the application:
+This syntax is parsed by the current development build. Command dispatch remains
+disabled with `sandbox-backend-unavailable` until the real execution gates pass:
 
 ```yaml
 subagents:
@@ -389,7 +390,7 @@ primary repository from the child, or claim unverified cleanup/security.
 
 ## 9. Acceptance and delivery gates
 
-- [ ] Default profiles are file-only; malformed/unsupported settings fail before dispatch.
+- [x] Default profiles are file-only; malformed/unsupported settings fail before dispatch.
 - [ ] Policy and runtime authority are pinned before queueing and verified across restart;
       altered source/snapshot/manifest inputs cannot substitute for pinned authority.
 - [ ] A child completes edit → failing test → diagnostics → repair → passing test
