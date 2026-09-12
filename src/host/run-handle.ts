@@ -103,6 +103,8 @@ export class RunHandle {
     finalCheckpoint: Checkpoint;
     exitReason: "done" | "session_failed" | "aborted";
   }>;
+  /** Terminal result reported by the loop, once completion has settled. */
+  private terminalExitReason: RunStats["exitReason"] | undefined;
   private readonly requestAbort: (reason: string) => Promise<void>;
   private readonly runControl: RunControl | undefined;
   private aborted = false;
@@ -136,7 +138,13 @@ export class RunHandle {
     this.configOverrideContainer = opts.configOverrideContainer;
     this.requestAbort = opts.requestAbort;
     this.runControl = opts.runControl;
-    this.completionPromise = opts.completionPromise;
+    this.completionPromise = opts.completionPromise.then((result) => {
+      // The loop owns terminal classification. Persisted cleanup and
+      // observability records may be appended after the terminal lifecycle
+      // record, so record-derived status is only a live-run fallback.
+      this.terminalExitReason = result.exitReason;
+      return result;
+    });
   }
 
   /** Resolves with the final `Checkpoint` and `exitReason` when the
@@ -278,6 +286,7 @@ export class RunHandle {
    * "running".
    */
   private computeExitReason(records?: readonly PersistedRecord[]): RunStats["exitReason"] {
+    if (this.terminalExitReason !== undefined) return this.terminalExitReason;
     if (this.aborted) return "aborted";
     records ??= this.log.records(this.runId);
     for (let index = records.length - 1; index >= 0; index--) {

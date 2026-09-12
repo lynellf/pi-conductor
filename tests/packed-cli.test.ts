@@ -132,6 +132,53 @@ console.log(JSON.stringify({ code, messages, exits }));
   });
 });
 
+it.each([
+  ["done", 0, "done"],
+  ["session_failed", 1, "tool_cleanup_unconfirmed"],
+  ["aborted", 0, "user_aborted"],
+] as const)("runs the built conduct entrypoint with terminal reason %s", (exitReason, expectedStatus, failureReason) => {
+  const manifest = join(sandbox, `entrypoint-${exitReason}.yaml`);
+  writeFileSync(manifest, "version: 1\nroles: []\n", "utf8");
+  const stub = join(packageRoot, `entrypoint-index-${exitReason}.mjs`);
+  writeFileSync(
+    stub,
+    `
+const reason = ${JSON.stringify(exitReason)};
+export const createProductionHost = () => { throw new Error('host factory should not run'); };
+export const startRun = async () => ({
+  runId: 'packed-entrypoint-status',
+  loadedManifest: { warnings: [] },
+  completion: async () => ({ finalCheckpoint: { current_role: reason === 'done' ? 'done' : 'orchestrator' }, exitReason: reason }),
+  latestResponse: () => null,
+  runStats: () => ({ state: reason === 'done' ? 'done' : 'orchestrator', exitReason: reason === 'session_failed' ? 'running' : reason, recordsCount: 4, failureReason: ${JSON.stringify(failureReason)} }),
+});
+`,
+  );
+  const preload = join(packageRoot, `entrypoint-preload-${exitReason}.mjs`);
+  writeFileSync(
+    preload,
+    `
+import { registerHooks } from 'node:module';
+registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === '../index.js' && context.parentURL?.endsWith('/dist/bin/cli-main.js')) {
+    return { url: ${JSON.stringify(pathToFileURL(stub).href)}, shortCircuit: true };
+  }
+  return nextResolve(specifier, context);
+} });
+`,
+  );
+  const result = invoke(["--non-interactive", "--json", manifest, "goal"], {
+    NODE_OPTIONS: `--import ${preload}`,
+  });
+  expect(result.status, result.stderr).toBe(expectedStatus);
+  const document = JSON.parse(result.stdout) as {
+    exit_reason: string;
+    run_stats: { exitReason: string };
+  };
+  expect(document.exit_reason).toBe(exitReason);
+  expect(document.run_stats.exitReason).toBe(exitReason);
+});
+
 it("explains how to supply the SDK when there are no peers or Pi on PATH", () => {
   const result = invoke([], { PATH: "" });
   expect({ status: result.status, stderr: result.stderr }).toEqual({

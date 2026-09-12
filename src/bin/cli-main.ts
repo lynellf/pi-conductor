@@ -11,7 +11,7 @@
  *     <manifestPath> <goal...>
  *
  * Exit codes:
- *   0 — run reached a terminal state (success or expected failure)
+ *   0 — run completed successfully or was explicitly aborted
  *   1 — startRun / orchestration error (model not found, manifest
  *       parse error, runtime error, etc.)
  *   2 — usage error (missing argv)
@@ -312,6 +312,11 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
 
       const { finalCheckpoint, exitReason } = await handle.completion();
       if (parsed.json) {
+        const stats = handle.runStats();
+        // `completion()` is the authoritative terminal result. Cleanup and
+        // observability records can trail the terminal lifecycle record, so a
+        // fresh record projection may still report `running`.
+        const terminalStats = stats.exitReason === exitReason ? stats : { ...stats, exitReason };
         const latestResponse = handle.latestResponse();
         const result: CliJsonResult = {
           schema_version: 1,
@@ -326,7 +331,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
                   text: latestResponse.text,
                   completed_at: latestResponse.completedAt,
                 },
-          run_stats: handle.runStats(),
+          run_stats: terminalStats,
         };
         await writeOutput(stdout, `${JSON.stringify(result)}\n`);
       } else {
@@ -334,7 +339,7 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
           `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}`,
         );
       }
-      return 0;
+      return exitReason === "session_failed" ? 1 : 0;
     } finally {
       removeSignalHandlers();
     }

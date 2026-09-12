@@ -5,11 +5,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createInitialCheckpoint } from "../../src/core/reduce.js";
-import type { MachineDefinition } from "../../src/core/types.js";
+import type { MachineDefinition, SessionLifecycleEvent } from "../../src/core/types.js";
 import type { LoadedManifest } from "../../src/host/manifest.js";
 import type { RunControl, RunResponse } from "../../src/host/run-control.js";
 import { RunHandle } from "../../src/host/run-handle.js";
-import { InMemoryRecordLog } from "../../src/persistence/log.js";
+import { type CheckpointSnapshot, InMemoryRecordLog } from "../../src/persistence/log.js";
 
 function makeDef(): MachineDefinition {
   return {
@@ -80,6 +80,112 @@ describe("RunHandle operator controls", () => {
     const handle = makeHandleWithControl(runControl as unknown as RunControl);
 
     expect(handle.latestResponse()).toEqual(response);
+  });
+
+  it("keeps the completed failure status after trailing records are appended", async () => {
+    const def = { ...makeDef(), workers: ["worker"], max_visits: { worker: 1 } };
+    const log = new InMemoryRecordLog();
+    const finalCheckpoint = {
+      ...createInitialCheckpoint(def),
+      run_id: "failed-run",
+      current_role: "worker" as const,
+    };
+    const handle = new RunHandle({
+      runId: "failed-run",
+      def,
+      log,
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: Promise.resolve({
+        finalCheckpoint,
+        exitReason: "session_failed" as const,
+      }),
+    });
+
+    await handle.completion();
+    log.append({
+      type: "session_failed",
+      run_id: "failed-run",
+      role: "worker",
+      visit_index: 1,
+      state: "worker",
+      model: null,
+      session_file: "session.jsonl",
+      parent_session: null,
+      failure_reason: "tool_cleanup_unconfirmed",
+      ts: 1,
+    } satisfies SessionLifecycleEvent);
+    log.append({
+      type: "checkpoint_snapshot",
+      checkpoint: finalCheckpoint,
+    } satisfies CheckpointSnapshot);
+
+    expect(handle.runStats().exitReason).toBe("session_failed");
+  });
+
+  it("does not expose a failure until pending completion settles during recovery", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    let settle!: (value: {
+      finalCheckpoint: ReturnType<typeof createInitialCheckpoint>;
+      exitReason: "session_failed";
+    }) => void;
+    const completionPromise = new Promise<{
+      finalCheckpoint: ReturnType<typeof createInitialCheckpoint>;
+      exitReason: "session_failed";
+    }>((resolve) => {
+      settle = resolve;
+    });
+    const handle = new RunHandle({
+      runId: "recovering-run",
+      def,
+      log,
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise,
+    });
+    log.append({
+      type: "session_failed",
+      run_id: "recovering-run",
+      role: "orchestrator",
+      visit_index: 1,
+      state: "orchestrator",
+      model: null,
+      session_file: "session.jsonl",
+      parent_session: null,
+      failure_reason: "tool_cleanup_unconfirmed",
+      ts: 1,
+    } satisfies SessionLifecycleEvent);
+    log.append({
+      type: "session_started",
+      run_id: "recovering-run",
+      role: "orchestrator",
+      visit_index: 1,
+      state: "orchestrator",
+      model: null,
+      session_file: "session.jsonl",
+      parent_session: null,
+      ts: 1,
+    } satisfies SessionLifecycleEvent);
+
+    expect(handle.runStats().exitReason).toBe("running");
+    settle({ finalCheckpoint: createInitialCheckpoint(def), exitReason: "session_failed" });
+    await handle.completion();
+    expect(handle.runStats().exitReason).toBe("session_failed");
   });
 });
 

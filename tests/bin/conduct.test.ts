@@ -30,7 +30,7 @@ import { Readable, Writable } from "node:stream";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
-import { runCli } from "../../src/bin/cli-main.js";
+import { type CliJsonResult, runCli } from "../../src/bin/cli-main.js";
 import type {
   HostFactoryContext,
   LoadedManifest,
@@ -674,7 +674,7 @@ describe("runCli delegation to startRun", () => {
     }
   });
 
-  it("writes a JSON result for session_failed without changing terminal exit semantics", async () => {
+  it("returns nonzero for session_failed while preserving the JSON terminal result", async () => {
     const dir = makeManifestDir();
     try {
       const stdout = makeWritableRecorder();
@@ -692,7 +692,7 @@ describe("runCli delegation to startRun", () => {
         stdout,
       });
 
-      expect(code).toBe(0);
+      expect(code).toBe(1);
       expect(JSON.parse(stdout.chunks.join(""))).toMatchObject({
         schema_version: 1,
         run_id: "run-json-failed",
@@ -700,6 +700,37 @@ describe("runCli delegation to startRun", () => {
         final_role: "worker",
         latest_response: null,
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses completion as the terminal authority when runStats has trailing-record drift", async () => {
+    const dir = makeManifestDir();
+    try {
+      const stdout = makeWritableRecorder();
+      const code = await runCli(["--json", "manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({
+          runId: "run-json-drift",
+          finalRole: "worker",
+          exitReason: "session_failed",
+          runStats: {
+            state: "worker",
+            exitReason: "running",
+            recordsCount: 8,
+          },
+        }),
+        modelRegistry: stubModelRegistry,
+        console: makeConsole(),
+        exit: makeExit().fn,
+        cwd: dir,
+        stdout,
+      });
+
+      const result = JSON.parse(stdout.chunks.join("")) as CliJsonResult;
+      expect(code).toBe(1);
+      expect(result.exit_reason).toBe("session_failed");
+      expect(result.run_stats.exitReason).toBe("session_failed");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
