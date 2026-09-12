@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildSpawnCallback } from "../../src/host/delegation/child-session.js";
+import { buildSpawnCallback, createChildSession } from "../../src/host/delegation/child-session.js";
 import type { SpawnChildConfig } from "../../src/host/delegation/delegate-tool.js";
 import type { DelegateToolFactoryOptions } from "../../src/host/delegation/delegate-tool-factory.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
@@ -45,6 +45,20 @@ function options(manager: DelegationManager, persisted: unknown[]): DelegateTool
 }
 
 describe("child SDK session lifecycle boundary", () => {
+  it("cannot bypass the unverified sandbox backend gate through direct session creation (#106)", async () => {
+    const persisted: unknown[] = [];
+    await expect(
+      createChildSession(options(new DelegationManager(), persisted), {
+        ...config,
+        profile: {
+          ...config.profile,
+          execution: { backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "sandbox-backend-unavailable" });
+    expect(persisted).toEqual([]);
+  });
+
   it("does not create or prompt a child cancelled before SDK creation", async () => {
     const manager = new DelegationManager();
     await manager.abort(config.childId);

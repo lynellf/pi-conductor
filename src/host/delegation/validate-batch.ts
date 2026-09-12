@@ -17,6 +17,7 @@
 
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
 import type { ContextArtifact, DelegateSubmissionArgs } from "../../seam/schema.js";
+import { SANDBOX_UNAVAILABLE_MESSAGE } from "../execution/sandbox/enablement.js";
 import { isValidTaskId } from "./ids.js";
 import { isSafeExactProjectionPath } from "./projection.js";
 import {
@@ -35,6 +36,7 @@ export type BatchValidationErrorCode =
   | "unallowed-subagent"
   | "primary-not-git"
   | "primary-dirty"
+  | "sandbox-backend-unavailable"
   | ProjectionAdmissionErrorCode;
 
 export interface BatchValidationError {
@@ -166,6 +168,12 @@ export function validateBatch(
   // worktree. Profiles without one retain the Issue #52 runtime path gate.
   for (const task of args.tasks) {
     const profile = profileByName.get(task.subagent);
+    if (profile?.execution !== undefined) {
+      errors.push({
+        code: "sandbox-backend-unavailable",
+        message: `task '${task.id}': ${SANDBOX_UNAVAILABLE_MESSAGE}`,
+      });
+    }
     const projectionPolicy = profile?.workspace?.projection;
     if (projectionPolicy !== undefined) {
       const resolution = resolveEffectiveProjection(

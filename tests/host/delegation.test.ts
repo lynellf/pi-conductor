@@ -67,6 +67,25 @@ describe("delegate task schema — Issue #52", () => {
 });
 
 describe("delegation batch gate (§4)", () => {
+  it("rejects sandbox requests before acceptance while real backend proof is unavailable (#106)", () => {
+    const result = validateBatch(
+      { tasks: [{ id: "task-1", subagent: "implementer", objective: "x", expected_output: "y" }] },
+      policy,
+      [
+        {
+          ...profile,
+          execution: { backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] },
+        },
+      ],
+      3,
+      { isGit: true, isClean: true, headCommit: "base" },
+    );
+    expect(result).toMatchObject({
+      valid: false,
+      errors: [{ code: "sandbox-backend-unavailable" }],
+    });
+  });
+
   it("rejects a dirty primary checkout before a child can be admitted", () => {
     const result = validateBatch(
       {

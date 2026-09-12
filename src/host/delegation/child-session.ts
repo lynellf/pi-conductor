@@ -9,6 +9,7 @@ import {
 import { resolveToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { SubagentStartedRecord } from "../../persistence/log.js";
 import { SessionState } from "../cost.js";
+import { SandboxBackendUnavailableError } from "../execution/sandbox/enablement.js";
 import { ToolExecutionController } from "../execution/tool-execution-controller.js";
 import { toToolExecutionModelError } from "../execution/tool-execution-model-error.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
@@ -123,6 +124,9 @@ export async function createChildSession(
   config: SpawnChildConfig,
 ): Promise<CreatedChild> {
   if (cancelled(opts, config.childId)) throw new Error("child cancelled before creation");
+  if (config.profile.execution !== undefined) {
+    throw new SandboxBackendUnavailableError();
+  }
   const entry = config.profile.models[0];
   if (entry === undefined) throw new Error(`subagent '${config.profile.name}' has no model`);
   const [provider, modelId] = splitModel(entry.model);
