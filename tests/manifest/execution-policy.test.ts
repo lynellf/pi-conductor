@@ -8,6 +8,7 @@ import { parseManifest } from "../../src/manifest/parse.js";
 import {
   DEFAULT_SUBAGENT_EXECUTION_POLICY,
   resolveSubagentExecutionPolicy,
+  validateSubagentExecutionPolicy,
 } from "../../src/manifest/subagent-execution-policy.js";
 import { type Manifest, ManifestParseError } from "../../src/manifest/types.js";
 import { validateManifest } from "../../src/manifest/validate.js";
@@ -234,6 +235,11 @@ subagents:
     ["network: bridge", "network"],
     ["environment: {HOME: /host}", "environment"],
     ["environment: {PATH: relative/bin}", "environment"],
+    ["environment: {PATH: /workspace/bin}", "environment"],
+    ["environment: {PATH: /proc}", "environment"],
+    ["environment: {PATH: /usr/../../home/sandbox}", "environment"],
+    ["environment: {PATH: //usr/bin}", "environment"],
+    ["environment: {PATH: /}", "environment"],
     ["max_output_bytes: 0", "max_output_bytes"],
   ])("rejects unsafe execution setting %s", (setting) => {
     expect(() =>
@@ -258,18 +264,24 @@ subagents:
   });
 
   it("requires runtime_root for bubblewrap", () => {
-    expect(() => resolveSubagentExecutionPolicy({ backend: "bubblewrap" })).toThrow(
-      ManifestParseError,
-    );
+    expect(() =>
+      parseManifest(
+        `${BASE_YAML.replace(/subagents:[\s\S]*$/, "")}subagents:\n  - name: helper\n    models: [stub:model]\n    max_session_cost_usd: 1\n    system_prompt: helper.md\n    execution: { backend: bubblewrap, writable_paths: [] }\n`,
+      ),
+    ).toThrow(ManifestParseError);
   });
 
   it("rejects an explicitly empty execution block", () => {
-    expect(() => resolveSubagentExecutionPolicy({})).toThrow(ManifestParseError);
+    expect(() =>
+      parseManifest(
+        `${BASE_YAML.replace(/subagents:[\s\S]*$/, "")}subagents:\n  - name: helper\n    models: [stub:model]\n    max_session_cost_usd: 1\n    system_prompt: helper.md\n    execution: {}\n`,
+      ),
+    ).toThrow(ManifestParseError);
   });
 
   it("rejects sandbox authority that would otherwise silently use file-only", () => {
-    expect(() => resolveSubagentExecutionPolicy({ writable_paths: ["src"] })).toThrow(
-      ManifestParseError,
+    expect(validateSubagentExecutionPolicy({ writable_paths: ["src"] })).toContain(
+      'execution sandbox authority requires backend "bubblewrap"',
     );
   });
 });

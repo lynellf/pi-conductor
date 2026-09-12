@@ -22,9 +22,9 @@ export type SubagentExecutionNetwork = "none";
 
 /** Manifest-facing opt-in command policy for one delegated profile. */
 export interface SubagentExecutionConfig {
-  readonly backend?: SubagentExecutionBackend;
-  readonly runtime_root?: string;
-  readonly writable_paths?: readonly string[];
+  readonly backend: "bubblewrap";
+  readonly runtime_root: string;
+  readonly writable_paths: readonly string[];
   readonly network?: SubagentExecutionNetwork;
   readonly environment?: Readonly<Record<string, string>>;
   readonly max_output_bytes?: number;
@@ -107,15 +107,14 @@ function hasSandboxAuthority(entry: Record<string, unknown>): boolean {
 
 /** Parse one profile execution block using the manifest's strict shape rules. */
 export function parseSubagentExecutionPolicy(raw: unknown, path: string): SubagentExecutionConfig {
+  if (raw === undefined) throw new ManifestParseError(`${path} is required`);
   const errors = validateSubagentExecutionPolicy(raw, path);
   if (errors.length > 0) throw new ManifestParseError(errors[0] ?? `${path} is invalid`);
   const entry = raw as Record<string, unknown>;
   return Object.freeze({
-    ...(entry.backend === undefined ? {} : { backend: entry.backend as "bubblewrap" }),
-    ...(entry.runtime_root === undefined ? {} : { runtime_root: entry.runtime_root as string }),
-    ...(entry.writable_paths === undefined
-      ? {}
-      : { writable_paths: Object.freeze([...(entry.writable_paths as string[])]) }),
+    backend: entry.backend as "bubblewrap",
+    runtime_root: entry.runtime_root as string,
+    writable_paths: Object.freeze([...(entry.writable_paths as string[])]),
     ...(entry.network === undefined ? {} : { network: "none" as const }),
     ...(entry.environment === undefined
       ? {}
@@ -133,8 +132,8 @@ export function resolveSubagentExecutionPolicy(
   const errors = validateSubagentExecutionPolicy(policy);
   if (errors.length > 0) throw new ManifestParseError(errors[0] ?? "execution is invalid");
   if (policy === undefined) return DEFAULT_SUBAGENT_EXECUTION_POLICY;
-  const backend = policy.backend ?? "file_only";
-  const writablePaths = Object.freeze([...(policy.writable_paths ?? [])]);
+  const backend = policy.backend;
+  const writablePaths = Object.freeze([...policy.writable_paths]);
   const environment = Object.freeze({ ...(policy.environment ?? {}) });
   return Object.freeze({
     backend,
@@ -225,5 +224,17 @@ function isReservedPath(value: string): boolean {
 }
 
 function isAbsolutePathList(value: string): boolean {
-  return value.split(":").every((part) => part.length > 0 && part.startsWith("/"));
+  const allowedRoots = new Set(["bin", "sbin", "usr", "lib", "lib64", "etc", "opt"]);
+  return value.split(":").every((part) => {
+    if (part.length === 0 || !part.startsWith("/") || part.startsWith("//")) return false;
+    const segments = part.split("/").slice(1);
+    if (
+      segments.length === 0 ||
+      segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
+    ) {
+      return false;
+    }
+    const root = segments[0];
+    return root !== undefined && allowedRoots.has(root);
+  });
 }
