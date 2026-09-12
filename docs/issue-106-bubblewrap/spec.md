@@ -409,14 +409,19 @@ primary repository from the child, or claim unverified cleanup/security.
 
 ## 10. Current prerequisite evidence and approval
 
-On 2026-09-12 the development host has non-setuid
+At the initial inspection on 2026-09-12, the development host had non-setuid
 `bubblewrap 0.9.0-1ubuntu0.1`. Its changelog contains a different older CVE
 backport, not proof for CVE-2026-87766. Canonical lists Noble as
 “Needs evaluation”. This build does not pass the proposed prerequisite gate.
-No Bubblewrap sandbox was executed and no host setting or package was changed.
+At that point no Bubblewrap sandbox had been executed and no host setting or package had been changed.
 Implementation/unit work can proceed after spec acknowledgement; real sandbox
 acceptance additionally requires a verified patched build and passing namespace
 probe on an authorized test host. That prerequisite is not silently waived.
+
+The operator has since installed the separately reviewed upstream 0.12.0 build
+and its explicit namespace profile. Its installed identity is verified and the
+restricted isolation and bootstrap fixtures pass. Production admission and
+delegated execution remain in progress; see [test runtime results](test-runtime-results.md).
 
 Sources:
 

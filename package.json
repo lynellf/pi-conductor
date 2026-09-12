@@ -57,6 +57,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
+    "test:sandbox": "vitest run --config vitest.sandbox.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "lint": "biome check .",

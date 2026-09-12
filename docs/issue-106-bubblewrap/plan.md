@@ -1,8 +1,9 @@
 # Issue #106 implementation plan
 
 Status: Specification acknowledged on 2026-09-12; policy/static prerequisites
-implemented. Patched runtime built/staged; real bootstrap proof awaits protected
-installation and an operator-approved namespace policy on the test host.
+implemented. Operator-installed patched runtime and namespace profile verified;
+real isolation and bootstrap proof pass. Runtime capture and durable admission
+pinning are in progress; delegated execution remains disabled.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
 integration, and final verification. No stage requires a separate human review
@@ -40,6 +41,10 @@ Progress:
       environment/runtime paths, writable-path syntax, and output limit.
 - [x] Fix fresh-host consumption of the manifest's pinned tool-policy defaults.
 - [x] Reproduce and repair both behaviors with focused tests; review PATH authority.
+- [x] Add and test the pure writable-authority predicate, including omitted
+      tracked/sparse descendants and profile-root restrictions on new files.
+- [x] Retain complete tracked metadata in parent capture; prove ordinary and
+      sparse-index omissions cannot disappear from writable-authority checks.
 - [ ] Resolve writable authority against the exact admitted task projection.
 - [ ] Pin runtime identity and accepted/start records; exercise changed-input restart.
 
@@ -47,6 +52,16 @@ The parser establishes syntax only. Task projection, filesystem provenance,
 runtime capture, and durable sandbox admission are not implemented. Both batch
 admission and direct SDK child creation reject a defined execution block while
 the backend is incomplete; no file-only fallback is used for opted-in profiles.
+
+The authority resolver requires the complete pinned-base tracked path set,
+including paths omitted by the parent sparse checkout. A directory cannot cover
+any tracked path outside the child's exact selection. Effective profile
+allowed/default roots also bound new-file creation: selecting
+`src/feature/a.ts` cannot grant `src` when the profile grants only `src/feature`.
+With no profile projection policy, the explicit execution writable root defines
+the new-file namespace, subject to the same excluded-descendant check. Base
+capture, actual file-type validation, admission wiring, and durable pinning are
+still required; the pure resolver alone does not enable execution.
 
 ## Increment B — prerequisite and bootstrap proof (Terra; Sol reviews)
 
@@ -74,15 +89,18 @@ Progress:
 - [x] Obtain operator authorization for the bounded patched-runtime preparation.
 - [x] Verify upstream tag/signature binding, build and stage 0.12.0 unprivileged,
       inventory minimal Bash files, and run upstream tests with skips reported.
-- [ ] Install the protected binary and obtain authorized host namespace access.
-- [ ] Collect production filesystem/package/capability observations through a
-      trusted host adapter; no production collector is implemented yet.
-- [ ] Run the real patched-runtime capability and bootstrap proof.
+- [x] Install the protected binary and obtain authorized host namespace access.
+- [x] Implement and verify the static filesystem/capability observer against the
+      exact host-approved upstream build, including rejection before execution.
+- [ ] Connect static evidence and the inert production-policy capability probe
+      to runtime admission; distribution-backport collection remains unsupported.
+- [x] Run the real patched-runtime capability and bootstrap proof.
 
 Static assessment accepts host-observed facts and separately approved build
-evidence for evaluation only. It never runs a binary, installs software, or
-claims a capability probe passed. Production delegation does not consume it
-until the collector and real execution gates are complete.
+evidence for evaluation only. The observer verifies protected file identities,
+digests, capabilities, version and options; it never installs software or claims
+a namespace probe passed. Production delegation does not consume it until the
+runtime admission and real execution gates are complete.
 
 ## Increment C — private execution files (Sol; Terra reviews)
 
@@ -166,19 +184,42 @@ for these deterministic and real-backend acceptance tests.
       advisories; no high/critical advisories and no dependency changes.
 
 Implementation commits: `ffa7c91`, `fbe7947`, `6cab9c8`, `4974a09`, `c66c6e5`.
-No live observation collector, prepared runtime, bootstrap, sandbox output,
-ingestion, or delegated command tool is delivered yet. The unchecked feature
-gates remain authoritative; installing prerequisites is not automatic enablement.
+That foundation verification predates the static observer and bootstrap proof
+below. Production runtime admission, sandbox output, ingestion, and delegated
+command tools remain incomplete. The unchecked feature gates are authoritative.
 
-## Current blocker to real execution verification
+## Bootstrap verification, 2026-09-12
 
-The system package remains `bubblewrap 0.9.0-1ubuntu0.1`. Following operator
-authorization, verified upstream 0.12.0 was built and staged unprivileged.
-Interactive sudo is unavailable, and upstream sandbox tests encounter an
-AppArmor denial writing `uid_map`. No host security settings were changed.
-See [preparation results](test-runtime-results.md) for source/build evidence and
-the separate pending installation/namespace-policy action. B4 and every real
-sandbox acceptance gate remain blocked; skipped tests do not satisfy them.
+- [x] Real static-observation, isolation, and bootstrap suites pass together:
+      15 tests in three files through `pnpm test:sandbox`.
+- [x] Exact release framing rejects EOF, short/bad frames, NUL, extra bytes,
+      repeated frames, and persistence failure. Changed copied Bash bytes fail
+      before spawn; a missing interpreter never reaches READY or release.
+- [x] Startup and final observations bind PID/start/PID namespace, with final
+      namespace PID 1 and isolated mount/user/network/IPC/UTS identities.
+- [x] Bootstrap child FDs 3/4 are present and FD 5 is absent before release;
+      the executed C probe observes no descriptors above intended stdio.
+- [x] Host death before release leaves the sentinel absent. Host death after
+      release settles the exact init and background descendant identities.
+      Tests distinguish missing/reused/zombie processes from namespace-read errors.
+- [x] Correlated exit status and drained output settle together; test cleanup
+      signals only exact owned identities. These fixtures do not implement
+      production restart reconciliation or authorize launcher-only cleanup.
+- [x] Full ordinary suite: 216 files / 2,324 tests pass. Typecheck, build, and
+      production dependency audit pass; the linked CLI resolves to this checkout.
+
+Additional commits: `3628301`, `4b99567`, `ea331e1`. The static observer accepts
+only separately approved upstream builds; it does not claim its namespace
+capability probe ran. The production probe/admission adapter remains unchecked.
+
+## Test-host prerequisite resolved
+
+The system package remains `bubblewrap 0.9.0-1ubuntu0.1`. The operator installed
+the reviewed upstream 0.12.0 build separately with the explicit namespace
+profile. The installed binary matches the approved digest and protected path
+requirements. Real isolation tests now pass; B4 and downstream implementation
+remain incomplete. See [preparation results](test-runtime-results.md) for the
+evidence and its limits. Skipped tests do not satisfy any feature gate.
 
 
 ## Review reconciliation
@@ -194,6 +235,6 @@ sandbox acceptance gate remain blocked; skipped tests do not satisfy them.
   releases it. Terra verified the finding and specified an exact trusted
   bootstrap READY/release protocol, final namespace observation, and required
   runtime proof. Early JSON user-namespace identity is not final identity.
-- No real sandbox guarantee was verified on this host. The vulnerable/unverified
-  installed package was not used, and no acceptance box for implementation or
-  runtime verification is marked complete.
+- The unverified distribution package was not used. Real isolation fixtures now
+  pass against the separately approved build; production execution and the
+  complete feature acceptance remain unchecked.
