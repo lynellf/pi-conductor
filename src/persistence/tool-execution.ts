@@ -2,6 +2,28 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import type { ToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
+import {
+  assertToolExecutionSandboxReadyRecord,
+  toolExecutionSandboxReadySchema,
+} from "./sandbox-execution.js";
+import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
+import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
+
+export type {
+  SandboxExecutionHostObserver,
+  SandboxExecutionOwner,
+  SandboxReadyEvidence,
+  VerifiedSandboxBinary,
+} from "./sandbox-execution.js";
+export {
+  assertToolExecutionSandboxReadyRecord,
+  sandboxExecutionHostObserverSchema,
+  sandboxExecutionOwnerSchema,
+  toolExecutionSandboxReadySchema,
+  verifiedSandboxBinarySchema,
+} from "./sandbox-execution.js";
+
 import { toolAdmissionSchema } from "./tool-admission.js";
 import { toolExecutionDiagnosticSchema } from "./tool-execution-diagnostic.js";
 
@@ -23,6 +45,12 @@ export const toolExecutionStartedSchema = Type.Object(
     timeout_ms: Type.Integer({ minimum: 1 }),
     recovery_count: nonNegativeInteger,
     admission: Type.Optional(toolAdmissionSchema),
+    sandbox: Type.Optional(
+      Type.Object(
+        { child_id: id, descriptor: subagentSandboxDescriptorSchema },
+        { additionalProperties: false },
+      ),
+    ),
     ts: Type.Number({ minimum: 0 }),
   },
   { additionalProperties: false },
@@ -87,11 +115,12 @@ export type { ToolExecutionDiagnostic } from "./tool-execution-diagnostic.js";
 export type ToolExecutionCleanupConfirmedRecord = Readonly<
   Static<typeof toolExecutionCleanupConfirmedSchema>
 >;
-/** Union of the two durable executable tool record shapes. */
+/** Union of durable executable tool record shapes. */
 export type ToolExecutionRecord =
   | ToolExecutionStartedRecord
   | ToolExecutionFinishedRecord
-  | ToolExecutionCleanupConfirmedRecord;
+  | ToolExecutionCleanupConfirmedRecord
+  | ToolExecutionSandboxReadyRecord;
 
 /** Typed rejection for malformed or inconsistent execution records. */
 export class ToolExecutionRecordError extends Error {
@@ -118,14 +147,17 @@ export function assertToolExecutionRecord(value: unknown): asserts value is Tool
   const isStarted = Value.Check(toolExecutionStartedSchema, value);
   const isFinished = Value.Check(toolExecutionFinishedSchema, value);
   const isCleanupConfirmed = Value.Check(toolExecutionCleanupConfirmedSchema, value);
-  if (!isStarted && !isFinished && !isCleanupConfirmed) {
+  const isSandboxReady = Value.Check(toolExecutionSandboxReadySchema, value);
+  if (!isStarted && !isFinished && !isCleanupConfirmed && !isSandboxReady) {
     throw new ToolExecutionRecordError("invalid tool execution record");
   }
   const record = value as ToolExecutionRecord;
   if (!Number.isFinite(record.ts)) {
     throw new ToolExecutionRecordError("tool execution timestamp must be finite");
   }
-  if (record.type === "tool_execution_finished") {
+  if (record.type === "tool_execution_sandbox_ready") {
+    assertToolExecutionSandboxReadyRecord(record);
+  } else if (record.type === "tool_execution_finished") {
     if (!Number.isFinite(record.elapsed_ms)) {
       throw new ToolExecutionRecordError("tool execution elapsed_ms must be finite");
     }
@@ -152,6 +184,14 @@ export function assertToolExecutionRecord(value: unknown): asserts value is Tool
     throw new ToolExecutionRecordError("tool execution recovery_count must be a safe integer");
   }
   if (
+    record.type === "tool_execution_started" &&
+    record.admission !== undefined &&
+    record.sandbox !== undefined
+  )
+    throw new ToolExecutionRecordError(
+      "sandbox start owner and legacy admission marker are mutually exclusive",
+    );
+  if (
     record.type === "tool_execution_cleanup_confirmed" &&
     record.operator_note.trim().length === 0
   ) {
@@ -165,6 +205,7 @@ export function assertToolExecutionRecord(value: unknown): asserts value is Tool
 /** One execution start and its optional terminal result. */
 export interface ToolExecutionTimelineEntry {
   readonly started: ToolExecutionStartedRecord;
+  readonly ready?: ToolExecutionSandboxReadyRecord;
   readonly finished?: ToolExecutionFinishedRecord;
   readonly cleanupConfirmed?: ToolExecutionCleanupConfirmedRecord;
 }
@@ -217,6 +258,28 @@ export function reconstructToolExecutionTimeline(
       continue;
     }
 
+    if (record.type === "tool_execution_sandbox_ready") {
+      const entry = entries.get(record.execution_id);
+      if (entry === undefined)
+        throw new ToolExecutionRecordError("sandbox ready has no preceding start");
+      if (entry.ready !== undefined)
+        throw new ToolExecutionRecordError("duplicate sandbox ready record");
+      if (entry.finished !== undefined || entry.cleanupConfirmed !== undefined)
+        throw new ToolExecutionRecordError("sandbox ready cannot follow terminal or cleanup");
+      if (entry.started.sandbox === undefined)
+        throw new ToolExecutionRecordError("sandbox ready requires a sandbox-enabled start");
+      assertMatchingIdentity(record, entry.started, "sandbox ready");
+      if (
+        record.sandbox.child_id !== entry.started.sandbox.child_id ||
+        !sameSandboxDescriptor(record.sandbox.descriptor, entry.started.sandbox.descriptor)
+      )
+        throw new ToolExecutionRecordError("sandbox ready mismatches sandbox owner");
+      if (record.ts < entry.started.ts)
+        throw new ToolExecutionRecordError("sandbox ready precedes execution start");
+      entries.set(record.execution_id, { ...entry, ready: record });
+      continue;
+    }
+
     const entry = entries.get(record.execution_id);
     if (entry === undefined) {
       throw new ToolExecutionRecordError("tool execution terminal has no preceding start");
@@ -227,11 +290,17 @@ export function reconstructToolExecutionTimeline(
     if (entry.cleanupConfirmed !== undefined)
       throw new ToolExecutionRecordError("terminal cannot follow cleanup confirmation");
     const start = entry.started;
+    if (start.sandbox !== undefined && entry.ready === undefined && record.outcome === "completed")
+      throw new ToolExecutionRecordError(
+        "sandbox execution terminal requires a preceding ready record",
+      );
     assertMatchingIdentity(record, start, "tool execution terminal");
+    if (entry.ready !== undefined && record.ts < entry.ready.ts)
+      throw new ToolExecutionRecordError("tool execution terminal precedes sandbox ready");
     if (record.recovery_count !== start.recovery_count) {
       throw new ToolExecutionRecordError("tool execution terminal mismatches recovery_count");
     }
-    entries.set(record.execution_id, { started: start, finished: record });
+    entries.set(record.execution_id, { ...entry, finished: record });
     if (record.outcome === "timed_out") timeoutCount += 1;
   }
 
@@ -252,6 +321,18 @@ export function reconstructToolExecutionTimeline(
     ),
     timeout_count: timeoutCount,
   };
+}
+
+function sameSandboxDescriptor(
+  left: SubagentSandboxDescriptor,
+  right: SubagentSandboxDescriptor,
+): boolean {
+  return (
+    left.backend === right.backend &&
+    left.execution_policy_digest === right.execution_policy_digest &&
+    left.runtime_digest === right.runtime_digest &&
+    left.materialization_id === right.materialization_id
+  );
 }
 
 function assertMatchingIdentity(
@@ -289,6 +370,7 @@ export function isToolExecutionRecord(value: unknown): value is ToolExecutionRec
   return (
     type === "tool_execution_started" ||
     type === "tool_execution_finished" ||
-    type === "tool_execution_cleanup_confirmed"
+    type === "tool_execution_cleanup_confirmed" ||
+    type === "tool_execution_sandbox_ready"
   );
 }

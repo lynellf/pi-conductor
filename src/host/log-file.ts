@@ -457,6 +457,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "tool_execution_started",
   "tool_execution_finished",
   "tool_execution_cleanup_confirmed",
+  "tool_execution_sandbox_ready",
   "end_guard_started",
   "end_guard_finished",
   "end_guard_budget_reset",

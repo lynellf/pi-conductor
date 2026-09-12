@@ -103,6 +103,13 @@ async function inspectWithLog(
   const currentProcesses: ProcessIdentity[] = [];
   for (const entry of timeline.unresolved) {
     const started = entry.started;
+    // D-stage records must never enter the legacy marker recovery path. The
+    // verified namespace reconciliation adapter is an E-stage enablement gate.
+    if (started.sandbox !== undefined)
+      throw new ToolExecutionReconciliationError(
+        "sandbox_cleanup_unconfirmed",
+        `sandbox cleanup requires original-host namespace lifecycle verification for execution_id=${started.execution_id}. Preserve the canonical log and private project/output files; do not replay. Sandbox reconciliation is not enabled in this development build.`,
+      );
     // Record timestamps are wall-clock milliseconds; /proc startTime is a
     // boot-relative tick count, so they cannot be compared directly.
     const scope =

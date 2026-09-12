@@ -2,6 +2,7 @@
 import { constants } from "node:fs";
 import { open, readlink } from "node:fs/promises";
 import { Value } from "typebox/value";
+import { assertSandboxNamespaceLifecycle } from "../../../persistence/sandbox-execution.js";
 import {
   type SandboxProcessObservation,
   sandboxProcessObservationSchema,
@@ -106,24 +107,7 @@ export function verifyFinalSandboxNamespaces(
   host: SandboxProcessObservation,
   startupPidNamespace: number,
 ): void {
-  for (const observation of [early, final, host])
-    if (
-      !Value.Check(sandboxProcessObservationSchema, observation) ||
-      observation.nspid[0] !== observation.pid
-    )
-      throw new Error("invalid sandbox namespace observation");
-  if (
-    early.pid !== final.pid ||
-    early.startTime !== final.startTime ||
-    early.namespaces.pid !== `pid:[${startupPidNamespace}]` ||
-    final.namespaces.pid !== early.namespaces.pid ||
-    final.nspid.at(-1) !== 1 ||
-    final.nspid.length !== host.nspid.length + 1
-  )
-    throw new Error("sandbox final namespace-init identity mismatch");
-  for (const name of namespaceNames)
-    if (final.namespaces[name] === host.namespaces[name])
-      throw new Error(`sandbox final ${name} namespace is not isolated`);
+  assertSandboxNamespaceLifecycle(early, final, startupPidNamespace, host);
 }
 
 async function readStat(

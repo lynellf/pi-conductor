@@ -84,7 +84,8 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   if (
     record.type === "tool_execution_started" ||
     record.type === "tool_execution_finished" ||
-    record.type === "tool_execution_cleanup_confirmed"
+    record.type === "tool_execution_cleanup_confirmed" ||
+    record.type === "tool_execution_sandbox_ready"
   ) {
     assertToolExecutionRecord(record);
   }

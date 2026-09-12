@@ -58,6 +58,44 @@ function executionRecords(
 }
 
 describe("tool execution reconciliation API", () => {
+  it("never applies marker-based cleanup to a sandbox execution", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-conductor-reconcile-sandbox-"));
+    const scan = vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);
+    try {
+      const log = new FileRecordLog({ baseDir: dir });
+      const [started] = executionRecords("sandbox-run", "sandbox-supervision");
+      log.append({
+        ...started,
+        sandbox: {
+          child_id: "child",
+          descriptor: {
+            backend: "bubblewrap",
+            execution_policy_digest: "a".repeat(64),
+            runtime_digest: "b".repeat(64),
+            materialization_id: "materialization",
+          },
+        },
+      });
+      const path = join(dir, "sandbox-run.jsonl");
+      const before = readFileSync(path, "utf8");
+      await expect(
+        inspectToolExecutionCleanup("sandbox-run", { baseDir: dir }),
+      ).rejects.toMatchObject({ code: "sandbox_cleanup_unconfirmed" });
+      await expect(
+        reconcileToolExecutionCleanup("sandbox-run", started.execution_id, {
+          baseDir: dir,
+          acknowledgment: true,
+          operatorNote: "test",
+        }),
+      ).rejects.toMatchObject({ code: "sandbox_cleanup_unconfirmed" });
+      expect(scan).not.toHaveBeenCalled();
+      expect(readFileSync(path, "utf8")).toBe(before);
+    } finally {
+      scan.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a different admission origin without scanning or changing the log", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-conductor-reconcile-origin-"));
     const scan = vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);

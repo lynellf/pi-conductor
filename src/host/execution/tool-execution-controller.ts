@@ -9,86 +9,44 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
-import type { ToolAdmissionEvidence } from "../../persistence/tool-admission.js";
+import { Value } from "typebox/value";
+import {
+  type SandboxExecutionOwner,
+  type SandboxReadyEvidence,
+  sandboxExecutionOwnerSchema,
+} from "../../persistence/sandbox-execution.js";
 import {
   reconstructToolExecutionTimeline,
   type ToolExecutionFinishedRecord,
   type ToolExecutionRecord,
   type ToolExecutionStartedRecord,
 } from "../../persistence/tool-execution.js";
-import type { ToolExecutionDiagnostic } from "../../persistence/tool-execution-diagnostic.js";
 import { SupervisedProcessError } from "./supervised-process.js";
+import {
+  executeToolLifecycle,
+  persistSandboxReadiness,
+  type ToolExecutionLifecycleAdapter,
+} from "./tool-execution-lifecycle.js";
 import {
   hasUnconfirmedCleanup,
   settleWithinCleanupWindow,
   timeoutDelay,
 } from "./tool-execution-timing.js";
 
-export type ToolExecutionErrorCode =
-  | "tool_input_invalid"
-  | "tool_timeout"
-  | "tool_timeout_exhausted"
-  | "tool_cleanup_unconfirmed"
-  | "tool_aborted"
-  | "tool_failed"
-  | "tool_persistence_ambiguous"
-  | "tool_closed"
-  | "tool_resume_unknown_owner";
+export {
+  type ToolExecutionControllerOptions,
+  ToolExecutionError,
+  type ToolExecutionErrorCode,
+  type ToolExecutionRunOptions,
+  type ToolExecutionScope,
+} from "./tool-execution-contract.js";
 
-/** Structured controller failure surfaced at the model boundary. */
-export class ToolExecutionError extends Error {
-  readonly code: ToolExecutionErrorCode;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
-  readonly executionId: string | undefined;
-  readonly diagnostic: ToolExecutionDiagnostic | undefined;
-
-  constructor(
-    code: ToolExecutionErrorCode,
-    message: string,
-    options?: {
-      readonly cleanup?: "confirmed" | "unconfirmed" | "not-started";
-      readonly executionId?: string;
-      readonly diagnostic?: ToolExecutionDiagnostic;
-      readonly cause?: unknown;
-    },
-  ) {
-    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
-    this.name = "ToolExecutionError";
-    this.code = code;
-    this.cleanup = options?.cleanup ?? "not-started";
-    this.executionId = options?.executionId;
-    this.diagnostic = options?.diagnostic;
-  }
-}
-
-export interface ToolExecutionScope {
-  readonly executionId: string;
-  readonly supervisionId: string;
-  readonly signal: AbortSignal;
-  readonly graceMs: number;
-  remainingTimeoutMs(): number;
-  assertOpen(): void;
-}
-
-export interface ToolExecutionRunOptions {
-  readonly signal?: AbortSignal;
-  /** Capture recovery evidence before persisting the start and admitting side effects (#103). */
-  readonly captureAdmission?: () => Promise<ToolAdmissionEvidence>;
-  /** A model-supplied deadline may shorten the pinned policy only. */
-  readonly modelTimeoutSeconds?: number;
-}
-
-export interface ToolExecutionControllerOptions {
-  readonly runId: string;
-  readonly logicalSessionId: string;
-  readonly roleSessionId: string;
-  readonly policy: Readonly<Required<ToolExecutionPolicy>>;
-  readonly persist: (record: ToolExecutionRecord) => void;
-  readonly priorRecords?: readonly ToolExecutionRecord[];
-  readonly onFatal?: (error: ToolExecutionError) => void;
-  readonly idFactory?: () => string;
-}
+import {
+  type ToolExecutionControllerOptions,
+  ToolExecutionError,
+  type ToolExecutionRunOptions,
+  type ToolExecutionScope,
+} from "./tool-execution-contract.js";
 
 /** Stop resume when an execution has no durable terminal and no trusted owner. */
 export function assertNoUnfinishedToolExecutions(records: readonly ToolExecutionRecord[]): void {
@@ -139,6 +97,51 @@ export class ToolExecutionController {
     operation: (scope: ToolExecutionScope) => Promise<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
+    return this.runAttempt(toolName, toolCallId, operation, runOptions);
+  }
+
+  /** Use a verified backend lifecycle while retaining controller deadlines and records (#106 §6). */
+  async runLifecycle<T>(
+    toolName: string,
+    toolCallId: string,
+    sandbox: SandboxExecutionOwner,
+    adapter: ToolExecutionLifecycleAdapter<T, SandboxReadyEvidence>,
+    runOptions: ToolExecutionRunOptions = {},
+  ): Promise<T> {
+    if (
+      runOptions.captureAdmission !== undefined ||
+      !Value.Check(sandboxExecutionOwnerSchema, sandbox)
+    )
+      throw new ToolExecutionError(
+        "tool_input_invalid",
+        "sandbox execution requires its own valid ownership evidence",
+      );
+    const owner = structuredClone(sandbox);
+    return this.runAttempt(
+      toolName,
+      toolCallId,
+      (scope) =>
+        executeToolLifecycle(adapter, scope, (evidence) => {
+          const started = this.generated.find(
+            (record) =>
+              record.type === "tool_execution_started" && record.execution_id === scope.executionId,
+          );
+          if (started?.type !== "tool_execution_started")
+            throw new Error("sandbox execution start is missing");
+          persistSandboxReadiness(started, evidence, (record) => this.append(record));
+        }),
+      runOptions,
+      owner,
+    );
+  }
+
+  private async runAttempt<T>(
+    toolName: string,
+    toolCallId: string,
+    operation: (scope: ToolExecutionScope) => Promise<T>,
+    runOptions: ToolExecutionRunOptions,
+    sandbox?: SandboxExecutionOwner,
+  ): Promise<T> {
     if (this.closed) {
       throw new ToolExecutionError("tool_closed", "tool execution admission is closed");
     }
@@ -166,6 +169,7 @@ export class ToolExecutionController {
       timeout_ms: timeoutMs,
       recovery_count: recoveryCount,
       ...(admission === undefined ? {} : { admission }),
+      ...(sandbox === undefined ? {} : { sandbox }),
       ts: startedAt,
     };
     this.append(started);
@@ -315,10 +319,7 @@ export class ToolExecutionController {
     try {
       this.options.persist(record);
     } catch (cause) {
-      const executionId =
-        record.type === "tool_execution_started" || record.type === "tool_execution_finished"
-          ? record.execution_id
-          : undefined;
+      const executionId = record.execution_id;
       const error = new ToolExecutionError(
         "tool_persistence_ambiguous",
         "tool execution persistence outcome is ambiguous; resume requires ownership reconciliation",

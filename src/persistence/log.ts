@@ -51,6 +51,7 @@ import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
+import type { ToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
 import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
 import type {
   ToolExecutionCleanupConfirmedRecord,
@@ -121,6 +122,22 @@ export {
   WorkspaceGuaranteeError,
 } from "./record-materialization.js";
 export type { RoleTurnRecord } from "./role-turn.js";
+export type {
+  SandboxExecutionHostObserver,
+  SandboxExecutionOwner,
+  SandboxReadyEvidence,
+  ToolExecutionSandboxReadyRecord,
+  VerifiedSandboxBinary,
+} from "./sandbox-execution.js";
+export {
+  assertSandboxNamespaceLifecycle,
+  assertToolExecutionSandboxReadyRecord,
+  SandboxExecutionRecordError,
+  sandboxExecutionHostObserverSchema,
+  sandboxExecutionOwnerSchema,
+  toolExecutionSandboxReadySchema,
+  verifiedSandboxBinarySchema,
+} from "./sandbox-execution.js";
 export type {
   ToolExecutionCleanupConfirmedRecord,
   ToolExecutionFinishedRecord,
@@ -403,6 +420,7 @@ export type PersistedRecord =
   | ToolExecutionStartedRecord
   | ToolExecutionFinishedRecord
   | ToolExecutionCleanupConfirmedRecord
+  | ToolExecutionSandboxReadyRecord
   | EndGuardRecord
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord;

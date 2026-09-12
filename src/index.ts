@@ -235,6 +235,22 @@ export {
   RoleTurnTelemetryLogError,
 } from "./persistence/role-turn.js";
 export type {
+  SandboxExecutionHostObserver,
+  SandboxExecutionOwner,
+  SandboxReadyEvidence,
+  ToolExecutionSandboxReadyRecord,
+  VerifiedSandboxBinary,
+} from "./persistence/sandbox-execution.js";
+export {
+  assertSandboxNamespaceLifecycle,
+  assertToolExecutionSandboxReadyRecord,
+  SandboxExecutionRecordError,
+  sandboxExecutionHostObserverSchema,
+  sandboxExecutionOwnerSchema,
+  toolExecutionSandboxReadySchema,
+  verifiedSandboxBinarySchema,
+} from "./persistence/sandbox-execution.js";
+export type {
   ToolExecutionCleanupConfirmedRecord,
   ToolExecutionFinishedRecord,
   ToolExecutionRecord,

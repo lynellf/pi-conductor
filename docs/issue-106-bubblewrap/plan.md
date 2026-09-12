@@ -164,6 +164,43 @@ cancellation, or restart lifecycle; those remain D/E delivery gates.
 
 Dependencies: A–C and verified bootstrap protocol.
 
+Progress:
+
+- [x] Add strict correlated sandbox start/READY records and namespace/origin
+      validation; retain readiness through later terminal materialization.
+- [x] Add the generic controller lifecycle seam with durable readiness before
+      authorization, cancellation arbitration, and cleanup settlement barriers.
+- [x] Verify setup/persistence failures, cancellation at phase boundaries,
+      timeout classification, and ambiguous terminal persistence without replay.
+- [x] Implement production command pipes with bounded framing, output
+      backpressure, exact release/deny, and independent physical draining.
+- [x] Verify production pipes against real Bubblewrap, including nonzero status,
+      stderr, background output, and the ambiguous normalized status 137.
+- [x] Finish reviewed private output persistence and retained-prefix retrieval.
+- [ ] Obtain the [command status clarification](signal-result-contract-proposal.md).
+- [ ] Implement the production runner and final result/terminal categories.
+- [ ] Verify actual cancellation and output settlement through that runner.
+
+The independent readiness/pipe work does not expose a Bash tool. The controller
+accepts a host-owned lifecycle adapter; the production sandbox implementation
+and its terminal evidence remain required. Sandbox records are explicitly
+excluded from legacy marker-based reconciliation while E is unfinished.
+
+Output storage persists a strict immutable run/child/execution/supervision
+attribution before spawn. Its read primitive validates that private metadata
+and the retained file digest, including verified prefixes of incomplete capture.
+A child can inspect its own earlier command output. The model-facing retrieval
+tool, controller terminal output references, and their complete ownership
+cross-checks remain part of D/E wiring; the storage primitive is not yet exposed
+to models. Capture failure is a one-way notification to the runner, avoiding a
+cycle between termination and spool finalization.
+
+The approved result contract needs one clarification: the supported Bubblewrap
+status interface maps both an explicit `exit(137)` and SIGKILL to 137. Real tests
+confirm the pinned-source finding. The proposed amendment reports this number
+and unknown command signal classification, with host-requested cancellation
+recorded separately. The approved spec is unchanged pending acknowledgement.
+
 ## Increment E — delegated feedback and restart (Luna/Terra; Sol reviews)
 
 9. Expose sandbox Bash/output retrieval only to admitted opted-in children.
@@ -187,7 +224,7 @@ for these deterministic and real-backend acceptance tests.
 - [ ] All acceptance boxes in the spec are satisfied with recorded evidence.
 - [ ] Cross-model review findings are reconciled; no security blocker remains.
 - [x] `pnpm typecheck` and `pnpm build` pass.
-- [ ] `pnpm test` passes, including core import guards and real sandbox tests.
+- [x] `pnpm test` passes, including core import guards and real sandbox tests.
 - [x] `pnpm lint` and `pnpm format:check` pass.
 - [x] `pnpm audit --prod` passes; any other advisories are reported accurately.
 - [x] User-facing docs and changelog describe actual supported configuration.
@@ -294,3 +331,28 @@ compilation in real tests is fixture preparation only.
 - The unverified distribution package was not used. Real isolation fixtures now
   pass against the separately approved build; production execution and the
   complete feature acceptance remain unchecked.
+
+## Readiness and output checkpoint verification, 2026-09-12
+
+- [x] Full ordinary suite on the stabilized tree: 238 files / 2,610 tests pass.
+- [x] Real suites on the approved installed Bubblewrap: six files / 26 tests pass.
+      Production command pipes preserve nonzero status and stderr, drain output
+      under backpressure, and settle the exact observed namespace init.
+- [x] Readiness validation rejects changed correlations, authority, namespace
+      identity, and unsafe binary evidence. Setup failures can terminate before
+      READY; successful completion requires READY and retains it in the timeline.
+- [x] Controller phase/cancellation/persistence races preserve at-most-one terminal
+      and prevent release after failed readiness persistence or cancellation.
+- [x] Output tests cover partial writes, shared cap accounting, retained-prefix
+      reads after restart, large previews, incomplete UTF-8, metadata failure,
+      unsafe files, changed bytes, and cross-child reference denial.
+- [x] Independent lifecycle and output review findings are reconciled. Private
+      attribution supplies persisted ownership; model-facing ownership parameters
+      must still be derived from trusted child context during E integration.
+- [x] Typecheck, build, repository lint, and production dependency audit pass.
+- [ ] Approve the proposed command-status clarification and complete production
+      runner, terminal output references, model tools, and E restart verification.
+
+The linked CLI remains a development checkpoint. Its configured sandbox guard
+stays active. These checks do not claim the end-to-end child repair workflow or
+production sandbox reconciliation has been implemented.
