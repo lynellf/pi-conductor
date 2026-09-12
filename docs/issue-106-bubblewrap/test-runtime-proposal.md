@@ -1,6 +1,7 @@
 # Patched test runtime proposal
 
-Status: prepared for operator authorization; no installation performed.
+Status: operator authorized preparation on 2026-09-12. Build and unprivileged
+staging completed; protected installation and real bootstrap proof remain blocked.
 
 The current development package, `bubblewrap 0.9.0-1ubuntu0.1`, has no verified
 fix for CVE-2026-87766. It cannot run the approved bootstrap/isolation proof.
@@ -62,7 +63,6 @@ can satisfy the gate instead of the proposed local preparation.
 - [Build requirements](https://github.com/containers/bubblewrap/blob/v0.12.0/meson.build)
 - [Security advisory](https://github.com/containers/bubblewrap/security/advisories/GHSA-pxhw-h44j-8pfx)
 
-No signed source checkout, build, runtime inventory approval, or real sandbox
-test has been performed by this proposal. Missing signing-key verification,
-package provenance, or privilege to install the protected prefix is a blocker,
-not a reason to relax the prerequisite contract.
+Execution evidence is recorded in [test-runtime-results.md](test-runtime-results.md).
+Missing provenance, installation privilege, or namespace permission remains a
+blocker, not a reason to relax the prerequisite contract.

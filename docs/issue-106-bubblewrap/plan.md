@@ -1,7 +1,8 @@
 # Issue #106 implementation plan
 
 Status: Specification acknowledged on 2026-09-12; policy/static prerequisites
-implemented. Real bootstrap proof awaits authorized patched-runtime preparation.
+implemented. Patched runtime built/staged; real bootstrap proof awaits protected
+installation and an operator-approved namespace policy on the test host.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
 integration, and final verification. No stage requires a separate human review
@@ -70,6 +71,10 @@ increment and revise the contract before exposing Bash.
 Progress:
 
 - [x] Static prerequisite assessment and exact approved-build binding pass review.
+- [x] Obtain operator authorization for the bounded patched-runtime preparation.
+- [x] Verify upstream tag/signature binding, build and stage 0.12.0 unprivileged,
+      inventory minimal Bash files, and run upstream tests with skips reported.
+- [ ] Install the protected binary and obtain authorized host namespace access.
 - [ ] Collect production filesystem/package/capability observations through a
       trusted host adapter; no production collector is implemented yet.
 - [ ] Run the real patched-runtime capability and bootstrap proof.
@@ -167,12 +172,13 @@ gates remain authoritative; installing prerequisites is not automatic enablement
 
 ## Current blocker to real execution verification
 
-The installed package is `bubblewrap 0.9.0-1ubuntu0.1`, with no verified fix for
-the required setup-traversal CVE. No replacement was installed and no namespace
-settings were changed. An authorized patched test runtime is required for B4
-and every real sandbox acceptance gate; unit tests alone cannot mark them done.
-The [bounded test-runtime proposal](test-runtime-proposal.md) identifies the
-specific installation/preparation action awaiting operator authorization.
+The system package remains `bubblewrap 0.9.0-1ubuntu0.1`. Following operator
+authorization, verified upstream 0.12.0 was built and staged unprivileged.
+Interactive sudo is unavailable, and upstream sandbox tests encounter an
+AppArmor denial writing `uid_map`. No host security settings were changed.
+See [preparation results](test-runtime-results.md) for source/build evidence and
+the separate pending installation/namespace-policy action. B4 and every real
+sandbox acceptance gate remain blocked; skipped tests do not satisfy them.
 
 
 ## Review reconciliation
