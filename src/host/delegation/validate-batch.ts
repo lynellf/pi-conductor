@@ -98,6 +98,7 @@ export function validateBatch(
   remainingChildren: number,
   gitCheck: GitCheckResult,
   materializedParentPaths?: readonly string[],
+  hostAvailable = false,
 ): BatchValidationResult {
   const errors: BatchValidationError[] = [];
   const profileByName = new Map(profiles.map((p) => [p.name, p]));
@@ -168,7 +169,7 @@ export function validateBatch(
   // worktree. Profiles without one retain the Issue #52 runtime path gate.
   for (const task of args.tasks) {
     const profile = profileByName.get(task.subagent);
-    if (profile?.execution !== undefined) {
+    if (profile?.execution !== undefined && !hostAvailable) {
       errors.push({
         code: "sandbox-backend-unavailable",
         message: `task '${task.id}': ${SANDBOX_UNAVAILABLE_MESSAGE}`,

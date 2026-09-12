@@ -2,6 +2,9 @@
 
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { Value } from "typebox/value";
+import type { SubagentProfile } from "../../manifest/types.js";
+import { subagentSandboxDescriptorSchema } from "../../persistence/subagent-sandbox.js";
 import { buildChildPrompt } from "./child-prompt.js";
 import { type PreparedTask, prepareTaskContextArtifacts } from "./context-artifact-admission.js";
 import { DelegateToolError } from "./delegate-error.js";
@@ -59,6 +62,7 @@ export async function prepareDelegateSubmission(
     options.remainingChildren,
     gitCheck,
     parentProjection.materializedPaths,
+    options.sandboxAdmission !== undefined,
   );
   if (!validation.valid) {
     throw new DelegateToolError(
@@ -125,6 +129,45 @@ export async function prepareDelegateSubmission(
       const profile = deepFreeze(structuredClone(task.profile));
       const contextFingerprint = fingerprint(task.resolvedContextArtifacts);
       const promptFingerprint = fingerprint(prompt.systemPrompt);
+      const roots = projectionRoots(task.profile);
+      const sandboxAdmission =
+        task.profile.execution === undefined
+          ? undefined
+          : options.sandboxAdmission === undefined
+            ? (() => {
+                throw new DelegateToolError(
+                  "batch_validation_failed",
+                  "sandbox admission is unavailable",
+                  [],
+                );
+              })()
+            : await options.sandboxAdmission
+                .capture({
+                  childId,
+                  runId: options.runId,
+                  primaryCheckout: options.primaryCheckout,
+                  profile,
+                  selectedPaths: paths,
+                  trackedPaths:
+                    parentProjection.trackedPaths ??
+                    (() => {
+                      throw new DelegateToolError(
+                        "batch_validation_failed",
+                        "complete tracked projection is unavailable",
+                        [],
+                      );
+                    })(),
+                  ...(roots === undefined ? {} : { projectionRoots: roots }),
+                })
+                .then((captured) => {
+                  if (!Value.Check(subagentSandboxDescriptorSchema, captured.sandbox))
+                    throw new DelegateToolError(
+                      "batch_validation_failed",
+                      "sandbox admission returned an invalid descriptor",
+                      [],
+                    );
+                  return { sandbox: deepFreeze(structuredClone(captured.sandbox)) };
+                });
       return Object.freeze({
         childId,
         taskId: task.taskId,
@@ -145,6 +188,7 @@ export async function prepareDelegateSubmission(
         profileFingerprint: fingerprint(profile),
         contextFingerprint,
         promptFingerprint,
+        ...(sandboxAdmission === undefined ? {} : { sandbox: sandboxAdmission.sandbox }),
       });
     }),
   );
@@ -157,6 +201,12 @@ export async function prepareDelegateSubmission(
 
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function projectionRoots(profile: SubagentProfile): readonly string[] | undefined {
+  const projection = profile.workspace?.projection;
+  if (projection === undefined) return undefined;
+  return projection.required ? projection.allowed_paths : projection.default_paths;
 }
 
 function deepFreeze<T>(value: T): T {

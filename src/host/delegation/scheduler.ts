@@ -8,16 +8,17 @@
 
 import {
   acceptedDelegationResults,
+  assertDelegationSubmissionAccepted,
   type DelegationSubmissionAcceptedRecord,
   delegationSubmissionId,
   spentDelegationSlots,
 } from "../../persistence/delegation-task.js";
 import type { PersistedRecord } from "../../persistence/log.js";
-import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import type { DelegateSubmissionArgs } from "../../seam/schema.js";
 import type { PreparedDelegateChild, PreparedDelegateSubmission } from "./admission.js";
 import { DelegationChildSafetyError, failedSafetyResult } from "./child-safety-error.js";
 import type { PoolChildResult } from "./pool.js";
+import { acceptedFingerprint, requestFingerprint } from "./scheduler-fingerprint.js";
 import { cancelledResult, resultState, terminalToPoolResult } from "./scheduler-results.js";
 
 export interface DelegationSchedulerIdentity {
@@ -78,6 +79,7 @@ interface TaskState {
 interface SubmissionState {
   readonly submissionId: string;
   readonly fingerprint: string;
+  readonly requestFingerprint?: string;
   readonly tasks: readonly TaskState[];
 }
 
@@ -132,10 +134,11 @@ export class DelegationScheduler {
       this.options.identity.logicalParentId,
       toolCallId,
     );
-    const fingerprint = sha256Canonical(input);
+    const rawRequestFingerprint = requestFingerprint(input);
     const prior = this.submissions.get(submissionId);
     if (prior !== undefined) {
-      if (prior.fingerprint !== fingerprint)
+      const expected = prior.requestFingerprint ?? prior.fingerprint;
+      if (expected !== rawRequestFingerprint)
         throw new Error("delegation submission identity was reused with different inputs");
       return prior.tasks.map((task) => task.childId);
     }
@@ -147,6 +150,8 @@ export class DelegationScheduler {
         spentDelegationSlots(this.options.records(), this.options.identity.logicalParentId),
     );
     const tasks = prepared.tasks;
+    const hasSandbox = tasks.some((task) => task.sandbox !== undefined);
+    const fingerprint = hasSandbox ? acceptedFingerprint(input, tasks) : rawRequestFingerprint;
     if (this.isClosed() || this.isBudgetExhausted())
       throw new Error("delegation admission is closed");
     if (tasks.length === 0) throw new Error("delegation submission requires a task");
@@ -166,6 +171,7 @@ export class DelegationScheduler {
       parent_visit_index: this.options.identity.parentVisitIndex,
       tool_call_id: toolCallId,
       input_fingerprint: fingerprint,
+      ...(hasSandbox ? { request_fingerprint: rawRequestFingerprint } : {}),
       children: tasks.map((task) => ({
         child_id: task.childId,
         task_id: task.taskId,
@@ -183,9 +189,11 @@ export class DelegationScheduler {
         context_fingerprint: task.contextFingerprint,
         prompt_fingerprint: task.promptFingerprint,
         projection_fingerprint: task.projectionFingerprint,
+        ...(task.sandbox === undefined ? {} : { sandbox: task.sandbox }),
       })),
       ts: Date.now(),
     };
+    assertDelegationSubmissionAccepted(accepted);
     try {
       this.options.persistRecord(accepted);
     } catch (cause) {
@@ -205,7 +213,12 @@ export class DelegationScheduler {
       this.queue.push(state);
       return state;
     });
-    this.submissions.set(submissionId, { submissionId, fingerprint, tasks: states });
+    this.submissions.set(submissionId, {
+      submissionId,
+      fingerprint,
+      ...(hasSandbox ? { requestFingerprint: rawRequestFingerprint } : {}),
+      tasks: states,
+    });
     this.drain();
     return states.map((task) => task.childId);
   }
@@ -461,6 +474,9 @@ export class DelegationScheduler {
       this.submissions.set(submission.submission_id, {
         submissionId: submission.submission_id,
         fingerprint: submission.input_fingerprint,
+        ...(submission.request_fingerprint === undefined
+          ? {}
+          : { requestFingerprint: submission.request_fingerprint }),
         tasks: states,
       });
     }

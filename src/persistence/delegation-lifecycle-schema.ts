@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
 
 const id = Type.String({ minLength: 1 });
 const nonNegative = Type.Number({ minimum: 0 });
@@ -106,6 +107,7 @@ export const acceptedChildStartedSchema = Type.Object(
     ),
     task_fingerprint: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
     projection_fingerprint: Type.Optional(projectionFingerprint),
+    sandbox: Type.Optional(subagentSandboxDescriptorSchema),
     context_artifacts: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },

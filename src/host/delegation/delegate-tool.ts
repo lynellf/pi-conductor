@@ -9,6 +9,7 @@ import type {
   DelegateResultStatus,
 } from "../../persistence/child-completion.js";
 import type { SubagentUsage } from "../../persistence/log.js";
+import type { SubagentSandboxDescriptor } from "../../persistence/subagent-sandbox.js";
 import type { PreparedDelegateChild } from "./admission.js";
 import { capChildText, type LegacyChildReport, normalizeChildTerminal } from "./child-result.js";
 import {
@@ -86,6 +87,25 @@ export interface DelegateToolOptions {
   readonly onChildStarted?: (info: PoolChildStartedInfo) => void;
   readonly onChildCompleted?: (result: PoolCompletedResult) => void;
   readonly onChildFailed?: (result: PoolFailedResult) => void;
+  /** Host-owned prepared-runtime admission; absent keeps execution fail-closed. */
+  readonly sandboxAdmission?: SandboxAdmissionAdapter;
+}
+
+/** Capture and revalidate one private sandbox admission without exposing metadata to children. */
+export interface SandboxAdmissionAdapter {
+  readonly capture: (input: {
+    readonly childId: string;
+    readonly runId: string;
+    readonly primaryCheckout: string;
+    readonly profile: SubagentProfile;
+    readonly selectedPaths: readonly string[];
+    readonly trackedPaths: readonly string[];
+    readonly projectionRoots?: readonly string[];
+  }) => Promise<{ readonly sandbox: SubagentSandboxDescriptor }>;
+  readonly verify: (input: {
+    readonly childId: string;
+    readonly sandbox: SubagentSandboxDescriptor;
+  }) => Promise<void>;
 }
 
 /** Immutable inputs for a single child SDK session. */
@@ -103,6 +123,8 @@ export interface SpawnChildConfig {
   readonly contextArtifacts: readonly ResolvedContextArtifact[];
   readonly taskFingerprint: string;
   readonly projectionFingerprint: ChildProjectionFingerprint;
+  /** Accepted sandbox identity, when this child has explicit execution authority. */
+  readonly sandbox?: SubagentSandboxDescriptor;
   readonly systemPrompt: string;
 }
 
@@ -245,6 +267,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       taskFingerprint: childTaskFingerprint,
       projectionFingerprint: childProjectionFingerprint,
       systemPrompt: prompt.systemPrompt,
+      ...(options.prepared.sandbox === undefined ? {} : { sandbox: options.prepared.sandbox }),
     });
   } catch (cause) {
     if (cause instanceof DelegationOwnershipError) throw cause;

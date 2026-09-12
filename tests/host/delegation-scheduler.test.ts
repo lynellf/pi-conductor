@@ -6,9 +6,11 @@ import {
 } from "../../src/host/delegation/child-safety-error.js";
 import type { PoolChildResult } from "../../src/host/delegation/pool.js";
 import { DelegationScheduler } from "../../src/host/delegation/scheduler.js";
+import { acceptedFingerprint } from "../../src/host/delegation/scheduler-fingerprint.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
+import type { SubagentSandboxDescriptor } from "../../src/persistence/subagent-sandbox.js";
 
-function child(taskId: string): PreparedDelegateChild {
+function child(taskId: string, sandbox?: SubagentSandboxDescriptor): PreparedDelegateChild {
   return {
     childId: `child-${taskId}` as PreparedDelegateChild["childId"],
     taskId,
@@ -31,6 +33,7 @@ function child(taskId: string): PreparedDelegateChild {
     promptFingerprint: "d".repeat(64),
     projectionFingerprint: { kind: "full_materialized", path_count: 0, sha256: "e".repeat(64) },
     systemPrompt: "worker",
+    ...(sandbox === undefined ? {} : { sandbox }),
   };
 }
 
@@ -62,6 +65,8 @@ function makeScheduler(
   records: PersistedRecord[] = [],
   maxParallel = 2,
   onTerminal?: (result: PoolChildResult) => void,
+  sandbox?: SubagentSandboxDescriptor,
+  onPrepare?: () => void,
 ) {
   return new DelegationScheduler({
     identity: {
@@ -74,11 +79,16 @@ function makeScheduler(
     maxChildren: 8,
     records: () => records,
     persistRecord: (record) => records.push(record),
-    prepareSubmission: async (input) => ({
-      baseCommit: "base",
-      materializedParentPaths: [],
-      tasks: input.tasks.map((task) => child(task.id)) as readonly PreparedDelegateChild[],
-    }),
+    prepareSubmission: async (input) => {
+      onPrepare?.();
+      return {
+        baseCommit: "base",
+        materializedParentPaths: [],
+        tasks: input.tasks.map((task) =>
+          child(task.id, sandbox),
+        ) as readonly PreparedDelegateChild[],
+      };
+    },
     runTask,
     onTerminal: (terminal) => {
       records.push({
@@ -104,6 +114,100 @@ function makeScheduler(
 }
 
 describe("DelegationScheduler", () => {
+  it("returns accepted sandbox IDs across duplicates and terminal replay without preparing again", async () => {
+    const sandbox: SubagentSandboxDescriptor = {
+      backend: "bubblewrap",
+      execution_policy_digest: "a".repeat(64),
+      runtime_digest: "b".repeat(64),
+      materialization_id: "materialization",
+    };
+    const records: PersistedRecord[] = [];
+    let prepared = 0;
+    const run = async (task: PreparedDelegateChild) => {
+      records.push({
+        type: "subagent_started",
+        run_id: "run",
+        child_id: task.childId,
+        task_id: task.taskId,
+        subagent: task.profile.name,
+        model: "provider:model",
+        branch: task.branch,
+        worktree_path: task.worktreePath,
+        base_commit: task.baseCommit,
+        parent_role: "orchestrator",
+        parent_visit_index: 1,
+        session_file: "session",
+        sandbox,
+        ts: Date.now(),
+      });
+      return result(task, "failed");
+    };
+    const scheduler = makeScheduler(run, records, 1, undefined, sandbox, () => prepared++);
+    const task = {
+      id: "duplicate",
+      subagent: "worker",
+      objective: "work",
+      expected_output: "done",
+    };
+    const request = { tasks: [task] };
+    const ids = await scheduler.submit("same-call", request);
+    await scheduler.wait(ids[0] ?? "");
+    expect(await scheduler.submit("same-call", request)).toEqual(ids);
+    const resumed = makeScheduler(run, records, 1, undefined, sandbox, () => prepared++);
+    expect(await resumed.submit("same-call", request)).toEqual(ids);
+    expect(prepared).toBe(1);
+    await expect(
+      resumed.submit("same-call", { tasks: [{ ...task, objective: "different" }] }),
+    ).rejects.toThrow("different inputs");
+    expect(
+      records.filter((record) => record.type === "delegation_submission_accepted"),
+    ).toHaveLength(1);
+  });
+
+  it("rejects an invalid prepared sandbox before persistence or dispatch", async () => {
+    const records: PersistedRecord[] = [];
+    let ran = false;
+    const scheduler = makeScheduler(
+      async (task) => {
+        ran = true;
+        return result(task);
+      },
+      records,
+      1,
+      undefined,
+      {
+        backend: "bubblewrap",
+        execution_policy_digest: "invalid",
+        runtime_digest: "b".repeat(64),
+        materialization_id: "x",
+      },
+    );
+    await expect(
+      scheduler.submit("invalid", {
+        tasks: [{ id: "invalid", subagent: "worker", objective: "work", expected_output: "done" }],
+      }),
+    ).rejects.toThrow();
+    expect(records).toEqual([]);
+    expect(ran).toBe(false);
+  });
+  it("binds policy/runtime digests while excluding random materialization IDs", () => {
+    const request = {
+      tasks: [{ id: "same", subagent: "worker", objective: "x", expected_output: "y" }],
+    };
+    const first = {
+      backend: "bubblewrap" as const,
+      execution_policy_digest: "a".repeat(64),
+      runtime_digest: "b".repeat(64),
+      materialization_id: "one",
+    };
+    const second = { ...first, materialization_id: "two" };
+    expect(acceptedFingerprint(request, [child("same", first)])).toBe(
+      acceptedFingerprint(request, [child("same", second)]),
+    );
+    expect(acceptedFingerprint(request, [child("same", first)])).not.toBe(
+      acceptedFingerprint(request, [child("same", { ...first, runtime_digest: "c".repeat(64) })]),
+    );
+  });
   it("settles a child after post-session safety failure while preserving the poison", async () => {
     const failure = new Error("tool_cleanup_unconfirmed: ls cleanup observation failed");
     const scheduler = makeScheduler(async (task) => {

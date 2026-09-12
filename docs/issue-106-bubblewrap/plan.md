@@ -1,9 +1,10 @@
 # Issue #106 implementation plan
 
-Status: Specification acknowledged on 2026-09-12; policy/static prerequisites
-implemented. Operator-installed patched runtime and namespace profile verified;
-real isolation and bootstrap proof pass. Runtime capture and durable admission
-pinning are in progress; delegated execution remains disabled.
+Status: Specification acknowledged on 2026-09-12. Policy, immutable runtime
+capture, durable admission, and the production-policy capability probe pass
+their focused and real-backend gates. Private command materialization, confined
+file tools, output, and execution lifecycle integration remain in progress;
+delegated command execution remains disabled.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
 integration, and final verification. No stage requires a separate human review
@@ -45,13 +46,14 @@ Progress:
       tracked/sparse descendants and profile-root restrictions on new files.
 - [x] Retain complete tracked metadata in parent capture; prove ordinary and
       sparse-index omissions cannot disappear from writable-authority checks.
-- [ ] Resolve writable authority against the exact admitted task projection.
-- [ ] Pin runtime identity and accepted/start records; exercise changed-input restart.
+- [x] Resolve writable authority against the exact admitted task projection.
+- [x] Pin runtime identity and accepted/start records; exercise changed-input restart.
 
-The parser establishes syntax only. Task projection, filesystem provenance,
-runtime capture, and durable sandbox admission are not implemented. Both batch
-admission and direct SDK child creation reject a defined execution block while
-the backend is incomplete; no file-only fallback is used for opted-in profiles.
+The host-owned admission adapter resolves exact projection authority, copies and
+verifies a private runtime, persists metadata, and runs the fixed capability
+probe before returning an accepted descriptor. Batch admission rejects an opt-in
+without this adapter. Direct SDK child creation remains disabled pending the
+execution and file-tool gates; no opted-in profile falls back to file-only.
 
 The authority resolver requires the complete pinned-base tracked path set,
 including paths omitted by the parent sparse checkout. A directory cannot cover
@@ -60,8 +62,8 @@ allowed/default roots also bound new-file creation: selecting
 `src/feature/a.ts` cannot grant `src` when the profile grants only `src/feature`.
 With no profile projection policy, the explicit execution writable root defines
 the new-file namespace, subject to the same excluded-descendant check. Base
-capture, actual file-type validation, admission wiring, and durable pinning are
-still required; the pure resolver alone does not enable execution.
+capture and actual file-type validation for command project materialization
+remain in increment C. The resolver and admission adapter do not expose Bash.
 
 ## Increment B — prerequisite and bootstrap proof (Terra; Sol reviews)
 
@@ -92,15 +94,14 @@ Progress:
 - [x] Install the protected binary and obtain authorized host namespace access.
 - [x] Implement and verify the static filesystem/capability observer against the
       exact host-approved upstream build, including rejection before execution.
-- [ ] Connect static evidence and the inert production-policy capability probe
+- [x] Connect static evidence and the inert production-policy capability probe
       to runtime admission; distribution-backport collection remains unsupported.
 - [x] Run the real patched-runtime capability and bootstrap proof.
 
-Static assessment accepts host-observed facts and separately approved build
-evidence for evaluation only. The observer verifies protected file identities,
-digests, capabilities, version and options; it never installs software or claims
-a namespace probe passed. Production delegation does not consume it until the
-runtime admission and real execution gates are complete.
+The admission adapter consumes static observation plus the separately approved
+fixed native probe. The probe uses the production mount plan, accepted runtime
+snapshot, strict namespace/mount observations, and verified bootstrap.
+Production child tools remain gated until C–E are complete.
 
 ## Increment C — private execution files (Sol; Terra reviews)
 
@@ -208,7 +209,7 @@ command tools remain incomplete. The unchecked feature gates are authoritative.
 - [x] Full ordinary suite: 216 files / 2,324 tests pass. Typecheck, build, and
       production dependency audit pass; the linked CLI resolves to this checkout.
 
-Additional commits: `3628301`, `4b99567`, `ea331e1`. The static observer accepts
+Additional commits: `3628301`, `4b99567`, `ea331e1`, `6d61092`. The static observer accepts
 only separately approved upstream builds; it does not claim its namespace
 capability probe ran. The production probe/admission adapter remains unchecked.
 
@@ -217,9 +218,37 @@ capability probe ran. The production probe/admission adapter remains unchecked.
 The system package remains `bubblewrap 0.9.0-1ubuntu0.1`. The operator installed
 the reviewed upstream 0.12.0 build separately with the explicit namespace
 profile. The installed binary matches the approved digest and protected path
-requirements. Real isolation tests now pass; B4 and downstream implementation
-remain incomplete. See [preparation results](test-runtime-results.md) for the
+requirements. Real isolation, B4, and the production admission probe now pass;
+downstream integration remains incomplete. See [preparation results](test-runtime-results.md) for the
 evidence and its limits. Skipped tests do not satisfy any feature gate.
+
+## Admission and production-probe verification, 2026-09-12
+
+- [x] Focused policy/runtime/admission/probe/delegation coverage: 260 tests in
+      18 files. Typecheck, build, and repository lint pass.
+- [x] Real suites run together against the exact approved build: 20 tests in
+      four files, including the actual host adapter's capture and verification.
+- [x] Complete regular-file runtime approval prevents unapproved loader/preload
+      additions. Capture rejects links and special files; snapshots retain
+      independent inodes, are sealed, fsynced, and inventoried again.
+- [x] Strict TypeBox metadata, canonical fingerprints, private append-once files,
+      bounded descriptor reads, and checked storage ancestry protect admission.
+      Accepted/start descriptors match. Duplicate and terminal-replay submissions
+      return existing IDs without preparing new authority.
+- [x] Snapshot verification survives source changes/removal and rejects changed,
+      missing, writable, or malformed retained data before child setup.
+- [x] The fixed native probe checks actual nested-userns denial, capabilities,
+      descriptors, devices, sentinel/network denial, final namespace identity,
+      and the exact mount set, including private `/dev/shm`.
+- [x] Production-probe persistence failure and a held pre-ready timeout settle
+      the verified init and cannot release later. Diagnostics remain inspectable;
+      only verified init identities and the owned launcher can be signaled.
+- [ ] Complete C–E and verify the full SDK child repair/restart/output workflow.
+
+Operators approve every file in a prepared runtime, including the native probe
+and its dependencies. Conductor neither compiles nor installs runtime inputs
+during admission. Operator source and instructions ship under `resources/sandbox`;
+compilation in real tests is fixture preparation only.
 
 
 ## Review reconciliation

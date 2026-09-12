@@ -86,6 +86,24 @@ describe("delegation batch gate (§4)", () => {
     });
   });
 
+  it("allows configured sandbox validation only when the host adapter is explicit", () => {
+    const result = validateBatch(
+      { tasks: [{ id: "task-1", subagent: "implementer", objective: "x", expected_output: "y" }] },
+      policy,
+      [
+        {
+          ...profile,
+          execution: { backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] },
+        },
+      ],
+      3,
+      { isGit: true, isClean: true, headCommit: "base" },
+      [],
+      true,
+    );
+    expect(result.valid).toBe(true);
+  });
+
   it("rejects a dirty primary checkout before a child can be admitted", () => {
     const result = validateBatch(
       {

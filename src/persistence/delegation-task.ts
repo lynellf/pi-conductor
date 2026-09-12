@@ -9,6 +9,11 @@ import type {
   SubagentFailedRecord,
   SubagentStartedRecord,
 } from "./log.js";
+import {
+  type SubagentSandboxDescriptor,
+  sandboxBoundFingerprint,
+  subagentSandboxDescriptorSchema,
+} from "./subagent-sandbox.js";
 
 const id = Type.String({ minLength: 1 });
 const sha256 = Type.String({ pattern: "^[a-f0-9]{64}$" });
@@ -37,6 +42,7 @@ const child = Type.Object(
     context_fingerprint: sha256,
     prompt_fingerprint: sha256,
     projection_fingerprint: projectionFingerprint,
+    sandbox: Type.Optional(subagentSandboxDescriptorSchema),
   },
   { additionalProperties: false },
 );
@@ -53,6 +59,7 @@ export const delegationSubmissionAcceptedSchema = Type.Object(
     parent_visit_index: nonNegativeInteger,
     tool_call_id: id,
     input_fingerprint: sha256,
+    request_fingerprint: Type.Optional(sha256),
     children: Type.Array(child, { minItems: 1 }),
     ts: Type.Number({ minimum: 0 }),
   },
@@ -85,6 +92,20 @@ export function assertDelegationSubmissionAccepted(
     throw new DelegationTaskRecordError("acceptance timestamp must be finite");
   if (new Set(record.children.map((entry) => entry.child_id)).size !== record.children.length)
     throw new DelegationTaskRecordError("accepted child IDs must be unique");
+  const hasSandbox = record.children.some((entry) => entry.sandbox !== undefined);
+  if (hasSandbox !== (record.request_fingerprint !== undefined))
+    throw new DelegationTaskRecordError(
+      "sandbox acceptance requires request_fingerprint and no-sandbox acceptance forbids it",
+    );
+  if (
+    hasSandbox &&
+    record.input_fingerprint !==
+      sandboxBoundFingerprint(
+        record.request_fingerprint as string,
+        record.children.map((entry) => entry.sandbox),
+      )
+  )
+    throw new DelegationTaskRecordError("sandbox acceptance fingerprint does not bind authority");
 }
 
 /** Derive the canonical submission identity from its durable parent/tool tuple. */
@@ -122,6 +143,19 @@ function matchesChild(
     accepted.branch === record.branch &&
     accepted.worktree_path === record.worktree_path &&
     accepted.base_commit === record.base_commit
+  );
+}
+
+function sameSandbox(
+  accepted: SubagentSandboxDescriptor | undefined,
+  started: SubagentSandboxDescriptor | undefined,
+): boolean {
+  if (accepted === undefined || started === undefined) return accepted === started;
+  return (
+    accepted.backend === started.backend &&
+    accepted.execution_policy_digest === started.execution_policy_digest &&
+    accepted.runtime_digest === started.runtime_digest &&
+    accepted.materialization_id === started.materialization_id
   );
 }
 
@@ -175,6 +209,8 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
     if (isStarted(record)) {
       const entry = accepted.get(record.child_id);
       if (entry === undefined) {
+        if (record.sandbox !== undefined)
+          throw new DelegationTaskRecordError("sandbox child start has no accepted submission");
         orphanStarts.add(record.child_id);
         continue;
       }
@@ -185,6 +221,7 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
       if (
         submission === undefined ||
         !matchesChild(entry, record) ||
+        !sameSandbox(entry.sandbox, record.sandbox) ||
         record.run_id !== submission.run_id ||
         !nonEmpty(record.session_file) ||
         !Number.isFinite(record.ts) ||

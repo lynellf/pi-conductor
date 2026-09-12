@@ -51,6 +51,7 @@ import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
+import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
 import type {
   ToolExecutionCleanupConfirmedRecord,
   ToolExecutionFinishedRecord,
@@ -277,6 +278,8 @@ export interface SubagentStartedRecord {
   readonly task_fingerprint?: string;
   /** Issue #57: hash-only materialized projection cohort identity. */
   readonly projection_fingerprint?: ChildProjectionFingerprint;
+  /** Issue #106: accepted sandbox identity, repeated at child start. */
+  readonly sandbox?: SubagentSandboxDescriptor;
   /** Issue #60 audit inventory; absent historical records mean not recorded. */
   readonly context_artifacts?: ContextArtifactsAudit;
   /** Resolved profile model retained for recovery and terminal roll-up. */

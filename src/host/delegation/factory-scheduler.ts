@@ -47,6 +47,7 @@ export function createDelegateScheduler(
         spawnAndRunChild: async () => {
           throw new Error("scheduler preparation cannot spawn directly");
         },
+        ...(opts.sandboxAdmission === undefined ? {} : { sandboxAdmission: opts.sandboxAdmission }),
       });
       for (const task of prepared.tasks)
         materializedPaths.set(task.childId, prepared.materializedParentPaths);
@@ -58,6 +59,11 @@ export function createDelegateScheduler(
       };
       signal.addEventListener("abort", abort, { once: true });
       try {
+        if (task.sandbox !== undefined) {
+          if (opts.sandboxAdmission === undefined)
+            throw new Error("sandbox admission is unavailable before child creation");
+          await opts.sandboxAdmission.verify({ childId: task.childId, sandbox: task.sandbox });
+        }
         const result = await runPreparedChild({
           prepared: task,
           runId: opts.runId,

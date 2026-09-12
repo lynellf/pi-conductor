@@ -20,6 +20,7 @@
     "dist",
     "extensions",
     "src",
+    "resources/sandbox",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

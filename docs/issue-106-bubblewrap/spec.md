@@ -284,6 +284,13 @@ Bubblewrap must close its status FD before reaching the bootstrap. READY is a
 framing marker, not a nonce or independent authentication proof; bootstrap
 trust and FD ownership establish the pre-command boundary.
 
+Host runtime approval covers the exact complete regular-file inventory, not
+only Bash and a subset of libraries. Unapproved loader configuration, preload
+files, or alternate libraries must not execute before this boundary. Capture
+and snapshot verification reject additional unapproved files. The fixed native
+capability probe is also part of that inventory and has a separate host approval;
+Conductor does not compile or install it during admission.
+
 Startup JSON identifies the host-visible PID of namespace PID 1 for the
 supported invocation without `--pidns` or `--as-pid-1`. It occurs before mount
 setup and can contain an earlier user-namespace identity. Record early PID1

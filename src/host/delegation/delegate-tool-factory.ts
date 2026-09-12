@@ -21,7 +21,11 @@ import {
 import type { DisplaySink } from "../display-sink.js";
 import { mapPoolResult } from "./child-result-mapping.js";
 import { buildSpawnCallback } from "./child-session.js";
-import { DelegateToolError, executeDelegate } from "./delegate-tool.js";
+import {
+  DelegateToolError,
+  executeDelegate,
+  type SandboxAdmissionAdapter,
+} from "./delegate-tool.js";
 import { appendCompleted, appendFailed, errorMessage } from "./factory-records.js";
 import type { DelegationManager } from "./manager.js";
 import type { PoolChildResult } from "./pool.js";
@@ -56,6 +60,8 @@ export interface DelegateToolFactoryOptions {
   readonly delegationMode?: import("../../manifest/types.js").DelegationMode;
   /** Explicit durable provenance for pre-#86 snapshots without a mode field. */
   readonly legacyDelegationMode?: boolean;
+  /** Host-owned prepared-runtime admission for explicit sandbox profiles. */
+  readonly sandboxAdmission?: SandboxAdmissionAdapter;
 }
 
 /** Create a parent-only delegate tool; it never creates an FSM event. */

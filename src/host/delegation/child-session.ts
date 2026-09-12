@@ -234,6 +234,7 @@ function persistStarted(
     completion_protocol: config.profile.completion_protocol,
     task_fingerprint: config.taskFingerprint,
     projection_fingerprint: config.projectionFingerprint,
+    ...(config.sandbox === undefined ? {} : { sandbox: config.sandbox }),
     context_artifacts: contextArtifactsAudit(config.contextArtifacts),
     model: child.model,
     session_file: sessionFile,

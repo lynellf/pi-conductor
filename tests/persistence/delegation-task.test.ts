@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import {
@@ -12,6 +13,10 @@ import {
   spentDelegationSlots,
 } from "../../src/persistence/delegation-task.js";
 import { InMemoryRecordLog, type PersistedRecord } from "../../src/persistence/log.js";
+import {
+  sandboxBoundFingerprint,
+  subagentSandboxDescriptorSchema,
+} from "../../src/persistence/subagent-sandbox.js";
 
 const child = {
   child_id: "child-1",
@@ -75,6 +80,12 @@ const started = {
   base_commit: child.base_commit,
   ts: 2,
 };
+const sandbox = {
+  backend: "bubblewrap" as const,
+  execution_policy_digest: "7".repeat(64),
+  runtime_digest: "8".repeat(64),
+  materialization_id: "550e8400-e29b-41d4-a716-446655440000",
+};
 
 describe("delegation submission acceptance ledger", () => {
   it("validates one atomic batch and derives pending, result, and spent state", () => {
@@ -104,6 +115,51 @@ describe("delegation submission acceptance ledger", () => {
         { ...terminal, session_file: "/tmp/other.jsonl" },
       ]),
     ).toThrow("session");
+  });
+
+  it("validates the strict optional sandbox descriptor and pins it across start", () => {
+    expect(Value.Check(subagentSandboxDescriptorSchema, sandbox)).toBe(true);
+    expect(Value.Check(subagentSandboxDescriptorSchema, { ...sandbox, extra: true })).toBe(false);
+    expect(
+      Value.Check(subagentSandboxDescriptorSchema, { ...sandbox, runtime_digest: "bad" }),
+    ).toBe(false);
+    const acceptedWithSandbox = {
+      ...accepted,
+      input_fingerprint: sandboxBoundFingerprint("9".repeat(64), [sandbox]),
+      request_fingerprint: "9".repeat(64),
+      children: [{ ...child, sandbox }],
+    };
+    const startedWithSandbox = { ...started, sandbox };
+    expect(() =>
+      assertDelegationTaskTimeline([acceptedWithSandbox, startedWithSandbox]),
+    ).not.toThrow();
+    expect(() =>
+      assertDelegationSubmissionAccepted({
+        ...acceptedWithSandbox,
+        children: [{ ...child, sandbox: { ...sandbox, runtime_digest: "a".repeat(64) } }],
+      }),
+    ).toThrow("fingerprint");
+    expect(() =>
+      assertDelegationTaskTimeline([
+        acceptedWithSandbox,
+        { ...startedWithSandbox, sandbox: { ...sandbox, runtime_digest: "a".repeat(64) } },
+      ]),
+    ).toThrow("identity");
+    expect(() => assertDelegationTaskTimeline([acceptedWithSandbox, { ...started }])).toThrow(
+      "identity",
+    );
+  });
+
+  it("requires request fingerprint for sandbox acceptance and rejects sandbox orphan starts", () => {
+    expect(() =>
+      assertDelegationSubmissionAccepted({ ...accepted, children: [{ ...child, sandbox }] }),
+    ).toThrow("request_fingerprint");
+    expect(() =>
+      assertDelegationSubmissionAccepted({ ...accepted, request_fingerprint: "9".repeat(64) }),
+    ).toThrow("no-sandbox");
+    expect(() => assertDelegationTaskTimeline([{ ...started, sandbox }])).toThrow(
+      "no accepted submission",
+    );
   });
 
   it("permits a running child to be cancelled with its real session and usage", () => {
