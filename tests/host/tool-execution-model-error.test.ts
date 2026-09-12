@@ -56,6 +56,29 @@ describe("tool execution model error boundary", () => {
     expect(message.length).toBeLessThanOrEqual(512);
   });
 
+  it.each([
+    "EACCES",
+    "EPERM",
+  ] as const)("keeps %s environment ownership ambiguous for the model", (code) => {
+    const error = toToolExecutionModelError(
+      Object.assign(new Error("tool execution cleanup could not be confirmed"), {
+        code: "tool_cleanup_unconfirmed",
+        cleanup: "unconfirmed",
+        diagnostic: {
+          cleanup_cause: "cleanup_observation_failed",
+          leader_observed: true,
+          observed_members: [],
+          observation_error: { operation: "read_environ", code, pid: 123 },
+        },
+      }),
+    );
+    const message = JSON.parse(error.message).message as string;
+    expect(message).toContain("A same-user service association is not ownership proof");
+    expect(message).toContain("tool_execution_started.admission.preexisting_before");
+    expect(message).toContain("conduct reconcile-tools");
+    expect(message).toContain("Do not replay the operation");
+  });
+
   it("preserves the controller cause for an ordinary worker failure", async () => {
     const controller = new ToolExecutionController({
       runId: "run",

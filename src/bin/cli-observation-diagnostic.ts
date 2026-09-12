@@ -52,6 +52,15 @@ export function formatObservationDiagnostic(error: ProcessObservationError): str
     lines.push(
       "Access was denied. Check the observing account, procfs access restrictions, and process inspection permissions with the host administrator; do not dump environment contents or weaken host security settings.",
     );
+    if (operation === "read_environ") {
+      lines.push(
+        "A service association from PPID, cgroup, or systemd MainPID is not lifecycle proof; the process may be a socket-activated external service or an escaped descendant.",
+      );
+      if (start !== undefined)
+        lines.push(
+          "Compare this start_time with tool_execution_started.admission.preexisting_before; an equal or newer process remains unverified.",
+        );
+    }
   }
   lines.push(
     "Restore observation access on the original Linux host, in the original PID/network namespaces, using the canonical run storage.",

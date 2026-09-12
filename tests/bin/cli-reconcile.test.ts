@@ -147,6 +147,27 @@ describe("reconcile-tools CLI", () => {
     await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
   });
 
+  it("explains that a permission-denied environment read does not prove service ownership", async () => {
+    const dir = await fixture();
+    vi.mocked(identity.findProcessesByOwnerToken).mockRejectedValue(
+      new identity.ProcessObservationError("read_environ", { code: "EACCES" }, 123, {
+        startTime: "98765",
+        processGroupId: 120,
+      }),
+    );
+
+    const out = output();
+    expect(await runReconcileCli(["reconcile-tools", "--log-dir", dir, "run-reconcile"], out)).toBe(
+      1,
+    );
+    const diagnostic = out.errors.join("\n");
+    expect(diagnostic).toContain(
+      "A service association from PPID, cgroup, or systemd MainPID is not lifecycle proof",
+    );
+    expect(diagnostic).toContain("tool_execution_started.admission.preexisting_before");
+    expect(diagnostic).toContain("socket-activated external service or an escaped descendant");
+  });
+
   it("returns nonzero and does not mutate for an unknown run", async () => {
     const dir = await fixture();
     const out = output();

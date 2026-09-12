@@ -58,14 +58,20 @@ export function toToolExecutionModelError(error: unknown): ToolExecutionModelErr
       : error instanceof Error
         ? error.message
         : String(error);
-  const boundedDiagnostic = textDiagnostic.slice(0, 300);
-  const guidance =
+  const deniedEnvironmentObservation =
+    structuredDiagnostic?.observation_error?.operation === "read_environ" &&
+    (structuredDiagnostic.observation_error.code === "EACCES" ||
+      structuredDiagnostic.observation_error.code === "EPERM");
+  const guidance = deniedEnvironmentObservation
+    ? permissionDeniedEnvironmentGuidance
+    : textDiagnostic.slice(0, 300);
+  const message =
     code === "tool_timeout" ||
     code === "tool_timeout_exhausted" ||
     code === "tool_aborted" ||
     code === "tool_cleanup_unconfirmed" ||
     code === "tool_persistence_ambiguous"
-      ? `${boundedDiagnostic}. The operation was not replayed; partial file effects may remain. Inspect the workspace before repair.`
+      ? `${guidance}. The operation was not replayed; partial file effects may remain. Inspect the workspace before repair.`
       : textDiagnostic;
   return new ToolExecutionModelError(
     {
@@ -74,9 +80,12 @@ export function toToolExecutionModelError(error: unknown): ToolExecutionModelErr
       ...(executionId === undefined ? {} : { executionId }),
       ...(structuredDiagnostic === undefined ? {} : { diagnostic: structuredDiagnostic }),
     },
-    guidance,
+    message,
   );
 }
+
+const permissionDeniedEnvironmentGuidance =
+  "A same-user service association is not ownership proof: it may be a socket-activated external service or an escaped descendant. Compare observed start_time with tool_execution_started.admission.preexisting_before; equal or newer remains unverified. Do not replay the operation. Preserve partial effects and inspect with conduct reconcile-tools";
 
 function isSafeDiagnostic(value: unknown): value is ToolExecutionDiagnostic {
   return Value.Check(toolExecutionDiagnosticSchema, value);
