@@ -4,6 +4,12 @@
 
 ### Bug fixes
 
+- Report terminal CLI session failures with exit 1 and consistent final JSON
+  status, including failures followed by checkpoint/context records (#105).
+- Explain unresolved environment visibility for services activated after tool
+  admission in model and CLI diagnostics; preserve fail-closed ownership
+  checks and guide inspection without automatic replay (#105).
+
 - Keep status refreshes from starving supervised process observation as run
   logs grow (#104). Read one consistent snapshot per refresh, reuse it for
   spinner updates, and leave observation time between expensive refreshes.

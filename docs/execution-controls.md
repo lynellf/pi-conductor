@@ -165,6 +165,44 @@ confirm an execution. A missing PID or a successful `ps`/`ls` alone does not
 establish cleanup. See the [Linux procfs reference](https://www.kernel.org/doc/html/latest/filesystems/proc.html#process-specific-subdirectories)
 for process metadata and access constraints.
 
+### Services activated after tool admission (#105)
+
+A foreground command can contact a socket or service manager and cause a
+service to start outside its process group. The service may not inherit the
+execution marker. Its PPID, cgroup, and a matching systemd `MainPID` describe
+current association; they do not prove that its lifecycle or effects are
+independent of the command. The host does not exempt processes by service or
+executable name.
+
+For a denied environment read, compare the diagnostic `start_time` with the
+correlated `tool_execution_started.admission.preexisting_before`. Equal or
+newer start ticks cannot use the durable pre-existing-process exemption.
+Inspect the process metadata and service activation evidence on the original
+host, along with the command's partial effects. A successful foreground exit or
+written setup receipt does not establish descendant cleanup. Keep receipts and
+workspace changes; do not repeat setup automatically.
+
+When this evidence cannot resolve ownership, the invocation remains
+`tool_cleanup_unconfirmed`. Automatic continuation for manager-launched
+services is unsupported by the current ownership contract. Run the read-only
+`reconcile-tools` inspection before considering confirmation; current service
+association, process age measured at recovery time, and a vanished PID cannot
+replace original admission evidence or bypass a failed scan. The existing
+operator attestation still requires every original process and partial effect
+to be checked. Do not stop a shared authentication service or weaken host
+security settings to suppress the diagnostic.
+
+### Headless terminal status (#105)
+
+The CLI uses the orchestration loop's settled result for both `exit_reason`
+and `run_stats.exitReason`, even when checkpoint or context records follow a
+session failure. Terminal `session_failed`, including
+`tool_cleanup_unconfirmed`, exits 1 so a shell or service manager sees failure.
+Successful `done` exits 0. An explicit application abort retains exit 0;
+the first SIGINT/SIGTERM requests that graceful abort. A second signal forces
+exit 130 (SIGINT) or 143 (SIGTERM). A live
+recovery is not made terminal merely because a previous session failed.
+
 Do not trust a historical PID by itself: correlate the run ID, execution ID,
 tool-call ID and tool name, then verify the current process start ticks, process
 group and ownership in the original host namespace. Stop only processes that
