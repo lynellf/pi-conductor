@@ -9,6 +9,8 @@ const execFileAsync = promisify(execFile);
 export interface ParentMaterializedProjection {
   readonly baseCommit: string;
   readonly paths: readonly string[];
+  /** Complete tracked path set, including sparse omissions; metadata only (#106 §2). */
+  readonly trackedPaths: readonly string[];
   /** Whether the parent omitted any tracked path from its active projection. */
   readonly isSparse: boolean;
 }
@@ -17,6 +19,7 @@ export interface ParentMaterializedProjection {
 export interface DelegateParentProjectionCapture {
   readonly baseCommit: string | null;
   readonly materializedPaths?: readonly string[];
+  readonly trackedPaths?: readonly string[];
   readonly isSparse?: boolean;
 }
 
@@ -60,16 +63,30 @@ export async function captureMaterializedParentProjection(
     await assertCleanExpectedBase(primaryCheckout, expectedBaseCommit);
 
     const paths = new Set<string>();
+    const trackedPaths = new Set<string>();
     let isSparse = false;
     for (const entry of stdout.split("\0")) {
+      if (entry === "") continue;
+      if (!entry.startsWith("H ") && !entry.startsWith("S ")) {
+        throw new ParentProjectionCaptureError(
+          "unexpected status in clean parent tracked-path capture",
+        );
+      }
+      const path = entry.slice(2);
+      if (path.length === 0 || path.endsWith("/") || trackedPaths.has(path)) {
+        throw new ParentProjectionCaptureError(
+          "incomplete or duplicate parent tracked-path capture",
+        );
+      }
+      // Without --sparse, ls-files expands sparse-index directory entries.
+      // Retain every omitted name, including names unsafe for child selection.
+      trackedPaths.add(path);
       // `git ls-files -t` marks ordinary materialized index entries with H;
       // skipped sparse entries are S and must never become child authority.
       if (entry.startsWith("S ")) {
         isSparse = true;
         continue;
       }
-      if (!entry.startsWith("H ")) continue;
-      const path = entry.slice(2);
       if (isSafeExactProjectionPath(path)) paths.add(path);
     }
     if (isSparse && paths.size === 0) {
@@ -80,6 +97,7 @@ export async function captureMaterializedParentProjection(
     return Object.freeze({
       baseCommit: expectedBaseCommit,
       paths: Object.freeze([...paths]),
+      trackedPaths: Object.freeze([...trackedPaths].sort()),
       isSparse,
     });
   } catch (cause) {
@@ -107,6 +125,7 @@ export async function captureParentProjection(
   return Object.freeze({
     baseCommit: captured.baseCommit,
     materializedPaths: captured.paths,
+    trackedPaths: captured.trackedPaths,
     isSparse: captured.isSparse,
   });
 }
