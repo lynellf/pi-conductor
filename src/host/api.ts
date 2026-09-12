@@ -149,6 +149,11 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
   );
   assertManifestWorkspaceBackendsSupported(loaded);
+  // The live host and restart snapshot must share the same resolved policy (#106 §3).
+  const pinnedLoaded: LoadedManifest = Object.freeze({
+    ...loaded,
+    manifest: pinExecutionPolicies(loaded.manifest),
+  });
   const baseDir = await resolveBaseDir(opts.baseDir);
   const log = new FileRecordLog({ baseDir });
   const def = loaded.def;
@@ -162,7 +167,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     log.append(
       createManifestSnapshot({
         runId,
-        manifest: pinExecutionPolicies(loaded.manifest),
+        manifest: pinnedLoaded.manifest,
         definition: def,
         ts: Date.now(),
       }),
@@ -193,7 +198,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     };
     log.append(seedRecord);
 
-    const host = opts.hostFactory({ runId, def, log, loadedManifest: loaded });
+    const host = opts.hostFactory({ runId, def, log, loadedManifest: pinnedLoaded });
     // Additive analytics context. Route it through the shared Host seam so
     // durable append and subscribeToRecords delivery stay in the same order.
     const contextRecord: RunContextRecord = {
@@ -211,7 +216,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
       host,
       initialCheckpoint,
       goal,
-      loadedManifest: loaded,
+      loadedManifest: pinnedLoaded,
       lease,
     });
   } catch (error) {

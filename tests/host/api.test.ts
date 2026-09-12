@@ -9,8 +9,7 @@
  *   - `resumeRun` with `modelRegistry` runs the preflight check on
  *     the resumed load.
  *   - `resumeRun` without `modelRegistry` skips the check.
- *   - `handle.loadedManifest` is the same reference returned by
- *     `loadManifest` (wiring consistency).
+ *   - Fresh hosts and handles consume the same policy pinned for restart.
  */
 
 import { createHash } from "node:crypto";
@@ -33,6 +32,7 @@ import {
   startRun,
 } from "../../src/index.js";
 import { toMachineDefinition } from "../../src/manifest/definition.js";
+import { DEFAULT_TOOL_EXECUTION_POLICY } from "../../src/manifest/execution-policy.js";
 import { parseManifest } from "../../src/manifest/parse.js";
 import type { InMemoryRecordLog } from "../../src/persistence/log.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
@@ -149,7 +149,51 @@ describe("startRun with modelRegistry (T2.10)", () => {
     await handle.abort("test cleanup");
   });
 
-  it("handle.loadedManifest is the same reference from loadManifest (wiring check)", async () => {
+  it("gives the fresh host and handle the same pinned policy recorded for restart (#106)", async () => {
+    await writeFile(
+      manifestPath,
+      `${VALID_MANIFEST}
+subagents:
+  - name: helper
+    models: [stub:model]
+    max_session_cost_usd: 1
+    system_prompt: roles/helper.md
+`,
+      "utf8",
+    );
+    let hostContext: HostFactoryContext | undefined;
+    const handle = await startRun(manifestPath, {
+      goal: "test",
+      baseDir: join(workdir, "runs"),
+      hostFactory: (ctx) => {
+        hostContext = ctx;
+        return stubHostFactory(ctx);
+      },
+    });
+    try {
+      if (hostContext === undefined) throw new Error("expected host construction");
+      const snapshot = hostContext.log
+        .records(handle.runId)
+        .find((record) => record.type === "manifest_snapshot");
+      if (snapshot?.type !== "manifest_snapshot") throw new Error("expected pinned snapshot");
+      expect(handle.loadedManifest).toBe(hostContext.loadedManifest);
+      expect(hostContext.loadedManifest.manifest).toEqual(snapshot.normalized_manifest);
+      expect(hostContext.loadedManifest.manifest.roles[0]?.tool_execution).toEqual(
+        DEFAULT_TOOL_EXECUTION_POLICY,
+      );
+      expect(hostContext.loadedManifest.manifest.subagents?.[0]?.tool_execution).toEqual(
+        DEFAULT_TOOL_EXECUTION_POLICY,
+      );
+      expect(Object.isFrozen(hostContext.loadedManifest.manifest.roles[0]?.tool_execution)).toBe(
+        true,
+      );
+    } finally {
+      await handle.abort("test cleanup");
+      await handle.completion();
+    }
+  });
+
+  it("handle exposes the loaded definition", async () => {
     await writeFile(manifestPath, MANIFEST_WITH_UNREGISTERED, "utf8");
     const handle = await startRun(manifestPath, {
       goal: "test",
