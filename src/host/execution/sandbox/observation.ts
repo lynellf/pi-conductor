@@ -1,42 +1,29 @@
 /** Read-only Bubblewrap host observation — Issue #106 §5. */
 
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
-import { dirname, posix } from "node:path";
 import { promisify } from "node:util";
-
-import type {
-  BubblewrapAncestorDirectory,
-  BubblewrapBinaryIdentity,
-  BubblewrapStaticObservation,
-  HostApprovedBubblewrapBuild,
-} from "./prerequisites.js";
+import { BubblewrapObservationError } from "./observation-error.js";
+import {
+  type BubblewrapFileObserver,
+  canonicalAbsolutePath,
+  inspectTrustedFile,
+  type ObservedTrustedFile,
+} from "./observation-files.js";
+import {
+  extractOptions,
+  matchingUpstreamApproval,
+  sameIdentity,
+  validIdentity,
+} from "./observation-support.js";
+import type { BubblewrapStaticObservation, HostApprovedBubblewrapBuild } from "./prerequisites.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_GETCAP_PATH = "/usr/sbin/getcap";
 const MAX_COMMAND_OUTPUT = 64 * 1024;
 const COMMAND_TIMEOUT_MS = 2_000;
 
-/** Typed failure while collecting trusted host facts for Bubblewrap admission. */
-export class BubblewrapObservationError extends Error {
-  constructor(
-    message: string,
-    readonly code:
-      | "bubblewrap-observation-invalid-path"
-      | "bubblewrap-observation-unavailable"
-      | "bubblewrap-observation-unsafe-file"
-      | "bubblewrap-observation-mutated"
-      | "bubblewrap-observation-capability-check-failed"
-      | "bubblewrap-observation-unapproved-build"
-      | "bubblewrap-observation-command-failed",
-    options?: { readonly cause?: unknown },
-  ) {
-    super(message, options);
-    this.name = "BubblewrapObservationError";
-  }
-}
+export { BubblewrapObservationError } from "./observation-error.js";
+export type { BubblewrapFileObserver, ObservedTrustedFile } from "./observation-files.js";
 
 /** Injectable command seam used to test ordering without running a capability probe. */
 export type BubblewrapObservationCommand = (
@@ -50,21 +37,73 @@ export interface BubblewrapObservationOptions {
   readonly approvedBuilds: readonly HostApprovedBubblewrapBuild[];
   readonly getcapPath?: string;
   readonly runCommand?: BubblewrapObservationCommand;
+  readonly platform?: string;
+  readonly observerUid?: number;
+  /** Deterministic seam for tests; production uses descriptor-anchored inspection. */
+  readonly observeFile?: BubblewrapFileObserver;
+  readonly canonicalizePath?: CanonicalizePath;
 }
 
-/** Collect static, identity-bound Bubblewrap facts without probing namespaces. */
+type CanonicalizePath = (path: string) => Promise<string>;
+
+/**
+ * Collect static, identity-bound Bubblewrap facts without probing namespaces.
+ * Pathname execution retains a privileged replacement race after the final check;
+ * protected ancestors prevent ordinary unprivileged replacement (#106 §5).
+ */
 export async function collectBubblewrapStaticObservation(
   options: BubblewrapObservationOptions,
 ): Promise<BubblewrapStaticObservation> {
-  const binaryPath = await canonicalAbsolutePath(options.binaryPath, "Bubblewrap binary");
-  const binary = await inspectTrustedFile(binaryPath, "Bubblewrap binary");
+  const platform = options.platform ?? process.platform;
+  const observerUid = options.observerUid ?? process.getuid?.() ?? -1;
+  if (platform !== "linux") {
+    throw new BubblewrapObservationError(
+      "Bubblewrap requires Linux",
+      "bubblewrap-observation-unsupported-platform",
+    );
+  }
+  if (!Number.isInteger(observerUid) || observerUid <= 0) {
+    throw new BubblewrapObservationError(
+      "Bubblewrap observation requires an unprivileged observer",
+      "bubblewrap-observation-privileged-observer",
+    );
+  }
+  const observeFile = options.observeFile ?? inspectTrustedFile;
+  const binaryPath = await canonicalAbsolutePath(
+    options.binaryPath,
+    "Bubblewrap binary",
+    options.canonicalizePath,
+  );
+  const binary = await observeFile(binaryPath, "Bubblewrap binary");
+  assertValidObservedFile(binary, "Bubblewrap binary");
+  if ((binary.identity.mode & 0o6000) !== 0 || (binary.identity.mode & 0o001) === 0) {
+    throw new BubblewrapObservationError(
+      "Bubblewrap binary has unsafe mode",
+      "bubblewrap-observation-unsafe-file",
+    );
+  }
   const getcapPath = await canonicalAbsolutePath(
     options.getcapPath ?? DEFAULT_GETCAP_PATH,
     "getcap",
+    options.canonicalizePath,
   );
-  await inspectTrustedFile(getcapPath, "getcap");
+  const getcap = await observeFile(getcapPath, "getcap");
+  assertValidObservedFile(getcap, "getcap");
+  if ((getcap.identity.mode & 0o6000) !== 0 || (getcap.identity.mode & 0o001) === 0) {
+    throw new BubblewrapObservationError(
+      "getcap has unsafe mode",
+      "bubblewrap-observation-unsafe-file",
+    );
+  }
   const command = options.runCommand ?? runTrustedCommand;
   const capabilities = await readCapabilities(command, getcapPath, binaryPath);
+  if (capabilities.length > 0) {
+    throw new BubblewrapObservationError(
+      "Bubblewrap binary has file capabilities",
+      "bubblewrap-observation-unsafe-file",
+    );
+  }
+  await assertUnchanged(observeFile, getcapPath, getcap, "after getcap");
   const approval = matchingUpstreamApproval(options.approvedBuilds, binary.identity, binary.sha256);
   if (approval === undefined) {
     throw new BubblewrapObservationError(
@@ -72,9 +111,11 @@ export async function collectBubblewrapStaticObservation(
       "bubblewrap-observation-unapproved-build",
     );
   }
+  await assertUnchanged(observeFile, binaryPath, binary, "before Bubblewrap --version");
   const versionResult = await runChecked(command, binaryPath, ["--version"]);
+  await assertUnchanged(observeFile, binaryPath, binary, "before Bubblewrap --help");
   const helpResult = await runChecked(command, binaryPath, ["--help"]);
-  const current = await inspectTrustedFile(binaryPath, "Bubblewrap binary");
+  const current = await observeFile(binaryPath, "Bubblewrap binary");
   if (!sameIdentity(binary.identity, current.identity) || binary.sha256 !== current.sha256) {
     throw new BubblewrapObservationError(
       "Bubblewrap binary identity or digest changed while being observed",
@@ -82,15 +123,15 @@ export async function collectBubblewrapStaticObservation(
     );
   }
   const version = versionResult.stdout.trim();
-  if (!/^bubblewrap \d+\.\d+\.\d+$/.test(version)) {
+  if (!/^bubblewrap \d+\.\d+\.\d+$/.test(version) || `bubblewrap ${approval.release}` !== version) {
     throw new BubblewrapObservationError(
       "Bubblewrap --version returned an unrecognized bounded response",
       "bubblewrap-observation-command-failed",
     );
   }
   return Object.freeze({
-    platform: process.platform,
-    observerUid: process.getuid?.() ?? -1,
+    platform,
+    observerUid,
     binary: Object.freeze({
       path: binaryPath,
       identity: Object.freeze(binary.identity),
@@ -104,96 +145,26 @@ export async function collectBubblewrapStaticObservation(
   });
 }
 
-async function canonicalAbsolutePath(path: string, label: string): Promise<string> {
-  if (!posix.isAbsolute(path) || posix.normalize(path) !== path) {
-    throw new BubblewrapObservationError(
-      `${label} path must be absolute and canonical`,
-      "bubblewrap-observation-invalid-path",
-    );
-  }
-  try {
-    return await realpath(path);
-  } catch (cause) {
-    throw new BubblewrapObservationError(
-      `${label} path is unavailable`,
-      "bubblewrap-observation-unavailable",
-      { cause },
-    );
-  }
-}
-
-async function inspectTrustedFile(
+async function assertUnchanged(
+  observeFile: BubblewrapFileObserver,
   path: string,
+  expected: ObservedTrustedFile,
   label: string,
-): Promise<{
-  readonly identity: BubblewrapBinaryIdentity;
-  readonly sha256: string;
-  readonly ancestors: readonly BubblewrapAncestorDirectory[];
-}> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    const before = await lstat(path);
-    if (!before.isFile() || before.uid !== 0 || (before.mode & 0o022) !== 0) {
-      throw new BubblewrapObservationError(
-        `${label} is not a root-owned non-writable regular file`,
-        "bubblewrap-observation-unsafe-file",
-      );
-    }
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const opened = await handle.stat();
-    const identity = fileIdentity(opened);
-    if (!sameIdentity(identity, fileIdentity(before))) throw mutated(label);
-    const hash = createHash("sha256");
-    const buffer = Buffer.allocUnsafe(64 * 1024);
-    let position = 0;
-    for (;;) {
-      const read = await handle.read(buffer, 0, buffer.length, position);
-      if (read.bytesRead === 0) break;
-      hash.update(buffer.subarray(0, read.bytesRead));
-      position += read.bytesRead;
-    }
-    const after = await handle.stat();
-    const afterPath = await lstat(path);
-    if (
-      !sameIdentity(identity, fileIdentity(after)) ||
-      !sameIdentity(identity, fileIdentity(afterPath))
-    ) {
-      throw mutated(label);
-    }
-    return { identity, sha256: hash.digest("hex"), ancestors: await trustedAncestors(path) };
-  } catch (cause) {
-    if (cause instanceof BubblewrapObservationError) throw cause;
-    throw new BubblewrapObservationError(
-      `${label} could not be observed`,
-      "bubblewrap-observation-unavailable",
-      { cause },
-    );
-  } finally {
-    await handle?.close().catch(() => undefined);
+): Promise<void> {
+  const current = await observeFile(path, label);
+  assertValidObservedFile(current, label);
+  if (!sameIdentity(expected.identity, current.identity) || expected.sha256 !== current.sha256) {
+    throw mutated(label);
   }
 }
 
-async function trustedAncestors(path: string): Promise<readonly BubblewrapAncestorDirectory[]> {
-  const paths: string[] = [];
-  let current = dirname(path);
-  while (true) {
-    paths.push(current);
-    const parent = dirname(current);
-    if (parent === current) break;
-    current = parent;
+function assertValidObservedFile(file: ObservedTrustedFile, label: string): void {
+  if (!validIdentity(file.identity) || !/^[0-9a-f]{64}$/.test(file.sha256)) {
+    throw new BubblewrapObservationError(
+      `${label} returned invalid file evidence`,
+      "bubblewrap-observation-unsafe-file",
+    );
   }
-  const entries: BubblewrapAncestorDirectory[] = [];
-  for (const ancestor of paths.reverse()) {
-    const stat = await lstat(ancestor);
-    if (!stat.isDirectory() || stat.uid !== 0 || (stat.mode & 0o022) !== 0) {
-      throw new BubblewrapObservationError(
-        `Bubblewrap ancestor '${ancestor}' is unsafe`,
-        "bubblewrap-observation-unsafe-file",
-      );
-    }
-    entries.push({ path: ancestor, isDirectory: true, uid: stat.uid, mode: stat.mode });
-  }
-  return entries;
 }
 
 async function readCapabilities(
@@ -211,9 +182,24 @@ async function readCapabilities(
       { cause },
     );
   }
-  if (Buffer.byteLength(result.stdout, "utf8") > MAX_COMMAND_OUTPUT) {
+  if (
+    Buffer.byteLength(result.stdout, "utf8") > MAX_COMMAND_OUTPUT ||
+    Buffer.byteLength(result.stderr, "utf8") > MAX_COMMAND_OUTPUT
+  ) {
     throw new BubblewrapObservationError(
       "getcap output exceeded the bounded limit",
+      "bubblewrap-observation-capability-check-failed",
+    );
+  }
+  if (result.stderr.length > 0) {
+    throw new BubblewrapObservationError(
+      "getcap reported a capability-check diagnostic",
+      "bubblewrap-observation-capability-check-failed",
+    );
+  }
+  if (result.stdout.length > 0 && result.stdout.trim().length === 0) {
+    throw new BubblewrapObservationError(
+      "getcap returned ambiguous whitespace",
       "bubblewrap-observation-capability-check-failed",
     );
   }
@@ -240,7 +226,23 @@ async function runChecked(
   args: readonly string[],
 ) {
   try {
-    return await command(file, args);
+    const result = await command(file, args);
+    if (
+      Buffer.byteLength(result.stdout, "utf8") > MAX_COMMAND_OUTPUT ||
+      Buffer.byteLength(result.stderr, "utf8") > MAX_COMMAND_OUTPUT
+    ) {
+      throw new BubblewrapObservationError(
+        "observation command output exceeded the bounded limit",
+        "bubblewrap-observation-command-failed",
+      );
+    }
+    if (result.stderr.length > 0) {
+      throw new BubblewrapObservationError(
+        "observation command reported an unexpected diagnostic",
+        "bubblewrap-observation-command-failed",
+      );
+    }
+    return result;
   } catch (cause) {
     throw new BubblewrapObservationError(
       `${file} ${args[0] ?? "command"} failed`,
@@ -248,6 +250,13 @@ async function runChecked(
       { cause },
     );
   }
+}
+
+function mutated(label: string): BubblewrapObservationError {
+  return new BubblewrapObservationError(
+    `${label} changed during observation`,
+    "bubblewrap-observation-mutated",
+  );
 }
 
 const runTrustedCommand: BubblewrapObservationCommand = async (file, args) => {
@@ -259,63 +268,3 @@ const runTrustedCommand: BubblewrapObservationCommand = async (file, args) => {
   });
   return { stdout: result.stdout, stderr: result.stderr };
 };
-
-function matchingUpstreamApproval(
-  approvals: readonly HostApprovedBubblewrapBuild[],
-  identity: BubblewrapBinaryIdentity,
-  sha256: string,
-): Extract<HostApprovedBubblewrapBuild, { kind: "upstream-release" }> | undefined {
-  return approvals.find(
-    (approval): approval is Extract<HostApprovedBubblewrapBuild, { kind: "upstream-release" }> =>
-      approval.kind === "upstream-release" &&
-      approval.approvalId.trim().length > 0 &&
-      approval.sha256 === sha256 &&
-      sameIdentity(approval.binaryIdentity, identity),
-  );
-}
-
-function extractOptions(help: string): readonly string[] {
-  return Object.freeze([...new Set(help.match(/--[a-z0-9-]+/gi) ?? [])]);
-}
-
-function fileIdentity(stat: {
-  readonly dev: number;
-  readonly ino: number;
-  readonly mode: number;
-  readonly uid: number;
-  readonly gid: number;
-  readonly size: number;
-  readonly mtimeMs: number;
-  readonly ctimeMs: number;
-}): BubblewrapBinaryIdentity {
-  return {
-    device: stat.dev,
-    inode: stat.ino,
-    mode: stat.mode,
-    uid: stat.uid,
-    gid: stat.gid,
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-    ctimeMs: stat.ctimeMs,
-  };
-}
-
-function sameIdentity(left: BubblewrapBinaryIdentity, right: BubblewrapBinaryIdentity): boolean {
-  return (
-    left.device === right.device &&
-    left.inode === right.inode &&
-    left.mode === right.mode &&
-    left.uid === right.uid &&
-    left.gid === right.gid &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs &&
-    left.ctimeMs === right.ctimeMs
-  );
-}
-
-function mutated(label: string): BubblewrapObservationError {
-  return new BubblewrapObservationError(
-    `${label} changed during observation`,
-    "bubblewrap-observation-mutated",
-  );
-}
