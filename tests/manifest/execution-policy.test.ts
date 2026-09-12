@@ -5,6 +5,10 @@ import {
   resolveToolExecutionPolicy,
 } from "../../src/manifest/execution-policy.js";
 import { parseManifest } from "../../src/manifest/parse.js";
+import {
+  DEFAULT_SUBAGENT_EXECUTION_POLICY,
+  resolveSubagentExecutionPolicy,
+} from "../../src/manifest/subagent-execution-policy.js";
 import { type Manifest, ManifestParseError } from "../../src/manifest/types.js";
 import { validateManifest } from "../../src/manifest/validate.js";
 
@@ -166,5 +170,106 @@ roles:
 
     const codes = validateManifest(manifest).errors.map((error) => error.code);
     expect(codes.filter((code) => code === "invalid-tool-execution-policy")).toHaveLength(2);
+  });
+});
+
+describe("subagent execution manifest policy", () => {
+  it("keeps omitted execution file-only with no runtime authority", () => {
+    const manifest = parseManifest(BASE_YAML);
+    const profile = manifest.subagents?.[0];
+    if (profile === undefined) throw new Error("fixture must contain helper profile");
+
+    expect(profile.execution).toBeUndefined();
+    expect(resolveSubagentExecutionPolicy()).toEqual(DEFAULT_SUBAGENT_EXECUTION_POLICY);
+    expect(Object.isFrozen(resolveSubagentExecutionPolicy())).toBe(true);
+  });
+
+  it("parses and resolves strict bubblewrap authority", () => {
+    const manifest = parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 1
+subagents:
+  - name: helper
+    models: [stub:model]
+    max_session_cost_usd: 1
+    system_prompt: .pi/subagents/helper.md
+    execution:
+      backend: bubblewrap
+      runtime_root: .pi/prepared-runtime
+      writable_paths: [src, tests/unit.test.ts]
+      network: none
+      environment:
+        PATH: /usr/bin:/bin
+        LANG: C.UTF-8
+      max_output_bytes: 1024
+`);
+    const execution = manifest.subagents?.[0]?.execution;
+    expect(execution).toEqual({
+      backend: "bubblewrap",
+      runtime_root: ".pi/prepared-runtime",
+      writable_paths: ["src", "tests/unit.test.ts"],
+      network: "none",
+      environment: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" },
+      max_output_bytes: 1024,
+    });
+    expect(resolveSubagentExecutionPolicy(execution)).toMatchObject({
+      backend: "bubblewrap",
+      runtime_root: ".pi/prepared-runtime",
+      writable_paths: ["src", "tests/unit.test.ts"],
+      max_output_bytes: 1024,
+    });
+    expect(Object.isFrozen(execution)).toBe(true);
+  });
+
+  it.each([
+    ["backend: host", "backend"],
+    ["runtime_root: /host/root", "runtime_root"],
+    ["runtime_root: ../outside", "runtime_root"],
+    ["writable_paths: [.git/config]", "writable_paths"],
+    ["writable_paths: [src, src/lib]", "writable_paths"],
+    ["network: bridge", "network"],
+    ["environment: {HOME: /host}", "environment"],
+    ["environment: {PATH: relative/bin}", "environment"],
+    ["max_output_bytes: 0", "max_output_bytes"],
+  ])("rejects unsafe execution setting %s", (setting) => {
+    expect(() =>
+      parseManifest(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+  - name: worker
+    max_visits: 1
+subagents:
+  - name: helper
+    models: [stub:model]
+    max_session_cost_usd: 1
+    system_prompt: .pi/subagents/helper.md
+    execution:
+      backend: bubblewrap
+      runtime_root: .pi/prepared-runtime
+      ${setting}
+`),
+    ).toThrow(ManifestParseError);
+  });
+
+  it("requires runtime_root for bubblewrap", () => {
+    expect(() => resolveSubagentExecutionPolicy({ backend: "bubblewrap" })).toThrow(
+      ManifestParseError,
+    );
+  });
+
+  it("rejects an explicitly empty execution block", () => {
+    expect(() => resolveSubagentExecutionPolicy({})).toThrow(ManifestParseError);
+  });
+
+  it("rejects sandbox authority that would otherwise silently use file-only", () => {
+    expect(() => resolveSubagentExecutionPolicy({ writable_paths: ["src"] })).toThrow(
+      ManifestParseError,
+    );
   });
 });

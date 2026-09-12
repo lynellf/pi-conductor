@@ -22,6 +22,7 @@ import type { ModelEffort, Role } from "../core/types.js";
 import { validateContextRetention } from "./context-retention.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
+import { validateSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
 import type { Manifest } from "./types.js";
 
@@ -88,6 +89,8 @@ export type ManifestErrorCode =
   | "trajectory-target-system-prompt-unresolved"
   /** Issue #76: executable tool policy contains malformed values or keys. */
   | "invalid-tool-execution-policy"
+  /** Issue #106: delegated execution policy contains malformed values or keys. */
+  | "invalid-subagent-execution-policy"
   /** Issue #75: end guard contains malformed values or keys. */
   | "invalid-end-guard"
   /** Prewalk is unavailable until Pi extension loading is supported (issue #94). */
@@ -585,6 +588,12 @@ export function validateManifest(m: Manifest): ManifestReport {
       `subagent '${profile.name}'.tool_execution`,
     )) {
       errors.push({ code: "invalid-tool-execution-policy", message });
+    }
+    for (const message of validateSubagentExecutionPolicy(
+      profile.execution,
+      `subagent '${profile.name}'.execution`,
+    )) {
+      errors.push({ code: "invalid-subagent-execution-policy", message });
     }
   }
 

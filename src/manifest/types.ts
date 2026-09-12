@@ -20,6 +20,7 @@ import type { ModelEffort, Role } from "../core/types.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { EndGuardConfig } from "./end-guard.js";
 import type { ToolExecutionPolicy } from "./execution-policy.js";
+import type { SubagentExecutionConfig } from "./subagent-execution-policy.js";
 
 // ─── Subagent profile types (delegation lite §3) ───────────────────────
 
@@ -38,6 +39,8 @@ export interface SubagentProfile {
   readonly completion_protocol: ChildCompletionProtocol;
   /** Issue #76: pinned executable-tool deadline policy. */
   readonly tool_execution?: ToolExecutionPolicy;
+  /** Issue #106: opt-in delegated command execution authority. */
+  readonly execution?: SubagentExecutionConfig;
   /** Issue #55: opt-in exact-file projection policy for delegated children. */
   readonly workspace?: SubagentWorkspaceConfig;
 }

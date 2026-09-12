@@ -28,6 +28,7 @@ import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
+import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
@@ -190,6 +191,10 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     entry.workspace === undefined
       ? undefined
       : parseSubagentWorkspace(entry.workspace, `${path}.workspace`);
+  const execution =
+    entry.execution === undefined
+      ? undefined
+      : parseSubagentExecutionPolicy(entry.execution, `${path}.execution`);
 
   return Object.freeze({
     name,
@@ -199,6 +204,7 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     completion_protocol,
     ...(tool_execution === undefined ? {} : { tool_execution }),
     ...(workspace === undefined ? {} : { workspace }),
+    ...(execution === undefined ? {} : { execution }),
   }) as SubagentProfile;
 }
 
