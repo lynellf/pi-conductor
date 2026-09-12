@@ -1,13 +1,16 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { prepareDelegateSubmission } from "../../src/host/delegation/admission.js";
-import type { SandboxAdmissionAdapter } from "../../src/host/delegation/delegate-tool.js";
+import {
+  runPreparedChild,
+  type SandboxAdmissionAdapter,
+} from "../../src/host/delegation/delegate-tool.js";
 import type { DelegationPolicy, SubagentProfile } from "../../src/manifest/types.js";
 
 const execFileAsync = promisify(execFile);
@@ -26,6 +29,7 @@ const roots = { required: ["src-a.txt", "tests-b.txt"], optional: ["src-a.txt", 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(tempDirs.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -39,6 +43,8 @@ async function fixture(): Promise<{ root: string; promptRoot: string }> {
   await writeFile(join(root, "tests-b.txt"), "b\n");
   await execFileAsync("git", ["add", "."], { cwd: root });
   await execFileAsync("git", ["commit", "-qm", "fixture"], { cwd: root });
+  await chmod(join(root, ".git"), 0o700);
+  await chmod(join(root, ".git/index"), 0o600);
   const promptRoot = await mkdtemp(join(tmpdir(), "pi-conductor-prompts-"));
   tempDirs.push(promptRoot);
   await writeFile(join(promptRoot, "worker.md"), "worker\n");
@@ -66,6 +72,7 @@ async function prepare(
   worker: SubagentProfile,
   adapter?: SandboxAdmissionAdapter,
   projection_paths?: string[],
+  context_artifacts?: { id: string; source: "file"; path: string }[],
 ) {
   return prepareDelegateSubmission({
     args: {
@@ -76,6 +83,7 @@ async function prepare(
           objective: "inspect",
           expected_output: "report",
           ...(projection_paths === undefined ? {} : { projection_paths }),
+          ...(context_artifacts === undefined ? {} : { context_artifacts }),
         },
       ],
     },
@@ -95,6 +103,64 @@ async function prepare(
 }
 
 describe("sandbox admission preparation", () => {
+  it("routes parent and context-artifact Git through protected absolute operations", async () => {
+    const { root, promptRoot } = await fixture();
+    const bin = join(promptRoot, "bin");
+    const sentinel = join(promptRoot, "ambient-git-used");
+    await mkdir(bin);
+    await writeFile(
+      join(bin, "git"),
+      `#!/bin/sh\nprintf unexpected > '${sentinel}'\nexec /usr/bin/git "$@"\n`,
+      { mode: 0o700 },
+    );
+    vi.stubEnv("PATH", bin);
+    const adapter: SandboxAdmissionAdapter = {
+      capture: async () => ({ sandbox: descriptor }),
+      verify: async () => {},
+    };
+    const result = await prepare(
+      root,
+      promptRoot,
+      profile({ backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] }, undefined),
+      adapter,
+      undefined,
+      [{ id: "source", source: "file", path: "src-a.txt" }],
+    );
+    expect(result.tasks[0]?.contextArtifacts[0]?.text).toBe("a\n");
+    await expect(lstat(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("stops incomplete sandbox dispatch before legacy worktree setup or SDK creation", async () => {
+    const { root, promptRoot } = await fixture();
+    const adapter: SandboxAdmissionAdapter = {
+      capture: async () => ({ sandbox: descriptor }),
+      verify: async () => {},
+    };
+    const prepared = await prepare(
+      root,
+      promptRoot,
+      profile({ backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] }, undefined),
+      adapter,
+    );
+    const child = prepared.tasks[0];
+    if (child === undefined) throw new Error("missing child");
+    const spawn = vi.fn(async () => {
+      throw new Error("unexpected spawn");
+    });
+    const result = await runPreparedChild({
+      prepared: child,
+      runId: "run",
+      parentRole: "orchestrator",
+      primaryCheckout: root,
+      parentMaterializedPaths: prepared.materializedParentPaths,
+      systemPromptRoot: promptRoot,
+      spawnAndRunChild: spawn,
+    });
+    expect(result.status).toBe("failed");
+    expect(spawn).not.toHaveBeenCalled();
+    await expect(lstat(child.worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("passes exact selected and complete tracked paths, then freezes the descriptor", async () => {
     const { root, promptRoot } = await fixture();
     let captured: { selectedPaths: readonly string[]; trackedPaths: readonly string[] } | undefined;

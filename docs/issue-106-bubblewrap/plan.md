@@ -3,7 +3,8 @@
 Status: Specification acknowledged on 2026-09-12. Policy, immutable runtime
 capture, durable admission, and the production-policy capability probe pass
 their focused and real-backend gates. Private command materialization, confined
-file tools, output, and execution lifecycle integration remain in progress;
+file tools, and validated ingestion also pass. Output and execution lifecycle
+integration remain in progress;
 delegated command execution remains disabled.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
@@ -120,6 +121,32 @@ Production child tools remain gated until C–E are complete.
 
 Dependencies: A and B. Keep runtime preparation generic; no repository-specific
 commands, automatic installation, acceptance policy, or publication logic.
+
+Progress:
+
+- [x] Materialize exactly selected project files into sealed base and independent
+      writable copies; bind strict metadata, identities, inventories, and bootstrap.
+- [x] Verify actual production mounts preserve private writes between launches
+      while rejecting read-only writes and mountpoint replacement.
+- [x] Serialize child operations through an owner-scoped gate, including queued
+      cancellation, active cleanup, and permanent sealing on uncertainty.
+- [x] Implement six confined file tools with descriptor-anchored traversal;
+      reject links, special files, changed identities, and unsupported output.
+- [x] Bound search execution in a terminating worker with a strict TypeBox
+      transport; retain the gate until worker settlement.
+- [x] Stage and validate complete bounded deltas before touching the generated
+      Git worktree; preserve explicit durable incomplete-application evidence.
+- [x] Constrain the new consumer's Git calls to a protected absolute executable,
+      captured control identities, raw blobs, and a constructed environment.
+- [x] Verify adversarial file access, ingestion, Git, and delegation admission;
+      preserve the dispatch guard until D and E pass.
+
+Verification: 233 ordinary test files / 2,528 tests pass on the stabilized C
+tree. All 21 real Bubblewrap tests in five files pass against the approved build,
+including actual project materialization and production mount construction.
+Typecheck, build, repository lint, and production dependency audit pass.
+This checkpoint does not expose delegated Bash or establish its output,
+cancellation, or restart lifecycle; those remain D/E delivery gates.
 
 ## Increment D — execution and output (Terra; Luna assists tests)
 

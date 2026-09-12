@@ -33,9 +33,10 @@
 
 ### In development
 
-- Add strict delegated Bubblewrap policy parsing and static prerequisite
-  assessment foundations (#106). Sandbox profiles fail admission explicitly
-  until real bootstrap/isolation/cleanup gates pass; child Bash is not enabled.
+- Add delegated Bubblewrap policy pinning, verified runtime admission, private
+  project materialization, confined file tools, and validated patch ingestion
+  foundations (#106). Real bootstrap and filesystem isolation tests pass;
+  command lifecycle and output integration remain gated, so child Bash is not enabled.
 
 ## [0.21.7] - 2026-09-09
 

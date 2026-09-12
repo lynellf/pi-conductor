@@ -23,6 +23,7 @@ export async function prepareTaskContextArtifacts(
   baseCommit: string,
   materializedParentPaths: readonly string[],
   testHook?: ResolveContextArtifactBatchOptions["testHook"],
+  gitAccess?: ResolveContextArtifactBatchOptions["gitAccess"],
 ): Promise<
   | { readonly valid: true; readonly tasks: readonly PreparedTask[] }
   | { readonly valid: false; readonly errors: readonly ContextArtifactResolutionError[] }
@@ -44,6 +45,7 @@ export async function prepareTaskContextArtifacts(
       ...(task.contextArtifacts === undefined ? {} : { artifacts: task.contextArtifacts }),
     })),
     ...(testHook === undefined ? {} : { testHook }),
+    ...(gitAccess === undefined ? {} : { gitAccess }),
   });
   if (!resolution.valid) return resolution;
 

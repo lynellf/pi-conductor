@@ -5,8 +5,13 @@ import { resolve } from "node:path";
 import { Value } from "typebox/value";
 import type { SubagentProfile } from "../../manifest/types.js";
 import { subagentSandboxDescriptorSchema } from "../../persistence/subagent-sandbox.js";
+import {
+  captureTrustedParentProjection,
+  readTrustedParentBlob,
+} from "../execution/sandbox/trusted-git-parent.js";
 import { buildChildPrompt } from "./child-prompt.js";
 import { type PreparedTask, prepareTaskContextArtifacts } from "./context-artifact-admission.js";
+import type { ContextArtifactGitAccess } from "./context-artifact-contract.js";
 import { DelegateToolError } from "./delegate-error.js";
 import type { DelegateToolOptions, SpawnChildConfig } from "./delegate-tool.js";
 import { projectionFingerprint, taskFingerprint } from "./fingerprints.js";
@@ -45,10 +50,40 @@ export async function prepareDelegateSubmission(
       [],
     );
   }
-  const gitCheck = await checkPrimaryGitStatus(options.primaryCheckout);
+  const usesSandbox = options.args.tasks.some((task) =>
+    options.profiles.some(
+      (profile) => profile.name === task.subagent && profile.execution !== undefined,
+    ),
+  );
+  if (usesSandbox && options.sandboxAdmission === undefined) {
+    const detail = "sandbox-backend-unavailable: no host-approved sandbox adapter is configured";
+    throw new DelegateToolError("batch_validation_failed", detail, [
+      { code: "sandbox-backend-unavailable", message: detail },
+    ]);
+  }
+  let gitCheck: Awaited<ReturnType<typeof checkPrimaryGitStatus>>;
   let parentProjection: DelegateParentProjectionCapture;
+  let gitAccess: ContextArtifactGitAccess | undefined;
   try {
-    parentProjection = await captureParentProjection(options.primaryCheckout, gitCheck);
+    if (usesSandbox) {
+      const primaryCheckout = options.primaryCheckout;
+      const captured = await captureTrustedParentProjection(primaryCheckout);
+      gitCheck = { isGit: true, isClean: true, headCommit: captured.baseCommit };
+      parentProjection = {
+        baseCommit: captured.baseCommit,
+        materializedPaths: captured.paths,
+        trackedPaths: captured.trackedPaths,
+        isSparse: captured.isSparse,
+      };
+      gitAccess = {
+        captureProjection: () => captureTrustedParentProjection(primaryCheckout),
+        readBlob: (base, path, maxBytes) =>
+          readTrustedParentBlob(primaryCheckout, base, path, maxBytes),
+      };
+    } else {
+      gitCheck = await checkPrimaryGitStatus(options.primaryCheckout);
+      parentProjection = await captureParentProjection(options.primaryCheckout, gitCheck);
+    }
   } catch (cause) {
     const detail = cause instanceof ParentProjectionCaptureError ? cause.message : message(cause);
     throw new DelegateToolError("batch_validation_failed", detail, [
@@ -100,6 +135,7 @@ export async function prepareDelegateSubmission(
     baseCommit,
     materializedParentPaths,
     options.contextArtifactTestHook,
+    gitAccess,
   );
   if (!contextResolution.valid) {
     throw new DelegateToolError(

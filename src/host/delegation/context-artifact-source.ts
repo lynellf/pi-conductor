@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { constants, lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
+import { withSandboxDirectory } from "../execution/sandbox/anchored-file-access.js";
 
 import {
   type ContextArtifactResolutionError,
@@ -69,7 +70,12 @@ export async function resolveFileContextArtifact(
     };
   }
 
-  const identity = await openIdentity(lexicalPath, taskId, artifactId, safePath);
+  const identity =
+    options.gitAccess === undefined
+      ? await openIdentity(lexicalPath, taskId, artifactId, safePath)
+      : await withSandboxDirectory(canonicalRoot, async (files) =>
+          identityOf(await files.fileStat(safePath)),
+        ).catch((cause) => filesystemError(cause, taskId, artifactId, safePath));
   if ("code" in identity) return { error: identity };
   const blob = await readPinnedBlob(
     options.primaryCheckout,
@@ -78,6 +84,7 @@ export async function resolveFileContextArtifact(
     taskId,
     artifactId,
     options.limits.max_item_utf8_bytes,
+    options.gitAccess,
   );
   if (!blob.valid) return blob;
 
@@ -218,6 +225,7 @@ async function readPinnedBlob(
   taskId: string,
   artifactId: string,
   itemLimit: number,
+  gitAccess?: ResolveContextArtifactBatchOptions["gitAccess"],
 ): Promise<
   | { readonly valid: true; readonly bytes: Buffer }
   | {
@@ -226,6 +234,29 @@ async function readPinnedBlob(
       readonly oversizedByteLength?: number;
     }
 > {
+  if (gitAccess !== undefined) {
+    try {
+      const result = await gitAccess.readBlob(baseCommit, safePath, itemLimit);
+      return "bytes" in result
+        ? { valid: true, bytes: result.bytes }
+        : {
+            valid: false,
+            error: oversizedContextArtifact(
+              taskId,
+              artifactId,
+              safePath,
+              result.oversizedByteLength,
+              itemLimit,
+            ),
+            oversizedByteLength: result.oversizedByteLength,
+          };
+    } catch {
+      return {
+        valid: false,
+        error: contextArtifactError("context-artifact-unreadable", taskId, artifactId, safePath),
+      };
+    }
+  }
   const object = `${baseCommit}:${safePath}`;
   const localOnlyEnvironment = { ...process.env, GIT_NO_LAZY_FETCH: "1" };
   try {

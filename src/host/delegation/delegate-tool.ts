@@ -1,7 +1,6 @@
 /** Delegate tool execution — delegation lite §4–§5 / Issue #57 §7. */
 
 import { mkdir } from "node:fs/promises";
-
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
 import type {
   ChildCompletionEvidence,
@@ -10,6 +9,7 @@ import type {
 } from "../../persistence/child-completion.js";
 import type { SubagentUsage } from "../../persistence/log.js";
 import type { SubagentSandboxDescriptor } from "../../persistence/subagent-sandbox.js";
+import { SANDBOX_UNAVAILABLE_MESSAGE } from "../execution/sandbox/enablement.js";
 import type { PreparedDelegateChild } from "./admission.js";
 import { capChildText, type LegacyChildReport, normalizeChildTerminal } from "./child-result.js";
 import {
@@ -227,6 +227,9 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   const { childId, task, worktreePath, branch, baseCommit } = options;
   if (options.isAdmissionClosed?.() === true) {
     return preStartFailure(options, "cancelled", "child admission closed by run abort");
+  }
+  if (options.prepared.sandbox !== undefined) {
+    return preStartFailure(options, "failed", SANDBOX_UNAVAILABLE_MESSAGE);
   }
   try {
     await createWorktree(worktreePath, branch, baseCommit, options.primaryCheckout);

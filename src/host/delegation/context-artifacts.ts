@@ -194,11 +194,13 @@ async function appendFinalCheckErrors(
 
   let parentUnchanged = false;
   try {
-    const current = await captureMaterializedParentProjection(
-      options.primaryCheckout,
-      options.baseCommit,
-    );
-    parentUnchanged = samePaths(current.paths, options.materializedParentPaths);
+    const current =
+      options.gitAccess === undefined
+        ? await captureMaterializedParentProjection(options.primaryCheckout, options.baseCommit)
+        : await options.gitAccess.captureProjection();
+    parentUnchanged =
+      current.baseCommit === options.baseCommit &&
+      samePaths(current.paths, options.materializedParentPaths);
   } catch {
     parentUnchanged = false;
   }

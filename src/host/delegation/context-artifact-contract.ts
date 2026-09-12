@@ -64,9 +64,20 @@ export interface ContextArtifactResolutionTask {
   readonly artifacts?: readonly ContextArtifact[];
 }
 
+/** Closed host Git operations for consumers that require constructed-environment access. */
+export interface ContextArtifactGitAccess {
+  readonly captureProjection: () => Promise<import("./projection.js").ParentMaterializedProjection>;
+  readonly readBlob: (
+    baseCommit: string,
+    path: string,
+    maxBytes: number,
+  ) => Promise<{ readonly bytes: Buffer } | { readonly oversizedByteLength: number }>;
+}
+
 /** Inputs tied to the clean parent base and exact materialized H capture. */
 export interface ResolveContextArtifactBatchOptions {
   readonly primaryCheckout: string;
+  readonly gitAccess?: ContextArtifactGitAccess;
   readonly baseCommit: string;
   readonly materializedParentPaths: readonly string[];
   readonly limits: ContextArtifactLimits;
