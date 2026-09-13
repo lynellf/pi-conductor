@@ -376,6 +376,15 @@ from the checkpoint, not by replaying agent emissions.
 }
 ```
 
+Issue #110 adds host-owned `accepted_handoff` metadata to ordinary accepted
+handoffs: schema version, recipient role, complete JSON payload, and compact
+UTF-8 byte count (maximum 64 KiB). The host validates and snapshots it before
+acceptance; the reducer remains payload-blind. Recipient seeds preserve its
+structured fields across resume, excluding model-authored `context_ref` and
+`artifacts`, whose existing host-owned delivery paths remain authoritative.
+Missing metadata preserves legacy and synthesized-handoff behavior; present
+invalid metadata is an error. See [the transport contract](../issue-110-handoff-transport.md).
+
 ### 11.3 `transition_rejected`
 
 The gap signal. Required for "prevent unexpected behavior from gaps" to hold.

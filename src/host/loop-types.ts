@@ -42,6 +42,8 @@ export interface RunLoopOptions {
   readonly initialParentSessionId?: string | null;
   /** Exact host-generated target prompt persisted by a selected trajectory handoff. */
   readonly initialTrajectorySeed?: string | null;
+  /** Durable fresh receiver seed reconstructed from an accepted handoff (issue #110). */
+  readonly initialHandoffSeed?: string | null;
   /** Next visit index per role reconstructed from durable lifecycle starts on resume. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Fresh executable invocation index per role for operator resume. */

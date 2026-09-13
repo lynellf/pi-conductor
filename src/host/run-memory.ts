@@ -28,6 +28,7 @@
  * `handoff(target_role=<worker>)`, and call `end` only when `can_end` is true.
  */
 
+import { recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { RunMemory } from "../core/run-memory.js";
 
 /**
@@ -88,6 +89,13 @@ export function formatRunMemorySeed(memory: RunMemory): string {
                 `    run_id: ${memory.last_message.context_ref.run_id}`,
                 `    source_role: ${memory.last_message.context_ref.source_role}`,
                 `    source_session_file: ${memory.last_message.context_ref.source_session_file}`,
+              ].join("\n"),
+          memory.last_message.accepted_handoff === undefined
+            ? "  accepted_handoff: (legacy or synthesized reason-only record)"
+            : [
+                "  accepted_handoff:",
+                `    recipient_role: ${memory.last_message.accepted_handoff.recipient_role}`,
+                `    payload: ${JSON.stringify(recipientHandoffPayload(memory.last_message.accepted_handoff))}`,
               ].join("\n"),
         ].join("\n");
 

@@ -1,3 +1,4 @@
+import { ACCEPTED_HANDOFF_MAX_UTF8_BYTES } from "../core/accepted-handoff.js";
 import type { MachineDefinition, Role } from "../core/types.js";
 import {
   type HandoffActionabilityFailure,
@@ -32,8 +33,7 @@ export function validateRoleHandoff(
 
 /** Model-facing role-specific handoff tool description. */
 export function formatHandoffDescription(context: HandoffContractContext | undefined): string {
-  const required =
-    "Required fields: target_role, status: ready | blocked | complete, objective, summary, requested_action.";
+  const required = `Required fields: target_role, status: ready | blocked | complete, objective, summary, requested_action. The complete payload must be exact JSON within ${ACCEPTED_HANDOFF_MAX_UTF8_BYTES} UTF-8 bytes. Use concise artifact locators and hashes for larger evidence.`;
   if (context === undefined) {
     return `Terminate this role session by routing control. ${required} Workers route only to the orchestrator; the orchestrator routes to a declared worker. request_end defaults to false and is valid only for an authorized end-request role returning complete work to the orchestrator.`;
   }

@@ -6,6 +6,7 @@ import { latestHandoffContextRef } from "./api-resume-state.js";
 import type { Host } from "./host.js";
 import type { RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
+import { formatIncomingHandoffSeed } from "./loop-format.js";
 import type { LoadedManifest } from "./manifest.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
@@ -96,6 +97,15 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
     host,
     initialGoal: goal,
     initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
+    ...(initialCheckpoint.current_role === "done"
+      ? {}
+      : {
+          initialHandoffSeed: formatIncomingHandoffSeed(
+            log.records(runId),
+            runId,
+            initialCheckpoint.current_role,
+          ),
+        }),
     initialArtifactDelivery: args.initialArtifactDelivery ?? null,
     ...(args.initialParentSessionId !== undefined && {
       initialParentSessionId: args.initialParentSessionId,

@@ -141,10 +141,19 @@ export interface HandoffContextRef {
   readonly source_session_file: string;
 }
 
+/** Host-owned durable copy of a recipient-bound accepted handoff (issue #110). */
+export interface AcceptedHandoffEnvelope {
+  readonly schema_version: 1;
+  readonly recipient_role: Role;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly utf8_bytes: number;
+}
+
 /**
  * §11.2: accepted transition record. Shape-validated at the seam; the
- * full validated payload is held by the host for seeding the next
- * session and is NOT part of this persisted record.
+ * full validated payload is normally transient. Role-emitted handoffs may
+ * carry the host-owned `accepted_handoff` snapshot for durable recipient
+ * delivery (issue #110); older and synthesized records omit it.
  */
 export interface TransitionAccepted {
   readonly type: "transition_accepted";
@@ -164,6 +173,8 @@ export interface TransitionAccepted {
   readonly session_file: string;
   /** Host-generated predecessor pointer; absent in older persisted records. */
   readonly context_ref?: HandoffContextRef | null;
+  /** Additive recipient-bound handoff transport; absent is legacy-compatible. */
+  readonly accepted_handoff?: AcceptedHandoffEnvelope;
   readonly ts: number;
 }
 

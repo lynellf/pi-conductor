@@ -1,5 +1,6 @@
 /** Accepted machine-event persistence and next-target routing. */
 
+import { recipientHandoffPayload } from "../core/accepted-handoff.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type { Checkpoint, HandoffContextRef, Role, UsageRecord } from "../core/types.js";
 import { artifactDelivery, type PersistedRecord } from "../persistence/log.js";
@@ -64,6 +65,14 @@ export async function persistAcceptedTransition(
   const { opts, def, host } = ctx;
   const validated = { event: args.event };
   const acceptedContextRef = args.acceptedContextRef;
+  const acceptedHandoff =
+    args.enrichedRecord.type === "transition_accepted"
+      ? (args.enrichedRecord.accepted_handoff ?? null)
+      : null;
+  const handoffPayload =
+    acceptedHandoff === null ? validated.event.payload : acceptedHandoff.payload;
+  const recipientPayload =
+    acceptedHandoff === null ? handoffPayload : recipientHandoffPayload(acceptedHandoff);
   // A valid machine event remains accepted even if the host cannot
   // collect its optional artifacts. Persist the accepted transition
   // first; artifact failure is a semantic deficiency for the receiver
@@ -111,7 +120,7 @@ export async function persistAcceptedTransition(
       visitIndex,
       terminal: "session_ended",
       ...(validated.event.type === "handoff" && {
-        handoff: validated.event.payload as HandoffArgs,
+        handoff: handoffPayload as HandoffArgs,
       }),
     });
   } catch (error) {
@@ -192,7 +201,7 @@ export async function persistAcceptedTransition(
       "runLoop: accepted non-terminal handoff is missing its host-generated context_ref",
     );
   }
-  const payload = validated.event.payload as Record<string, unknown> | undefined;
+  const payload = recipientPayload as Record<string, unknown> | undefined;
   const suggestsNext =
     validated.event.type === "handoff" &&
     payload !== undefined &&

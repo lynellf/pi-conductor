@@ -221,6 +221,14 @@ which tools it has, what its legal handoff target is, and whether it may request
 completion. The host force-injects both `handoff` and `end` into every role;
 workers return through `handoff`, while only the orchestrator can finalize a run.
 
+Accepted handoffs deliver structured fields to the recipient, including returning
+orchestrators, and retain them across restart. The complete JSON payload is limited
+to 64 KiB of UTF-8; an oversized payload receives a validation error that the role
+can correct in the same session. Use concise public artifact locators and hashes
+for larger evidence. Artifact declarations still require the existing host
+collection and delivery checks. Older run records retain reason-only delivery
+where structured fields were not persisted.
+
 A minimal starter bundle is available programmatically:
 
 ```ts

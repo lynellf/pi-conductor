@@ -32,12 +32,33 @@
  * it stores. The `defineTool` import lives in `tools.ts`, not here.
  */
 
+import type { AcceptedHandoffEnvelopeRejection } from "../core/accepted-handoff.js";
 import type { HandoffActionabilityFailure } from "../seam/schema.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 
+/** A correctable handoff rejection recorded before the machine-event capture. */
+export interface TransportHandoffValidationFailure {
+  readonly missingFields: readonly [];
+  readonly invalidFields: readonly [];
+  readonly transportError: AcceptedHandoffEnvelopeRejection;
+  readonly actualUtf8Bytes: number | null;
+}
+
+export type HandoffValidationFailure =
+  | HandoffActionabilityFailure
+  | TransportHandoffValidationFailure;
+
+/** Narrow a correctable rejection to its durable-envelope transport form. */
+export function isTransportHandoffValidationFailure(failure: {
+  readonly missingFields: readonly string[];
+  readonly invalidFields: readonly string[];
+}): failure is TransportHandoffValidationFailure {
+  return "transportError" in failure && "actualUtf8Bytes" in failure;
+}
+
 export class SessionSeam {
   private readonly _captures: EmissionCapture[] = [];
-  private readonly _handoffValidationFailures: HandoffActionabilityFailure[] = [];
+  private readonly _handoffValidationFailures: HandoffValidationFailure[] = [];
   private readonly _sealedListeners = new Set<() => void>();
   private _sealed = false;
 
@@ -66,12 +87,12 @@ export class SessionSeam {
   }
 
   /** Record an incomplete handoff without turning it into a machine event. */
-  rejectHandoff(failure: HandoffActionabilityFailure): void {
+  rejectHandoff(failure: HandoffValidationFailure): void {
     this._handoffValidationFailures.push(failure);
   }
 
   /** Return and clear pending handoff-validation failures for loop persistence. */
-  takeHandoffValidationFailures(): readonly HandoffActionabilityFailure[] {
+  takeHandoffValidationFailures(): readonly HandoffValidationFailure[] {
     const failures = Object.freeze([...this._handoffValidationFailures]);
     this._handoffValidationFailures.length = 0;
     return failures;

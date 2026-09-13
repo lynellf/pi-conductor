@@ -52,6 +52,12 @@ violate the reducer's payload-blind, deterministic boundary.
 
 ## Consequences
 
+Issue #110 supplements this optional transcript tool with durable structured
+envelope delivery in the recipient seed. The accepted envelope is stored on its
+transition and does not depend on `handoff_context` or its 10,000-character limit.
+See [the transport contract](../issue-110-handoff-transport.md) for bounds,
+recipient binding, and compatibility with records predating this addition.
+
 - Handoffs remain compact by default while recipients without filesystem tools
   still have a read-only context path.
 - The host must wire the tool only for a referenced recipient session and must

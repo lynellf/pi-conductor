@@ -1,5 +1,6 @@
 /** Stable seed, error, and artifact formatting helpers for the orchestration loop. */
 
+import { incomingAcceptedHandoff, recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { HandoffContextRef, Role } from "../core/types.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import { ArtifactCollectionError } from "./artifacts/collect.js";
@@ -113,8 +114,7 @@ export function formatHandoffSeed(
       : Object.fromEntries(
           Object.entries(payload).filter(([key]) => key !== "context_ref" && key !== "artifacts"),
         );
-  const payloadStr =
-    payloadForSeed === undefined ? "(no payload)" : JSON.stringify(payloadForSeed, null, 2);
+  const payloadStr = payloadForSeed === undefined ? "(no payload)" : JSON.stringify(payloadForSeed);
   const suggestsLine =
     suggestsNext !== null
       ? `\nThe previous role suggests you may next hand off to: ${suggestsNext} (advisory; §8.3).`
@@ -133,6 +133,26 @@ export function formatHandoffSeed(
     "",
     "Continue your work for this role. When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or, if you are the orchestrator, end.",
   ].join("\n");
+}
+
+/** Rebuild a fresh receiver seed from the exact durable incoming envelope. */
+export function formatIncomingHandoffSeed(
+  records: readonly PersistedRecord[],
+  runId: string,
+  recipientRole: Role,
+): string | null {
+  const incoming = incomingAcceptedHandoff(records, runId, recipientRole);
+  if (incoming === null || incoming.envelope === null) return null;
+  const contextRef = incoming.record.context_ref;
+  if (contextRef === undefined || contextRef === null) {
+    throw new Error("accepted_handoff is missing its host-generated context_ref");
+  }
+  return formatHandoffSeed(
+    recipientHandoffPayload(incoming.envelope),
+    recipientRole,
+    incoming.record.suggests_next,
+    contextRef,
+  );
 }
 
 export { formatArtifactsUnavailableSeedSection };

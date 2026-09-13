@@ -85,7 +85,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // the snapshot's active_role_session id (resume case) or null (fresh).
   let parentSessionId: string | null =
     checkpoint.active_role_session?.id ?? opts.initialParentSessionId ?? null;
-  let seed = opts.initialTrajectorySeed ?? initialGoal;
+  let seed = opts.initialTrajectorySeed ?? opts.initialHandoffSeed ?? initialGoal;
   // A resumed trajectory target must receive its durable, admission-checked
   // user prompt byte-for-byte, including when that target is the orchestrator.
   let useInitialTrajectorySeed = opts.initialTrajectorySeed !== undefined;

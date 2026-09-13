@@ -218,6 +218,9 @@ export interface HandoffValidationRejectedRecord {
   readonly session_file: string;
   readonly missing_fields: readonly string[];
   readonly invalid_fields: readonly string[];
+  /** Present for a correctable durable-envelope transport rejection (issue #110). */
+  readonly transport_error?: "handoff_envelope_not_json" | "handoff_envelope_too_large";
+  readonly actual_utf8_bytes?: number | null;
   readonly ts: number;
 }
 

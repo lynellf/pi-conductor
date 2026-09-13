@@ -42,8 +42,10 @@
 
 import { rollup } from "../cost/rollup.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import { incomingAcceptedHandoff } from "./accepted-handoff.js";
 import { availableTargets } from "./targets.js";
 import type {
+  AcceptedHandoffEnvelope,
   Checkpoint,
   HandoffContextRef,
   MachineDefinition,
@@ -85,6 +87,8 @@ export interface LastMessage {
   readonly text: string | null;
   readonly suggests_next: string | null;
   readonly context_ref: HandoffContextRef | null;
+  /** Present only when the preceding accepted transition durably carried one. */
+  readonly accepted_handoff?: AcceptedHandoffEnvelope;
 }
 
 /** §8.4 run memory artifact. */
@@ -136,7 +140,7 @@ export function buildRunMemory(
   // + suggests_next, so a fresh orchestrator session sees the previous
   // worker's verdict/status without reading transcripts. Null before
   // the first transition (the initial orchestrator session).
-  const last_message = buildLastMessage(records, checkpoint.run_id);
+  const last_message = buildLastMessage(records, checkpoint.run_id, checkpoint.current_role);
   const pendingEndRequest = checkpoint.end_request ?? null;
   const end_request =
     pendingEndRequest === null ? null : Object.freeze({ role: pendingEndRequest.role });
@@ -190,20 +194,29 @@ export function buildRunMemory(
  * `suggests_next` for observability and never branches on them (§3/§5.1);
  * this function only reads them back for the orchestrator's seed.
  */
-function buildLastMessage(records: readonly PersistedRecord[], runId: string): LastMessage | null {
+function buildLastMessage(
+  records: readonly PersistedRecord[],
+  runId: string,
+  recipientRole: Checkpoint["current_role"],
+): LastMessage | null {
   let latest: TransitionAccepted | null = null;
   for (const record of records) {
-    if (record.type !== "transition_accepted") continue;
-    if (record.run_id !== runId) continue;
-    latest = record; // append-ordered: last match is the latest
+    if (record.type !== "transition_accepted" || record.run_id !== runId) continue;
+    latest = record;
   }
   if (latest === null) return null;
+  const incoming =
+    recipientRole === "done" || latest.event !== "handoff" || latest.to !== recipientRole
+      ? null
+      : incomingAcceptedHandoff(records, runId, recipientRole);
   const reason = latest.payload_summary.reason;
+  const acceptedHandoff = incoming?.envelope ?? undefined;
   return {
     from: latest.role,
     text: typeof reason === "string" ? reason : null,
     suggests_next: latest.suggests_next,
     context_ref: resolveContextRef(latest, runId),
+    ...(acceptedHandoff !== undefined && { accepted_handoff: acceptedHandoff }),
   };
 }
 

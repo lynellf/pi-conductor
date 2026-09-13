@@ -4,6 +4,9 @@
 
 ### Bug fixes
 
+- Deliver accepted structured handoff fields to both workers and returning
+  orchestrators across restart, without transcript recovery; reject envelopes
+  over 64 KiB explicitly and preserve verified artifact delivery authority (#110).
 - Close ambient inherited descriptors in the sandbox bootstrap before READY;
   preserve the probe's zero-extra-descriptor guard and report descriptor failures (#109).
 - Initialize protected sandbox workspace roots before fresh production admission;

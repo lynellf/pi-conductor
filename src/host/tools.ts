@@ -61,6 +61,7 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 
+import { createAcceptedHandoffEnvelope } from "../core/accepted-handoff.js";
 import { endArgsSchema, type HandoffCandidate, handoffArgsSchema } from "../seam/schema.js";
 import { validateEmission } from "../seam/validate-emission.js";
 import {
@@ -83,7 +84,12 @@ import type { SessionSeam } from "./seam.js";
  */
 export interface EmissionToolDetails {
   readonly ok: boolean;
-  readonly reason?: "schema_invalid" | "extra_emission" | "handoff_incomplete";
+  readonly reason?:
+    | "schema_invalid"
+    | "extra_emission"
+    | "handoff_incomplete"
+    | "handoff_envelope_not_json"
+    | "handoff_envelope_too_large";
   readonly target_role?: string;
   readonly missing_fields?: readonly string[];
   readonly invalid_fields?: readonly string[];
@@ -238,12 +244,45 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // ── First machine-event call: validate at the seam ───────────
       const validated = validateEmission([{ toolName, args: params }]);
 
+      // A durable envelope must be snapshotted before capture and sealing.
+      // Rejecting here leaves the role live for an explicit repair and makes
+      // it impossible to accept a transition whose payload cannot persist.
+      let captureArgs: unknown = params;
+      if (validated.kind === "ok" && validated.event.type === "handoff") {
+        const envelope = createAcceptedHandoffEnvelope(
+          validated.event.payload,
+          validated.event.target_role,
+        );
+        if (envelope.kind === "rejected") {
+          activeSeam().rejectHandoff({
+            missingFields: [],
+            invalidFields: [],
+            transportError: envelope.reason,
+            actualUtf8Bytes: envelope.actual_utf8_bytes,
+          });
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text:
+                  envelope.reason === "handoff_envelope_too_large"
+                    ? "handoff payload is too large for durable recipient delivery. Reduce it below 65536 UTF-8 bytes and try again."
+                    : "handoff payload cannot be represented exactly as JSON for durable recipient delivery. Correct it and try again.",
+              },
+            ],
+            details: { ok: false, reason: envelope.reason } satisfies EmissionToolDetails,
+            terminate: false,
+          };
+        }
+        captureArgs = envelope.envelope.payload;
+      }
+
       // Always push the call's args to the buffer — both valid and
       // schema-invalid captures are recorded. The loop's
       // `validateEmission` re-derives the breach reason from the
       // single-element buffer, so the schema-invalid path stays
       // observable at the loop level.
-      activeSeam().push({ toolName, args: params });
+      activeSeam().push({ toolName, args: captureArgs });
 
       if (validated.kind === "ok") {
         // ── Valid capture. Set the sealed flag (§12.1). ───────────

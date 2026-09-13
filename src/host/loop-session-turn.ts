@@ -1,6 +1,6 @@
 /** Prompt, admission, failure, cost-cap, and end-guard handling for one role session. */
-// This module stays under 500 lines because the prompt/admission/end-guard state machine is one
-// coherent retry boundary; splitting individual branches would obscure its ordering contract.
+// This retry boundary keeps prompt, terminal, and cost-cap precedence together;
+// transport validation and persistence helpers are split out to stay under 500 lines.
 
 import { reduce } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
@@ -8,6 +8,10 @@ import type { HandoffContextRef, MachineEvent, UsageRecord } from "../core/types
 import { sha256Canonical } from "../persistence/trajectory-records.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import { validateEmission } from "../seam/validate-emission.js";
+import {
+  persistHandoffValidationFailures,
+  prepareAcceptedHandoffAtLoopBoundary,
+} from "./accepted-handoff-validation.js";
 import { runEndGuardAttempt } from "./end-guard-loop.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type { SessionTerminalReason } from "./host.js";
@@ -123,18 +127,14 @@ export async function runSessionTurn(
       throw promptError;
     }
 
-    for (const failure of session.takeHandoffValidationFailures?.() ?? []) {
-      host.persistRecord({
-        type: "handoff_validation_rejected",
-        run_id: ctx.checkpoint.run_id,
-        role,
-        session_id: sessionId,
-        session_file: sessionFile,
-        missing_fields: failure.missingFields,
-        invalid_fields: failure.invalidFields,
-        ts: Date.now(),
-      });
-    }
+    persistHandoffValidationFailures({
+      failures: session.takeHandoffValidationFailures?.() ?? [],
+      host,
+      runId: ctx.checkpoint.run_id,
+      role,
+      sessionId,
+      sessionFile,
+    });
 
     const captures = session.readCaptureBuffer();
     const validated = validateEmission(captures);
@@ -199,7 +199,6 @@ export async function runSessionTurn(
       state.inner = { kind: "failed" };
       break;
     }
-
     // ── §11.7 run-cap evaluation (Task 17) ──────────────
     // Evaluate the cap against the persisted rollup PLUS this
     // terminal's captured usage, before reducing the role's
@@ -351,18 +350,30 @@ export async function runSessionTurn(
       continue;
     }
 
+    const acceptedEnvelope =
+      validated.event.type === "handoff"
+        ? prepareAcceptedHandoffAtLoopBoundary({
+            event: validated.event,
+            host,
+            runId: ctx.checkpoint.run_id,
+            role,
+            sessionId,
+            sessionFile,
+            resetCapture: () => session.resetCaptureBuffer(),
+            reopen: () => opts.runControl?.reopenActiveSession(session),
+            setCorrection: (correction) => {
+              ctx.nextSeed = correction;
+            },
+          })
+        : null;
+    if (validated.event.type === "handoff" && acceptedEnvelope === null) continue;
+
     // ── Single valid emission — call reduce (§12) ──────────────
     let reduceResult = reduce(ctx.checkpoint, validated.event, def, {
       role,
       sessionFile,
       ts: Date.now(),
     });
-    // §11.2: the reducer emits a placeholder `payload_summary`
-    // (it never inspects payload content, §3/§12). The seam is the
-    // declared writer that enriches it with the real `field_names` +
-    // surfaced `reason` before persistence — so the run-memory
-    // `last_message` (§8.4) can deliver the worker's verdict/status
-    // to the next orchestrator session.
     const acceptedContextRef: HandoffContextRef | null =
       reduceResult.kind === "accepted" && validated.event.type === "handoff"
         ? {
@@ -377,6 +388,8 @@ export async function runSessionTurn(
             ...reduceResult.record,
             payload_summary: summarizePayload(validated.event.payload),
             context_ref: acceptedContextRef,
+            ...(reduceResult.record.event === "handoff" &&
+              acceptedEnvelope !== null && { accepted_handoff: acceptedEnvelope }),
           }
         : reduceResult.record;
     if (reduceResult.kind === "rejected") {
