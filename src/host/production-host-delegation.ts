@@ -11,6 +11,7 @@ import type { ProductionDelegationCoordinator } from "./delegation/production-de
 import { createSandboxAdmissionAdapter } from "./delegation/sandbox-admission.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
+import { initializeProtectedRunLayout } from "./execution/sandbox/protected-run-layout.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { DelegateBridgeHandler, DelegateBridgeResult } from "./rpc/delegate-bridge.js";
 import { DelegateBridgeConfigError } from "./rpc/delegate-bridge.js";
@@ -83,37 +84,35 @@ export async function createDelegateTool(
   if (parentVisitIndex === undefined) {
     throw new Error("delegation requires the loop-owned parent visitIndex");
   }
+  const runStateDir = join(ctx.cwd, ".pi-conductor", "runs", ctx.runId);
   const sandboxAdmission =
     ctx.sandboxHostApproval === undefined
       ? undefined
-      : createSandboxAdmissionAdapter({
-          runId: ctx.runId,
-          runStateDir: join(ctx.cwd, ".pi-conductor", "runs", ctx.runId),
-          primaryCheckout,
-          manifestRoot:
-            ctx.loadedManifest.manifestDir ??
-            (() => {
-              throw new Error("sandbox execution requires a manifest directory");
-            })(),
-          hostProtection: {
+      : protectedSandboxAdmission(
+          createSandboxAdmissionAdapter({
+            runId: ctx.runId,
+            runStateDir,
             primaryCheckout,
-            stateRoots: [
-              join(ctx.cwd, ".pi-conductor"),
-              join(ctx.cwd, ".pi-conductor", "runs", ctx.runId),
-            ],
-            childWorkspaceRoots: [
-              join(ctx.cwd, ".pi-conductor", "runs", ctx.runId, "worktrees"),
-              join(ctx.cwd, ".pi-conductor", "runs", ctx.runId, "sandbox"),
-            ],
-          },
-          binaryPath: ctx.sandboxHostApproval.binaryPath,
-          approvedBuilds: ctx.sandboxHostApproval.approvedBuilds,
-          bootstrapApproval: ctx.sandboxHostApproval.bootstrapApproval,
-          probeApproval: ctx.sandboxHostApproval.probeApproval,
-          ...(ctx.sandboxHostApproval.getcapPath === undefined
-            ? {}
-            : { getcapPath: ctx.sandboxHostApproval.getcapPath }),
-        });
+            manifestRoot:
+              ctx.loadedManifest.manifestDir ??
+              (() => {
+                throw new Error("sandbox execution requires a manifest directory");
+              })(),
+            hostProtection: {
+              primaryCheckout,
+              stateRoots: [join(ctx.cwd, ".pi-conductor"), runStateDir],
+              childWorkspaceRoots: [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")],
+            },
+            binaryPath: ctx.sandboxHostApproval.binaryPath,
+            approvedBuilds: ctx.sandboxHostApproval.approvedBuilds,
+            bootstrapApproval: ctx.sandboxHostApproval.bootstrapApproval,
+            probeApproval: ctx.sandboxHostApproval.probeApproval,
+            ...(ctx.sandboxHostApproval.getcapPath === undefined
+              ? {}
+              : { getcapPath: ctx.sandboxHostApproval.getcapPath }),
+          }),
+          runStateDir,
+        );
   const manifest = ctx.loadedManifest.manifest;
   const factoryOptions = {
     role: roleConfig,
@@ -123,7 +122,7 @@ export async function createDelegateTool(
     parentRole: role,
     parentVisitIndex,
     primaryCheckout,
-    runStateDir: join(ctx.cwd, ".pi-conductor", "runs", ctx.runId),
+    runStateDir,
     persistRecord: (record: PersistedRecord) => ctx.persistRecord(record),
     agentDir: ctx.agentDir,
     systemPromptRoot: delegationPromptRoot(ctx.loadedManifest, ctx.cwd),
@@ -151,6 +150,19 @@ export async function createDelegateTool(
     factoryOptions,
     JSON.stringify([ctx.runId, role, executionVisitIndex]),
   );
+}
+
+function protectedSandboxAdmission(
+  adapter: SandboxAdmissionAdapter,
+  runStateDir: string,
+): SandboxAdmissionAdapter {
+  return Object.freeze({
+    capture: async (input: Parameters<SandboxAdmissionAdapter["capture"]>[0]) => {
+      await initializeProtectedRunLayout(runStateDir);
+      return adapter.capture(input);
+    },
+    verify: (input: Parameters<SandboxAdmissionAdapter["verify"]>[0]) => adapter.verify(input),
+  });
 }
 
 /** Adapt the existing delegate tool to the isolated role's RPC bridge. */

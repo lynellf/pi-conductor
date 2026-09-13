@@ -1,6 +1,6 @@
 /** Immutable caller-prepared runtime capture for Issue #106 §§2–3. */
 
-import { chmod, lstat, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, posix } from "node:path";
 
@@ -9,6 +9,10 @@ import {
   preparedRuntimeInventoryDigest,
 } from "../../../persistence/sandbox-runtime.js";
 import { sameIdentity } from "./observation-support.js";
+import {
+  canonicalRuntimeDirectory as canonicalDirectory,
+  formatRuntimePath,
+} from "./runtime-directory.js";
 import {
   copyRuntimeTree,
   inventoryRuntimeTree,
@@ -250,12 +254,12 @@ async function validateHostProtection(
     );
   }
   const stateAndChildren = [...protection.stateRoots, ...protection.childWorkspaceRoots];
-  if (
-    stateAndChildren.some((path) => !isCanonicalAbsolute(path)) ||
-    new Set(stateAndChildren).size !== stateAndChildren.length
-  ) {
+  const invalidPath = stateAndChildren.find(
+    (path, index) => !isCanonicalAbsolute(path) || stateAndChildren.indexOf(path) !== index,
+  );
+  if (invalidPath !== undefined) {
     throw new PreparedRuntimeCaptureError(
-      "runtime host protection contains an invalid path",
+      `runtime host protection contains a duplicate or noncanonical path: ${formatRuntimePath(invalidPath)}`,
       "runtime-invalid-source",
     );
   }
@@ -280,20 +284,6 @@ async function validateHostProtection(
     })),
     ...(additional ?? []),
   ]);
-}
-
-async function canonicalDirectory(path: string, label: string): Promise<string> {
-  if (!isCanonicalAbsolute(path)) {
-    throw new PreparedRuntimeCaptureError(`${label} is not canonical`, "runtime-invalid-source");
-  }
-  const canonical = await realpath(path).catch(() => undefined);
-  if (canonical !== path || !(await lstat(path)).isDirectory()) {
-    throw new PreparedRuntimeCaptureError(
-      `${label} is not a canonical directory`,
-      "runtime-invalid-source",
-    );
-  }
-  return path;
 }
 
 async function chmodForRemoval(

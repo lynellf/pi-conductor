@@ -4,6 +4,8 @@
 
 ### Bug fixes
 
+- Initialize protected sandbox workspace roots before fresh production admission;
+  reject unsafe existing roots and identify directory failures by path and cause (#108).
 - Admit safe sandbox projections when unrelated tracked filenames contain spaces
   or `+`; retain complete tracked metadata for writable-authority checks and
   identify invalid projection authority with a bounded filename diagnostic (#107).

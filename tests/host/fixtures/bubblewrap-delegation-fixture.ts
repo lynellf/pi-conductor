@@ -33,7 +33,9 @@ export interface RealDelegationFixture {
   cleanup(): Promise<void>;
 }
 
-export async function createRealDelegationFixture(): Promise<RealDelegationFixture> {
+export async function createRealDelegationFixture(
+  options: { readonly freshProductionLayout?: boolean; readonly fourFiles?: boolean } = {},
+): Promise<RealDelegationFixture> {
   const binaryPath = required("PI_CONDUCTOR_BWRAP");
   const runtimeSource = required("PI_CONDUCTOR_BWRAP_RUNTIME");
   const expectedHash = required("PI_CONDUCTOR_BWRAP_SHA256");
@@ -44,7 +46,9 @@ export async function createRealDelegationFixture(): Promise<RealDelegationFixtu
   await chmod(root, 0o700);
   const checkout = join(root, "checkout");
   const runtime = join(checkout, ".pi/runtime");
-  const runStateDir = join(root, "state/run");
+  const runStateDir = options.freshProductionLayout
+    ? join(root, ".pi-conductor/runs/real-delegate")
+    : join(root, "state/run");
   const agentDir = join(root, "agent");
   const sessionDir = join(root, "sessions");
   const promptRoot = join(root, "prompts");
@@ -54,7 +58,9 @@ export async function createRealDelegationFixture(): Promise<RealDelegationFixtu
     mkdir(agentDir),
     mkdir(sessionDir),
     mkdir(promptRoot),
-    mkdir(join(runStateDir, "worktrees"), { recursive: true, mode: 0o700 }),
+    ...(options.freshProductionLayout
+      ? []
+      : [mkdir(join(runStateDir, "worktrees"), { recursive: true, mode: 0o700 })]),
   ]);
   await chmod(checkout, 0o700);
   for (const entry of parseInventory(
@@ -85,11 +91,23 @@ export async function createRealDelegationFixture(): Promise<RealDelegationFixtu
   await mkdir(join(checkout, "alpha"));
   await mkdir(join(checkout, "beta"));
   await mkdir(join(checkout, "docs"));
+  if (options.fourFiles) {
+    await mkdir(join(checkout, "gamma"));
+    await mkdir(join(checkout, "delta"));
+  }
   await writeFile(join(checkout, "alpha/value.txt"), "original\n");
   await writeFile(join(checkout, "beta/value.txt"), "original\n");
+  if (options.fourFiles) {
+    await writeFile(join(checkout, "gamma/value.txt"), "original\n");
+    await writeFile(join(checkout, "delta/value.txt"), "original\n");
+  }
   await writeFile(join(checkout, "docs/notes + final.md"), "unselected notes\n");
   await writeFile(join(checkout, "docs/space name.md"), "unselected space\n");
   await writeFile(join(promptRoot, "worker.md"), "Use the supplied tools to complete the task.\n");
+  if (options.freshProductionLayout) {
+    await writeFile(join(checkout, "worker.md"), "Use the supplied tools to complete the task.\n");
+    await writeFile(join(root, "worker.md"), "Use the supplied tools to complete the task.\n");
+  }
   await git(checkout, ["init", "-q"]);
   await git(checkout, ["add", "."]);
   await git(checkout, [

@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SandboxAdmissionAdapter } from "../../src/host/delegation/delegate-tool.js";
 import type { SandboxHostApproval } from "../../src/host/execution/sandbox/host-approval.js";
 import type { LoadedManifest } from "../../src/host/manifest.js";
 
 const createAdmission = vi.hoisted(() => vi.fn(() => ({ capture: vi.fn(), verify: vi.fn() })));
+const initializeLayout = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../../src/host/delegation/sandbox-admission.js", () => ({
   createSandboxAdmissionAdapter: createAdmission,
 }));
-
 afterEach(() => {
   vi.doUnmock("../../src/host/delegation/sandbox-admission.js");
+  vi.doUnmock("../../src/host/execution/sandbox/protected-run-layout.js");
   vi.resetModules();
   createAdmission.mockReset();
+  initializeLayout.mockReset();
 });
 
 describe("production sandbox delegation wiring", () => {
@@ -18,6 +21,9 @@ describe("production sandbox delegation wiring", () => {
     vi.resetModules();
     vi.doMock("../../src/host/delegation/sandbox-admission.js", () => ({
       createSandboxAdmissionAdapter: createAdmission,
+    }));
+    vi.doMock("../../src/host/execution/sandbox/protected-run-layout.js", () => ({
+      initializeProtectedRunLayout: initializeLayout,
     }));
     const { createDelegateTool } = await import("../../src/host/production-host-delegation.js");
     const approval = { binaryPath: "/opt/bwrap" } as unknown as SandboxHostApproval;
@@ -46,6 +52,39 @@ describe("production sandbox delegation wiring", () => {
       }),
       expect.any(String),
     );
+    expect(initializeLayout).not.toHaveBeenCalled();
+  });
+
+  it("initializes fixed roots only when a sandbox child is captured", async () => {
+    vi.resetModules();
+    const capture = vi.fn(async () => ({ sandbox: {} }));
+    createAdmission.mockReturnValue({ capture, verify: vi.fn() });
+    vi.doMock("../../src/host/delegation/sandbox-admission.js", () => ({
+      createSandboxAdmissionAdapter: createAdmission,
+    }));
+    vi.doMock("../../src/host/execution/sandbox/protected-run-layout.js", () => ({
+      initializeProtectedRunLayout: initializeLayout,
+    }));
+    const { createDelegateTool } = await import("../../src/host/production-host-delegation.js");
+    const createTool = vi.fn(async (options: Record<string, unknown>) => options);
+    await createDelegateTool(
+      context(
+        { manifestDir: "/manifest", manifest: {} } as unknown as LoadedManifest,
+        { binaryPath: "/opt/bwrap" } as unknown as SandboxHostApproval,
+        createTool,
+      ),
+      "parent",
+      roleConfig(),
+      "/projected/parent",
+      1,
+      1,
+    );
+
+    const options = createTool.mock.calls[0]?.[0] as { sandboxAdmission: SandboxAdmissionAdapter };
+    await options.sandboxAdmission.capture({} as never);
+
+    expect(initializeLayout).toHaveBeenCalledWith("/host/.pi-conductor/runs/run-1");
+    expect(capture).toHaveBeenCalledOnce();
   });
 });
 
