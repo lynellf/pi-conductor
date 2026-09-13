@@ -49,6 +49,7 @@ describe("approved inert Bubblewrap capability probe", () => {
   let bootstrapApproval: HostApprovedBootstrapRuntime;
   let probeSha256 = "";
   let approvedBuild: HostApprovedBubblewrapBuild;
+  let adapter: ReturnType<typeof createSandboxAdmissionAdapter>;
   const binary = required("PI_CONDUCTOR_BWRAP");
 
   beforeAll(async () => {
@@ -138,6 +139,21 @@ describe("approved inert Bubblewrap capability probe", () => {
         childWorkspaceRoots: [],
       },
     });
+    adapter = createSandboxAdmissionAdapter({
+      runId: "real-probe-run",
+      runStateDir: runState,
+      primaryCheckout: checkout,
+      manifestRoot: checkout,
+      hostProtection: {
+        primaryCheckout: checkout,
+        stateRoots: [join(root, "state")],
+        childWorkspaceRoots: [],
+      },
+      bootstrapApproval,
+      binaryPath: binary,
+      approvedBuilds: [approvedBuild],
+      probeApproval: { approvalId: "issue-106-real-probe", sha256: probeSha256 },
+    });
   }, 20_000);
 
   afterAll(async () => {
@@ -164,6 +180,53 @@ describe("approved inert Bubblewrap capability probe", () => {
     expect(result.report.extra_fds).toBe(0);
     expect(result.final.nspid.at(-1)).toBe(1);
   }, 15_000);
+
+  it("issue #109: admits four concurrent probes with no inherited descriptors", async () => {
+    await assertIssue109AmbientDescriptors();
+    const profile = {
+      name: "worker",
+      models: [{ model: "stub:model", effort: "medium" as const }],
+      system_prompt: "unused",
+      max_session_cost_usd: 1,
+      completion_protocol: "minimal" as const,
+      execution: admission.policy.execution,
+    };
+    const captures = await Promise.allSettled(
+      ["issue109-a", "issue109-b", "issue109-c", "issue109-d"].map((childId) =>
+        adapter.capture({
+          childId,
+          runId: "real-probe-run",
+          primaryCheckout: checkout,
+          profile,
+          selectedPaths: ["src/main.c", "package.json"],
+          trackedPaths: ["src/main.c", "package.json"],
+        }),
+      ),
+    );
+    const failures = captures.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (failures.length !== 0) throw new AggregateError(failures, "concurrent admissions failed");
+    const admitted = captures.flatMap((result) =>
+      result.status === "fulfilled" ? [result.value.sandbox] : [],
+    );
+    expect(admitted).toHaveLength(4);
+    for (const sandbox of admitted) {
+      const artifact = join(runState, "sandboxes", sandbox.materialization_id);
+      const probeDirectory = (await readdir(artifact)).find((name) => name.startsWith("probe-"));
+      if (probeDirectory === undefined) throw new Error("probe artifact was not retained");
+      const result = JSON.parse(
+        await readFile(join(artifact, probeDirectory, "result.json"), "utf8"),
+      ) as {
+        report?: { extra_fds?: unknown };
+        final?: SandboxProcessObservation;
+      };
+      expect(result.report?.extra_fds).toBe(0);
+      if (result.final === undefined) throw new Error("probe result omitted final observation");
+      expect(await classifySandboxProcess(result.final)).not.toBe("alive");
+    }
+    await assertIssue109AmbientDescriptors();
+  }, 45_000);
 
   it("captures and verifies through the production host admission adapter", async () => {
     const adapter = createSandboxAdmissionAdapter({
@@ -260,6 +323,15 @@ describe("approved inert Bubblewrap capability probe", () => {
     await expect(lstat(join(artifactPath, "result.json"))).rejects.toThrow();
   }, 15_000);
 });
+
+async function assertIssue109AmbientDescriptors(): Promise<void> {
+  const mode = process.env.PI_CONDUCTOR_ISSUE109_MODE;
+  if (mode === undefined) return;
+  const descriptors = await readdir("/proc/self/fd");
+  const present = mode === "inherit";
+  for (const descriptor of ["34", "35", "255"])
+    expect(descriptors.includes(descriptor)).toBe(present);
+}
 
 function parseApprovedInventory(value: unknown): readonly { path: string; sha256: string }[] {
   if (!Array.isArray(value) || value.length === 0)

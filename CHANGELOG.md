@@ -4,6 +4,8 @@
 
 ### Bug fixes
 
+- Close ambient inherited descriptors in the sandbox bootstrap before READY;
+  preserve the probe's zero-extra-descriptor guard and report descriptor failures (#109).
 - Initialize protected sandbox workspace roots before fresh production admission;
   reject unsafe existing roots and identify directory failures by path and cause (#108).
 - Admit safe sandbox projections when unrelated tracked filenames contain spaces

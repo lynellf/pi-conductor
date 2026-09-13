@@ -1,6 +1,6 @@
 /** End-to-end production runner proof against the operator-approved Bubblewrap. */
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, readFile, readlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { captureSandboxAdmission } from "../../src/host/execution/sandbox/admission-store.js";
@@ -149,6 +149,26 @@ describe("real production Bubblewrap command runner", () => {
     expect(repaired.previews.stdout.data).toBe("repaired");
   }, 10_000);
 
+  it("issue #109: production command runner strips ambient descriptors and confirms cleanup", async () => {
+    await assertIssue109AmbientDescriptors();
+    const runner = createSandboxCommandRunner({
+      ...runnerOptions,
+      command: [
+        "test ! -e /proc/self/fd/3 && test ! -e /proc/self/fd/4 || exit 91",
+        `for descriptor in /proc/self/fd/[0-9]*; do if [ -e "$descriptor" ]; then printf "%s\\n" "\${descriptor##*/}"; fi; done`,
+      ].join("; "),
+    });
+    active.push(runner);
+    await runner.prepare(scope("issue109-execution", "issue109-supervision"));
+    await runner.authorize();
+    const result = await runner.settle();
+    await assertIssue109AmbientDescriptors();
+    expect(result.normalizedStatus).toBe(0);
+    const observed = result.previews.stdout.data.trim().split("\n").sort();
+    expect(observed).toEqual(["0", "1", "2"]);
+    expect(runner.terminalEvidence()).toMatchObject({ cleanup: "confirmed" });
+  }, 15_000);
+
   it("controller timeout kills a TERM-resistant namespace and retains terminal evidence", async () => {
     const records: ToolExecutionRecord[] = [];
     const controller = new ToolExecutionController({
@@ -234,6 +254,17 @@ function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`real command runner test requires ${name}`);
   return value;
+}
+
+async function assertIssue109AmbientDescriptors(): Promise<void> {
+  const mode = process.env.PI_CONDUCTOR_ISSUE109_MODE;
+  if (mode === undefined) return;
+  const descriptors = await readdir("/proc/self/fd");
+  const present = mode === "inherit";
+  for (const descriptor of ["34", "35", "255"]) {
+    expect(descriptors.includes(descriptor)).toBe(present);
+    if (present) expect(await readlink(`/proc/self/fd/${descriptor}`)).toContain("/dev/ptmx");
+  }
 }
 
 async function sha256(path: string): Promise<string> {

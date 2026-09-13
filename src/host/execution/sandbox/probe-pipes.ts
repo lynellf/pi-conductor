@@ -1,6 +1,8 @@
 /** Bounded control/output channels for the fixed pre-admission probe (#106 §5–6). */
 import type { ChildProcess } from "node:child_process";
 import { Readable, Writable } from "node:stream";
+import { Value } from "typebox/value";
+import { sandboxCapabilityProbeReportSchema } from "../../../persistence/sandbox-probe.js";
 import type { SandboxProcessObservation } from "../../../persistence/sandbox-process.js";
 import {
   BUBBLEWRAP_READY_FRAME,
@@ -140,11 +142,23 @@ export function captureProbePipes(child: ChildProcess) {
         errors.length !== 0
       )
         throw new Error(
-          `probe failed: exit=${result.code} signal=${result.signal} stderr_bytes=${Buffer.byteLength(errors)}`,
+          `probe failed: exit=${result.code} signal=${result.signal} stderr_bytes=${Buffer.byteLength(errors)}${descriptorFailureHint(output)}`,
         );
       return { stdout: output, code: exitCode };
     },
   };
+}
+
+function descriptorFailureHint(output: string): string {
+  // Diagnostic only: exit/status failure still rejects, and raw report fields stay private.
+  let report: unknown;
+  try {
+    report = JSON.parse(output);
+  } catch {
+    return "";
+  }
+  if (!Value.Check(sandboxCapabilityProbeReportSchema, report) || report.extra_fds === 0) return "";
+  return `; unexpected inherited descriptors (count=${report.extra_fds}); inspect the host launch environment`;
 }
 
 function collect(stream: Readable, limit: number, fail: (cause: unknown) => void) {

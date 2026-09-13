@@ -1,4 +1,4 @@
-/** Issue #106 §6 trusted bootstrap protocol; no production runner is wired yet. */
+/** Shared trusted bootstrap protocol for Bubblewrap probe and command launches (#106 §6). */
 
 /** Bootstrap's fixed pre-command framing marker. */
 export const BUBBLEWRAP_READY_FRAME = "READY\n";
@@ -10,24 +10,43 @@ const RELEASE_FRAME_LENGTH = BUBBLEWRAP_RELEASE_FRAME.length;
 const RELEASE_READ_LIMIT = RELEASE_FRAME_LENGTH + 1;
 const MAX_PENDING_STATUS_BYTES = 64 * 1024;
 
-/** Fixed host-authored Bash source for the Bubblewrap authorization boundary (#106 §6). */
+/**
+ * Re-exec a fixed `-c` program so Bash has no script-input FD, then close every non-control
+ * child descriptor before READY; this keeps inherited host FDs out of both sandbox paths (#109).
+ */
 export const BUBBLEWRAP_BOOTSTRAP_SOURCE = `#!/bin/bash
+exec /bin/bash --noprofile --norc -c '
 set -eu
 
-printf '%s' '${BUBBLEWRAP_READY_FRAME}' >&4
-release=''
+shopt -s nullglob
+descriptor_paths=(/proc/self/fd/[0-9]*)
+if [ "\${#descriptor_paths[@]}" -eq 0 ]; then
+  exit 82
+fi
+for descriptor_path in "\${descriptor_paths[@]}"; do
+  descriptor="\${descriptor_path##*/}"
+  case "\${descriptor}" in
+    ""|*[!0-9]*) exit 82 ;;
+    0|1|2|3|4) ;;
+    *) exec {descriptor}>&- ;;
+  esac
+done
+
+printf "%s" "${BUBBLEWRAP_READY_FRAME}" >&4
+release=
 release_status=0
-if LC_ALL=C IFS= read -r -d '' -n ${RELEASE_READ_LIMIT} -u 3 release; then
+if LC_ALL=C IFS= read -r -d "" -n ${RELEASE_READ_LIMIT} -u 3 release; then
   exit 80
 else
   release_status=$?
 fi
-if [ "$release_status" -ne 1 ] || [ "$release" != '${BUBBLEWRAP_RELEASE_FRAME}' ]; then
+if [ "$release_status" -ne 1 ] || [ "$release" != "${BUBBLEWRAP_RELEASE_FRAME}" ]; then
   exit 81
 fi
 exec 3<&-
 exec 4>&-
 exec "$@"
+' pi-conductor-bootstrap "$@"
 `;
 
 /** One JSON object emitted by Bubblewrap's `--json-status-fd`. */
