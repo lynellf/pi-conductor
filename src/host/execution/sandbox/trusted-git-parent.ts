@@ -1,7 +1,10 @@
-/** Filter-free primary checkout capture for sandbox delegation admission (#106 §4). */
+/** Validated primary checkout capture for sandbox delegation admission (#106 §4). */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ParentMaterializedProjection } from "../../delegation/projection.js";
+import {
+  isSafeExactProjectionPath,
+  type ParentMaterializedProjection,
+} from "../../delegation/projection.js";
 import { type SandboxDirectory, withSandboxDirectory } from "./anchored-file-access.js";
 import { trustedGitConfig, trustedGitEnvironment } from "./trusted-git-environment.js";
 import {
@@ -62,7 +65,7 @@ export async function captureTrustedParentProjection(
       const expected = index.get(path);
       if (expected === undefined) throw new Error("trusted parent index changed during capture");
       await assertWorkingBlob(files, path, expected);
-      materialized.push(path);
+      if (isSafeExactProjectionPath(path)) materialized.push(path);
     }
   });
   const untracked = nulPaths(

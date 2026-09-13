@@ -5,11 +5,12 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-/** A clean parent's materialized (`H`) paths at one immutable base. */
+/** A clean parent's selectable materialized (`H`) paths at one immutable base. */
 export interface ParentMaterializedProjection {
   readonly baseCommit: string;
+  /** Only paths accepted by isSafeExactProjectionPath; not the full tracked inventory. */
   readonly paths: readonly string[];
-  /** Complete tracked path set, including sparse omissions; metadata only (#106 §2). */
+  /** Complete tracked set, including sparse omissions and non-selectable names (#106 §2). */
   readonly trackedPaths: readonly string[];
   /** Whether the parent omitted any tracked path from its active projection. */
   readonly isSparse: boolean;

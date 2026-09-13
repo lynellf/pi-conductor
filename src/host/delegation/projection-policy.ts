@@ -70,10 +70,15 @@ export function resolveEffectiveProjection(
     return rejection(errors);
   }
 
-  if (materializedParentPaths.some((path) => !isSafeExactProjectionPath(path))) {
+  const unsafeParentPath = materializedParentPaths.find((path) => !isSafeExactProjectionPath(path));
+  if (unsafeParentPath !== undefined) {
+    const preview = JSON.stringify(unsafeParentPath.slice(0, 160));
     errors.push({
       code: "projection-authority-unavailable",
-      message: "the captured parent materialized-path authority contains an unsafe exact path",
+      message:
+        `the captured parent materialized-path authority contains an unsafe exact path: ${preview}` +
+        `${unsafeParentPath.length > 160 ? " (truncated)" : ""}; ` +
+        "capture must provide selectable exact paths separately from complete tracked metadata",
     });
     return rejection(errors);
   }

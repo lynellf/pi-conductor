@@ -4,8 +4,9 @@ import { join } from "node:path";
 import type { StreamFunction } from "@earendil-works/pi-ai";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-
+import type { DelegateToolFactoryOptions } from "../../src/host/delegation/delegate-tool-factory.js";
 import { createDelegateTool } from "../../src/host/delegation/delegate-tool-factory.js";
+import { createDelegateScheduler } from "../../src/host/delegation/factory-scheduler.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
 import {
   makeStubModel,
@@ -35,6 +36,9 @@ describe("production Bubblewrap delegated SDK sessions", () => {
     expect(result.completion_evidence.changed_paths).toEqual(["alpha/value.txt"]);
     expect(await readFile(join(result.worktree_path, "alpha/value.txt"), "utf8")).toBe("fixed\n");
     expect(await readFile(join(fixture.checkout, "alpha/value.txt"), "utf8")).toBe("original\n");
+    expect(await readFile(join(fixture.checkout, "docs/notes + final.md"), "utf8")).toBe(
+      "unselected notes\n",
+    );
     const terminal = records.filter((record) => record.type === "tool_execution_finished");
     expect(
       terminal.map(
@@ -54,7 +58,13 @@ describe("production Bubblewrap delegated SDK sessions", () => {
     ]);
     const profiles = [profile("alpha"), profile("beta")];
     const manager = new DelegationManager();
-    const tool = delegate(fixture, profiles, records, manager, routedRegistry(streams));
+    const { tool, scheduler } = delegate(
+      fixture,
+      profiles,
+      records,
+      manager,
+      routedRegistry(streams),
+    );
     try {
       const raw = await invoke(tool, "pair", {
         mode: "blocking",
@@ -81,6 +91,20 @@ describe("production Bubblewrap delegated SDK sessions", () => {
       );
       expect(await readFile(join(fixture.checkout, "alpha/value.txt"), "utf8")).toBe("original\n");
       expect(await readFile(join(fixture.checkout, "beta/value.txt"), "utf8")).toBe("original\n");
+      expect(await readFile(join(fixture.checkout, "docs/space name.md"), "utf8")).toBe(
+        "unselected space\n",
+      );
+      const accepted = records.filter((record) => record.type === "delegation_submission_accepted");
+      expect(accepted).toHaveLength(1);
+      expect(accepted[0]?.children.map((child) => child.task_id)).toEqual([
+        "task-alpha",
+        "task-beta",
+      ]);
+      const acceptedChildIds = accepted[0]?.children.map((child) => child.child_id);
+      const startedChildIds = records
+        .filter((record) => record.type === "subagent_started")
+        .map((record) => (record.type === "subagent_started" ? record.child_id : undefined));
+      expect(new Set(startedChildIds)).toEqual(new Set(acceptedChildIds));
       const refs = records
         .filter((record) => record.type === "tool_execution_finished")
         .map((record) =>
@@ -97,7 +121,11 @@ describe("production Bubblewrap delegated SDK sessions", () => {
       ).toHaveLength(2);
       expect(diagnostics).toEqual(new Set(["alpha", "beta"]));
     } finally {
-      await manager.abortAll();
+      try {
+        await scheduler.close();
+      } finally {
+        await manager.abortAll();
+      }
     }
   }, 60_000);
 });
@@ -150,36 +178,7 @@ async function executeChild(
     workspace: { projection: { required: true, allowed_paths: [`${path}/value.txt`] } },
     tool_execution: { timeout_seconds: 5, termination_grace_seconds: 1 },
   };
-  const tool = createDelegateTool({
-    role: {
-      name: "orchestrator",
-      is_orchestrator: true,
-      models: [{ model: "stub:parent", effort: "medium" }],
-      system_prompt: "worker.md",
-      tools: ["delegate"],
-      delegation: {
-        allowed_subagents: [profile.name],
-        max_children_per_session: 1,
-        max_parallel: 1,
-        mode: "blocking",
-      },
-    },
-    subagents: [profile],
-    remainingChildren: 1,
-    runId: "real-delegate",
-    parentRole: "orchestrator",
-    parentVisitIndex: 1,
-    primaryCheckout: fixture.checkout,
-    runStateDir: fixture.runStateDir,
-    persistRecord: (record) => records.push(record),
-    agentDir: fixture.agentDir,
-    systemPromptRoot: fixture.promptRoot,
-    modelRegistry: registry,
-    sessionDir: fixture.sessionDir,
-    manager,
-    sandboxAdmission: fixture.sandboxAdmission,
-    sandboxHostApproval: fixture.hostApproval,
-  });
+  const { tool, scheduler } = delegate(fixture, [profile], records, manager, registry);
   try {
     const raw = await (
       tool.execute as unknown as (
@@ -214,8 +213,54 @@ async function executeChild(
       throw new Error("read_execution_output diagnostics were not returned to SDK");
     return result;
   } finally {
-    await manager.abortAll();
+    try {
+      await scheduler.close();
+    } finally {
+      await manager.abortAll();
+    }
   }
+}
+
+function delegate(
+  fixture: RealDelegationFixture,
+  profiles: SubagentProfile[],
+  records: PersistedRecord[],
+  manager: DelegationManager,
+  modelRegistry: ModelRegistry,
+) {
+  const options = {
+    role: {
+      name: "orchestrator",
+      is_orchestrator: true,
+      models: [{ model: "stub:parent", effort: "medium" }],
+      system_prompt: "worker.md",
+      tools: ["delegate"],
+      delegation: {
+        allowed_subagents: profiles.map((item) => item.name),
+        max_children_per_session: profiles.length,
+        max_parallel: profiles.length,
+        mode: "blocking",
+      },
+    },
+    subagents: profiles,
+    remainingChildren: profiles.length,
+    runId: "real-delegate",
+    parentRole: "orchestrator",
+    parentVisitIndex: 1,
+    primaryCheckout: fixture.checkout,
+    runStateDir: fixture.runStateDir,
+    persistRecord: (record) => records.push(record),
+    agentDir: fixture.agentDir,
+    systemPromptRoot: fixture.promptRoot,
+    modelRegistry,
+    sessionDir: fixture.sessionDir,
+    manager,
+    sandboxAdmission: fixture.sandboxAdmission,
+    sandboxHostApproval: fixture.hostApproval,
+    records: () => records,
+  } satisfies DelegateToolFactoryOptions;
+  const scheduler = createDelegateScheduler(options, "real-parent");
+  return { tool: createDelegateTool({ ...options, scheduler }), scheduler };
 }
 
 function call(name: string, args: Record<string, unknown>): StubStep {
@@ -337,45 +382,6 @@ function routedRegistry(streams: ReadonlyMap<string, StreamFunction>): ModelRegi
     models: [...streams.keys()].map((id) => ({ ...base, id, name: id })),
   });
   return registry;
-}
-
-function delegate(
-  fixture: RealDelegationFixture,
-  profiles: SubagentProfile[],
-  records: PersistedRecord[],
-  manager: DelegationManager,
-  modelRegistry: ModelRegistry,
-) {
-  return createDelegateTool({
-    role: {
-      name: "orchestrator",
-      is_orchestrator: true,
-      models: [{ model: "stub:alpha", effort: "medium" }],
-      system_prompt: "worker.md",
-      tools: ["delegate"],
-      delegation: {
-        allowed_subagents: profiles.map((item) => item.name),
-        max_children_per_session: 2,
-        max_parallel: 2,
-        mode: "blocking",
-      },
-    },
-    subagents: profiles,
-    remainingChildren: 2,
-    runId: "real-delegate",
-    parentRole: "orchestrator",
-    parentVisitIndex: 1,
-    primaryCheckout: fixture.checkout,
-    runStateDir: fixture.runStateDir,
-    persistRecord: (record) => records.push(record),
-    agentDir: fixture.agentDir,
-    systemPromptRoot: fixture.promptRoot,
-    modelRegistry,
-    sessionDir: fixture.sessionDir,
-    manager,
-    sandboxAdmission: fixture.sandboxAdmission,
-    sandboxHostApproval: fixture.hostApproval,
-  });
 }
 
 function invoke(tool: ReturnType<typeof createDelegateTool>, id: string, args: unknown) {

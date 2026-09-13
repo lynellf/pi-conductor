@@ -4,6 +4,9 @@
 
 ### Bug fixes
 
+- Admit safe sandbox projections when unrelated tracked filenames contain spaces
+  or `+`; retain complete tracked metadata for writable-authority checks and
+  identify invalid projection authority with a bounded filename diagnostic (#107).
 - Give fresh hosts the same resolved tool policies recorded in the durable
   manifest snapshot (#106).
 - Report terminal CLI session failures with exit 1 and consistent final JSON

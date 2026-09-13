@@ -84,8 +84,11 @@ export async function createRealDelegationFixture(): Promise<RealDelegationFixtu
   );
   await mkdir(join(checkout, "alpha"));
   await mkdir(join(checkout, "beta"));
+  await mkdir(join(checkout, "docs"));
   await writeFile(join(checkout, "alpha/value.txt"), "original\n");
   await writeFile(join(checkout, "beta/value.txt"), "original\n");
+  await writeFile(join(checkout, "docs/notes + final.md"), "unselected notes\n");
+  await writeFile(join(checkout, "docs/space name.md"), "unselected space\n");
   await writeFile(join(promptRoot, "worker.md"), "Use the supplied tools to complete the task.\n");
   await git(checkout, ["init", "-q"]);
   await git(checkout, ["add", "."]);
@@ -100,6 +103,9 @@ export async function createRealDelegationFixture(): Promise<RealDelegationFixtu
   ]);
   await chmod(join(checkout, ".git"), 0o700);
   await chmod(join(checkout, ".git/index"), 0o600);
+  await chmod(join(checkout, "docs"), 0o700);
+  await chmod(join(checkout, "docs/notes + final.md"), 0o600);
+  await chmod(join(checkout, "docs/space name.md"), 0o600);
   const binary = await lstat(binaryPath);
   const bootstrapApproval = {
     approvalId: "delegated-session-runtime",
