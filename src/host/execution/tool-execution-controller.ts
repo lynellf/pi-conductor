@@ -10,9 +10,9 @@
 
 import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
+import type { SandboxExecutionTerminal } from "../../persistence/sandbox-command.js";
 import {
   type SandboxExecutionOwner,
-  type SandboxReadyEvidence,
   sandboxExecutionOwnerSchema,
 } from "../../persistence/sandbox-execution.js";
 import {
@@ -25,8 +25,9 @@ import { SupervisedProcessError } from "./supervised-process.js";
 import {
   executeToolLifecycle,
   persistSandboxReadiness,
-  type ToolExecutionLifecycleAdapter,
+  type SandboxToolExecutionAdapter,
 } from "./tool-execution-lifecycle.js";
+import { buildToolExecutionTerminal } from "./tool-execution-terminal.js";
 import {
   hasUnconfirmedCleanup,
   settleWithinCleanupWindow,
@@ -75,6 +76,7 @@ export class ToolExecutionController {
   private closed = false;
   private readonly finishedIds = new Set<string>();
   private readonly activeAborts = new Set<AbortController>();
+  private readonly terminalEvidence = new Map<string, () => SandboxExecutionTerminal>();
 
   constructor(private readonly options: ToolExecutionControllerOptions) {
     this.idFactory = options.idFactory ?? randomUUID;
@@ -105,7 +107,7 @@ export class ToolExecutionController {
     toolName: string,
     toolCallId: string,
     sandbox: SandboxExecutionOwner,
-    adapter: ToolExecutionLifecycleAdapter<T, SandboxReadyEvidence>,
+    adapter: SandboxToolExecutionAdapter<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
     if (
@@ -132,6 +134,7 @@ export class ToolExecutionController {
         }),
       runOptions,
       owner,
+      () => adapter.terminalEvidence(),
     );
   }
 
@@ -141,6 +144,7 @@ export class ToolExecutionController {
     operation: (scope: ToolExecutionScope) => Promise<T>,
     runOptions: ToolExecutionRunOptions,
     sandbox?: SandboxExecutionOwner,
+    terminalEvidence?: () => SandboxExecutionTerminal,
   ): Promise<T> {
     if (this.closed) {
       throw new ToolExecutionError("tool_closed", "tool execution admission is closed");
@@ -173,6 +177,7 @@ export class ToolExecutionController {
       ts: startedAt,
     };
     this.append(started);
+    if (terminalEvidence !== undefined) this.terminalEvidence.set(executionId, terminalEvidence);
 
     const operationAbort = new AbortController();
     this.activeAborts.add(operationAbort);
@@ -218,7 +223,11 @@ export class ToolExecutionController {
     } catch (error) {
       runOptions.signal?.removeEventListener("abort", onExternalAbort);
       this.activeAborts.delete(operationAbort);
-      return this.failBeforeOperation(started, error);
+      try {
+        return this.failBeforeOperation(started, error);
+      } finally {
+        this.terminalEvidence.delete(executionId);
+      }
     }
 
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -284,6 +293,7 @@ export class ToolExecutionController {
       }
       return this.finishTimeout(started, executionId, recoveryCount, settled.error ?? error);
     } finally {
+      this.terminalEvidence.delete(executionId);
       if (timer !== undefined) clearTimeout(timer);
       if (cleanupTimer !== undefined) clearTimeout(cleanupTimer);
       runOptions.signal?.removeEventListener("abort", onExternalAbort);
@@ -420,23 +430,31 @@ export class ToolExecutionController {
     diagnostic?: ToolExecutionFinishedRecord["diagnostic"],
   ): void {
     if (this.finishedIds.has(started.execution_id)) return;
-    this.append({
-      type: "tool_execution_finished",
-      schema_version: 1,
-      run_id: started.run_id,
-      execution_id: started.execution_id,
-      supervision_id: started.supervision_id,
-      logical_session_id: started.logical_session_id,
-      role_session_id: started.role_session_id,
-      tool_call_id: started.tool_call_id,
-      tool_name: started.tool_name,
-      elapsed_ms: Math.max(0, Date.now() - started.ts),
-      recovery_count: started.recovery_count,
-      outcome,
-      cleanup,
-      ...(diagnostic === undefined ? {} : { diagnostic }),
-      ts: Date.now(),
-    });
+    const ready = this.generated.find(
+      (record) =>
+        record.type === "tool_execution_sandbox_ready" &&
+        record.execution_id === started.execution_id,
+    );
+    let record: ToolExecutionFinishedRecord;
+    try {
+      record = buildToolExecutionTerminal(
+        started,
+        outcome,
+        cleanup,
+        diagnostic,
+        ready?.type === "tool_execution_sandbox_ready" ? ready : undefined,
+        this.terminalEvidence.get(started.execution_id),
+      );
+    } catch (cause) {
+      const error = new ToolExecutionError(
+        "tool_cleanup_unconfirmed",
+        "tool terminal evidence is invalid; preserve the execution for reconciliation",
+        { cleanup: "unconfirmed", executionId: started.execution_id, cause },
+      );
+      this.closeOnFatal(error);
+      throw error;
+    }
+    this.append(record);
     this.finishedIds.add(started.execution_id);
   }
 

@@ -246,13 +246,17 @@ function pipeOutput(
   });
   source.once("error", (cause) => {
     fail(cause);
-    if (!destination.writableEnded && !destination.destroyed) destination.end();
+    if (!destination.destroyed)
+      destination.destroy(
+        cause instanceof Error ? cause : new Error(`sandbox ${name} source failed`, { cause }),
+      );
     sourceDone.resolve();
   });
   source.once("close", () => {
     if (!sourceEnded) {
-      fail(new Error(`sandbox ${name} closed before end`));
-      if (!destination.writableEnded && !destination.destroyed) destination.end();
+      const cause = new Error(`sandbox ${name} closed before end`);
+      fail(cause);
+      if (!destination.destroyed) destination.destroy(cause);
     }
     sourceDone.resolve();
   });

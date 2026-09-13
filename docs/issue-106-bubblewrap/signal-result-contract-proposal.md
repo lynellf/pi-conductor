@@ -1,7 +1,6 @@
 # Issue #106: command status clarification
 
-Status: Proposed; awaiting overseer acknowledgement. This does not change the
-approved specification yet.
+Status: Acknowledged by the overseer on 2026-09-12 and applied to spec §7.
 
 ## Evidence
 
@@ -18,7 +17,7 @@ Real production-pipe tests against that installed build confirm both cases
 report 137 (`tests/host/bubblewrap-command-pipes.real.ts`). The same suite checks
 ordinary nonzero exit, stderr, background output, and backpressure.
 
-## Recommended amendment to spec §7
+## Accepted amendment to spec §7
 
 Replace “accurate command exit code/signal” with:
 

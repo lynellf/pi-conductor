@@ -234,6 +234,12 @@ export {
   RoleTurnRunMismatchError,
   RoleTurnTelemetryLogError,
 } from "./persistence/role-turn.js";
+export type { SandboxExecutionTerminal } from "./persistence/sandbox-command.js";
+export {
+  assertSandboxExecutionTerminal,
+  SandboxCommandRecordError,
+  sandboxExecutionTerminalSchema,
+} from "./persistence/sandbox-command.js";
 export type {
   SandboxExecutionHostObserver,
   SandboxExecutionOwner,

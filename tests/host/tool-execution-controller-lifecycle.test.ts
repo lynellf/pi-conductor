@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ToolExecutionController } from "../../src/host/execution/tool-execution-controller.js";
-import type { ToolExecutionLifecycleAdapter } from "../../src/host/execution/tool-execution-lifecycle.js";
+import type { SandboxToolExecutionAdapter } from "../../src/host/execution/tool-execution-lifecycle.js";
 import { DEFAULT_TOOL_EXECUTION_POLICY } from "../../src/manifest/execution-policy.js";
 import type {
   SandboxExecutionOwner,
@@ -60,7 +60,7 @@ function evidence(): SandboxReadyEvidence {
       path: "/opt/bwrap",
       approval_id: "approval",
     },
-    output_ref: "22222222-2222-2222-2222-222222222222",
+    output_ref: "22222222-2222-4222-8222-222222222222",
   };
 }
 function fixture(persistFault?: (record: ToolExecutionRecord) => void) {
@@ -77,7 +77,26 @@ function fixture(persistFault?: (record: ToolExecutionRecord) => void) {
       events.push(record.type);
     },
   });
-  const adapter: ToolExecutionLifecycleAdapter<number, SandboxReadyEvidence> = {
+  const adapter: SandboxToolExecutionAdapter<number> = {
+    terminalEvidence: () => ({
+      category: events.includes("settle")
+        ? "command_status"
+        : events.includes("authorize")
+          ? "authorization_ambiguous"
+          : "setup_failed",
+      normalized_status: events.includes("settle") ? 17 : null,
+      signal: "unknown",
+      cleanup: "confirmed",
+      termination_requested: events.includes("terminate"),
+      output_ref: evidence().output_ref,
+      output: {
+        schemaVersion: 1,
+        outputRef: evidence().output_ref,
+        capture: "complete",
+        stdout: { byteCount: 0, retainedVerified: true, sha256: "a".repeat(64) },
+        stderr: { byteCount: 0, retainedVerified: true, sha256: "a".repeat(64) },
+      },
+    }),
     prepare: async () => {
       events.push("prepare");
       return evidence();
@@ -110,6 +129,9 @@ describe("controller sandbox readiness", () => {
     ]);
     expect(reconstructToolExecutionTimeline(f.records).unresolved).toEqual([]);
     expect(f.records[0]).toMatchObject({ sandbox: owner });
+    expect(f.records.at(-1)).toMatchObject({
+      sandbox: { normalized_status: 17, signal: "unknown", output_ref: evidence().output_ref },
+    });
   });
   it("never releases mismatched sandbox authority", async () => {
     const f = fixture();
@@ -145,6 +167,21 @@ describe("controller sandbox readiness", () => {
     expect(f.events).toEqual([]);
   });
 
+  it("records pre-aborted admission without starting physical setup", async () => {
+    const f = fixture();
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      f.controller.runLifecycle("bash", "call", owner, f.adapter, { signal: abort.signal }),
+    ).rejects.toMatchObject({ code: "tool_aborted" });
+    expect(f.events).toEqual(["tool_execution_started", "tool_execution_finished"]);
+    expect(f.records.at(-1)).toMatchObject({
+      outcome: "aborted",
+      sandbox: { category: "setup_failed", normalized_status: null, cleanup: "confirmed" },
+    });
+    expect(reconstructToolExecutionTimeline(f.records).unresolved).toEqual([]);
+  });
+
   it("records exactly one timeout after managed cancellation settles", async () => {
     vi.useFakeTimers();
     try {
@@ -169,6 +206,7 @@ describe("controller sandbox readiness", () => {
   it("retains readiness and failure when release may have reached the command", async () => {
     const f = fixture();
     f.adapter.authorize = async () => {
+      f.events.push("authorize");
       throw new Error("release callback failed");
     };
     await expect(f.controller.runLifecycle("bash", "call", owner, f.adapter)).rejects.toMatchObject(
@@ -178,6 +216,16 @@ describe("controller sandbox readiness", () => {
     expect(entry?.ready).toBeDefined();
     expect(entry?.finished?.outcome).toBe("failed");
     expect(f.events).toContain("terminate");
+  });
+
+  it("rejects a setup-failure claim after durable readiness", async () => {
+    const f = fixture();
+    f.adapter.authorize = async () => {
+      throw new Error("invalid backend state");
+    };
+    await expect(f.controller.runLifecycle("bash", "call", owner, f.adapter)).rejects.toMatchObject(
+      { code: "tool_cleanup_unconfirmed" },
+    );
   });
 
   it("does not return a result if cancellation arrives as settlement resolves", async () => {
@@ -208,5 +256,44 @@ describe("controller sandbox readiness", () => {
     );
     expect(attempts).toBe(1);
     expect(reconstructToolExecutionTimeline(f.records).unresolved).toHaveLength(1);
+  });
+
+  it("preserves an unresolved execution when backend output ownership is inconsistent", async () => {
+    const f = fixture();
+    const original = f.adapter.terminalEvidence;
+    f.adapter.terminalEvidence = () => ({
+      ...original(),
+      output_ref: "33333333-3333-4333-8333-333333333333",
+    });
+    await expect(f.controller.runLifecycle("bash", "call", owner, f.adapter)).rejects.toMatchObject(
+      { code: "tool_cleanup_unconfirmed" },
+    );
+    expect(f.records.filter((record) => record.type === "tool_execution_finished")).toEqual([]);
+    expect(reconstructToolExecutionTimeline(f.records).unresolved).toHaveLength(1);
+    await expect(f.controller.run("read", "later", async () => 1)).rejects.toMatchObject({
+      code: "tool_closed",
+    });
+  });
+
+  it("downgrades terminal certainty when cleanup exceeds the controller window", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      f.adapter.settle = () => new Promise<number>(() => undefined);
+      f.adapter.terminate = () => new Promise<"confirmed">(() => undefined);
+      const pending = f.controller.runLifecycle("bash", "call", owner, f.adapter);
+      const assertion = expect(pending).rejects.toMatchObject({
+        code: "tool_cleanup_unconfirmed",
+      });
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+      expect(f.records.at(-1)).toMatchObject({
+        outcome: "cleanup_unconfirmed",
+        sandbox: { category: "cleanup_unconfirmed", cleanup: "unconfirmed" },
+      });
+      expect(reconstructToolExecutionTimeline(f.records).unresolved).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

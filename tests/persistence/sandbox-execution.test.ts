@@ -196,7 +196,17 @@ describe("sandbox READY persistence", () => {
     expect(() => reconstructToolExecutionTimeline([started, finished])).toThrow(
       "requires a preceding ready record",
     );
-    const failed = { ...finished, outcome: "failed" as const };
+    const failed: ToolExecutionFinishedRecord = {
+      ...finished,
+      outcome: "failed",
+      sandbox: {
+        category: "setup_failed",
+        normalized_status: null,
+        signal: "unknown",
+        termination_requested: false,
+        cleanup: "confirmed",
+      },
+    };
     expect(reconstructToolExecutionTimeline([started, failed]).entries[0]?.finished).toEqual(
       failed,
     );

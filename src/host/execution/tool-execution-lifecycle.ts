@@ -1,5 +1,6 @@
 /** Prepare, durably authorize, and settle one host-owned execution (#106 §6). */
 
+import type { SandboxExecutionTerminal } from "../../persistence/sandbox-command.js";
 import type {
   SandboxReadyEvidence,
   ToolExecutionSandboxReadyRecord,
@@ -18,6 +19,12 @@ export interface ToolExecutionLifecycleAdapter<T, Ready> {
   settle(): Promise<T>;
   /** Latch closure before awaiting setup; settle all late resources, output, and owned processes. */
   terminate(reason: "cancelled" | "failed", graceMs: number): Promise<"confirmed" | "unconfirmed">;
+}
+
+/** Sandbox adapters retain metadata-only terminal evidence even when setup or cancellation fails. */
+export interface SandboxToolExecutionAdapter<T>
+  extends ToolExecutionLifecycleAdapter<T, SandboxReadyEvidence> {
+  terminalEvidence(): SandboxExecutionTerminal;
 }
 
 /** Author the correlation fields and validate namespace/authority evidence before append. */

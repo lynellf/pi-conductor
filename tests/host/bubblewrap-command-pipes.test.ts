@@ -191,6 +191,20 @@ describe("production Bubblewrap command pipes", () => {
     await expect(f.pipes.drained).resolves.toBeUndefined();
   });
 
+  it("marks the output destination failed when its source errors", async () => {
+    const destination = new PassThrough();
+    const destinationError = new Promise<Error>((resolve) => destination.once("error", resolve));
+    const f = fixture({ stdout: destination, stderr: new PassThrough() });
+    f.stdout.destroy(new Error("source read failed"));
+    await expect(f.pipes.fault).rejects.toThrow("source read failed");
+    await expect(destinationError).resolves.toMatchObject({ message: "source read failed" });
+    f.stderr.end();
+    f.ready.end();
+    f.status.end();
+    f.child.emit("close", 1, null);
+    await expect(f.pipes.drained).resolves.toBeUndefined();
+  });
+
   it("resumes source drain when a destination closes before finish", async () => {
     const destination = new Writable({
       highWaterMark: 1,

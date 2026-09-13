@@ -2,6 +2,11 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import {
+  assertSandboxExecutionTerminal,
+  assertSandboxTerminalCorrelation,
+  sandboxExecutionTerminalSchema,
+} from "./sandbox-command.js";
 import type { ToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
 import {
   assertToolExecutionSandboxReadyRecord,
@@ -80,6 +85,7 @@ export const toolExecutionFinishedSchema = Type.Object(
     ]),
     cleanup: Type.Union([Type.Literal("confirmed"), Type.Literal("unconfirmed")]),
     diagnostic: Type.Optional(toolExecutionDiagnosticSchema),
+    sandbox: Type.Optional(sandboxExecutionTerminalSchema),
     ts: Type.Number({ minimum: 0 }),
   },
   { additionalProperties: false },
@@ -158,6 +164,7 @@ export function assertToolExecutionRecord(value: unknown): asserts value is Tool
   if (record.type === "tool_execution_sandbox_ready") {
     assertToolExecutionSandboxReadyRecord(record);
   } else if (record.type === "tool_execution_finished") {
+    if (record.sandbox !== undefined) assertSandboxExecutionTerminal(record.sandbox);
     if (!Number.isFinite(record.elapsed_ms)) {
       throw new ToolExecutionRecordError("tool execution elapsed_ms must be finite");
     }
@@ -242,6 +249,10 @@ export function reconstructToolExecutionTimeline(
       if (entry === undefined) {
         throw new ToolExecutionRecordError("cleanup confirmation has no preceding start");
       }
+      if (entry.started.sandbox !== undefined)
+        throw new ToolExecutionRecordError(
+          "sandbox cleanup requires backend-specific verification",
+        );
       if (entry.cleanupConfirmed !== undefined) {
         throw new ToolExecutionRecordError("duplicate cleanup confirmation");
       }
@@ -295,6 +306,7 @@ export function reconstructToolExecutionTimeline(
         "sandbox execution terminal requires a preceding ready record",
       );
     assertMatchingIdentity(record, start, "tool execution terminal");
+    assertSandboxTerminalCorrelation(start.sandbox, entry.ready, record);
     if (entry.ready !== undefined && record.ts < entry.ready.ts)
       throw new ToolExecutionRecordError("tool execution terminal precedes sandbox ready");
     if (record.recovery_count !== start.recovery_count) {

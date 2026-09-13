@@ -180,6 +180,24 @@ describe("tool execution persistence contract", () => {
     expect(timeline.unresolved).toHaveLength(0);
   });
 
+  it("rejects legacy marker cleanup evidence for a sandbox execution", () => {
+    const sandboxStart = {
+      ...started,
+      sandbox: {
+        child_id: "child",
+        descriptor: {
+          backend: "bubblewrap" as const,
+          execution_policy_digest: "a".repeat(64),
+          runtime_digest: "b".repeat(64),
+          materialization_id: "materialization",
+        },
+      },
+    };
+    expect(() => reconstructToolExecutionTimeline([sandboxStart, cleanupConfirmed])).toThrow(
+      "sandbox cleanup requires backend-specific verification",
+    );
+  });
+
   it.each([
     ["confirmation without start", [cleanupConfirmed]],
     ["confirmation for clean terminal", [started, finished, cleanupConfirmed]],

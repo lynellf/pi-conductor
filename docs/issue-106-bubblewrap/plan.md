@@ -3,9 +3,9 @@
 Status: Specification acknowledged on 2026-09-12. Policy, immutable runtime
 capture, durable admission, and the production-policy capability probe pass
 their focused and real-backend gates. Private command materialization, confined
-file tools, and validated ingestion also pass. Output and execution lifecycle
-integration remain in progress;
-delegated command execution remains disabled.
+file tools, validated ingestion, production command execution, and retained
+output tools also pass. SDK child wiring and restart integration remain in
+progress; delegated command execution remains disabled.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
 integration, and final verification. No stage requires a separate human review
@@ -177,9 +177,11 @@ Progress:
 - [x] Verify production pipes against real Bubblewrap, including nonzero status,
       stderr, background output, and the ambiguous normalized status 137.
 - [x] Finish reviewed private output persistence and retained-prefix retrieval.
-- [ ] Obtain the [command status clarification](signal-result-contract-proposal.md).
-- [ ] Implement the production runner and final result/terminal categories.
-- [ ] Verify actual cancellation and output settlement through that runner.
+- [x] Obtain the [command status clarification](signal-result-contract-proposal.md).
+- [x] Persist normalized status, unknown signal classification, host termination,
+      output references, and conservative cleanup in correlated terminal records.
+- [x] Implement and verify the complete production runner.
+- [x] Verify actual cancellation and output settlement through that runner.
 
 The independent readiness/pipe work does not expose a Bash tool. The controller
 accepts a host-owned lifecycle adapter; the production sandbox implementation
@@ -195,11 +197,11 @@ cross-checks remain part of D/E wiring; the storage primitive is not yet exposed
 to models. Capture failure is a one-way notification to the runner, avoiding a
 cycle between termination and spool finalization.
 
-The approved result contract needs one clarification: the supported Bubblewrap
+The approved result contract now records this clarification: the supported Bubblewrap
 status interface maps both an explicit `exit(137)` and SIGKILL to 137. Real tests
-confirm the pinned-source finding. The proposed amendment reports this number
+confirm the pinned-source finding. The accepted amendment reports this number
 and unknown command signal classification, with host-requested cancellation
-recorded separately. The approved spec is unchanged pending acknowledgement.
+recorded separately. The overseer acknowledged the amendment on 2026-09-12.
 
 ## Increment E — delegated feedback and restart (Luna/Terra; Sol reviews)
 
@@ -218,6 +220,29 @@ recorded separately. The approved spec is unchanged pending acknowledgement.
 
 Dependencies: A–D. Do not start a production application campaign as a substitute
 for these deterministic and real-backend acceptance tests.
+
+Implementation sequence within E:
+
+- [ ] Thread the operator approval through CLI/extension host factories and bind
+      admission to the pinned manifest and host-owned run directory.
+- [ ] Create opted-in worktrees with trusted Git, materialize each private project,
+      and expose only the confined file tools plus sandbox Bash/output tools.
+- [ ] Await child-owned execution settlement on completion/cancellation, ingest
+      validated deltas, and inspect completion using the captured Git identity.
+- [ ] Add sandbox-specific original-host inspection and explicit cleanup
+      confirmation; reject cross-backend cleanup records in timeline validation.
+- [ ] Verify one-session repair, independent concurrent children, cancellation,
+      host-death recovery, retained output, and zero command replay.
+
+Restart design: inspect only recorded init/launcher identities. Require the
+recorded boot and observer namespaces to match the current observer's origin;
+the restarted observer itself has a new PID. Missing/reused/settled process
+observations alone do not authorize resume. Explicit original-host cleanup
+attestation remains necessary, and live or unreadable recorded processes block
+confirmation. A start without usable READY remains unknown. Confirmation of a
+selected sandbox execution must not trigger legacy marker scans for unrelated
+entries; those entries retain their own run-level cleanup barriers. Preserve
+unfinalized output without inventing complete capture or replaying commands.
 
 ## Final delivery
 
@@ -350,9 +375,36 @@ compilation in real tests is fixture preparation only.
       attribution supplies persisted ownership; model-facing ownership parameters
       must still be derived from trusted child context during E integration.
 - [x] Typecheck, build, repository lint, and production dependency audit pass.
-- [ ] Approve the proposed command-status clarification and complete production
-      runner, terminal output references, model tools, and E restart verification.
+- [x] Approve the command-status clarification.
+- [ ] Complete production runner, terminal output references, model tools, and
+      E restart verification.
 
 The linked CLI remains a development checkpoint. Its configured sandbox guard
 stays active. These checks do not claim the end-to-end child repair workflow or
 production sandbox reconciliation has been implemented.
+
+## Production runner verification, 2026-09-13
+
+- [x] Full ordinary suite: 243 files / 2,649 tests pass.
+- [x] All real Bubblewrap suites: eight files / 33 tests pass against the approved
+      installed build. Nonzero status and stderr remain ordinary repair results;
+      later commands observe the retained private changes.
+- [x] Controller timeout settles TERM-resistant namespace descendants. Held setup
+      cancellation cannot spawn/release later and reports uncertainty until settled.
+- [x] Output-cap failure stops the owned command, drains streams, and retains a
+      verified readable prefix. Stream-source failure marks capture incomplete.
+- [x] Host death before release leaves user-command sentinels absent. Host death
+      after release retains partial project/output bytes and immutable attribution;
+      reopened logs retain READY without a fabricated terminal or final-output
+      metadata. Exact recorded descendants/init/launcher settle in these fixtures.
+- [x] Standalone command/output tools enforce child ownership, bounded schemas,
+      gate serialization, and cancellation. Ambiguous terminal persistence seals
+      the gate before queued file access; errors expose validated output references.
+- [x] Independent review findings are reconciled. Cleanup uncertainty dominates
+      output and status categories; legacy marker confirmations cannot clear
+      sandbox executions. Node signaling uses fresh identity/origin checks and
+      retains the documented non-pidfd fallback limitation.
+- [x] Typecheck, build, lint, format check, and production audit pass.
+
+This completes D's components. E still owns SDK exposure, cancellable final
+ingestion, sandbox-specific operator recovery, and complete child-session tests.

@@ -337,12 +337,18 @@ and identity assumptions; it cannot be added by inference during implementation.
 
 The opted-in child gets `bash` and `read_execution_output` in addition to its
 existing confined file tools and pinned completion tool, if any.
-`bash` returns an accurate command exit code/signal, bounded stdout/stderr
-previews, truncation flags, execution identity, and opaque output references.
+`bash` returns the normalized command status reported by Bubblewrap, bounded
+stdout/stderr previews, truncation flags, execution identity, and opaque output
+references. The status interface cannot distinguish `exit(128 + N)` from
+termination by signal N. Signal classification remains unknown rather than
+guessed. Host-requested termination is recorded separately from command status.
 A nonzero command exit with confirmed cleanup is an ordinary tool result for
 local repair; it does not automatically fail the role or select another model.
-Distinguish setup failure, command exit/signal, timeout, cancellation,
+Distinguish setup failure, command status, timeout, cancellation,
 unconfirmed cleanup, and incomplete output capture in durable metadata.
+
+The overseer acknowledged this status clarification on 2026-09-12; its source
+and real-test evidence are retained in [the decision](signal-result-contract-proposal.md).
 
 Spool streams outside all sandbox mounts with private permissions. Durable
 records contain references, counts, digests, category, and cleanup disposition;
