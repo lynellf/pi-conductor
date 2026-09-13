@@ -4,6 +4,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as sandboxRecovery from "../../src/host/execution/sandbox/recovery.js";
 import * as processIdentity from "../../src/host/execution/supervised-process-identity.js";
 import { captureToolAdmission } from "../../src/host/execution/tool-admission.js";
 import {
@@ -17,6 +18,11 @@ import type {
   ToolExecutionFinishedRecord,
   ToolExecutionStartedRecord,
 } from "../../src/persistence/tool-execution.js";
+import {
+  isToolExecutionRecord,
+  reconstructToolExecutionTimeline,
+} from "../../src/persistence/tool-execution.js";
+import { sandboxReadyFixture } from "./fixtures/sandbox-ready-fixture.js";
 
 function executionRecords(
   runId: string,
@@ -58,6 +64,58 @@ function executionRecords(
 }
 
 describe("tool execution reconciliation API", () => {
+  it("confirms one sandbox without scanning or clearing a legacy sibling execution", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-conductor-reconcile-mixed-"));
+    const { started, ready } = sandboxReadyFixture();
+    const scan = vi
+      .spyOn(processIdentity, "findProcessesByOwnerToken")
+      .mockRejectedValue(new Error("unrelated inaccessible process"));
+    const inspect = sandboxRecovery.inspectSandboxCleanup;
+    const observer = structuredClone(ready.host_observer);
+    observer.process.pid = 99;
+    observer.process.nspid = [99];
+    const sandbox = vi.spyOn(sandboxRecovery, "inspectSandboxCleanup").mockImplementation((entry) =>
+      inspect(entry, {
+        origin: async () => ({ bootId: ready.boot_id, observer }),
+        classify: async () => "missing",
+        observe: async () => {
+          throw new Error("missing process must not be inspected");
+        },
+      }),
+    );
+    try {
+      const log = new FileRecordLog({ baseDir: dir });
+      const [legacy] = executionRecords("run", "legacy-supervision");
+      log.append({ ...legacy, execution_id: "legacy" });
+      log.append(started);
+      log.append(ready);
+      const view = await inspectToolExecutionCleanup("run", {
+        baseDir: dir,
+        executionId: "execution",
+      });
+      expect(view.unresolved).toHaveLength(1);
+      expect(view.unresolved[0]?.sandbox?.status).toBe("attestation_required");
+      const confirmation = await reconcileToolExecutionCleanup("run", "execution", {
+        baseDir: dir,
+        acknowledgment: true,
+        operatorNote: "Inspected original processes, writers, and partial effects.",
+      });
+      expect(confirmation.verification).toBe("operator_confirmed_sandbox_cleanup");
+      expect(scan).not.toHaveBeenCalled();
+      const timeline = reconstructToolExecutionTimeline(
+        new FileRecordLog({ baseDir: dir }).records("run").filter(isToolExecutionRecord),
+      );
+      expect(timeline.unresolved.map((entry) => entry.started.execution_id)).toEqual(["legacy"]);
+      expect(
+        timeline.entries.find((entry) => entry.started.execution_id === "execution")?.finished,
+      ).toBeUndefined();
+    } finally {
+      sandbox.mockRestore();
+      scan.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("never applies marker-based cleanup to a sandbox execution", async () => {
     const dir = await mkdtemp(join(tmpdir(), "pi-conductor-reconcile-sandbox-"));
     const scan = vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);
@@ -80,7 +138,10 @@ describe("tool execution reconciliation API", () => {
       const before = readFileSync(path, "utf8");
       await expect(
         inspectToolExecutionCleanup("sandbox-run", { baseDir: dir }),
-      ).rejects.toMatchObject({ code: "sandbox_cleanup_unconfirmed" });
+      ).resolves.toMatchObject({
+        unresolved: [{ sandbox: { status: "missing_ready" } }],
+        currentProcesses: [],
+      });
       await expect(
         reconcileToolExecutionCleanup("sandbox-run", started.execution_id, {
           baseDir: dir,

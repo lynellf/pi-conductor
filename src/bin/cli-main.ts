@@ -49,7 +49,8 @@ import { resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-
+import type { SandboxHostApproval } from "../host/execution/sandbox/host-approval.js";
+import { loadSandboxHostApproval } from "../host/execution/sandbox/host-approval.js";
 import {
   createProductionHost,
   type Host,
@@ -118,13 +119,14 @@ export interface CliJsonResult {
 // ─── Argv parsing ──────────────────────────────────────────────────────
 
 const USAGE =
-  "Usage: conduct [--non-interactive] [--log-dir <path>] [--json] <manifestPath> <goal...>";
+  "Usage: conduct [--non-interactive] [--log-dir <path>] [--sandbox-approval <path>] [--json] <manifestPath> <goal...>";
 
 interface ParsedArgs {
   readonly manifestPath: string;
   readonly goal: string;
   readonly nonInteractive: boolean;
   readonly logDir?: string;
+  readonly sandboxApproval?: string;
   readonly json: boolean;
 }
 
@@ -141,6 +143,7 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
   let index = 0;
   let nonInteractive = false;
   let logDir: string | undefined;
+  let sandboxApproval: string | undefined;
   let json = false;
 
   while (index < argv.length) {
@@ -164,6 +167,14 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
       index += 2;
       continue;
     }
+    if (arg === "--sandbox-approval") {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("--"))
+        return { ok: false, message: "pi-conductor: --sandbox-approval requires a path" };
+      sandboxApproval = value;
+      index += 2;
+      continue;
+    }
     break;
   }
 
@@ -180,6 +191,7 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
       goal,
       nonInteractive,
       ...(logDir !== undefined && { logDir }),
+      ...(sandboxApproval !== undefined && { sandboxApproval }),
       json,
     },
   };
@@ -258,6 +270,17 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
       return 1;
     }
   }
+  let sandboxHostApproval: SandboxHostApproval | undefined;
+  if (parsed.sandboxApproval !== undefined) {
+    try {
+      sandboxHostApproval = await loadSandboxHostApproval(resolve(cwd, parsed.sandboxApproval));
+    } catch (error) {
+      out.error(
+        `pi-conductor: invalid sandbox approval: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 1;
+    }
+  }
 
   const uiContext = parsed.nonInteractive
     ? createNonInteractiveUiContext()
@@ -269,7 +292,12 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
   // reused across resumes.
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
-      extension: { modelRegistry, cwd, uiContext },
+      extension: {
+        modelRegistry,
+        cwd,
+        uiContext,
+        ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),
+      },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest,

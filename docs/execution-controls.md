@@ -113,6 +113,15 @@ conduct reconcile-tools --log-dir <path> <run-id>
 conduct reconcile-tools --log-dir <path> <run-id> --execution <execution-id> --confirm-cleanup --note "<operator note>"
 ```
 
+For a delegated Bubblewrap execution, extend the inspection form with the exact
+`--execution` ID before considering confirmation. Inspection is bound to its
+persisted child, launcher, namespace-init, and sandbox-origin evidence; it does
+not use the legacy global environment-marker scan. The host never replays the
+command. If the execution has no durable correlated sandbox `READY` record,
+confirmation is refused even after processes disappear, because the host
+lacks the recorded identities needed to verify the original sandbox. Leave
+the run blocked and preserve its records for investigation.
+
 The confirmation command never kills a process or replays a tool. The explicit
 acknowledgment attests that the operator ran the command on the original Linux
 host and PID/network namespaces and canonical storage, stopped all original
@@ -157,9 +166,12 @@ ownership is unverified. Inspect the suggested metadata, then check the
 observing account and procfs/process inspection restrictions with the original
 host's administrator when no saved admission evidence proves it unrelated.
 Restore the required visibility without weakening host
-security settings or dumping environment contents. Repeat the inspection
-form `conduct reconcile-tools --log-dir <path> <run-id>`, omitting `--execution`,
-`--confirm-cleanup`, and `--note`. Only after inspection succeeds and all
+security settings or dumping environment contents. For a legacy non-sandbox
+execution, repeat the inspection form
+`conduct reconcile-tools --log-dir <path> <run-id>`, omitting `--execution`,
+`--confirm-cleanup`, and `--note`. For a sandbox execution, retain its required
+exact `--execution` selector and omit only confirmation and note. Only after
+inspection succeeds and all
 original processes and partial effects have been checked should an operator
 confirm an execution. A missing PID or a successful `ps`/`ls` alone does not
 establish cleanup. See the [Linux procfs reference](https://www.kernel.org/doc/html/latest/filesystems/proc.html#process-specific-subdirectories)

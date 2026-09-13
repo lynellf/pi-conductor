@@ -9,12 +9,15 @@ import { capChildText } from "./child-result.js";
 import type { SpawnChildConfig } from "./delegate-tool.js";
 
 export function childTaskSeed(config: SpawnChildConfig): string {
+  const workspace = config.sandbox === undefined ? config.worktreePath : "/workspace";
   if (config.profile.completion_protocol === "minimal")
-    return "Begin the assigned task using only the available file tools.";
+    return config.sandbox === undefined
+      ? "Begin the assigned task using only the available file tools."
+      : "Begin the assigned task in /workspace using the available file and command tools.";
   return [
     `Task ID: ${config.taskId}`,
-    `Worktree: ${config.worktreePath}`,
-    "Begin the assigned task. Modify files in this worktree, then call report_result.",
+    `Worktree: ${workspace}`,
+    `Begin the assigned task. Modify files in ${workspace}, then call report_result.`,
   ].join("\n");
 }
 

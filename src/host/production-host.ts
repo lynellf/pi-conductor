@@ -235,6 +235,9 @@ export class ProductionHost extends ProductionHostContext implements Host {
 
   private delegateContext(): DelegateHostContext {
     return {
+      ...(this.sandboxHostApproval === undefined
+        ? {}
+        : { sandboxHostApproval: this.sandboxHostApproval }),
       loadedManifest: this.loadedManifest,
       runId: this.runId,
       cwd: this.cwd,

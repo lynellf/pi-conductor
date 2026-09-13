@@ -1,6 +1,7 @@
 # Issue #106: delegated command execution through Bubblewrap
 
-Status: Acknowledged by the overseer on 2026-09-12; implementation in progress.
+Status: Acknowledged by the overseer on 2026-09-12; implemented and verified on
+2026-09-13. All acceptance gates pass; see the [verification record](plan.md).
 
 ## 1. Objective and authority
 
@@ -28,15 +29,16 @@ Approved assumptions:
 - Full output is privately retained outside the sandbox and retrieved through
   a child-scoped tool, rather than exposing conductor's storage directory.
 
-## 2. Proposed profile configuration
+## 2. Profile configuration
 
-This syntax is parsed by the current development build. Command dispatch remains
-disabled with `sandbox-backend-unavailable` until the real execution gates pass:
+This syntax opts one delegated profile into command execution. Production
+dispatch additionally requires the explicit host approval and real prerequisite
+checks in §§5–6; omission retains file-only behavior:
 
 ```yaml
 subagents:
   - name: implementer
-    models: [openai-codex:gpt-5.6-luna]
+    models: [{ model: openai-codex:gpt-5.6-luna, effort: medium }]
     max_session_cost_usd: 2
     system_prompt: .pi/roles/implementer.md
     workspace:
@@ -46,7 +48,7 @@ subagents:
         default_paths: [src, tests, package.json]
     execution:
       backend: bubblewrap
-      runtime_root: .pi/prepared-runtime
+      runtime_root: prepared-runtime
       writable_paths: [src, tests]
       network: none
       environment:
@@ -404,21 +406,21 @@ primary repository from the child, or claim unverified cleanup/security.
 ## 9. Acceptance and delivery gates
 
 - [x] Default profiles are file-only; malformed/unsupported settings fail before dispatch.
-- [ ] Policy and runtime authority are pinned before queueing and verified across restart;
+- [x] Policy and runtime authority are pinned before queueing and verified across restart;
       altered source/snapshot/manifest inputs cannot substitute for pinned authority.
-- [ ] A child completes edit → failing test → diagnostics → repair → passing test
+- [x] A child completes edit → failing test → diagnostics → repair → passing test
       and returns an inspectable patch in one session, without parent remediation.
-- [ ] Two children do this concurrently with independent workspaces/output/gates.
-- [ ] Executed programs cannot read denied host/credential/sibling/Git paths,
+- [x] Two children do this concurrently with independent workspaces/output/gates.
+- [x] Executed programs cannot read denied host/credential/sibling/Git paths,
       escape via links, write read-only inputs, use host FDs/IPC, or reach a network.
-- [ ] Declared prepared runtime inputs work; missing inputs fail without expansion.
-- [ ] Timeout, child/global abort, host death, and restart exercise descendants,
+- [x] Declared prepared runtime inputs work; missing inputs fail without expansion.
+- [x] Timeout, child/global abort, host death, and restart exercise descendants,
       preserve partial effects, prevent replay, and do not cancel siblings.
-- [ ] Complete and truncated output, retention failure, and cross-child reference
+- [x] Complete and truncated output, retention failure, and cross-child reference
       denial are durably observable and locally inspectable, including after restart.
-- [ ] Real tests run against a verified patched Bubblewrap. A skipped/unavailable
+- [x] Real tests run against a verified patched Bubblewrap. A skipped/unavailable
       integration environment does not satisfy the feature delivery gate.
-- [ ] Documentation describes supported guarantees, prerequisites, and limits.
+- [x] Documentation describes supported guarantees, prerequisites, and limits.
 
 ## 10. Current prerequisite evidence and approval
 
@@ -434,7 +436,8 @@ probe on an authorized test host. That prerequisite is not silently waived.
 The operator has since installed the separately reviewed upstream 0.12.0 build
 and its explicit namespace profile. Its installed identity is verified and the
 restricted isolation and bootstrap fixtures pass. Production admission and
-delegated execution remain in progress; see [test runtime results](test-runtime-results.md).
+delegated execution use the same fail-closed prerequisite contract; see
+[test runtime results](test-runtime-results.md) for the dated host evidence.
 
 Sources:
 

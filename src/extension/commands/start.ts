@@ -34,6 +34,8 @@ import { join } from "node:path";
 
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { DisplaySink } from "../../host/display-sink.js";
+import type { SandboxHostApproval } from "../../host/execution/sandbox/host-approval.js";
+import { loadSandboxHostApproval } from "../../host/execution/sandbox/host-approval.js";
 import {
   createProductionHost,
   type Host,
@@ -182,6 +184,21 @@ export async function handleStart(
   // run; the factory is not reused across resumes).
   const modelRegistry = ctx.modelRegistry;
   const cwd = ctx.cwd;
+  const sandboxApprovalFlag = deps.getFlag("conduct-sandbox-approval");
+  let sandboxHostApproval: SandboxHostApproval | undefined;
+  if (typeof sandboxApprovalFlag === "string" && sandboxApprovalFlag.length > 0) {
+    try {
+      sandboxHostApproval = await loadSandboxHostApproval(
+        sandboxApprovalFlag.startsWith("/") ? sandboxApprovalFlag : join(cwd, sandboxApprovalFlag),
+      );
+    } catch (error) {
+      notify(
+        `Invalid sandbox approval: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return;
+    }
+  }
 
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
@@ -191,6 +208,7 @@ export async function handleStart(
         uiContext: ctx.ui,
         isUiContextCurrent: isContextCurrent,
         ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
+        ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),
       },
       run: {
         log: factoryCtx.log,

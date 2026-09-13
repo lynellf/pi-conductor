@@ -34,6 +34,45 @@ let handleResume: ResumeHandler;
 let InMemoryRecordLog: typeof import("../../src/index.js").InMemoryRecordLog;
 let loadManifestFromString: typeof import("../../src/index.js").loadManifestFromString;
 
+async function writeApproval(root: string): Promise<string> {
+  const path = join(root, "approval.json");
+  await writeFile(
+    path,
+    JSON.stringify({
+      schemaVersion: 1,
+      binaryPath: "/opt/bwrap",
+      approvedBuilds: [
+        {
+          kind: "upstream-release",
+          release: "0.12.0",
+          binaryIdentity: {
+            device: 1,
+            inode: 2,
+            mode: 493,
+            uid: 0,
+            gid: 0,
+            size: 1,
+            mtimeMs: 1,
+            ctimeMs: 1,
+          },
+          sha256: "a".repeat(64),
+          approvalId: "bwrap",
+        },
+      ],
+      bootstrapApproval: {
+        approvalId: "runtime",
+        files: [
+          { path: "bin/bash", sha256: "b".repeat(64) },
+          { path: "opt/pi-conductor/probes/capability-probe-v1", sha256: "c".repeat(64) },
+        ],
+      },
+      probeApproval: { approvalId: "probe", sha256: "c".repeat(64) },
+    }),
+    { mode: 0o600 },
+  );
+  return path;
+}
+
 const MANIFEST = `
 version: 1
 roles:
@@ -183,6 +222,48 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
     expect(bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.displaySink).toBe(
       displaySink,
     );
+  });
+
+  it("passes the operator sandbox approval through /conduct start", async () => {
+    const ctx = makeCtx(cwd);
+    const handle = makeCompletionHandle("run-start-sandbox");
+    const approvalPath = await writeApproval(cwd);
+    bridgeMocks.createProductionHost.mockReturnValue({} as never);
+    bridgeMocks.startRun.mockImplementation(async (_manifestPath, opts) => {
+      await opts.hostFactory({
+        log: new InMemoryRecordLog(),
+        loadedManifest: makeLoadedManifest(),
+        runId: "run-start-sandbox",
+      } as never);
+      return handle;
+    });
+    await handleStart("test goal", ctx, {
+      getFlag: (name) => (name === "conduct-sandbox-approval" ? approvalPath : undefined),
+    });
+    expect(
+      bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.sandboxHostApproval,
+    ).toBeDefined();
+  });
+
+  it("passes the operator sandbox approval through /conduct:resume", async () => {
+    const ctx = makeCtx(cwd);
+    const handle = makeCompletionHandle("run-resume-sandbox");
+    const approvalPath = await writeApproval(cwd);
+    bridgeMocks.createProductionHost.mockReturnValue({} as never);
+    bridgeMocks.resumeRun.mockImplementation(async (_manifestPath, _runId, opts) => {
+      await opts.hostFactory({
+        log: new InMemoryRecordLog(),
+        loadedManifest: makeLoadedManifest(),
+        runId: "run-resume-sandbox",
+      } as never);
+      return handle;
+    });
+    await handleResume("run-resume-sandbox", ctx, {
+      getFlag: (name) => (name === "conduct-sandbox-approval" ? approvalPath : undefined),
+    });
+    expect(
+      bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.sandboxHostApproval,
+    ).toBeDefined();
   });
 
   it("notifies when resume preserves legacy delegation mode without a snapshot", async () => {

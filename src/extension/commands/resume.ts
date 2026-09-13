@@ -28,7 +28,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-
+import type { SandboxHostApproval } from "../../host/execution/sandbox/host-approval.js";
+import { loadSandboxHostApproval } from "../../host/execution/sandbox/host-approval.js";
 import {
   createProductionHost,
   type Host,
@@ -97,6 +98,21 @@ export async function handleResume(
   // inside `resumeRun`.
   const modelRegistry = ctx.modelRegistry;
   const cwd = ctx.cwd;
+  const sandboxApprovalFlag = deps.getFlag("conduct-sandbox-approval");
+  let sandboxHostApproval: SandboxHostApproval | undefined;
+  if (typeof sandboxApprovalFlag === "string" && sandboxApprovalFlag.length > 0) {
+    try {
+      sandboxHostApproval = await loadSandboxHostApproval(
+        sandboxApprovalFlag.startsWith("/") ? sandboxApprovalFlag : join(cwd, sandboxApprovalFlag),
+      );
+    } catch (error) {
+      notify(
+        `Invalid sandbox approval: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return;
+    }
+  }
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
       extension: {
@@ -105,6 +121,7 @@ export async function handleResume(
         uiContext: ctx.ui,
         isUiContextCurrent: isContextCurrent,
         ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
+        ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),
       },
       run: {
         log: factoryCtx.log,

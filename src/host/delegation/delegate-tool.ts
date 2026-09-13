@@ -9,9 +9,13 @@ import type {
 } from "../../persistence/child-completion.js";
 import type { SubagentUsage } from "../../persistence/log.js";
 import type { SubagentSandboxDescriptor } from "../../persistence/subagent-sandbox.js";
-import { SANDBOX_UNAVAILABLE_MESSAGE } from "../execution/sandbox/enablement.js";
 import type { PreparedDelegateChild } from "./admission.js";
-import { capChildText, type LegacyChildReport, normalizeChildTerminal } from "./child-result.js";
+import {
+  type ChildWorktreeInspection,
+  capChildText,
+  type LegacyChildReport,
+  normalizeChildTerminal,
+} from "./child-result.js";
 import {
   completionEvidence,
   isPoolCompleted,
@@ -146,6 +150,8 @@ export interface ChildTerminal {
   readonly summary?: string;
   readonly verification?: readonly string[];
   readonly failureReason?: string;
+  /** Host-only trusted inspection; required for sandbox children. */
+  readonly worktreeInspection?: ChildWorktreeInspection;
 }
 
 /** Validate, create worktrees, run bounded children, and preserve input order. */
@@ -228,16 +234,15 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   if (options.isAdmissionClosed?.() === true) {
     return preStartFailure(options, "cancelled", "child admission closed by run abort");
   }
-  if (options.prepared.sandbox !== undefined) {
-    return preStartFailure(options, "failed", SANDBOX_UNAVAILABLE_MESSAGE);
-  }
-  try {
-    await createWorktree(worktreePath, branch, baseCommit, options.primaryCheckout);
-    if (task.projectionPaths !== undefined) {
-      await configureExactSparseWorktree(worktreePath, branch, baseCommit, task.projectionPaths);
+  if (options.prepared.sandbox === undefined) {
+    try {
+      await createWorktree(worktreePath, branch, baseCommit, options.primaryCheckout);
+      if (task.projectionPaths !== undefined) {
+        await configureExactSparseWorktree(worktreePath, branch, baseCommit, task.projectionPaths);
+      }
+    } catch (cause) {
+      return preStartFailure(options, "failed", `failed to create worktree: ${message(cause)}`);
     }
-  } catch (cause) {
-    return preStartFailure(options, "failed", `failed to create worktree: ${message(cause)}`);
   }
 
   const prompt = { systemPrompt: options.prepared.systemPrompt };
@@ -284,13 +289,22 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   }
 
   const report = terminal.report ?? legacyReportFromCompatibilityTerminal(terminal, task.profile);
+  const worktree =
+    options.prepared.sandbox === undefined
+      ? await inspectChildWorktree(worktreePath, branch, baseCommit)
+      : terminal.worktreeInspection;
+  if (worktree === undefined)
+    throw new DelegationOwnershipError(
+      "sandbox child returned without trusted worktree inspection",
+      new Error("missing sandbox worktree inspection"),
+    );
   const raw = {
     protocol: task.profile.completion_protocol,
     cancelled: terminal.cancelled === true || terminal.status === "cancelled",
     sessionError: terminal.sessionError ?? terminal.failureReason ?? null,
     report,
     finalResponse: terminal.finalResponse ?? null,
-    worktree: await inspectChildWorktree(worktreePath, branch, baseCommit),
+    worktree,
     ...(terminal.fileToolCalls === undefined ? {} : { fileToolCalls: terminal.fileToolCalls }),
     ...(terminal.duplicateReadCalls === undefined
       ? {}

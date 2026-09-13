@@ -8,6 +8,7 @@ import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { EndGuardRunner } from "./end-guard-runner.js";
 import { assertFileToolWorkerRuntime } from "./execution/file-tool-worker.js";
+import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { ProductionHostOptions } from "./production-host-options.js";
@@ -43,6 +44,7 @@ export class ProductionHostContext {
   protected readonly agentsBySessionId: Map<string, SessionEventSource> = new Map();
   protected readonly sessionState: ProductionSessionState;
   protected snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
+  protected readonly sandboxHostApproval: SandboxHostApproval | undefined;
 
   constructor(opts: ProductionHostOptions) {
     // Fail before the orchestration loop admits a role session. The worker
@@ -62,6 +64,10 @@ export class ProductionHostContext {
     this.log = opts.log;
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;
+    this.sandboxHostApproval =
+      opts.sandboxHostApproval === undefined
+        ? undefined
+        : structuredClone(opts.sandboxHostApproval);
     this.uiContext = opts.uiContext;
     this.isUiContextCurrent = opts.isUiContextCurrent;
     this.displaySink = opts.displaySink;

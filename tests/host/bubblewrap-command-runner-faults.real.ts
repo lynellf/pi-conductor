@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { captureSandboxAdmission } from "../../src/host/execution/sandbox/admission-store.js";
 import { createSandboxCommandRunner } from "../../src/host/execution/sandbox/command-runner.js";
 import { collectBubblewrapStaticObservation } from "../../src/host/execution/sandbox/observation.js";
@@ -16,7 +16,12 @@ import {
 import { classifySandboxProcess } from "../../src/host/execution/sandbox/process-observation.js";
 import { materializeSandboxProject } from "../../src/host/execution/sandbox/project-materialization.js";
 import type { HostApprovedBootstrapRuntime } from "../../src/host/execution/sandbox/runtime-types.js";
+import * as processIdentity from "../../src/host/execution/supervised-process-identity.js";
 import { ToolExecutionController } from "../../src/host/execution/tool-execution-controller.js";
+import {
+  inspectToolExecutionCleanup,
+  reconcileToolExecutionCleanup,
+} from "../../src/host/execution/tool-execution-reconciliation.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import type {
   SandboxExecutionOwner,
@@ -272,6 +277,28 @@ describe("real production sandbox command runner faults", () => {
     );
     if (mode === "before_ready") {
       expect(ready).toBeUndefined();
+      const started = records.find((record) => record.type === "tool_execution_started");
+      if (started?.type !== "tool_execution_started")
+        throw new Error("start-only host death did not persist its start");
+      const scan = vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);
+      try {
+        await expect(
+          inspectToolExecutionCleanup(admission.runId, {
+            baseDir: logBaseDir,
+            executionId: started.execution_id,
+          }),
+        ).resolves.toMatchObject({ unresolved: [{ sandbox: { status: "missing_ready" } }] });
+        await expect(
+          reconcileToolExecutionCleanup(admission.runId, started.execution_id, {
+            baseDir: logBaseDir,
+            acknowledgment: true,
+            operatorNote: "Inspected the start-only record; no usable READY identity exists.",
+          }),
+        ).rejects.toMatchObject({ code: "sandbox_cleanup_unconfirmed" });
+        expect(scan).not.toHaveBeenCalled();
+      } finally {
+        scan.mockRestore();
+      }
     } else {
       expect(ready).toBeDefined();
       if (ready === undefined) throw new Error("durable READY record is missing");
@@ -368,8 +395,65 @@ describe("real production sandbox command runner faults", () => {
       waitUntilOwnedSettled(init, 3_000),
       waitUntilOwnedSettled(launcher, 3_000),
     ]);
+    const started = records.find((record) => record.type === "tool_execution_started");
+    if (started?.type !== "tool_execution_started")
+      throw new Error("after-release execution start is missing");
+    expect(ready.host_observer.process.pid).not.toBe(process.pid);
+    const scan = vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);
+    const signal = vi.spyOn(process, "kill");
+    try {
+      const inspection = await inspectToolExecutionCleanup(admission.runId, {
+        baseDir: logBaseDir,
+        executionId: started.execution_id,
+      });
+      expect(inspection).toMatchObject({
+        currentProcesses: [],
+        unresolved: [
+          {
+            executionId: started.execution_id,
+            sandbox: { status: "attestation_required", outputRef: ready.output_ref },
+          },
+        ],
+      });
+      expect(scan).not.toHaveBeenCalled();
+      expect(signal).not.toHaveBeenCalled();
+      const confirmed = await reconcileToolExecutionCleanup(admission.runId, started.execution_id, {
+        baseDir: logBaseDir,
+        acknowledgment: true,
+        operatorNote:
+          "Inspected exact original sandbox identities, descendant settlement, partial project file, and raw attributed output on the original host.",
+      });
+      expect(confirmed).toMatchObject({
+        verification: "operator_confirmed_sandbox_cleanup",
+        sandbox: {
+          boot_id: ready.boot_id,
+          output_ref: ready.output_ref,
+          final_init: ready.final_init,
+          launcher: ready.launcher,
+          observer: {
+            time_namespace: ready.host_observer.time_namespace,
+            process: { namespaces: ready.host_observer.process.namespaces },
+          },
+        },
+      });
+      if (confirmed.verification !== "operator_confirmed_sandbox_cleanup")
+        throw new Error("sandbox confirmation used the wrong verification kind");
+      expect(confirmed.sandbox.observer.process.pid).toBe(process.pid);
+      expect(confirmed.sandbox.observer.process.pid).not.toBe(ready.host_observer.process.pid);
+      expect(scan).not.toHaveBeenCalled();
+      expect(signal).not.toHaveBeenCalled();
+    } finally {
+      scan.mockRestore();
+      signal.mockRestore();
+    }
     const reopened = toolRecords(new FileRecordLog({ baseDir: logBaseDir }), admission.runId);
     expect(reopened.some((record) => record.type === "tool_execution_finished")).toBe(false);
+    expect(reopened).toContainEqual(
+      expect.objectContaining({
+        type: "tool_execution_cleanup_confirmed",
+        verification: "operator_confirmed_sandbox_cleanup",
+      }),
+    );
     expect(await readFile(join(project.writablePath, "src/host-death-after-release"), "utf8")).toBe(
       "partial-file",
     );

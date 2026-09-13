@@ -12,6 +12,7 @@
 - [Projection-aware child authority (Issue #52)](#projection-aware-child-authority-issue-52)
 - [Read-only context artifacts (Issue #60)](#read-only-context-artifacts-issue-60)
 - [Declarative profile projection policy (Issue #55)](#declarative-profile-projection-policy-issue-55)
+- [Bubblewrap command sandbox (Issue #106)](#bubblewrap-command-sandbox-issue-106)
 - [Child boundary and branch integration](#child-boundary-and-branch-integration)
 
 Yes: `delegate` is a host-provided tool, but **only a role that explicitly opts
@@ -77,8 +78,9 @@ changing this policy or a profile.
 The child profile's `system_prompt` is a normal prompt file. Tell it to make a
 focused change and call `report_result`. The host supplies the child task and
 its worktree path; do not put parent transcripts or FSM routing instructions in
-the child prompt. The child is file-only: the parent alone runs commands,
-verifies results, commits, and reconciles a retained child worktree.
+the child prompt. A profile is file-only by default. An operator can opt a
+profile into the Bubblewrap command boundary described below; the parent still
+reviews the result and decides whether to integrate it.
 
 ### Ask the parent to delegate
 
@@ -225,10 +227,11 @@ set; for a non-sparse parent, omission retains the legacy full-child-worktree
 behavior. An explicit subset is always applied and rechecked before the child
 session starts.
 
-A child cannot use `request_files`, `delegate`, or a shell. It cannot expand its
-own projection: the parent must decide whether to disclose more context before
-or in a later delegated batch. This keeps child authority monotonic even when
-siblings run concurrently.
+A child cannot use `request_files` or `delegate`, and it cannot expand its own
+projection. A file-only child has no shell. A Bubblewrap-enabled child gets
+only the sandbox command tools described below. The parent must decide whether
+to disclose more context before or in a later delegated batch. This keeps child
+authority monotonic even when siblings run concurrently.
 
 The run log records each accepted child's `parent_role`, `parent_visit_index`,
 and effective `projection_paths` in `subagent_started`. Rejected batches append
@@ -327,14 +330,179 @@ policy roots. Rejected policy admission uses the existing
 `delegation_validation_rejected` record. This is file-tool path confinement,
 not an OS, credential, or network sandbox.
 
+### Bubblewrap command sandbox (Issue #106)
+
+Command execution is an explicit per-profile opt-in. Add `execution` beside a
+subagent's `workspace` policy:
+
+```yaml
+subagents:
+  - name: focused-implementer
+    models: [{ model: openai-codex:gpt-5.6-luna, effort: medium }]
+    max_session_cost_usd: 2
+    system_prompt: .pi/subagents/focused-implementer.md
+    workspace:
+      projection:
+        required: false
+        allowed_paths: [src, tests, package.json]
+        default_paths: [src, tests, package.json]
+    execution:
+      backend: bubblewrap
+      runtime_root: prepared-runtime
+      writable_paths: [src, tests]
+      network: none
+      environment:
+        PATH: /usr/bin:/bin
+        LANG: C.UTF-8
+      max_output_bytes: 67108864
+    tool_execution:
+      timeout_seconds: 300
+      termination_grace_seconds: 2
+      max_recoverable_timeouts: 2
+```
+
+Omitting `execution` preserves the file-only behavior and needs no Bubblewrap
+installation or approval. For an opted-in profile, `runtime_root` is relative
+to the manifest directory, and `writable_paths` must stay within the profile's
+admitted projection. `network` is currently exactly `none`. The child receives
+`bash` and `read_execution_output` in addition to its confined file tools.
+Commands and file tools operate on the same private materialization; the host
+validates and stages its final changed paths without giving the child ambient
+Git authority.
+
+The host operator must independently prepare four inputs before starting or
+resuming an opted-in run:
+
+1. Install an exact reviewed Bubblewrap build containing the required
+   CVE-2026-87766 fix at a protected canonical absolute path. The binary must
+   be a regular non-setuid file without file capabilities; its ancestors must
+   not be writable by untrusted users. The host must permit the required user,
+   PID, mount, network, IPC, and UTS namespaces while the runtime probe verifies
+   the final restrictions.
+2. Protect the primary checkout, its ancestors, and Git control files from
+   group/other writes. Admission checks these paths and refuses an unsafe
+   checkout. Review ownership and collaboration requirements before changing
+   permissions; Conductor does not apply `chmod` or `chown` repairs.
+3. Build a private `runtime_root` using only directories and regular files
+   beneath the admitted roots `bin`, `sbin`, `usr`, `lib`, `lib64`, `etc`, and
+   `opt`. Include `/bin/bash`, its absolute ELF interpreter and transitive
+   libraries, and the compiled fixed probe at
+   `/opt/pi-conductor/probes/capability-probe-v1`. Do not use symlinks or
+   hardlinks. The approval must list every regular file, sorted by its relative
+   path; an omitted or extra runtime file fails closed.
+4. Create a host-owned approval document matching the exported
+   [`sandboxHostApprovalSchema`](../src/host/execution/sandbox/host-approval.ts).
+   Capture `binaryIdentity` from `lstat` of the installed executable and compute
+   lowercase SHA-256 digests from the exact installed binary and runtime files.
+   Approval IDs are operator audit identifiers, not substitutes for those
+   measurements.
+
+The closed JSON shape is:
+
+```json
+{
+  "schemaVersion": 1,
+  "binaryPath": "/protected/prefix/bin/bwrap",
+  "approvedBuilds": [
+    {
+      "kind": "upstream-release",
+      "release": "0.12.0",
+      "binaryIdentity": {
+        "device": 0,
+        "inode": 0,
+        "mode": 33261,
+        "uid": 0,
+        "gid": 0,
+        "size": 0,
+        "mtimeMs": 0,
+        "ctimeMs": 0
+      },
+      "sha256": "<64 lowercase hex characters>",
+      "approvalId": "reviewed-bubblewrap-build"
+    }
+  ],
+  "bootstrapApproval": {
+    "approvalId": "reviewed-runtime-inventory",
+    "files": [
+      { "path": "bin/bash", "sha256": "<64 lowercase hex characters>" },
+      {
+        "path": "opt/pi-conductor/probes/capability-probe-v1",
+        "sha256": "<64 lowercase hex characters>"
+      }
+    ]
+  },
+  "probeApproval": {
+    "approvalId": "reviewed-capability-probe",
+    "sha256": "<same digest as the inventory probe entry>"
+  },
+  "getcapPath": "/protected/path/to/getcap"
+}
+```
+
+The numeric identity values above are placeholders and the abbreviated
+`files` array is illustrative; do not copy them as approval evidence. Populate
+the array with the complete measured runtime inventory. `getcapPath` is
+optional when the host can use the default protected observer. Store the final
+JSON at a canonical absolute path as a current-user-owned, single-link regular
+file with mode `0600`, under a directory whose ownership and permissions pass
+the same protected-path checks. The loader rejects unknown fields, unsafe
+paths, duplicate or unsorted runtime entries, and changed files.
+
+For the standalone CLI, put the option before the manifest path:
+
+```bash
+conduct --sandbox-approval /secure/path/sandbox-approval.json \
+  .pi/conductor.yaml "Implement and test the requested change."
+```
+
+For the Pi extension, start Pi with
+`--conduct-sandbox-approval /secure/path/sandbox-approval.json`; both
+`/conduct` and `/conduct:resume` read that flag. See the
+[preparation procedure](issue-106-bubblewrap/test-runtime-proposal.md),
+[recorded prerequisite evidence](issue-106-bubblewrap/test-runtime-results.md),
+and [approved sandbox specification](issue-106-bubblewrap/spec.md) when
+reviewing a host installation. These resources describe evidence and test
+inputs; they do not approve another host's binary or runtime.
+
+The sandbox uses fresh Linux namespaces, an empty root, read-only runtime and
+project inputs, private writable paths, private temporary/home/run directories,
+and no network interface beyond loopback. It adds no ambient host credentials
+or writable host mounts; an operator remains responsible for secrets they
+explicitly place in the approved runtime or projected files. It still shares
+the host kernel and currently enforces no CPU, memory, process-count, or storage
+quota. Keep command deadlines finite.
+
+An ordinary command exit, including nonzero exit, is a tool result with numeric
+status `0..255`; stderr and retained output remain available for repair. The
+current Bubblewrap JSON status cannot distinguish a process killed by a signal
+from a program that explicitly exits with the corresponding `128 + signal`
+value, so durable signal classification is `unknown`. Host timeout and abort
+remain separately recorded cancellation causes.
+
+If restart finds an unfinished sandbox execution, inspect it without mutation:
+
+```text
+conduct reconcile-tools --log-dir <path> <run-id> --execution <execution-id>
+```
+
+Recovery is bound to the original sandbox origin and recorded namespace/init
+identity. It never scans global process markers and never replays the command.
+After independently stopping every verified owned process and inspecting
+partial project/output effects, use the same exact execution ID with
+`--confirm-cleanup --note "<operator note>"`. An execution with no durable
+correlated `READY` record remains blocked and cannot be cleared by operator
+confirmation. See [executable tool controls](execution-controls.md) for the
+full confirmation contract.
+
 ### Child boundary and branch integration
 
-Each child receives only `read`, `grep`, `find`, `ls`, `edit`, `write`, and
-`report_result`, rooted in its generated worktree. Every child file tool
+Each file-only child receives `read`, `grep`, `find`, `ls`, `edit`, `write`,
+and `report_result`, rooted in its generated worktree. Every child file tool
 rejects absolute paths, `..` traversal, and paths that resolve through a symlink
 outside that worktree; this is path confinement, not an OS or credential
-sandbox. Children cannot call `run`, `bash`, `handoff`, `end`, `ask_user`, or
-`delegate`.
+sandbox. File-only children cannot call `run`, `bash`, `handoff`, `end`,
+`ask_user`, or `delegate`; Bubblewrap-enabled children add only the command and
+output tools above.
 
 The parent receives the worktree path and branch, then owns testing, formatting,
 builds, Git inspection, commits, and integration. For example, it may run

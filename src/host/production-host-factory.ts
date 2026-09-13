@@ -34,6 +34,7 @@ import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-codin
 import type { RecordLog } from "../persistence/log.js";
 import type { RoleTurnTelemetryOptions } from "../persistence/role-turn.js";
 import type { DisplaySink } from "./display-sink.js";
+import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import type { LoadedManifest } from "./manifest.js";
 import { ProductionHost } from "./production-host.js";
 
@@ -45,6 +46,8 @@ import { ProductionHost } from "./production-host.js";
  * the host layer from the extension's type surface.
  */
 export interface ExtensionContextInputs {
+  /** Optional operator-approved Bubblewrap metadata. */
+  readonly sandboxHostApproval?: SandboxHostApproval;
   /** Extension's `ModelRegistry` (shared with pi's configured providers). */
   readonly modelRegistry: ModelRegistry;
   /** Extension's working directory (typically `ctx.cwd`). */
@@ -121,6 +124,9 @@ export interface CreateProductionHostInputs {
 export function createProductionHost(inputs: CreateProductionHostInputs): ProductionHost {
   return new ProductionHost({
     modelRegistry: inputs.extension.modelRegistry,
+    ...(inputs.extension.sandboxHostApproval === undefined
+      ? {}
+      : { sandboxHostApproval: inputs.extension.sandboxHostApproval }),
     cwd: inputs.extension.cwd,
     ...(inputs.extension.uiContext !== undefined && { uiContext: inputs.extension.uiContext }),
     ...(inputs.extension.isUiContextCurrent !== undefined && {

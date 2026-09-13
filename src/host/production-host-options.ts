@@ -2,6 +2,7 @@
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
 import type { DisplaySink } from "./display-sink.js";
+import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import type { NodeRoleSession } from "./rpc/node-role-session.js";
@@ -17,6 +18,8 @@ import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
  */
 /** Construction dependencies for a production Host run. */
 export interface ProductionHostOptions {
+  /** Host-operator Bubblewrap approval; never sourced from the manifest/model. */
+  readonly sandboxHostApproval?: SandboxHostApproval;
   /** Real `ModelRegistry` from the host's environment (extension
    *  `ExtensionCommandContext.modelRegistry` or
    *  `ModelRegistry.create(authStorage, modelsPath)` in standalone). */

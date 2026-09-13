@@ -1,10 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxCommandResult } from "../../src/host/execution/sandbox/command-runner.js";
-import { createSandboxCommandTools } from "../../src/host/execution/sandbox/command-tools.js";
 import type { SandboxHostApproval } from "../../src/host/execution/sandbox/host-approval.js";
-import { SandboxOperationGate } from "../../src/host/execution/sandbox/operation-gate.js";
-import { readSandboxExecutionOutput } from "../../src/host/execution/sandbox/output-retrieval.js";
-import { ToolExecutionError } from "../../src/host/execution/tool-execution-controller.js";
 import type { SandboxAdmissionRecord } from "../../src/persistence/sandbox-admission.js";
 import type { SandboxExecutionTerminal } from "../../src/persistence/sandbox-command.js";
 import type { SandboxProjectMaterializationDescriptor } from "../../src/persistence/sandbox-materialization.js";
@@ -58,17 +54,7 @@ const terminal: SandboxExecutionTerminal = {
   output_ref: outputRef,
   output: runnerResult.output,
 };
-const runner = {
-  prepare: vi.fn(),
-  authorize: vi.fn(),
-  settle: vi.fn(),
-  terminate: vi.fn(),
-  terminalEvidence: vi.fn(() => terminal),
-};
-vi.mock("../../src/host/execution/sandbox/command-runner.js", () => ({
-  createSandboxCommandRunner: vi.fn(() => runner),
-}));
-vi.mock("../../src/host/execution/sandbox/output-retrieval.js", () => ({
+const { readSandboxExecutionOutput, runner } = vi.hoisted(() => ({
   readSandboxExecutionOutput: vi.fn(async () => ({
     capture: "complete",
     retainedByteCount: 3,
@@ -78,11 +64,40 @@ vi.mock("../../src/host/execution/sandbox/output-retrieval.js", () => ({
     nextOffset: 2,
     eof: true,
   })),
+  runner: {
+    prepare: vi.fn(),
+    authorize: vi.fn(),
+    settle: vi.fn(),
+    terminate: vi.fn(),
+    terminalEvidence: vi.fn(),
+  },
+}));
+vi.mock("../../src/host/execution/sandbox/command-runner.js", () => ({
+  createSandboxCommandRunner: vi.fn(() => runner),
+}));
+vi.mock("../../src/host/execution/sandbox/output-retrieval.js", () => ({
+  readSandboxExecutionOutput,
 }));
 
-beforeEach(() => {
+afterAll(() => {
+  vi.doUnmock("../../src/host/execution/sandbox/command-runner.js");
+  vi.doUnmock("../../src/host/execution/sandbox/output-retrieval.js");
+  vi.resetModules();
+});
+
+let createSandboxCommandTools: typeof import("../../src/host/execution/sandbox/command-tools.js").createSandboxCommandTools;
+let SandboxOperationGate: typeof import("../../src/host/execution/sandbox/operation-gate.js").SandboxOperationGate;
+let ToolExecutionError: typeof import("../../src/host/execution/tool-execution-controller.js").ToolExecutionError;
+
+beforeEach(async () => {
+  vi.resetModules();
   vi.clearAllMocks();
   runner.terminalEvidence.mockReturnValue(terminal);
+  ({ createSandboxCommandTools } = await import(
+    "../../src/host/execution/sandbox/command-tools.js"
+  ));
+  ({ SandboxOperationGate } = await import("../../src/host/execution/sandbox/operation-gate.js"));
+  ({ ToolExecutionError } = await import("../../src/host/execution/tool-execution-controller.js"));
 });
 
 function tools(

@@ -56,7 +56,8 @@ After install, seven slash commands are available inside any pi session:
 Plus a flag:
 
 ```text
---conduct-manifest <path>  Override the default manifest path
+--conduct-manifest <path>          Override the default manifest path
+--conduct-sandbox-approval <path>  Load host-owned sandbox approval JSON
 ```
 
 A thin CLI fallback (`bin/conduct`) also ships, for non-pi consumers and
@@ -96,6 +97,53 @@ a graceful abort so terminal state can be persisted; a second signal exits
 immediately.
 
 The engine is the same in all three surfaces — extension, CLI, and library.
+
+### Opt-in delegated command sandbox
+
+Delegated children remain file-only unless their subagent profile declares an
+`execution` block. The initial command backend is Linux Bubblewrap with no
+network:
+
+```yaml
+subagents:
+  - name: implementer
+    models:
+      - model: openai-codex:gpt-5.6-luna
+        effort: medium
+    max_session_cost_usd: 2
+    system_prompt: .pi/subagents/implementer.md
+    workspace:
+      projection:
+        allowed_paths: [src, tests, package.json]
+        default_paths: [src, tests, package.json]
+    execution:
+      backend: bubblewrap
+      runtime_root: prepared-runtime
+      writable_paths: [src, tests]
+      network: none
+      environment:
+        PATH: /usr/bin:/bin
+        LANG: C.UTF-8
+      max_output_bytes: 67108864
+```
+
+An opted-in run also requires explicit host approval. Pass
+`--sandbox-approval <path>` to the standalone CLI or set Pi's
+`--conduct-sandbox-approval <path>` flag for `/conduct` and
+`/conduct:resume`. The manifest and model cannot supply this approval. The
+approval file must be a canonical absolute path to a current-user-owned,
+single-link regular file with mode `0600`.
+
+The approved Bubblewrap executable must be an exact reviewed patched build,
+and the prepared runtime must contain the complete approved regular-file
+inventory, `/bin/bash`, and the fixed compiled capability probe. Admission
+rechecks binary identity and digest, runtime contents, probe digest, and the
+required namespace behavior before a command is released. The primary checkout
+and its Git control files must also have protected ownership and permissions;
+admission rejects group-writable or other-writable paths rather than changing
+their modes. See
+[sandboxed delegation](docs/delegation.md#bubblewrap-command-sandbox-issue-106)
+for approval preparation, guarantees, limits, and recovery.
 
 ### Two layers, kept strictly apart
 
@@ -211,7 +259,7 @@ The reference material is split into focused pages:
 - [Tools available to roles](docs/role-tools.md) — machine tools, SDK tools, and
   the explicit `tools:` allowlist.
 - [Worktree subagent delegation](docs/delegation.md) — child profiles,
-  projections, artifacts, and branch integration.
+  projections, optional Bubblewrap commands, artifacts, and branch integration.
 - [Per-role isolated workspaces](docs/workspaces.md) — workspace backends,
   artifacts, mounts, and progressive disclosure.
 - [Advanced: library use](docs/library.md) — embedding the engine in a library

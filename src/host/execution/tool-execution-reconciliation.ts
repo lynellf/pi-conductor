@@ -13,6 +13,7 @@ import {
   reconstructToolExecutionTimeline,
 } from "../../persistence/tool-execution.js";
 import { FileRecordLog } from "../log-file.js";
+import { inspectSandboxCleanup, type SandboxCleanupInspection } from "./sandbox/recovery.js";
 import type { ProcessIdentity } from "./supervised-process-identity.js";
 import * as processIdentity from "./supervised-process-identity.js";
 import { restoreToolAdmission } from "./tool-admission.js";
@@ -23,6 +24,8 @@ const MAX_NOTE = 1000;
 /** Filesystem location of the host-owned run log. */
 export interface ToolExecutionCleanupOptions {
   readonly baseDir: string;
+  /** Inspect only this execution, without scanning unrelated unresolved entries. */
+  readonly executionId?: string;
 }
 
 /** Safe identity-only view of one unresolved execution. */
@@ -35,6 +38,7 @@ export interface ToolExecutionUnresolvedEntry {
   readonly toolName: string;
   readonly entry: ToolExecutionTimelineEntry;
   readonly currentProcesses: readonly ProcessIdentity[];
+  readonly sandbox?: SandboxCleanupInspection;
 }
 
 /** Inspection result containing unresolved executions and marked processes. */
@@ -89,6 +93,7 @@ function assertCompleteLog(runId: string, baseDir: string): void {
 async function inspectWithLog(
   runId: string,
   log: FileRecordLog,
+  executionId?: string,
 ): Promise<ToolExecutionCleanupInspection> {
   if (!log.listRunIds().includes(runId))
     throw new ToolExecutionReconciliationError("run_not_found", `run '${runId}' does not exist`);
@@ -103,24 +108,20 @@ async function inspectWithLog(
   const currentProcesses: ProcessIdentity[] = [];
   for (const entry of timeline.unresolved) {
     const started = entry.started;
-    // D-stage records must never enter the legacy marker recovery path. The
-    // verified namespace reconciliation adapter is an E-stage enablement gate.
-    if (started.sandbox !== undefined)
-      throw new ToolExecutionReconciliationError(
-        "sandbox_cleanup_unconfirmed",
-        `sandbox cleanup requires original-host namespace lifecycle verification for execution_id=${started.execution_id}. Preserve the canonical log and private project/output files; do not replay. Sandbox reconciliation is not enabled in this development build.`,
-      );
+    if (executionId !== undefined && executionId !== started.execution_id) continue;
     // Record timestamps are wall-clock milliseconds; /proc startTime is a
     // boot-relative tick count, so they cannot be compared directly.
+    const sandbox = started.sandbox === undefined ? undefined : await inspectSandboxCleanup(entry);
     const scope =
-      started.admission === undefined ? undefined : await restoreToolAdmission(started.admission);
+      sandbox !== undefined || started.admission === undefined
+        ? undefined
+        : await restoreToolAdmission(started.admission);
     // No minimum-start prefilter: marker-positive ownership takes precedence
     // over durable age evidence, which only resolves denied environment reads.
-    const processes = await processIdentity.findProcessesByOwnerToken(
-      started.supervision_id,
-      undefined,
-      scope,
-    );
+    const processes =
+      sandbox !== undefined
+        ? []
+        : await processIdentity.findProcessesByOwnerToken(started.supervision_id, undefined, scope);
     currentProcesses.push(...processes);
     unresolved.push({
       executionId: started.execution_id,
@@ -131,8 +132,14 @@ async function inspectWithLog(
       toolName: started.tool_name,
       entry,
       currentProcesses: processes,
+      ...(sandbox === undefined ? {} : { sandbox }),
     });
   }
+  if (executionId !== undefined && unresolved.length === 0)
+    throw new ToolExecutionReconciliationError(
+      "unknown_or_clean",
+      `execution '${executionId}' is unknown or already clean`,
+    );
   return {
     runId,
     unresolved: Object.freeze(unresolved),
@@ -146,9 +153,10 @@ export async function inspectToolExecutionCleanup(
   options: ToolExecutionCleanupOptions,
 ): Promise<ToolExecutionCleanupInspection> {
   const log = logFor(runId, options.baseDir);
+  if (options.executionId !== undefined) valid(options.executionId, "execution_id");
   const lease = await log.acquireRunLease(runId);
   try {
-    return await inspectWithLog(runId, log);
+    return await inspectWithLog(runId, log, options.executionId);
   } finally {
     await lease.release();
   }
@@ -191,7 +199,7 @@ export async function reconcileToolExecutionCleanup(
     if (!log.listRunIds().includes(runId))
       throw new ToolExecutionReconciliationError("run_not_found", `run '${runId}' does not exist`);
     assertCompleteLog(runId, realpathSync(options.baseDir));
-    const inspection = await inspectWithLog(runId, log);
+    const inspection = await inspectWithLog(runId, log, executionId);
     const target = inspection.unresolved.find((item) => item.executionId === executionId);
     if (target === undefined)
       throw new ToolExecutionReconciliationError(
@@ -216,6 +224,12 @@ export async function reconcileToolExecutionCleanup(
       );
     }
     const started = target.entry.started;
+    const sandbox = target.sandbox;
+    if (
+      sandbox !== undefined &&
+      (sandbox.status !== "attestation_required" || sandbox.evidence === undefined)
+    )
+      throw new ToolExecutionReconciliationError("sandbox_cleanup_unconfirmed", sandbox.guidance);
     const record: ToolExecutionCleanupConfirmedRecord = {
       type: "tool_execution_cleanup_confirmed",
       schema_version: 1,
@@ -227,7 +241,12 @@ export async function reconcileToolExecutionCleanup(
       tool_call_id: started.tool_call_id,
       tool_name: started.tool_name,
       cleanup: "confirmed",
-      verification: "operator_confirmed_owner_marker_absent",
+      ...(sandbox?.evidence === undefined
+        ? { verification: "operator_confirmed_owner_marker_absent" as const }
+        : {
+            verification: "operator_confirmed_sandbox_cleanup" as const,
+            sandbox: sandbox.evidence,
+          }),
       operator_note: options.operatorNote,
       operator: userInfo().username,
       ts: Date.now(),

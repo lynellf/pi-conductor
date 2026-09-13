@@ -26,20 +26,79 @@ export async function buildChildPrompt(
   const baseSystemPrompt = await readFile(systemPromptPath, "utf8");
   const taskPrompt =
     profile.completion_protocol === "minimal"
-      ? minimalChildPrompt(baseSystemPrompt, objective, expectedOutput, projectionPaths)
-      : legacyChildPrompt(
+      ? minimalChildPrompt(
           baseSystemPrompt,
-          profile.name,
-          taskId,
           objective,
           expectedOutput,
-          runId,
-          parentRole,
-          worktreePath,
-        );
+          projectionPaths,
+          profile.execution !== undefined,
+        )
+      : profile.execution !== undefined
+        ? sandboxChildPrompt(
+            baseSystemPrompt,
+            profile,
+            taskId,
+            objective,
+            expectedOutput,
+            runId,
+            parentRole,
+          )
+        : legacyChildPrompt(
+            baseSystemPrompt,
+            profile.name,
+            taskId,
+            objective,
+            expectedOutput,
+            runId,
+            parentRole,
+            worktreePath,
+          );
   return {
     systemPrompt: appendContextArtifacts(taskPrompt, contextArtifacts),
   };
+}
+
+function sandboxChildPrompt(
+  baseSystemPrompt: string,
+  profile: SubagentProfile,
+  taskId: string,
+  objective: string,
+  expectedOutput: string,
+  runId: string,
+  parentRole: string,
+): string {
+  const completion =
+    profile.completion_protocol === "minimal"
+      ? "When finished, respond normally with a concise final summary. Do not call a conductor completion tool."
+      : "Call report_result with completed, no_changes, or failed when finished.";
+  return [
+    baseSystemPrompt.trim(),
+    "",
+    "CONDUCTOR SANDBOXED SUBAGENT CONTEXT",
+    `Subagent Profile: ${profile.name}`,
+    `Task ID: ${taskId}`,
+    `Parent Run: ${runId}`,
+    `Parent Role: ${parentRole}`,
+    "Workspace: /workspace",
+    "",
+    "YOUR TASK:",
+    objective,
+    "",
+    "AVAILABLE TOOLS:",
+    "- Use the confined file tools for files in /workspace.",
+    "- Use bash to run commands in /workspace.",
+    "- Use read_execution_output to inspect retained command output by output_ref; it accepts no path.",
+    "",
+    "REQUIRED BEHAVIOR:",
+    "- Work only inside /workspace and through the available tools.",
+    "- If a test fails, diagnose the failure, repair the work, and rerun the relevant test.",
+    "- Do not expand authority, enable network access, use ambient Git, or access host paths.",
+    "",
+    "EXPECTED OUTPUT:",
+    expectedOutput,
+    "",
+    completion,
+  ].join("\n");
 }
 
 function minimalChildPrompt(
@@ -47,11 +106,25 @@ function minimalChildPrompt(
   objective: string,
   expectedOutput: string,
   projectionPaths: readonly string[] | undefined,
+  sandboxed = false,
 ): string {
   const visibleFiles =
     projectionPaths === undefined
-      ? "the files materialized in this worktree"
+      ? sandboxed
+        ? "the files materialized in /workspace"
+        : "the files materialized in this worktree"
       : projectionPaths.join("\n");
+  const behavior = sandboxed
+    ? [
+        "- Work only through the available file tools and bash in /workspace.",
+        "- Use read_execution_output to inspect retained command output by output_ref; it accepts no path.",
+        "- If a test fails, diagnose the failure, repair the work, and rerun the relevant test.",
+        "- Do not expand authority, enable network access, use ambient Git, or access host paths.",
+      ]
+    : [
+        "- Work only through the available file tools.",
+        "- Stay within the visible files and do not run commands.",
+      ];
   return [
     baseSystemPrompt.trim(),
     "",
@@ -63,8 +136,8 @@ function minimalChildPrompt(
     visibleFiles,
     "",
     "Required behavior:",
-    "- Work only through the available file tools.",
-    "- Stay within the visible files and do not run commands.",
+    ...(sandboxed ? ["Workspace: /workspace"] : []),
+    ...behavior,
     "",
     "Expected outcome:",
     expectedOutput,

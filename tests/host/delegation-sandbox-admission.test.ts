@@ -130,7 +130,7 @@ describe("sandbox admission preparation", () => {
     await expect(lstat(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("stops incomplete sandbox dispatch before legacy worktree setup or SDK creation", async () => {
+  it("routes sandbox dispatch without legacy worktree setup or inspection", async () => {
     const { root, promptRoot } = await fixture();
     const adapter: SandboxAdmissionAdapter = {
       capture: async () => ({ sandbox: descriptor }),
@@ -144,9 +144,20 @@ describe("sandbox admission preparation", () => {
     );
     const child = prepared.tasks[0];
     if (child === undefined) throw new Error("missing child");
-    const spawn = vi.fn(async () => {
-      throw new Error("unexpected spawn");
-    });
+    const spawn = vi.fn(async () => ({
+      started: true,
+      model: "stub:model",
+      sessionFile: "/private/session.jsonl",
+      usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 0 },
+      finalResponse: "done",
+      worktreeInspection: {
+        state: "clean" as const,
+        headCommit: child.baseCommit,
+        changedPathCount: 0,
+        changedPaths: [],
+        changedPathsTruncated: false,
+      },
+    }));
     const result = await runPreparedChild({
       prepared: child,
       runId: "run",
@@ -156,8 +167,8 @@ describe("sandbox admission preparation", () => {
       systemPromptRoot: promptRoot,
       spawnAndRunChild: spawn,
     });
-    expect(result.status).toBe("failed");
-    expect(spawn).not.toHaveBeenCalled();
+    expect(result.status).toBe("no_changes");
+    expect(spawn).toHaveBeenCalledTimes(1);
     await expect(lstat(child.worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 

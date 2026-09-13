@@ -1,6 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxProcessObservation } from "../../src/persistence/sandbox-process.js";
 
 const { observation, observeSandboxProcess } = vi.hoisted(() => {
@@ -23,7 +23,12 @@ vi.mock("../../src/host/execution/sandbox/process-observation.js", () => ({
   observeSandboxProcess,
 }));
 
-import { captureSandboxCommandPipes } from "../../src/host/execution/sandbox/command-pipes.js";
+afterAll(() => {
+  vi.doUnmock("../../src/host/execution/sandbox/process-observation.js");
+  vi.resetModules();
+});
+
+let captureSandboxCommandPipes: typeof import("../../src/host/execution/sandbox/command-pipes.js").captureSandboxCommandPipes;
 
 function fixture(destinations?: { stdout: Writable; stderr: Writable }) {
   const child = new ChildProcess();
@@ -52,7 +57,13 @@ async function finish(f: ReturnType<typeof fixture>, code = 0): Promise<void> {
 }
 
 describe("production Bubblewrap command pipes", () => {
-  beforeEach(() => observeSandboxProcess.mockClear());
+  beforeEach(async () => {
+    vi.resetModules();
+    observeSandboxProcess.mockClear();
+    ({ captureSandboxCommandPipes } = await import(
+      "../../src/host/execution/sandbox/command-pipes.js"
+    ));
+  });
 
   it("starts identity observation inside the startup JSON handler", async () => {
     const f = fixture();

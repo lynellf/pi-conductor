@@ -11,6 +11,7 @@ import type {
   ToolExecutionFinishedRecord,
   ToolExecutionStartedRecord,
 } from "../../src/persistence/tool-execution.js";
+import { sandboxReadyFixture } from "../host/fixtures/sandbox-ready-fixture.js";
 
 function output() {
   const lines: string[] = [];
@@ -94,6 +95,44 @@ describe("reconcile-tools CLI", () => {
     expect(code).toBe(0);
     expect(JSON.parse(out.lines[0] ?? "{}").unresolved).toHaveLength(1);
     await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
+  });
+
+  it("inspects a selected sandbox without scanning unrelated legacy processes or mutating", async () => {
+    const dir = await fixture();
+    const log = new FileRecordLog({ baseDir: dir });
+    log.append(sandboxReadyFixture("run-reconcile", "sandbox-execution").started);
+    vi.mocked(identity.findProcessesByOwnerToken).mockRejectedValue(
+      new Error("unrelated denied process"),
+    );
+    const before = await readFile(join(dir, "run-reconcile.jsonl"), "utf8");
+    const out = output();
+    expect(
+      await runReconcileCli(
+        ["reconcile-tools", "--log-dir", dir, "run-reconcile", "--execution", "sandbox-execution"],
+        out,
+      ),
+    ).toBe(0);
+    expect(out.errors).toEqual([]);
+    const result = JSON.parse(out.lines[0] ?? "{}");
+    expect(result.unresolved).toHaveLength(1);
+    expect(result.unresolved[0]).toMatchObject({ sandbox: { status: "missing_ready" } });
+    expect(identity.findProcessesByOwnerToken).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, "run-reconcile.jsonl"), "utf8")).resolves.toBe(before);
+  });
+
+  it("rejects an unknown targeted inspection without claiming cleanup or scanning", async () => {
+    const dir = await fixture();
+    const out = output();
+    expect(
+      await runReconcileCli(
+        ["reconcile-tools", "--log-dir", dir, "run-reconcile", "--execution", "typo"],
+        out,
+      ),
+    ).toBe(1);
+    expect(out.errors.join("\n")).toContain("unknown or already clean");
+    expect(out.lines).toEqual([]);
+    expect(identity.findProcessesByOwnerToken).not.toHaveBeenCalled();
+    expect(new FileRecordLog({ baseDir: dir }).records("run-reconcile")).toHaveLength(2);
   });
 
   it("appends confirmation for a dead-process fixture", async () => {

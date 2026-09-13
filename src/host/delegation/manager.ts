@@ -6,6 +6,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 export class DelegationManager {
   private readonly sessions = new Map<string, AgentSession>();
   private readonly abortFailureHandlers = new Map<string, (cause: unknown) => void>();
+  private readonly hostAbortHandlers = new Map<string, () => Promise<void>>();
   private readonly cancelled = new Set<string>();
   private closed = false;
 
@@ -14,18 +15,24 @@ export class DelegationManager {
     childId: string,
     session: AgentSession,
     onAbortFailure?: (cause: unknown) => void,
+    abortHostOwned?: () => Promise<void>,
   ): void {
     this.sessions.set(childId, session);
     if (onAbortFailure !== undefined) this.abortFailureHandlers.set(childId, onAbortFailure);
+    if (abortHostOwned !== undefined) this.hostAbortHandlers.set(childId, abortHostOwned);
     if (!this.closed && !this.cancelled.has(childId)) return;
     this.cancelled.add(childId);
-    void session.abort().catch((cause: unknown) => onAbortFailure?.(cause));
+    void Promise.all([
+      invokeHostAbort(abortHostOwned).catch((cause: unknown) => onAbortFailure?.(cause)),
+      session.abort().catch((cause: unknown) => onAbortFailure?.(cause)),
+    ]);
   }
 
   /** Stop tracking a child after its sole terminal record is appended. */
   unregister(childId: string): void {
     this.sessions.delete(childId);
     this.abortFailureHandlers.delete(childId);
+    this.hostAbortHandlers.delete(childId);
   }
 
   /** Whether this child was cancelled by a run abort. */
@@ -43,11 +50,7 @@ export class DelegationManager {
     this.closed = true;
     const active = [...this.sessions.entries()];
     for (const [childId] of active) this.cancelled.add(childId);
-    await Promise.all(
-      active.map(([childId, session]) =>
-        session.abort().catch((cause: unknown) => this.abortFailureHandlers.get(childId)?.(cause)),
-      ),
-    );
+    await Promise.all(active.map(([childId, session]) => this.abortManaged(childId, session)));
   }
 
   /** Abort one owned child without closing admission for unrelated work. */
@@ -55,8 +58,24 @@ export class DelegationManager {
     this.cancelled.add(childId);
     const session = this.sessions.get(childId);
     if (session === undefined) return;
-    await session
-      .abort()
-      .catch((cause: unknown) => this.abortFailureHandlers.get(childId)?.(cause));
+    await this.abortManaged(childId, session);
+  }
+
+  private async abortManaged(childId: string, session: AgentSession): Promise<void> {
+    const onFailure = this.abortFailureHandlers.get(childId);
+    const hostAbort = invokeHostAbort(this.hostAbortHandlers.get(childId)).catch((cause: unknown) =>
+      onFailure?.(cause),
+    );
+    const sdkAbort = session.abort().catch((cause: unknown) => onFailure?.(cause));
+    await Promise.all([hostAbort, sdkAbort]);
+  }
+}
+
+function invokeHostAbort(abort: (() => Promise<void>) | undefined): Promise<void> {
+  if (abort === undefined) return Promise.resolve();
+  try {
+    return abort();
+  } catch (cause) {
+    return Promise.reject(cause);
   }
 }

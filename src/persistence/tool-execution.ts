@@ -30,6 +30,17 @@ export {
 } from "./sandbox-execution.js";
 
 import { toolAdmissionSchema } from "./tool-admission.js";
+import {
+  assertToolCleanupBackend,
+  type ToolExecutionCleanupConfirmedRecord,
+  toolExecutionCleanupConfirmedSchema,
+} from "./tool-execution-cleanup.js";
+
+export {
+  type ToolExecutionCleanupConfirmedRecord,
+  toolExecutionCleanupConfirmedSchema,
+} from "./tool-execution-cleanup.js";
+
 import { toolExecutionDiagnosticSchema } from "./tool-execution-diagnostic.js";
 
 const id = Type.String({ minLength: 1 });
@@ -91,36 +102,11 @@ export const toolExecutionFinishedSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** TypeBox schema for an operator-confirmed cleanup reconciliation record. */
-export const toolExecutionCleanupConfirmedSchema = Type.Object(
-  {
-    type: Type.Literal("tool_execution_cleanup_confirmed"),
-    schema_version: Type.Literal(1),
-    run_id: id,
-    execution_id: id,
-    supervision_id: id,
-    logical_session_id: id,
-    role_session_id: id,
-    tool_call_id: id,
-    tool_name: id,
-    cleanup: Type.Literal("confirmed"),
-    verification: Type.Literal("operator_confirmed_owner_marker_absent"),
-    operator_note: Type.String({ minLength: 1, maxLength: 1000 }),
-    operator: Type.String({ minLength: 1, maxLength: 256 }),
-    ts: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
-
 /** Durable identity and deadline captured before an executable tool starts. */
 export type ToolExecutionStartedRecord = Readonly<Static<typeof toolExecutionStartedSchema>>;
 /** Durable terminal result correlated with one started executable tool. */
 export type ToolExecutionFinishedRecord = Readonly<Static<typeof toolExecutionFinishedSchema>>;
 export type { ToolExecutionDiagnostic } from "./tool-execution-diagnostic.js";
-/** Durable operator attestation that an unconfirmed execution is now settled. */
-export type ToolExecutionCleanupConfirmedRecord = Readonly<
-  Static<typeof toolExecutionCleanupConfirmedSchema>
->;
 /** Union of durable executable tool record shapes. */
 export type ToolExecutionRecord =
   | ToolExecutionStartedRecord
@@ -249,10 +235,13 @@ export function reconstructToolExecutionTimeline(
       if (entry === undefined) {
         throw new ToolExecutionRecordError("cleanup confirmation has no preceding start");
       }
-      if (entry.started.sandbox !== undefined)
+      try {
+        assertToolCleanupBackend(record, entry.started.sandbox, entry.ready);
+      } catch (cause) {
         throw new ToolExecutionRecordError(
-          "sandbox cleanup requires backend-specific verification",
+          cause instanceof Error ? cause.message : "invalid cleanup backend",
         );
+      }
       if (entry.cleanupConfirmed !== undefined) {
         throw new ToolExecutionRecordError("duplicate cleanup confirmation");
       }
@@ -261,6 +250,7 @@ export function reconstructToolExecutionTimeline(
       assertMatchingIdentity(record, entry.started, "cleanup confirmation");
       if (
         record.ts < entry.started.ts ||
+        (entry.ready !== undefined && record.ts < entry.ready.ts) ||
         (entry.finished !== undefined && record.ts < entry.finished.ts)
       ) {
         throw new ToolExecutionRecordError("cleanup confirmation timestamp precedes execution");

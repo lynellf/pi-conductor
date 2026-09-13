@@ -3,8 +3,9 @@
 The operator authorized the bounded preparation proposal and subsequently
 installed the reviewed protected binary and explicit AppArmor profile. The
 installed digest matches the reviewed build. Unprivileged real isolation tests
-now pass, including the trusted bootstrap proof. Production admission work
-remains in progress.
+passed, including the trusted bootstrap proof. This file records the dated host
+preparation evidence; current production behavior is documented in
+[delegation](../delegation.md#bubblewrap-command-sandbox-issue-106).
 
 ## Completed evidence
 
@@ -97,9 +98,9 @@ before and after release with an owned background descendant. Process-state
 checks distinguish dead/zombie, missing, or reused identities from failed
 namespace observations. Correlated exit status and drained output are checked.
 
-These are prerequisite/fixture results, not production admission or delegated
-Bash enablement. The remaining feature gates are tracked in the implementation
-plan; runtime capture, command lifecycle/output, and safe ingestion remain work.
+These results establish prerequisite and fixture evidence for that host. They
+do not approve another host's binary, runtime, or capability probe; production
+repeats exact admission checks against the operator-supplied approval.
 
 The upstream sandbox suite was repeated at the installed path: 66 tests pass,
 one skips for unavailable message queues, and one fails because its recursive

@@ -33,10 +33,21 @@
 
 ### In development
 
-- Add delegated Bubblewrap policy pinning, verified runtime admission, private
-  project materialization, confined file tools, and validated patch ingestion
-  foundations (#106). Real bootstrap and filesystem isolation tests pass;
-  command lifecycle and output integration remain gated, so child Bash is not enabled.
+- Add opt-in delegated command execution through a host-approved patched
+  Bubblewrap build (#106). Opted-in children receive confined file tools,
+  `bash`, and retained-output retrieval over one private materialization;
+  profiles without `execution` remain file-only. Commands have no network,
+  persist numeric exit status with unknown signal classification, and settle
+  namespace/process ownership before child completion.
+- Add explicit sandbox approval inputs: standalone CLI
+  `--sandbox-approval <path>` and Pi extension
+  `--conduct-sandbox-approval <path>`. Approval JSON pins the exact executable,
+  complete bootstrap runtime inventory, and compiled capability probe; it is
+  host-owned and cannot be selected by a manifest or model.
+- Extend `conduct reconcile-tools` with sandbox-aware inspection. Recovery
+  never replays a command and requires an exact execution ID plus explicit
+  operator confirmation; an execution that never durably reached `READY`
+  remains blocked.
 
 ## [0.21.7] - 2026-09-09
 

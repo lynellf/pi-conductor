@@ -10,7 +10,7 @@ import { formatObservationDiagnostic } from "./cli-observation-diagnostic.js";
 
 /** Usage and acknowledgment semantics for the reconciliation CLI. */
 export const RECONCILE_USAGE =
-  "Usage: conduct reconcile-tools --log-dir <path> <run-id> [--execution <id> --confirm-cleanup --note <text>]\n  --confirm-cleanup attests the original host/PID and network namespaces, canonical storage, ALL original processes (including unmarked descendants) stopped, and partial effects inspected.";
+  "Usage: conduct reconcile-tools --log-dir <path> <run-id> [--execution <id> [--confirm-cleanup --note <text>]]\n  --execution inspects one execution without scanning unrelated entries.\n  --confirm-cleanup attests the original host namespaces, canonical storage, ALL original processes and writers (including unmarked descendants) stopped, and partial effects inspected.";
 
 interface Parsed {
   readonly baseDir: string;
@@ -54,9 +54,8 @@ function parse(argv: readonly string[]): Parsed {
   }
   if (baseDir === undefined || runId === undefined) throw new Error(RECONCILE_USAGE);
   if (
-    (executionId === undefined) !== (note === undefined) ||
-    (executionId !== undefined && !confirmed) ||
-    (executionId === undefined && confirmed)
+    (note !== undefined && !confirmed) ||
+    (confirmed && (executionId === undefined || note === undefined))
   )
     throw new Error(RECONCILE_USAGE);
   return {
@@ -95,7 +94,10 @@ export async function runReconcileCli(
     } else {
       const inspection: ToolExecutionCleanupInspection = await inspectToolExecutionCleanup(
         args.runId,
-        { baseDir: args.baseDir },
+        {
+          baseDir: args.baseDir,
+          ...(args.executionId === undefined ? {} : { executionId: args.executionId }),
+        },
       );
       output.log(JSON.stringify(inspection));
     }

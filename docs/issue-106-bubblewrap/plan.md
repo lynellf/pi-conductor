@@ -1,11 +1,9 @@
 # Issue #106 implementation plan
 
-Status: Specification acknowledged on 2026-09-12. Policy, immutable runtime
-capture, durable admission, and the production-policy capability probe pass
-their focused and real-backend gates. Private command materialization, confined
-file tools, validated ingestion, production command execution, and retained
-output tools also pass. SDK child wiring and restart integration remain in
-progress; delegated command execution remains disabled.
+Status: Implemented and verified on 2026-09-13 against the specification
+acknowledged on 2026-09-12. All A–E gates pass, including 2,688 ordinary tests
+and 37 real Bubblewrap tests. The linked CLI is rebuilt. The final integrated
+verification section below supersedes the historical checkpoint limitations.
 Contract: [spec.md](spec.md). Luna, Terra, and Sol performed independent
 configuration, lifecycle, and security investigations. Root coordinates review,
 integration, and final verification. No stage requires a separate human review
@@ -223,15 +221,15 @@ for these deterministic and real-backend acceptance tests.
 
 Implementation sequence within E:
 
-- [ ] Thread the operator approval through CLI/extension host factories and bind
+- [x] Thread the operator approval through CLI/extension host factories and bind
       admission to the pinned manifest and host-owned run directory.
-- [ ] Create opted-in worktrees with trusted Git, materialize each private project,
+- [x] Create opted-in worktrees with trusted Git, materialize each private project,
       and expose only the confined file tools plus sandbox Bash/output tools.
-- [ ] Await child-owned execution settlement on completion/cancellation, ingest
+- [x] Await child-owned execution settlement on completion/cancellation, ingest
       validated deltas, and inspect completion using the captured Git identity.
-- [ ] Add sandbox-specific original-host inspection and explicit cleanup
+- [x] Add sandbox-specific original-host inspection and explicit cleanup
       confirmation; reject cross-backend cleanup records in timeline validation.
-- [ ] Verify one-session repair, independent concurrent children, cancellation,
+- [x] Verify one-session repair, independent concurrent children, cancellation,
       host-death recovery, retained output, and zero command replay.
 
 Restart design: inspect only recorded init/launcher identities. Require the
@@ -246,14 +244,14 @@ unfinalized output without inventing complete capture or replaying commands.
 
 ## Final delivery
 
-- [ ] All acceptance boxes in the spec are satisfied with recorded evidence.
-- [ ] Cross-model review findings are reconciled; no security blocker remains.
+- [x] All acceptance boxes in the spec are satisfied with recorded evidence.
+- [x] Cross-model review findings are reconciled; no security blocker remains.
 - [x] `pnpm typecheck` and `pnpm build` pass.
 - [x] `pnpm test` passes, including core import guards and real sandbox tests.
 - [x] `pnpm lint` and `pnpm format:check` pass.
 - [x] `pnpm audit --prod` passes; any other advisories are reported accurately.
 - [x] User-facing docs and changelog describe actual supported configuration.
-- [ ] Rebuilt linked CLI/extension includes the feature; fixture resources settle.
+- [x] Rebuilt linked CLI/extension includes the feature; fixture resources settle.
 - [x] Changes are committed and the final report distinguishes verified guarantees
       from unsupported platforms, prerequisites, and remaining limitations.
 
@@ -332,7 +330,7 @@ evidence and its limits. Skipped tests do not satisfy any feature gate.
 - [x] Production-probe persistence failure and a held pre-ready timeout settle
       the verified init and cannot release later. Diagnostics remain inspectable;
       only verified init identities and the owned launcher can be signaled.
-- [ ] Complete C–E and verify the full SDK child repair/restart/output workflow.
+- [x] Complete C–E and verify the full SDK child repair/restart/output workflow.
 
 Operators approve every file in a prepared runtime, including the native probe
 and its dependencies. Conductor neither compiles nor installs runtime inputs
@@ -376,7 +374,7 @@ compilation in real tests is fixture preparation only.
       must still be derived from trusted child context during E integration.
 - [x] Typecheck, build, repository lint, and production dependency audit pass.
 - [x] Approve the command-status clarification.
-- [ ] Complete production runner, terminal output references, model tools, and
+- [x] Complete production runner, terminal output references, model tools, and
       E restart verification.
 
 The linked CLI remains a development checkpoint. Its configured sandbox guard
@@ -408,3 +406,43 @@ production sandbox reconciliation has been implemented.
 
 This completes D's components. E still owns SDK exposure, cancellable final
 ingestion, sandbox-specific operator recovery, and complete child-session tests.
+
+## Integrated delegated execution verification, 2026-09-13
+
+This section records the final E integration; earlier checkpoint descriptions
+retain the scope and limitations that applied when those checkpoints were made.
+
+- [x] All real Bubblewrap suites pass together: ten files / 37 tests on the
+      approved installed 0.12.0 build, with no skipped tests.
+- [x] Credential-free production SDK children perform edit, failed command,
+      successful retained-stderr retrieval, repair, and passing command in one
+      session. The generated worktree contains the repair; the primary is unchanged.
+- [x] Two children overlap execution, retrieve their own diagnostics, produce
+      independent repaired worktrees and four distinct output references, and
+      leave both primary files unchanged.
+- [x] Per-child cancellation settles the exact observed init and descendant while
+      its sibling remains live and completes. Global cancellation settles both
+      trees. Partial private files and attributed stdout remain readable; no
+      command is replayed.
+- [x] Host-death recovery requires original boot/namespace origin and durable
+      READY identities plus explicit operator attestation. Missing READY, live
+      processes, unreadable identities, and mismatched origin remain blocked.
+      Targeted sandbox inspection never invokes the legacy global marker scan;
+      unrelated unresolved entries keep their separate run-level barriers.
+- [x] CLI and extension start/resume propagate host-only approval. Child prompts
+      expose the actual sandbox tools and preserve the minimal completion contract.
+- [x] Cross-model review findings are fixed: incomplete or post-apply inspection
+      failures remain ownership errors during cancellation, and registration
+      survives until SDK disposal settles. Regression tests cover these races.
+- [x] Full ordinary suite passes: 249 files / 2,688 tests, including core import
+      guards and packed CLI/extension checks. Mocked sandbox/SDK suites now reset
+      module caches before importing their subjects and clean up their mocks;
+      this removes the order-dependent harness failures found during integration.
+- [x] Build, typecheck, lint, formatting, and production dependency audit pass.
+      The linked `conduct` resolves to this checkout and exposes the rebuilt
+      approval flag and targeted reconciliation help.
+
+Application campaigns and production-model calls were not part of these tests.
+Opted-in application use still requires the operator's complete approved runtime,
+protected checkout/Git controls, and approval document; no host permission change
+or implicit approval is performed by Conductor.

@@ -64,6 +64,37 @@ describe("minimal child task card (Issue #57 §6.2)", () => {
     expect(prompt.systemPrompt).not.toContain("branch");
     expect(prompt.systemPrompt).not.toContain("integration");
   });
+
+  it("gives opted-in children only the fixed sandbox workspace and command tools", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-sandbox-child-prompt-"));
+    directories.push(directory);
+    const promptPath = join(directory, "child.md");
+    await writeFile(promptPath, "Profile instructions.");
+
+    const prompt = await buildChildPrompt(
+      {
+        ...profile("minimal"),
+        execution: { backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] },
+      },
+      promptPath,
+      "task-1",
+      "Repair the failing test.",
+      "Summarize the repair.",
+      "parent-run",
+      "parent-role",
+      "/private/worktree",
+      ["src/parser.ts"],
+    );
+
+    expect(prompt.systemPrompt).toContain("Workspace: /workspace");
+    expect(prompt.systemPrompt).toContain("bash");
+    expect(prompt.systemPrompt).toContain("read_execution_output");
+    expect(prompt.systemPrompt).toContain("diagnose the failure, repair the work");
+    expect(prompt.systemPrompt).toContain("Do not expand authority");
+    expect(prompt.systemPrompt).toContain("Visible files:\nsrc/parser.ts");
+    expect(prompt.systemPrompt).toContain("BLOCKED: <reason>");
+    expect(prompt.systemPrompt).not.toContain("/private/worktree");
+  });
 });
 
 describe("Issue #60 child context artifact prompt section", () => {

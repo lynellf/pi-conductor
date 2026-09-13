@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentProfile } from "../../src/manifest/types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -19,7 +19,14 @@ vi.mock("../../src/host/execution/sandbox/probe-runner.js", () => ({
   runSandboxCapabilityProbe: mocks.probe,
 }));
 
-import { createSandboxAdmissionAdapter } from "../../src/host/delegation/sandbox-admission.js";
+afterAll(() => {
+  vi.doUnmock("../../src/host/execution/sandbox/policy-pin.js");
+  vi.doUnmock("../../src/host/execution/sandbox/admission-store.js");
+  vi.doUnmock("../../src/host/execution/sandbox/probe-runner.js");
+  vi.resetModules();
+});
+
+let createSandboxAdmissionAdapter: typeof import("../../src/host/delegation/sandbox-admission.js").createSandboxAdmissionAdapter;
 
 const sandbox = {
   backend: "bubblewrap" as const,
@@ -29,12 +36,16 @@ const sandbox = {
 };
 const admission = { runId: "run-1", childId: "child-1", sandbox };
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
   vi.clearAllMocks();
   mocks.pin.mockReturnValue({ digest: "policy" });
   mocks.capture.mockResolvedValue(admission);
   mocks.read.mockResolvedValue(admission);
   mocks.probe.mockResolvedValue({});
+  ({ createSandboxAdmissionAdapter } = await import(
+    "../../src/host/delegation/sandbox-admission.js"
+  ));
 });
 
 describe("host-owned sandbox admission adapter", () => {

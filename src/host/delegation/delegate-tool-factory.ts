@@ -19,6 +19,7 @@ import {
   delegateArgsSchemaForMode,
 } from "../../seam/schema.js";
 import type { DisplaySink } from "../display-sink.js";
+import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js";
 import { mapPoolResult } from "./child-result-mapping.js";
 import { buildSpawnCallback } from "./child-session.js";
 import {
@@ -62,6 +63,7 @@ export interface DelegateToolFactoryOptions {
   readonly legacyDelegationMode?: boolean;
   /** Host-owned prepared-runtime admission for explicit sandbox profiles. */
   readonly sandboxAdmission?: SandboxAdmissionAdapter;
+  readonly sandboxHostApproval?: SandboxHostApproval;
 }
 
 /** Create a parent-only delegate tool; it never creates an FSM event. */
@@ -172,6 +174,9 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           onChildStarted: () => {},
           onChildCompleted: (child) => appendCompleted(opts.persistRecord, opts.runId, child),
           onChildFailed: (child) => appendFailed(opts.persistRecord, opts.runId, child),
+          ...(opts.sandboxAdmission === undefined
+            ? {}
+            : { sandboxAdmission: opts.sandboxAdmission }),
         });
         remaining -= args.tasks.length;
         return {

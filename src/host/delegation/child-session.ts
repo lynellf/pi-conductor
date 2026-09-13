@@ -1,4 +1,6 @@
 /** SDK child-session lifecycle adapter — delegation lite §§6–7. */
+// This stays in one module (under 500 LOC) because SDK creation, registration,
+// sandbox ownership, and disposal form one failure-atomic lifecycle boundary.
 
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import {
@@ -25,6 +27,7 @@ import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
 import type { DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
 import { failedTerminal, zeroUsage } from "./factory-records.js";
 import { buildChildTools, childToolNames } from "./run-tool.js";
+import { createSandboxChildContext, type SandboxChildContext } from "./sandbox-child-context.js";
 
 /** Created SDK child and its host-owned accounting state. */
 export interface CreatedChild {
@@ -32,18 +35,22 @@ export interface CreatedChild {
   readonly state: SessionState;
   readonly model: string;
   readonly reportCapture: ReportCapture;
+  readonly sandboxContext?: SandboxChildContext;
 }
 
 /** Build the standalone child callback used by the delegate scheduler. */
 export function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
   return async (config: SpawnChildConfig): Promise<ChildTerminal> => {
     if (cancelled(opts, config.childId))
-      return failedTerminal(
-        false,
-        config.profile.models[0]?.model ?? "",
-        null,
-        zeroUsage(),
-        "child cancelled before creation",
+      return withSandboxInspection(
+        config,
+        failedTerminal(
+          false,
+          config.profile.models[0]?.model ?? "",
+          null,
+          zeroUsage(),
+          "child cancelled before creation",
+        ),
       );
 
     let child: CreatedChild;
@@ -51,36 +58,23 @@ export function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       child = await createChildSession(opts, config);
     } catch (cause) {
       if (cause instanceof DelegationOwnershipError) throw cause;
-      return failedTerminal(
-        false,
-        config.profile.models[0]?.model ?? "",
-        null,
-        zeroUsage(),
-        `failed to create child session: ${cause instanceof Error ? cause.message : String(cause)}`,
+      return withSandboxInspection(
+        config,
+        failedTerminal(
+          false,
+          config.profile.models[0]?.model ?? "",
+          null,
+          zeroUsage(),
+          `failed to create child session: ${cause instanceof Error ? cause.message : String(cause)}`,
+        ),
       );
     }
     const sessionFile = child.session.sessionFile;
     if (sessionFile === undefined) {
-      await cleanupOwnedChild(child.session);
+      await cleanupCreatedChild(child);
       throw new DelegationOwnershipError(
         "child SDK session has no persistent session file",
         new Error("missing session file"),
-      );
-    }
-    try {
-      persistStarted(opts, config, child, sessionFile);
-    } catch (cause) {
-      await cleanupOwnedChild(child.session);
-      throw new DelegationOwnershipError("delegated child start persistence is ambiguous", cause);
-    }
-    if (cancelled(opts, config.childId)) {
-      await cleanupOwnedChild(child.session);
-      return failedTerminal(
-        true,
-        child.model,
-        sessionFile,
-        child.state.usage(),
-        "child cancelled before registration",
       );
     }
     const terminal = observeChildTerminal({
@@ -91,18 +85,37 @@ export function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
       manager: opts.manager,
       reportCapture: child.reportCapture,
     });
-    opts.manager.register(config.childId, child.session, (cause) => {
-      terminal.reject(new DelegationOwnershipError("child SDK abort is ambiguous", cause));
-    });
+    // Registration precedes the durable start so cancellation cannot miss the
+    // host-owned sandbox. Observe an early rejection if that append then fails.
+    void terminal.promise.catch(() => undefined);
+    opts.manager.register(
+      config.childId,
+      child.session,
+      (cause) => {
+        terminal.reject(new DelegationOwnershipError("child SDK abort is ambiguous", cause));
+      },
+      child.sandboxContext?.cancel,
+    );
+    let sandboxToolsClosed = false;
+    let lifecycleCause: unknown;
     try {
+      try {
+        persistStarted(opts, config, child, sessionFile);
+      } catch (cause) {
+        await opts.manager.abort(config.childId);
+        throw new DelegationOwnershipError("delegated child start persistence is ambiguous", cause);
+      }
       if (cancelled(opts, config.childId)) {
-        await child.session.abort();
-        return failedTerminal(
-          true,
-          child.model,
-          sessionFile,
-          child.state.usage(),
-          "child cancelled before prompt",
+        await opts.manager.abort(config.childId);
+        return withSandboxInspection(
+          config,
+          failedTerminal(
+            true,
+            child.model,
+            sessionFile,
+            child.state.usage(),
+            "child cancelled before prompt",
+          ),
         );
       }
       void child.session.prompt(childTaskSeed(config)).catch((cause: unknown) => {
@@ -110,12 +123,109 @@ export function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
           `child prompt failed: ${cause instanceof Error ? cause.message : String(cause)}`,
         );
       });
-      return await terminal.promise;
+      const observed = await terminal.promise;
+      if (child.sandboxContext === undefined) return observed;
+      try {
+        await child.sandboxContext.closeToolAdmission();
+        sandboxToolsClosed = true;
+      } catch (cause) {
+        sandboxToolsClosed = true;
+        try {
+          await child.sandboxContext.cancel();
+        } catch (cancelCause) {
+          throw new DelegationOwnershipError(
+            "sandbox tool admission cleanup is ambiguous",
+            new AggregateError([cause, cancelCause]),
+          );
+        }
+        throw new DelegationOwnershipError("sandbox tool admission cleanup failed", cause);
+      }
+      if (cancelled(opts, config.childId) || observed.cancelled === true) {
+        await child.sandboxContext.cancel();
+        return { ...observed, worktreeInspection: invalidWorktreeInspection() };
+      }
+      try {
+        const worktreeInspection = await child.sandboxContext.ingestAndInspect();
+        if (cancelled(opts, config.childId)) {
+          return {
+            ...observed,
+            cancelled: true,
+            sessionError: "child cancelled during sandbox integration",
+            worktreeInspection,
+          };
+        }
+        return {
+          ...observed,
+          worktreeInspection,
+        };
+      } catch (cause) {
+        if (cancelled(opts, config.childId)) {
+          try {
+            await child.sandboxContext.cancel();
+          } catch (cleanupCause) {
+            throw new DelegationOwnershipError(
+              "cancelled sandbox integration cleanup is ambiguous",
+              new AggregateError([cause, cleanupCause]),
+            );
+          }
+          return {
+            ...observed,
+            cancelled: true,
+            sessionError: "child cancelled during sandbox integration",
+            worktreeInspection: invalidWorktreeInspection(),
+          };
+        }
+        throw new DelegationOwnershipError("sandbox child integration is incomplete", cause);
+      }
+    } catch (cause) {
+      lifecycleCause = cause;
+      throw cause;
     } finally {
-      opts.manager.unregister(config.childId);
-      await disposeOwnedChild(child.session);
+      await finalizeRegisteredChild(
+        opts,
+        config.childId,
+        child,
+        sandboxToolsClosed,
+        lifecycleCause,
+      );
     }
   };
+}
+
+async function finalizeRegisteredChild(
+  opts: DelegateToolFactoryOptions,
+  childId: string,
+  child: CreatedChild,
+  sandboxToolsClosed: boolean,
+  lifecycleCause: unknown,
+): Promise<void> {
+  const cleanupCauses: unknown[] = [];
+  if (!sandboxToolsClosed && child.sandboxContext !== undefined) {
+    try {
+      await child.sandboxContext.closeToolAdmission();
+    } catch (cause) {
+      cleanupCauses.push(cause);
+      try {
+        await child.sandboxContext.cancel();
+      } catch (cancelCause) {
+        cleanupCauses.push(cancelCause);
+      }
+    }
+  }
+  try {
+    await disposeOwnedChild(child.session);
+  } catch (cause) {
+    cleanupCauses.push(cause);
+  } finally {
+    opts.manager.unregister(childId);
+  }
+  if (cleanupCauses.length === 0) return;
+  throw new DelegationOwnershipError(
+    "delegated child final cleanup is ambiguous",
+    new AggregateError(
+      lifecycleCause === undefined ? cleanupCauses : [lifecycleCause, ...cleanupCauses],
+    ),
+  );
 }
 
 /** Create a child SDK session after admission and cancellation checks. */
@@ -124,7 +234,11 @@ export async function createChildSession(
   config: SpawnChildConfig,
 ): Promise<CreatedChild> {
   if (cancelled(opts, config.childId)) throw new Error("child cancelled before creation");
-  if (config.profile.execution !== undefined) {
+  const sandboxEnabled =
+    config.profile.execution !== undefined &&
+    config.sandbox !== undefined &&
+    opts.sandboxHostApproval !== undefined;
+  if (!sandboxEnabled && (config.profile.execution !== undefined || config.sandbox !== undefined)) {
     throw new SandboxBackendUnavailableError();
   }
   const entry = config.profile.models[0];
@@ -132,6 +246,54 @@ export async function createChildSession(
   const [provider, modelId] = splitModel(entry.model);
   const model = opts.resolveChildModel?.(entry.model) ?? opts.modelRegistry.find(provider, modelId);
   if (model === undefined) throw new Error(`model '${entry.model}' is not registered`);
+  let controller: ToolExecutionController | null = null;
+  const sandboxContext = sandboxEnabled
+    ? await createSandboxChildContext({
+        config,
+        runId: opts.runId,
+        primaryCheckout: opts.primaryCheckout,
+        runStateDir: opts.runStateDir,
+        hostApproval: opts.sandboxHostApproval,
+        getController: () => controller,
+      })
+    : undefined;
+  try {
+    return await initializeSdkChild(
+      opts,
+      config,
+      entry.model,
+      entry.effort,
+      model,
+      sandboxContext,
+      () => controller,
+      (value) => {
+        controller = value;
+      },
+    );
+  } catch (cause) {
+    if (cause instanceof DelegationOwnershipError) throw cause;
+    try {
+      await sandboxContext?.cancel();
+    } catch (cleanupCause) {
+      throw new DelegationOwnershipError(
+        "sandbox child cleanup after SDK setup failure is ambiguous",
+        new AggregateError([cause, cleanupCause]),
+      );
+    }
+    throw cause;
+  }
+}
+
+async function initializeSdkChild(
+  opts: DelegateToolFactoryOptions,
+  config: SpawnChildConfig,
+  modelName: string,
+  effort: string,
+  model: NonNullable<ReturnType<DelegateToolFactoryOptions["modelRegistry"]["find"]>>,
+  sandboxContext: SandboxChildContext | undefined,
+  getController: () => ToolExecutionController | null,
+  setController: (controller: ToolExecutionController) => void,
+): Promise<CreatedChild> {
   const loader = new DefaultResourceLoader({
     cwd: config.worktreePath,
     agentDir: opts.agentDir,
@@ -146,7 +308,6 @@ export async function createChildSession(
   await loader.reload();
   const reportCapture = createReportCapture();
   const policy = resolveToolExecutionPolicy(config.profile.tool_execution);
-  let controller: ToolExecutionController | null = null;
   const reportTool =
     config.profile.completion_protocol === "report_result"
       ? [buildReportResultTool(reportCapture)]
@@ -156,6 +317,13 @@ export async function createChildSession(
   // the registry's own runtime by identity when available, matching the
   // shared role-session compatibility path.
   const runtime = Object.getOwnPropertyDescriptor(opts.modelRegistry, "runtime")?.value;
+  const childTools =
+    sandboxContext?.tools ??
+    buildChildTools({
+      worktreePath: config.worktreePath,
+      getController,
+      getPolicy: () => policy,
+    });
   const createOpts: NonNullable<Parameters<typeof createAgentSession>[0]> & {
     modelRuntime?: unknown;
   } = {
@@ -165,22 +333,18 @@ export async function createChildSession(
     ...(runtime !== undefined && { modelRuntime: runtime }),
     resourceLoader: loader,
     sessionManager: SessionManager.create(config.worktreePath, opts.sessionDir),
-    customTools: [
-      ...buildChildTools({
-        worktreePath: config.worktreePath,
-        getController: () => controller,
-        getPolicy: () => policy,
-      }),
-      ...reportTool,
-    ],
-    tools: childToolNames(config.profile.completion_protocol),
-    thinkingLevel: entry.effort as never,
+    customTools: [...childTools, ...reportTool],
+    tools:
+      sandboxContext === undefined
+        ? childToolNames(config.profile.completion_protocol)
+        : [...childTools.map((tool) => tool.name), ...reportTool.map((tool) => tool.name)],
+    thinkingLevel: effort as never,
   };
   const { session } = await createAgentSession(createOpts);
   try {
     const state = new SessionState({
       cap: config.profile.max_session_cost_usd,
-      model: entry.model,
+      model: modelName,
     });
     attachSessionEventHandler({
       session,
@@ -189,29 +353,71 @@ export async function createChildSession(
       ...(opts.displaySink === undefined ? {} : { onDisplay: opts.displaySink }),
       origin: { child_id: config.childId, task_id: config.taskId, subagent: config.profile.name },
     });
-    controller = new ToolExecutionController({
-      runId: opts.runId,
-      logicalSessionId: `${opts.runId}:${config.childId}`,
-      roleSessionId: config.childId,
-      policy,
-      persist: opts.persistRecord,
-      onFatal: (error) => {
-        reportCapture.close();
-        state.setTerminalReason(
-          error.code === "tool_timeout_exhausted"
-            ? "tool_timeout_exhausted"
-            : "tool_cleanup_unconfirmed",
-          toToolExecutionModelError(error).message,
-        );
-        state.markAborted();
-        void session.abort();
-      },
-    });
-    return { session, state, model: entry.model, reportCapture };
+    setController(
+      new ToolExecutionController({
+        runId: opts.runId,
+        logicalSessionId: `${opts.runId}:${config.childId}`,
+        roleSessionId: config.childId,
+        policy,
+        persist: opts.persistRecord,
+        onFatal: (error) => {
+          reportCapture.close();
+          state.setTerminalReason(
+            error.code === "tool_timeout_exhausted"
+              ? "tool_timeout_exhausted"
+              : "tool_cleanup_unconfirmed",
+            toToolExecutionModelError(error).message,
+          );
+          state.markAborted();
+          void session.abort();
+        },
+      }),
+    );
+    return {
+      session,
+      state,
+      model: modelName,
+      reportCapture,
+      ...(sandboxContext === undefined ? {} : { sandboxContext }),
+    };
   } catch (cause) {
-    await cleanupOwnedChild(session);
+    await cleanupCreatedChild({
+      session,
+      ...(sandboxContext === undefined ? {} : { sandboxContext }),
+    });
     throw new DelegationOwnershipError("child SDK initialization is ambiguous", cause);
   }
+}
+
+function withSandboxInspection(config: SpawnChildConfig, terminal: ChildTerminal): ChildTerminal {
+  return config.sandbox === undefined
+    ? terminal
+    : { ...terminal, worktreeInspection: invalidWorktreeInspection() };
+}
+
+function invalidWorktreeInspection() {
+  return { state: "invalid" as const, headCommit: null };
+}
+
+async function cleanupCreatedChild(
+  child: Pick<CreatedChild, "session"> & { readonly sandboxContext?: SandboxChildContext },
+): Promise<void> {
+  let sandboxCause: unknown;
+  try {
+    await child.sandboxContext?.cancel();
+  } catch (cause) {
+    sandboxCause = cause;
+  }
+  try {
+    await cleanupOwnedChild(child.session);
+  } catch (cause) {
+    throw new DelegationOwnershipError(
+      "child SDK and sandbox cleanup is ambiguous",
+      sandboxCause === undefined ? cause : new AggregateError([sandboxCause, cause]),
+    );
+  }
+  if (sandboxCause !== undefined)
+    throw new DelegationOwnershipError("sandbox child cleanup is ambiguous", sandboxCause);
 }
 
 function persistStarted(
