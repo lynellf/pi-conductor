@@ -239,6 +239,9 @@ a `delegation_validation_rejected` record with the parent identity, task IDs,
 and typed validation errors; no child lifecycle record is created for such a
 batch.
 
+For a reusable broader sandbox profile, configuration constraints, and a real
+two-batch experiment, see the [workspace preparation evaluation](issue-111-workspace-evaluation.md).
+
 ### Read-only context artifacts (Issue #60)
 
 A task may also attach a small ordered text inventory without widening its file
