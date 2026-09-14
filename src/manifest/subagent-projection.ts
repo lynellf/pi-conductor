@@ -1,5 +1,6 @@
 /** Issue #55 subagent projection policy parsing and static validation. */
 
+import { parseSubagentSnapshotPolicy } from "./subagent-snapshot.js";
 import type { SubagentProjectionPolicy, SubagentWorkspaceConfig } from "./types.js";
 import { ManifestParseError } from "./types.js";
 
@@ -26,13 +27,20 @@ export interface SubagentProjectionManifestError {
   readonly message: string;
 }
 
-/** Parse Issue #55's deliberately projection-only subagent workspace block. */
+/** Parse exclusive projection/snapshot workspace contracts (#55 / #111). */
 export function parseSubagentWorkspace(raw: unknown, path: string): SubagentWorkspaceConfig {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new ManifestParseError(`${path} must be a YAML mapping (object)`);
   }
   const workspace = raw as Record<string, unknown>;
-  rejectUnknownFields(workspace, new Set(["projection"]), path);
+  rejectUnknownFields(workspace, new Set(["projection", "snapshot"]), path);
+  if (workspace.snapshot !== undefined) {
+    if (workspace.projection !== undefined)
+      throw new ManifestParseError(`${path} cannot combine snapshot and projection`);
+    return Object.freeze({
+      snapshot: parseSubagentSnapshotPolicy(workspace.snapshot, `${path}.snapshot`),
+    });
+  }
   if (workspace.projection === undefined) {
     throw new ManifestParseError(`${path} must contain a \`projection\` mapping`);
   }

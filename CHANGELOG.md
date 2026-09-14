@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add explicit sandbox snapshot profiles with approved roots, admission file limits,
+  compact worker prompts and durable authority checks. Reuse the same profile for
+  later batches without enumerating imports; existing narrow profiles stay unchanged (#111).
+
 ### Bug fixes
 
 - Deliver accepted structured handoff fields to both workers and returning

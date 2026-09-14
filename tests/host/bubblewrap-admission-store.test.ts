@@ -22,6 +22,7 @@ import {
 } from "../../src/host/execution/sandbox/admission-store.js";
 import { pinSandboxPolicy } from "../../src/host/execution/sandbox/policy-pin.js";
 import type { HostApprovedBootstrapRuntime } from "../../src/host/execution/sandbox/runtime-types.js";
+import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
 
 const cleanup: string[] = [];
 
@@ -156,6 +157,39 @@ describe("private sandbox admission store", () => {
     sandbox.runtime_digest = "0".repeat(64);
     await writeFile(metadata, `${JSON.stringify(parsed)}\n`, { mode: 0o600 });
     await expect(reopen(value, record)).rejects.toThrow();
+  });
+
+  it.each([
+    false,
+    true,
+  ])("rejects stripped snapshot authority even when its descriptor is rehashed: %s", async (rewriteDescriptor) => {
+    const value = await fixture();
+    value.policy = pinSandboxPolicy({
+      execution: value.policy.execution,
+      selectedPaths: ["src/a.ts"],
+      trackedPaths: ["src/a.ts"],
+      snapshot: { paths: ["src"], max_files: 10 },
+    });
+    const record = await capture(value);
+    const metadata = metadataPath(value.runStateDir, record.sandbox.materialization_id);
+    const { workspaceSnapshot: _snapshot, digest: _digest, ...authority } = record.policy;
+    const downgraded = { ...authority, digest: sha256Canonical(authority) };
+    await writeFile(
+      metadata,
+      JSON.stringify({
+        ...record,
+        policy: downgraded,
+        sandbox: rewriteDescriptor
+          ? { ...record.sandbox, execution_policy_digest: downgraded.digest }
+          : record.sandbox,
+      }),
+    );
+    // The accepted descriptor is retained independently of admission.json.
+    await expect(reopen(value, record)).rejects.toThrow(
+      rewriteDescriptor
+        ? "sandbox admission identity does not match expected child"
+        : "sandbox admission authority digest mismatch",
+    );
   });
 
   it.each(["deleted", "tampered"])("rejects a %s accepted snapshot", async (kind) => {

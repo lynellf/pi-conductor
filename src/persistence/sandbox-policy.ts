@@ -2,6 +2,18 @@
 import { type Static, Type } from "typebox";
 
 const paths = Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true });
+const workspaceSnapshot = Type.Object(
+  {
+    mode: Type.Literal("snapshot"),
+    paths: Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      uniqueItems: true,
+    }),
+    max_files: Type.Integer({ minimum: 1, maximum: 10_000 }),
+  },
+  { additionalProperties: false },
+);
 const environment = Type.Object(
   {
     PATH: Type.Optional(Type.String()),
@@ -38,6 +50,7 @@ export const pinnedSandboxPolicySchema = Type.Object(
     selectedPaths: paths,
     trackedPaths: paths,
     projectionRoots: Type.Optional(paths),
+    workspaceSnapshot: Type.Optional(workspaceSnapshot),
     writableRoots: Type.Array(
       Type.Object(
         {

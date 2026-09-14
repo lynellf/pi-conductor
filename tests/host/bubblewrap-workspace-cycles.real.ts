@@ -28,6 +28,7 @@ const imports = Array.from({ length: 55 }, (_, index) => `deps/dep-${index}.sh`)
 it.each([
   "broad",
   "narrow",
+  "snapshot",
 ] as const)("reuses one %s profile for two batches with changing files and tests", async (mode) => {
   const setupStarted = performance.now();
   const fixture = await createRealDelegationFixture();
@@ -51,7 +52,13 @@ it.each([
             projection: { required: true, allowed_paths: ["alpha", "beta", "deps", "tests"] },
           },
         }
-      : {}),
+      : mode === "snapshot"
+        ? {
+            workspace: {
+              snapshot: { paths: ["alpha", "beta", "deps", "tests", "reference"], max_files: 100 },
+            },
+          }
+        : {}),
   };
   const pinnedProfile = JSON.stringify(profile);
   const manager = new DelegationManager();
@@ -102,10 +109,16 @@ it.each([
   try {
     await mkdir(join(fixture.checkout, "deps"));
     await mkdir(join(fixture.checkout, "tests"));
+    await mkdir(join(fixture.checkout, "reference"));
+    for (let index = 0; index < 10; index++)
+      await writeFile(
+        join(fixture.checkout, `reference/context-${index}.md`),
+        "approved reference\n",
+      );
     for (const path of imports) await writeFile(join(fixture.checkout, path), ":\n");
     for (let index = 0; index < 20; index++)
       await writeFile(join(fixture.checkout, `docs/unrelated-${index}.md`), "not a dependency\n");
-    await writeFile(join(fixture.checkout, "tests/check.sh"), checkScript());
+    await writeFile(join(fixture.checkout, "tests/check.sh"), checkScript(mode === "snapshot"));
     await git(fixture.checkout, ["add", "."]);
     await commit(fixture.checkout, "experiment inputs");
     const setupMs = performance.now() - setupStarted;
@@ -114,7 +127,7 @@ it.each([
       const preparationStarted = performance.now();
       if (cycle === 2) {
         await writeFile(join(fixture.checkout, "deps/later.sh"), ":\n");
-        await writeFile(join(fixture.checkout, "tests/later.sh"), checkScript());
+        await writeFile(join(fixture.checkout, "tests/later.sh"), checkScript(mode === "snapshot"));
         await git(fixture.checkout, ["add", "."]);
         await commit(fixture.checkout, "discover later verification requirement");
       }
@@ -218,12 +231,19 @@ it.each([
     expect(diagnostics.size).toBe(4);
     expect(selectedCounts).toHaveLength(4);
     if (mode === "narrow") expect(selectedCounts).toEqual([58, 58, 60, 60]);
+    if (mode === "snapshot") {
+      expect(selectedCounts).toEqual([68, 68, 70, 70]);
+      for (const paths of selectedSets) {
+        expect(paths).not.toContain("docs/unrelated-0.md");
+        expect(paths).toContain("reference/context-0.md");
+      }
+    }
     for (const paths of selectedSets.slice(0, 2)) expect(paths).not.toContain("deps/later.sh");
     for (const paths of selectedSets.slice(2)) {
       expect(paths).toContain("deps/later.sh");
       expect(paths).toContain("tests/later.sh");
     }
-    expect(selectedCounts.every((count) => (mode === "broad" ? count > 64 : count <= 64))).toBe(
+    expect(selectedCounts.every((count) => (mode === "narrow" ? count <= 64 : count > 64))).toBe(
       true,
     );
     expect(
@@ -310,8 +330,14 @@ function registry(records: PersistedRecord[], diagnostics: Set<string>): ModelRe
 function call(name: string, args: Record<string, unknown>): StubStep {
   return { kind: "emit_tool_calls", calls: [{ name, arguments: args }] };
 }
-function checkScript(): string {
-  return 'for dependency in deps/*.sh; do source "$dependency" || exit 18; done\nif [[ $(<"$1") == "$2" ]]; then printf pass; else printf "expected-%s\\n" "$2" >&2; exit 17; fi\n';
+function checkScript(snapshot: boolean): string {
+  const denied = snapshot
+    ? "if [[ -e docs/unrelated-0.md || -e .git || -e .pi-conductor ]]; then exit 19; fi\nif (printf unexpected > deps/dep-0.sh) 2>/dev/null; then exit 20; fi\n"
+    : "";
+  return (
+    denied +
+    'for dependency in deps/*.sh; do source "$dependency" || exit 18; done\nif [[ $(<"$1") == "$2" ]]; then printf pass; else printf "expected-%s\\n" "$2" >&2; exit 17; fi\n'
+  );
 }
 async function git(cwd: string, args: string[]) {
   return execute("/usr/bin/git", ["-c", "core.hooksPath=/dev/null", ...args], {

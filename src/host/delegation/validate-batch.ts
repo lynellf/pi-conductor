@@ -26,6 +26,12 @@ import {
   resolveEffectiveProjection,
 } from "./projection-policy.js";
 
+import {
+  resolveSnapshotProjection,
+  type SnapshotAdmissionError,
+  type SnapshotAdmissionErrorCode,
+} from "./snapshot-policy.js";
+
 // ─── Validation errors ───────────────────────────────────────────────────
 
 export type BatchValidationErrorCode =
@@ -37,7 +43,8 @@ export type BatchValidationErrorCode =
   | "primary-not-git"
   | "primary-dirty"
   | "sandbox-backend-unavailable"
-  | ProjectionAdmissionErrorCode;
+  | ProjectionAdmissionErrorCode
+  | SnapshotAdmissionErrorCode;
 
 export interface BatchValidationError {
   readonly code: BatchValidationErrorCode;
@@ -175,6 +182,30 @@ export function validateBatch(
         message: `task '${task.id}': ${SANDBOX_UNAVAILABLE_MESSAGE}`,
       });
     }
+    const snapshot = profile?.workspace?.snapshot;
+    if (snapshot !== undefined) {
+      if (profile?.workspace?.projection !== undefined) {
+        errors.push({
+          code: "invalid-snapshot-policy",
+          message: `task '${task.id}': workspace snapshot and projection are mutually exclusive`,
+        });
+        continue;
+      }
+      if (profile?.execution?.backend !== "bubblewrap")
+        errors.push({
+          code: "snapshot-requires-sandbox",
+          message: `task '${task.id}': snapshot requires explicit Bubblewrap execution`,
+        });
+      const resolution = resolveSnapshotProjection(
+        snapshot,
+        task.projection_paths,
+        materializedParentPaths,
+      );
+      if (!resolution.valid)
+        errors.push(...resolution.errors.map((error) => withTaskId(task.id, error)));
+      else effectiveProjectionByTaskId.set(task.id, resolution.projection.paths);
+      continue;
+    }
     const projectionPolicy = profile?.workspace?.projection;
     if (projectionPolicy !== undefined) {
       const resolution = resolveEffectiveProjection(
@@ -291,7 +322,10 @@ function validateLegacyProjectionPaths(
   return errors;
 }
 
-function withTaskId(taskId: string, error: ProjectionAdmissionError): BatchValidationError {
+function withTaskId(
+  taskId: string,
+  error: ProjectionAdmissionError | SnapshotAdmissionError,
+): BatchValidationError {
   return {
     code: error.code,
     message: `task '${taskId}' ${error.message}`,

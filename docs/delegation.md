@@ -12,6 +12,7 @@
 - [Projection-aware child authority (Issue #52)](#projection-aware-child-authority-issue-52)
 - [Read-only context artifacts (Issue #60)](#read-only-context-artifacts-issue-60)
 - [Declarative profile projection policy (Issue #55)](#declarative-profile-projection-policy-issue-55)
+- [Explicit sandbox snapshot workspace (Issue #111)](#explicit-sandbox-snapshot-workspace-issue-111)
 - [Bubblewrap command sandbox (Issue #106)](#bubblewrap-command-sandbox-issue-106)
 - [Child boundary and branch integration](#child-boundary-and-branch-integration)
 
@@ -311,7 +312,8 @@ subagents:
         default_paths: [src/parser, tests/parser]
 ```
 
-For this profile-only `workspace` block, `projection` is the sole valid field.
+A profile `workspace` chooses either this `projection` block or the explicit
+`snapshot` mode described below; combining them is rejected.
 `required` is an explicit boolean; `allowed_paths` is a non-empty, duplicate-free
 list of at most 64 safe repository-relative literals. A literal can name one
 tracked file or a directory root, but it is never passed raw to Git as a glob.
@@ -332,6 +334,68 @@ exists. Profiles without this block retain the Issue #52 behavior above.
 policy roots. Rejected policy admission uses the existing
 `delegation_validation_rejected` record. This is file-tool path confinement,
 not an OS, credential, or network sandbox.
+
+### Explicit sandbox snapshot workspace (Issue #111)
+
+A reusable sandbox profile can select approved source/test roots without listing
+all their import dependencies for each task. Choose an explicit snapshot instead
+of `workspace.projection`:
+
+```yaml
+subagents:
+  - name: project-worker
+    models: [{ model: openai-codex:gpt-5.6-terra, effort: high }]
+    max_session_cost_usd: 2
+    system_prompt: project-worker.md
+    completion_protocol: minimal
+    workspace:
+      snapshot:
+        paths: [src, tests, package.json]
+        max_files: 4096
+    execution:
+      backend: bubblewrap
+      runtime_root: prepared-runtime
+      writable_paths: [src, tests]
+      network: none
+```
+
+Add this profile to the parent's `delegation.allowed_subagents` and give the parent
+finite child and concurrency limits. Snapshot tasks **omit `projection_paths`**;
+a supplied selection is rejected. The parent supplies the objective, likely areas
+and verification expectations in the task packet. The child receives a compact
+root/count summary and uses file tools to discover relevant files.
+
+`paths` accepts 1–64 non-overlapping safe file/directory literals. Every root must
+match a selectable tracked file in the clean parent's materialized checkout.
+`max_files` is required, from 1 through 10,000; it bounds the expanded exact file
+set at admission. Empty/unavailable roots, unsafe control paths and over-limit
+expansion reject the batch before any child is accepted. A sparse parent's missing
+files remain missing. Growth beyond the limit requires a new run with an explicitly
+updated manifest; there is no automatic authority expansion.
+
+Snapshot mode requires the [approved Bubblewrap setup](#bubblewrap-command-sandbox-issue-106).
+Read-only/runtime dependencies must already be available beneath approved roots or
+in the independently approved runtime. Fixed `execution.writable_paths` and all
+excluded-descendant checks still apply. New files and generated outputs are allowed
+beneath an admitted writable directory; an entirely new empty output root needs an
+approved tracked descendant in the parent first. The file limit applies to the
+initial snapshot, not as a live disk quota. Existing metadata, file-tool, command
+output and final-ingestion bounds also remain in force.
+
+Each admitted task pins its clean base, exact selection, roots, file limit and
+sandbox identity. Later commits cannot change queued work. Restart verifies
+retained metadata and uses the pinned manifest; current YAML is not substituted.
+Unfinished children retain the existing cancellation/reconciliation behavior.
+The parent explicitly reviews and integrates independent sibling patches, commits
+a clean baseline, and can then submit later tasks using the same profile.
+
+Existing exact/default projections retain their 64-file limit. Omitting `workspace`
+continues to inherit the full materialized parent without this new snapshot policy;
+it is not implicitly converted. Snapshot mode offers explicit root selection and a
+file-count ceiling. It does not expose host home, Git control state, credentials or
+sibling workspaces, and it does not identify secrets within operator-selected files.
+See the [contract and verification](issue-111-snapshot-workspace.md) and the
+[earlier comparison](issue-111-workspace-evaluation.md) for evidence and limitations.
 
 ### Bubblewrap command sandbox (Issue #106)
 

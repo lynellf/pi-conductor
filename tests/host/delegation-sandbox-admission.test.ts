@@ -229,6 +229,37 @@ describe("sandbox admission preparation", () => {
     expect(received).toEqual(expectedRoots);
   });
 
+  it("pins snapshot roots, exact files and profile before a later parent commit", async () => {
+    const { root, promptRoot } = await fixture();
+    const worker = profile(
+      { backend: "bubblewrap", runtime_root: "runtime", writable_paths: ["src-a.txt"] },
+      { snapshot: { paths: ["src-a.txt"], max_files: 10 } },
+    );
+    let captured: Parameters<SandboxAdmissionAdapter["capture"]>[0] | undefined;
+    const adapter: SandboxAdmissionAdapter = {
+      capture: async (input) => {
+        captured = input;
+        return { sandbox: descriptor };
+      },
+      verify: async () => {},
+    };
+    const prepared = await prepare(root, promptRoot, worker, adapter);
+    const child = prepared.tasks[0];
+    if (!child) throw new Error("missing child");
+    expect(captured?.projectionRoots).toEqual(["src-a.txt"]);
+    expect(captured?.selectedPaths).toEqual(["src-a.txt"]);
+    expect(captured?.profile.workspace).toEqual(worker.workspace);
+    expect(child.projectionFingerprint.path_count).toBe(1);
+    expect(child.systemPrompt).toContain("1 admitted files");
+    const originalBase = child.baseCommit;
+    await writeFile(join(root, "later.txt"), "later discovery");
+    await execFileAsync("git", ["add", "later.txt"], { cwd: root });
+    await execFileAsync("git", ["commit", "-qm", "later"], { cwd: root });
+    expect(child.baseCommit).toBe(originalBase);
+    expect(child.projectionPaths).toEqual(["src-a.txt"]);
+    expect(Object.isFrozen(child.profile.workspace?.snapshot?.paths)).toBe(true);
+  });
+
   it("fails capture before acceptance and never calls spawn", async () => {
     const { root, promptRoot } = await fixture();
     const spawned = false;

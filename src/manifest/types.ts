@@ -41,13 +41,19 @@ export interface SubagentProfile {
   readonly tool_execution?: ToolExecutionPolicy;
   /** Issue #106: opt-in delegated command execution authority. */
   readonly execution?: SubagentExecutionConfig;
-  /** Issue #55: opt-in exact-file projection policy for delegated children. */
+  /** Issues #55 / #111: opt-in exact projection or sandbox snapshot workspace. */
   readonly workspace?: SubagentWorkspaceConfig;
 }
 
-/** Issue #55: the only workspace block permitted on a subagent profile. */
-export interface SubagentWorkspaceConfig {
-  readonly projection: SubagentProjectionPolicy;
+/** Exclusive exact projection or explicit sandbox snapshot authority (#55 / #111). */
+export type SubagentWorkspaceConfig =
+  | { readonly projection: SubagentProjectionPolicy; readonly snapshot?: never }
+  | { readonly snapshot: SubagentSnapshotPolicy; readonly projection?: never };
+
+/** Issue #111: operator-approved roots and maximum admitted snapshot file count. */
+export interface SubagentSnapshotPolicy {
+  readonly paths: readonly string[];
+  readonly max_files: number;
 }
 
 /** Issue #55: literal policy roots used to resolve a child exact-file projection. */

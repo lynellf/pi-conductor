@@ -92,6 +92,7 @@ export type {
   ModelConfig,
   RoleConfig,
   SubagentProfile,
+  SubagentSnapshotPolicy,
 } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
 

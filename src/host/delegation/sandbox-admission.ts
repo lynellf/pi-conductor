@@ -51,6 +51,9 @@ export function createSandboxAdmissionAdapter(
       }
       const policy = pinSandboxPolicy({
         execution: input.profile.execution,
+        ...(input.profile.workspace?.snapshot === undefined
+          ? {}
+          : { snapshot: input.profile.workspace.snapshot }),
         ...(input.profile.tool_execution === undefined
           ? {}
           : { toolExecution: input.profile.tool_execution }),

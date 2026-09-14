@@ -24,11 +24,14 @@ import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
 import { validateSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
+import { validateSubagentSnapshotPolicy } from "./subagent-snapshot.js";
 import type { Manifest } from "./types.js";
 
 // ─── Result types ─────────────────────────────────────────────────────
 
 export type ManifestErrorCode =
+  | "invalid-subagent-snapshot"
+  | "snapshot-requires-sandbox"
   /** Exactly one role with `is_orchestrator: true` is required; found 0. */
   | "missing-orchestrator"
   /** Exactly one role with `is_orchestrator: true` is required; found > 1. */
@@ -304,7 +307,19 @@ export function validateManifest(m: Manifest): ManifestReport {
           });
         }
       }
-      if (profile.workspace !== undefined) {
+      if (profile.workspace?.snapshot !== undefined) {
+        for (const message of validateSubagentSnapshotPolicy(profile.workspace.snapshot))
+          errors.push({
+            code: "invalid-subagent-snapshot",
+            message: `subagent '${profile.name}': ${message}`,
+          });
+        if (profile.execution?.backend !== "bubblewrap")
+          errors.push({
+            code: "snapshot-requires-sandbox",
+            message: `subagent '${profile.name}' snapshot requires explicit Bubblewrap execution`,
+          });
+      }
+      if (profile.workspace?.projection !== undefined) {
         errors.push(
           ...validateSubagentProjectionPolicy(profile.name, profile.workspace.projection),
         );

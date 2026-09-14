@@ -240,6 +240,7 @@ function fingerprint(value: unknown): string {
 }
 
 function projectionRoots(profile: SubagentProfile): readonly string[] | undefined {
+  if (profile.workspace?.snapshot !== undefined) return profile.workspace.snapshot.paths;
   const projection = profile.workspace?.projection;
   if (projection === undefined) return undefined;
   return projection.required ? projection.allowed_paths : projection.default_paths;

@@ -23,6 +23,13 @@ export async function buildChildPrompt(
   projectionPaths?: readonly string[],
   contextArtifacts: readonly ResolvedContextArtifact[] = [],
 ): Promise<ChildPrompt> {
+  const snapshot = profile.workspace?.snapshot;
+  if (snapshot !== undefined && (profile.execution === undefined || projectionPaths === undefined))
+    throw new Error("snapshot prompt requires admitted sandbox file selection");
+  const snapshotSummary =
+    snapshot === undefined
+      ? undefined
+      : `Snapshot roots: ${JSON.stringify(snapshot.paths)}\n${projectionPaths?.length} admitted files in /workspace. Use the file tools to discover task-relevant files; these roots do not grant additional access.`;
   const baseSystemPrompt = await readFile(systemPromptPath, "utf8");
   const taskPrompt =
     profile.completion_protocol === "minimal"
@@ -32,6 +39,7 @@ export async function buildChildPrompt(
           expectedOutput,
           projectionPaths,
           profile.execution !== undefined,
+          snapshotSummary,
         )
       : profile.execution !== undefined
         ? sandboxChildPrompt(
@@ -42,6 +50,7 @@ export async function buildChildPrompt(
             expectedOutput,
             runId,
             parentRole,
+            snapshotSummary,
           )
         : legacyChildPrompt(
             baseSystemPrompt,
@@ -66,6 +75,7 @@ function sandboxChildPrompt(
   expectedOutput: string,
   runId: string,
   parentRole: string,
+  snapshotSummary?: string,
 ): string {
   const completion =
     profile.completion_protocol === "minimal"
@@ -80,6 +90,7 @@ function sandboxChildPrompt(
     `Parent Run: ${runId}`,
     `Parent Role: ${parentRole}`,
     "Workspace: /workspace",
+    ...(snapshotSummary === undefined ? [] : [snapshotSummary]),
     "",
     "YOUR TASK:",
     objective,
@@ -107,13 +118,15 @@ function minimalChildPrompt(
   expectedOutput: string,
   projectionPaths: readonly string[] | undefined,
   sandboxed = false,
+  snapshotSummary?: string,
 ): string {
   const visibleFiles =
-    projectionPaths === undefined
+    snapshotSummary ??
+    (projectionPaths === undefined
       ? sandboxed
         ? "the files materialized in /workspace"
         : "the files materialized in this worktree"
-      : projectionPaths.join("\n");
+      : projectionPaths.join("\n"));
   const behavior = sandboxed
     ? [
         "- Work only through the available file tools and bash in /workspace.",

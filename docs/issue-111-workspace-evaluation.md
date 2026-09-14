@@ -1,5 +1,10 @@
 # Issue #111 — Workspace preparation evaluation
 
+This records the initial baseline experiment. The subsequently approved
+[explicit snapshot workspace](issue-111-snapshot-workspace.md) adds root selection
+and a retained file-count limit; its implementation does not establish a
+productivity improvement over these baseline results.
+
 This experiment evaluates existing sandbox behavior before choosing a permission
 API. It changes no production code or narrow-profile semantics. The user approved
 evaluating a reusable broader profile first.

@@ -97,6 +97,39 @@ describe("minimal child task card (Issue #57 §6.2)", () => {
   });
 });
 
+describe("Issue #111 compact snapshot prompts", () => {
+  it.each([
+    "minimal",
+    "report_result",
+  ] as const)("summarizes roots and file count for %s", async (protocol) => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-conductor-snapshot-prompt-"));
+    directories.push(directory);
+    const promptPath = join(directory, "child.md");
+    await writeFile(promptPath, "Focused instructions.");
+    const prompt = await buildChildPrompt(
+      {
+        ...profile(protocol),
+        execution: { backend: "bubblewrap", runtime_root: "runtime", writable_paths: ["src"] },
+        workspace: { snapshot: { paths: ["src", "tests"], max_files: 4096 } },
+      },
+      promptPath,
+      "task",
+      "Repair parser",
+      "Verified patch",
+      "run",
+      "parent",
+      "/private/worktree",
+      Array.from({ length: 4000 }, (_, i) => `src/file-${i}.ts`),
+    );
+    expect(prompt.systemPrompt).toContain('Snapshot roots: ["src","tests"]');
+    expect(prompt.systemPrompt).toContain("4000 admitted files");
+    expect(prompt.systemPrompt).toContain("read_execution_output");
+    expect(prompt.systemPrompt).not.toContain("src/file-0.ts");
+    expect(prompt.systemPrompt).not.toContain("/private/worktree");
+    expect(prompt.systemPrompt.length).toBeLessThan(2400);
+  });
+});
+
 describe("Issue #60 child context artifact prompt section", () => {
   it.each([
     "report_result",

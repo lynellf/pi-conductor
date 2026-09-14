@@ -2,6 +2,7 @@
 import { dirname } from "node:path";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { toMachineDefinition } from "../manifest/definition.js";
+import { parseSubagentWorkspace } from "../manifest/subagent-projection.js";
 import type { ManifestSnapshotRecord } from "../persistence/trajectory-records.js";
 import { checkModelProvidersRegistered, type LoadedManifest } from "./manifest.js";
 
@@ -12,15 +13,38 @@ export async function loadPinnedManifest(
   modelRegistry: ModelRegistry | undefined,
 ): Promise<LoadedManifest> {
   const manifestDir = dirname(manifestPath);
+  // Retained JSON is untrusted at runtime. Reparse the closed workspace union
+  // without applying current manifest defaults to unrelated pinned fields.
+  const pinned = snapshot.normalized_manifest;
+  const manifest = Object.freeze({
+    ...pinned,
+    ...(pinned.subagents === undefined
+      ? {}
+      : {
+          subagents: Object.freeze(
+            pinned.subagents.map((profile, index) =>
+              profile.workspace === undefined
+                ? profile
+                : Object.freeze({
+                    ...profile,
+                    workspace: parseSubagentWorkspace(
+                      profile.workspace,
+                      `pinned subagents[${index}].workspace`,
+                    ),
+                  }),
+            ),
+          ),
+        }),
+  });
   const warnings =
     modelRegistry === undefined
       ? Object.freeze([])
-      : checkModelProvidersRegistered(snapshot.normalized_manifest, modelRegistry);
+      : checkModelProvidersRegistered(manifest, modelRegistry);
   return Object.freeze({
-    manifest: snapshot.normalized_manifest,
-    def: toMachineDefinition(snapshot.normalized_manifest),
+    manifest,
+    def: toMachineDefinition(manifest),
     warnings,
     manifestDir,
-    manifestVersion: snapshot.normalized_manifest.version,
+    manifestVersion: manifest.version,
   });
 }
