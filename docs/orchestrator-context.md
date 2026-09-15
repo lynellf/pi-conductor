@@ -65,6 +65,23 @@ after a crash: reset cannot certify an unfinished tool or process as settled.
 It can replace missing or corrupt conversation history when the durable run log
 and pinned context policy remain valid.
 
+When the SDK recovers from a provider error during tool-call generation, the
+failed assistant response remains in the original session file for auditing and
+cost accounting. A superseding assistant response with no intervening user or
+tool result allows that unexecuted failed response to be omitted from effective
+retained context. Durable execution or delegation-admission evidence prevents
+this omission. Exhausted retries and unresolved executed calls still fail the
+boundary check; restoration never executes or fabricates tool results.
+
+If boundary capture, session disposal, or boundary commit fails after a handoff,
+the accepted transition remains saved and the receiver does not start. A durable
+`run_finalization_failed` record identifies the phase, code, bounded diagnostic,
+role session, and recovery path. Status and run listings report the failure.
+Capture and commit failures require explicit `--reset-orchestrator-context`
+before resuming from the accepted checkpoint. A disposal failure blocks resume,
+including context reset: inspect and stop remaining resources on the original
+host before starting a fresh run. Reset cannot prove that disposal completed.
+
 ## Supported combinations
 
 Both shared SDK sessions and isolated RPC sessions support retention. Local

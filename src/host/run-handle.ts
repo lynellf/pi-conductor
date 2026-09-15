@@ -46,6 +46,7 @@ import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
 import { rollup } from "../cost/rollup.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { latestRunFinalizationFailure } from "../persistence/run-finalization.js";
 import { applyRunConfigOverride } from "./config.js";
 import type { LoadedManifest } from "./manifest.js";
 import { type RunControl, RunControlError, type RunResponse } from "./run-control.js";
@@ -138,13 +139,21 @@ export class RunHandle {
     this.configOverrideContainer = opts.configOverrideContainer;
     this.requestAbort = opts.requestAbort;
     this.runControl = opts.runControl;
-    this.completionPromise = opts.completionPromise.then((result) => {
-      // The loop owns terminal classification. Persisted cleanup and
-      // observability records may be appended after the terminal lifecycle
-      // record, so record-derived status is only a live-run fallback.
-      this.terminalExitReason = result.exitReason;
-      return result;
-    });
+    this.completionPromise = opts.completionPromise
+      .then((result) => {
+        // The loop owns terminal classification. Persisted cleanup and
+        // observability records may be appended after the terminal lifecycle
+        // record, so record-derived status is only a live-run fallback.
+        this.terminalExitReason = result.exitReason;
+        return result;
+      })
+      .catch((error: unknown) => {
+        // A finalization persistence failure can reject the loop after the
+        // accepted checkpoint is already durable. Keep live status terminal
+        // even when no durable failure tombstone could be appended.
+        this.terminalExitReason = "session_failed";
+        throw error;
+      });
   }
 
   /** Resolves with the final `Checkpoint` and `exitReason` when the
@@ -289,6 +298,9 @@ export class RunHandle {
     if (this.terminalExitReason !== undefined) return this.terminalExitReason;
     if (this.aborted) return "aborted";
     records ??= this.log.records(this.runId);
+    if (latestRunFinalizationFailure(records, this.runId) !== null) {
+      return "session_failed";
+    }
     for (let index = records.length - 1; index >= 0; index--) {
       const record = records[index];
       if (record?.type !== "checkpoint_snapshot") continue;

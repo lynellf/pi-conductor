@@ -51,6 +51,7 @@ import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
+import type { RunFinalizationFailedRecord } from "./run-finalization.js";
 import type { ToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
 import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
 import type {
@@ -122,6 +123,13 @@ export {
   WorkspaceGuaranteeError,
 } from "./record-materialization.js";
 export type { RoleTurnRecord } from "./role-turn.js";
+export type { RunFinalizationFailedRecord } from "./run-finalization.js";
+export {
+  assertRunFinalizationFailure,
+  latestRunFinalizationFailure,
+  RunFinalizationFailureError,
+  runFinalizationFailedSchema,
+} from "./run-finalization.js";
 export type {
   SandboxExecutionHostObserver,
   SandboxExecutionOwner,
@@ -426,7 +434,8 @@ export type PersistedRecord =
   | ToolExecutionSandboxReadyRecord
   | EndGuardRecord
   | DelegationSubmissionAcceptedRecord
-  | OrchestratorContextRecord;
+  | OrchestratorContextRecord
+  | RunFinalizationFailedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

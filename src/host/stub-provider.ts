@@ -122,6 +122,9 @@ export type StubStep =
   | {
       readonly kind: "fail";
       readonly errorMessage: string;
+      /** Tool-call blocks retained in an interrupted assistant response. They are
+       * intentionally not emitted as tool events, so the SDK never executes them. */
+      readonly partialToolCalls?: readonly StubToolCall[];
       readonly usage?: Partial<Usage>;
     };
 
@@ -262,6 +265,14 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
     }
 
     if (step.kind === "fail") {
+      for (const [index, call] of (step.partialToolCalls ?? []).entries()) {
+        finalMessage.content.push({
+          type: "toolCall",
+          id: `partial-${stepIndex}-${index}`,
+          name: call.name,
+          arguments: call.arguments,
+        });
+      }
       finalMessage.stopReason = "error";
       finalMessage.errorMessage = step.errorMessage;
       stream.push({ type: "start", partial: finalMessage });

@@ -9,7 +9,6 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import { artifactDelivery } from "../persistence/log.js";
-import type { ContextBoundaryReference } from "../persistence/orchestrator-context.js";
 import type { Host, RoleSession, SessionTerminalReason } from "./host.js";
 import {
   appendArtifactSeedSection,
@@ -26,6 +25,7 @@ import type {
   RunLoopResult,
 } from "./loop-types.js";
 import { ZERO_USAGE } from "./loop-types.js";
+import { finalizeSession } from "./session-finalization.js";
 
 /** Explicit state and host dependencies for one role session lifecycle. */
 export interface SessionLoopContext {
@@ -76,7 +76,7 @@ export type SessionLoopResult =
 
 /** Runs one role session from start through settlement and disposal. */
 export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopResult> {
-  const { opts, def, host, role, visitIndex, session, seed } = ctx;
+  const { def, host, role, visitIndex, session, seed } = ctx;
   const state: SessionTurnState = {
     inner: { kind: "failed" },
     sessionHostReason: null,
@@ -91,6 +91,8 @@ export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopRe
     ctx.artifactSeedForVisit === null
       ? seed
       : appendArtifactSeedSection(seed, ctx.artifactSeedForVisit);
+  let terminalResult: RunLoopResult | null = null;
+  let finalizationFailed = false;
   try {
     const sessionId = session.sessionId;
     const sessionFile = session.sessionFile;
@@ -281,80 +283,17 @@ export async function runSession(ctx: SessionLoopContext): Promise<SessionLoopRe
       },
       state,
     );
-    if (turnResult.kind === "terminal") return { kind: "terminal", result: turnResult.result };
+    if (turnResult.kind === "terminal") terminalResult = turnResult.result;
   } finally {
-    // spec §12.1 lifecycle step 7 / `RoleSession.dispose` (host.ts):
-    // release this iteration's session resources on EVERY exit path —
-    // accepted handoff, session_failed (breach / host reason), done,
-    // run-cap early return, or a thrown invariant. Without this, each
-    // spawned session's runtime / listeners / file handles persist
-    // until the Vitest worker exits, which dominated memory pressure
-    // during Phase 5's host-heavy suite. The `finally` wraps the
-    // session block (spawn is outside: a spawn failure leaves no
-    // handle to dispose). The inner retry `continue` stays inside the
-    // try, so the session is NOT disposed mid-retry — only on the
-    // iteration's terminal exit.
-    //
-    // A dispose rejection must not shadow the run's authoritative
-    // outcome (transition / session_failed / thrown invariant); we
-    // suppress it here and route to structured logging once Task 5's
-    // observability seam lands. This is a deliberate, documented
-    // suppression — not a silent fallback on ambiguity.
-    if (!state.delegationSettled && state.delegationSettlementError === null) {
-      try {
-        await host.settleDelegation?.(
-          session,
-          state.sessionHostReason ??
-            (state.inner.kind === "failed" ? "parent session failed" : "parent session settled"),
-        );
-      } catch (cause) {
-        state.delegationSettlementError = cause;
-      }
-    }
-    let retainedBoundary: ContextBoundaryReference | null = null;
-    let retentionError: unknown = null;
-    const terminalPersisted = state.terminalPersisted;
-    if (
-      session.retainedContext !== undefined &&
-      terminalPersisted &&
-      state.delegationSettlementError === null
-    ) {
-      try {
-        retainedBoundary = await session.retainedContext.captureBoundary();
-      } catch (cause) {
-        retentionError = cause;
-      }
-    }
-
-    opts.runControl?.releaseActiveSession(session);
-    let disposalSucceeded = false;
-    await session.dispose().then(
-      () => {
-        disposalSucceeded = true;
-      },
-      (disposeError) => {
-        if (session.retainedContext !== undefined && retentionError === null) {
-          retentionError = disposeError;
-        }
-      },
-    );
-    if (opts.runControl === undefined) await opts.abortControl?.setActiveSession(null);
-    if (
-      retainedBoundary !== null &&
-      disposalSucceeded &&
-      state.delegationSettlementError === null &&
-      session.retainedContext !== undefined
-    ) {
-      try {
-        await session.retainedContext.commitBoundary(retainedBoundary);
-      } catch (cause) {
-        retentionError = cause;
-      }
-    }
-    if (state.delegationSettlementError !== null)
-      await Promise.reject(state.delegationSettlementError);
-    if (retentionError !== null) await Promise.reject(retentionError);
+    finalizationFailed = await finalizeSession(ctx, state);
   }
+  if (finalizationFailed) {
+    return {
+      kind: "terminal",
+      result: { finalCheckpoint: ctx.checkpoint, exitReason: "session_failed" },
+    };
+  }
+  if (terminalResult !== null) return { kind: "terminal", result: terminalResult };
 
   return {
     kind: "settled",

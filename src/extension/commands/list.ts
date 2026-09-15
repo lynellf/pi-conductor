@@ -152,7 +152,11 @@ export async function handleList(
         activeSession === undefined || activeSession === null
           ? ""
           : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
-      const prefix = `${runId} · ${stats.state} · ${stats.exitReason} · $${stats.costRollup.perRun.cost.toFixed(3)}${modelPart}`;
+      const finalizationPart =
+        stats.finalizationFailure === undefined
+          ? ""
+          : ` · finalization=${stats.finalizationFailure.phase}:${stats.finalizationFailure.code}`;
+      const prefix = `${runId} · ${stats.state} · ${stats.exitReason}${finalizationPart} · $${stats.costRollup.perRun.cost.toFixed(3)}${modelPart}`;
       lines.push(trace.length > 0 ? `${prefix} · ${trace}` : prefix);
     } catch (error) {
       if (!(error instanceof RecordLogError)) throw error;

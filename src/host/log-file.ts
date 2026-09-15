@@ -468,6 +468,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "context_boundary_committed",
   "context_compaction_started",
   "context_compaction",
+  "run_finalization_failed",
 ]);
 
 /** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */

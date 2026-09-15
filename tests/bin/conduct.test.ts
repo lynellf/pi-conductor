@@ -481,6 +481,7 @@ describe("runCli delegation to startRun", () => {
             finalCheckpoint: { current_role: "done" },
             exitReason: "done",
           }),
+          runStats: () => ({ state: "done", exitReason: "done", recordsCount: 1 }),
         } as unknown as RunHandle;
       });
 
@@ -822,6 +823,48 @@ describe("runCli delegation to startRun", () => {
       const stdout = c.stdoutLines.join("\n");
       expect(stdout).toMatch(/run_id=run-abc-123/);
       expect(stdout).toMatch(/state=done/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints actionable finalization recovery in plain output", async () => {
+    const dir = makeManifestDir();
+    try {
+      const c = makeConsole();
+      const code = await runCli(["manifest.yaml", "goal"], {
+        startRun: makeStartRunMock({
+          runId: "run-finalization-plain",
+          finalRole: "reviewer",
+          exitReason: "session_failed",
+          runStats: {
+            state: "reviewer",
+            exitReason: "session_failed",
+            recordsCount: 4,
+            finalizationFailure: {
+              schema_version: 1,
+              type: "run_finalization_failed",
+              run_id: "run-finalization-plain",
+              role: "orchestrator",
+              role_session_id: "role-session-1",
+              session_file: "session.jsonl",
+              phase: "context_capture",
+              code: "unresolved_tool_call",
+              diagnostic: "reset retained context before resuming",
+              recovery: "reset_orchestrator_context",
+              ts: 1,
+            },
+          },
+        }),
+        modelRegistry: stubModelRegistry,
+        console: c,
+        exit: makeExit().fn,
+        cwd: dir,
+      });
+      expect(code).toBe(1);
+      expect(c.stdoutLines.join("\n")).toContain(
+        "recovery=resume with --reset-orchestrator-context failure_detail=reset retained context before resuming",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -21,6 +21,7 @@ import {
   captureOrchestratorContextBoundary,
   restoreOrchestratorContextBoundary,
 } from "./orchestrator-context-files.js";
+import { executedToolCallIdsForRoleSession } from "./orchestrator-context-retry-projection.js";
 import {
   type CompactionSettingsSnapshot,
   captureCompactionSettings,
@@ -114,6 +115,11 @@ export class OrchestratorContextCoordinator {
       boundary: existing.boundary,
       destinationSessionDir: this.options.sessionDir,
       cwd: this.options.cwd,
+      executedToolCallIds: executedToolCallIdsForRoleSession(
+        records,
+        this.options.role,
+        existing.boundary.role_session_id,
+      ),
     });
     return {
       sessionManager: restored.manager,
@@ -202,6 +208,11 @@ export class OrchestratorContextCoordinator {
             sessionFile: identity.sessionFile,
             conversationId: identity.conversationId,
             leafId,
+            executedToolCallIds: executedToolCallIdsForRoleSession(
+              this.options.log.records(this.options.runId),
+              this.options.role,
+              identity.roleSessionId,
+            ),
           });
           assertSeedDeliveryAtBoundary(captured.entries, leafId, deliveryLeaf, deliveredSeed);
           return captured.reference;

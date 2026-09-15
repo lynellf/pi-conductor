@@ -12,6 +12,13 @@ export function formatTerminalReason(
 
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
+    if (record?.type === "run_finalization_failed") {
+      const recovery =
+        record.recovery === "inspect_disposal"
+          ? "inspect and stop remaining resources on original host, then start a fresh run"
+          : "resume with --reset-orchestrator-context";
+      return `session_failed(finalization:${record.phase}:${record.code}) recovery=${recovery} failure_detail=${boundDetail(record.diagnostic)}`;
+    }
     if (record?.type === "session_failed") {
       const reason = record.failure_reason ?? "unknown";
       const detail = formatDetail(record.failure_detail);

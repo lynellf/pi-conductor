@@ -5,6 +5,7 @@ import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
+import { assertRunFinalizationFailure } from "./run-finalization.js";
 import { assertToolExecutionRecord } from "./tool-execution.js";
 import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
@@ -60,6 +61,10 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
 
   if (record.type === "manifest_snapshot") {
     verifyManifestSnapshot(record as unknown as ManifestSnapshotRecord);
+  }
+  if (record.type === "run_finalization_failed") {
+    assertRunFinalizationFailure(record);
+    return;
   }
 
   if (record.type === "workspace_provisioned") {

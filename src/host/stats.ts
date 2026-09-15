@@ -40,6 +40,10 @@ import {
   inspectOrchestratorContext,
   type OrchestratorContextInspection,
 } from "../persistence/orchestrator-context-inspection.js";
+import {
+  latestRunFinalizationFailure,
+  type RunFinalizationFailedRecord,
+} from "../persistence/run-finalization.js";
 import { isToolExecutionRecord, type ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { projectToolExecutionStats, type ToolExecutionStats } from "./execution/execution-stats.js";
 
@@ -140,6 +144,7 @@ export interface RunStats {
   readonly toolExecution?: ToolExecutionStats;
   /** Bounded retained orchestrator context state; omitted for context_retention: none. */
   readonly context?: OrchestratorContextInspection;
+  readonly finalizationFailure?: RunFinalizationFailedRecord;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -175,6 +180,7 @@ export function runStats(
       isToolExecutionRecord(record) && record.run_id === runId,
   );
   const toolExecution = projectToolExecutionStats(toolRecords);
+  const finalizationFailure = latestRunFinalizationFailure(records, runId);
 
   // §11.8: `state` is the current role from the latest checkpoint.
   // If no checkpoint exists yet (the run hasn't started), fall
@@ -195,6 +201,7 @@ export function runStats(
     subagents,
     toolExecution,
     ...(context === null ? {} : { context }),
+    ...(finalizationFailure === null ? {} : { finalizationFailure }),
   } as RunStats;
   return Object.freeze(result);
 }

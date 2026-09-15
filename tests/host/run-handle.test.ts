@@ -187,6 +187,29 @@ describe("RunHandle operator controls", () => {
     await handle.completion();
     expect(handle.runStats().exitReason).toBe("session_failed");
   });
+
+  it("keeps live status failed when completion rejects during finalization", async () => {
+    const def = makeDef();
+    const error = new Error("finalization persistence failed");
+    const handle = new RunHandle({
+      runId: "rejected-finalization-run",
+      def,
+      log: new InMemoryRecordLog(),
+      loadedManifest: {
+        def,
+        manifest: { version: 1, roles: [] } as unknown as LoadedManifest["manifest"],
+        warnings: [],
+        manifestDir: null,
+        manifestVersion: 1,
+      },
+      configOverrideContainer: { current: {} },
+      requestAbort: vi.fn().mockResolvedValue(undefined),
+      completionPromise: Promise.reject(error),
+    });
+
+    await expect(handle.completion()).rejects.toBe(error);
+    expect(handle.runStats().exitReason).toBe("session_failed");
+  });
 });
 
 describe("RunHandle.abort()", () => {

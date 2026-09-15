@@ -1169,9 +1169,9 @@ describe("runLoop — session disposal (§12.1 step 7)", () => {
     session.retainedContextMode = "capture-fails";
     host.enqueue(session);
 
-    await expect(makeRun(createInitialCheckpoint(makeDef()), host)).rejects.toThrow(
-      "capture failed",
-    );
+    await expect(makeRun(createInitialCheckpoint(makeDef()), host)).resolves.toMatchObject({
+      exitReason: "session_failed",
+    });
     expect(session.retentionEvents).toEqual(["capture", "dispose"]);
   });
 
@@ -1182,9 +1182,9 @@ describe("runLoop — session disposal (§12.1 step 7)", () => {
     session.retainedContextMode = "dispose-fails";
     host.enqueue(session);
 
-    await expect(makeRun(createInitialCheckpoint(makeDef()), host)).rejects.toThrow(
-      "dispose failed",
-    );
+    await expect(makeRun(createInitialCheckpoint(makeDef()), host)).resolves.toMatchObject({
+      exitReason: "session_failed",
+    });
     expect(session.retentionEvents).toEqual(["capture", "dispose"]);
   });
 
@@ -1209,6 +1209,40 @@ describe("runLoop — session disposal (§12.1 step 7)", () => {
 });
 
 describe("runLoop — host hook usage", () => {
+  it.each([
+    "user_aborted",
+    "tool_cleanup_unconfirmed",
+    "session_cost_cap_exceeded",
+  ] as const)("preserves %s lifecycle attribution when context finalization also fails", async (reason) => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    host.nextModel = "stub:fallback";
+    const checkpoint = createInitialCheckpoint(makeDef());
+    const session = new FakeSession("orchestrator", "retained-terminal", [{ kind: "no_emission" }]);
+    session.retainedContextMode = "capture-fails";
+    session.afterPrompt = () => {
+      host.terminalReasons.set(session.sessionId, reason);
+    };
+    host.enqueue(session);
+
+    const result = await makeRun(checkpoint, host);
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(host.spawnedSessions).toHaveLength(1);
+    const records = log.records(checkpoint.run_id);
+    const terminals = records.filter(
+      (record) => record.type === "session_failed" || record.type === "session_ended",
+    );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]).toMatchObject({ type: "session_failed", failure_reason: reason });
+    expect(records).toContainEqual(
+      expect.objectContaining({ type: "run_finalization_failed", phase: "context_capture" }),
+    );
+    expect(
+      records.some((record) => record.type === "model_retry" || record.type === "model_fallback"),
+    ).toBe(false);
+  });
+
   it("persists cleanup failure detail and does not retry or dispatch after provider abort", async () => {
     const log = new InMemoryRecordLog();
     const host = new FakeHost("run-1", log);

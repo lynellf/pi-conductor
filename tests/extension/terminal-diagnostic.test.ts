@@ -67,6 +67,48 @@ describe("terminal diagnostics", () => {
     );
   });
 
+  it("surfaces post-lifecycle finalization phase, code, and bounded diagnostic", () => {
+    const formatted = formatTerminalReason("session_failed", [
+      {
+        type: "run_finalization_failed",
+        schema_version: 1,
+        run_id: "run-1",
+        role: "orchestrator",
+        role_session_id: "role-session-1",
+        session_file: "session.jsonl",
+        phase: "context_capture",
+        code: "unresolved_tool_call",
+        diagnostic: "retained context could not be captured",
+        recovery: "reset_orchestrator_context",
+        ts: 3,
+      },
+    ]);
+    expect(formatted).toBe(
+      "session_failed(finalization:context_capture:unresolved_tool_call) recovery=resume with --reset-orchestrator-context failure_detail=retained context could not be captured",
+    );
+  });
+
+  it("directs disposal failures to inspect resources and start a fresh run", () => {
+    const formatted = formatTerminalReason("session_failed", [
+      {
+        type: "run_finalization_failed",
+        schema_version: 1,
+        run_id: "run-1",
+        role: "orchestrator",
+        role_session_id: "role-session-1",
+        session_file: "session.jsonl",
+        phase: "session_dispose",
+        code: "dispose_failed",
+        diagnostic: "original host remains active",
+        recovery: "inspect_disposal",
+        ts: 3,
+      },
+    ]);
+    expect(formatted).toContain(
+      "recovery=inspect and stop remaining resources on original host, then start a fresh run",
+    );
+  });
+
   it.each(["done", "aborted"] as const)("does not attach stale diagnostics to %s", (reason) => {
     expect(formatTerminalReason(reason, [failedRecord("stale failure")])).toBe(reason);
   });

@@ -5,8 +5,10 @@ import {
   assertRestorableOrchestratorContext,
   queryOrchestratorContext,
 } from "../persistence/orchestrator-context-query.js";
+import { latestRunFinalizationFailure } from "../persistence/run-finalization.js";
 import type { LoadedManifest } from "./manifest.js";
 import { captureOrchestratorContextBoundary } from "./orchestrator-context-files.js";
+import { executedToolCallIdsForRoleSession } from "./orchestrator-context-retry-projection.js";
 
 /** Admission inputs for a resumed orchestrator context. */
 export interface OrchestratorContextResumeOptions {
@@ -21,6 +23,17 @@ export interface OrchestratorContextResumeOptions {
 export async function admitOrchestratorContextResume(
   options: OrchestratorContextResumeOptions,
 ): Promise<LoadedManifest> {
+  const failure = latestRunFinalizationFailure(options.records, options.runId);
+  if (failure?.recovery === "inspect_disposal") {
+    throw new Error(
+      `resume blocked by session disposal failure (${failure.code}) for ${failure.role_session_id}: ${failure.diagnostic}. Inspect and stop remaining resources on the original host before starting a fresh run; context reset cannot confirm disposal.`,
+    );
+  }
+  if (failure !== null && !options.reset) {
+    throw new Error(
+      `resume blocked by ${failure.phase} (${failure.code}) for ${failure.role_session_id}: ${failure.diagnostic}. Retry resume with --reset-orchestrator-context to start a fresh context epoch and preserve the accepted checkpoint.`,
+    );
+  }
   const loaded = effectiveHistoricalManifest(options.loadedManifest, options.records);
   const role = contextRole(loaded);
   if (role === null) {
@@ -66,6 +79,11 @@ export async function admitOrchestratorContextResume(
       conversationId: restorable.boundary.conversation_id,
       sessionFile: restorable.boundary.session_file,
       leafId: restorable.boundary.leaf_id,
+      executedToolCallIds: executedToolCallIdsForRoleSession(
+        options.records,
+        role,
+        restorable.boundary.role_session_id,
+      ),
     });
     if (captured.reference.history_sha256 !== restorable.boundary.history_sha256) {
       throw new Error(

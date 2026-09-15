@@ -363,8 +363,17 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         };
         await writeOutput(stdout, `${JSON.stringify(result)}\n`);
       } else {
+        const finalization = handle.runStats().finalizationFailure;
+        const finalizationDiagnostic =
+          finalization === undefined
+            ? ""
+            : ` finalization=${finalization.phase}:${finalization.code} recovery=${
+                finalization.recovery === "inspect_disposal"
+                  ? "inspect and stop remaining resources on original host, then start a fresh run"
+                  : "resume with --reset-orchestrator-context"
+              } failure_detail=${finalization.diagnostic}`;
         out.log(
-          `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}`,
+          `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}${finalizationDiagnostic}`,
         );
       }
       return exitReason === "session_failed" ? 1 : 0;

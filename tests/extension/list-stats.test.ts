@@ -109,6 +109,28 @@ describe("computeListedExitReason", () => {
     expect(reason).toBe<ListedExitReason>("session_failed");
   });
 
+  it("returns 'session_failed' for a durable finalization failure", () => {
+    const reason = computeListedExitReason(
+      [
+        {
+          type: "run_finalization_failed",
+          schema_version: 1,
+          run_id: "run-1",
+          role: "orchestrator",
+          role_session_id: "role-session-1",
+          session_file: "session.jsonl",
+          phase: "context_commit",
+          code: "commit_failed",
+          diagnostic: "commit failed",
+          recovery: "reset_orchestrator_context",
+          ts: 2,
+        },
+      ],
+      ck(),
+    );
+    expect(reason).toBe("session_failed");
+  });
+
   // ─── Scenario E: done precedence over trailing session_failed ───
 
   it("returns 'done' when checkpoint is done even if a session_failed record trails", () => {
@@ -117,5 +139,28 @@ describe("computeListedExitReason", () => {
       ck({ current_role: "done" }),
     );
     expect(reason).toBe<ListedExitReason>("done");
+  });
+
+  it("returns 'session_failed' when finalization fails after an accepted end", () => {
+    const reason = computeListedExitReason(
+      [
+        transitionAccepted({ from: "orchestrator", to: "done", event: "end", target_role: null }),
+        {
+          type: "run_finalization_failed",
+          schema_version: 1,
+          run_id: "run-1",
+          role: "orchestrator",
+          role_session_id: "role-session-1",
+          session_file: "session.jsonl",
+          phase: "context_commit",
+          code: "commit_failed",
+          diagnostic: "commit failed",
+          recovery: "reset_orchestrator_context",
+          ts: 2,
+        },
+      ],
+      ck({ current_role: "done" }),
+    );
+    expect(reason).toBe("session_failed");
   });
 });

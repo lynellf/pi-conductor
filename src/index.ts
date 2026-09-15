@@ -205,9 +205,16 @@ export type {
   RecordLog,
   RoleTurnRecord,
   RunContextRecord,
+  RunFinalizationFailedRecord,
   RunSeededRecord,
 } from "./persistence/log.js";
-export { InMemoryRecordLog } from "./persistence/log.js";
+export {
+  assertRunFinalizationFailure,
+  InMemoryRecordLog,
+  latestRunFinalizationFailure,
+  RunFinalizationFailureError,
+  runFinalizationFailedSchema,
+} from "./persistence/log.js";
 export type {
   OrchestratorContextBoundaryInspection,
   OrchestratorContextCompactionInspection,

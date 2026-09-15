@@ -250,11 +250,13 @@ describe("orchestrator context session file boundary", () => {
       conversationId: manager.getSessionId(),
       leafId: tip,
     });
+    expect(boundary.effectiveEntries).toHaveLength(boundary.entries.length);
     const restored = await restoreOrchestratorContextBoundary({
       boundary: boundary.reference,
       destinationSessionDir: makeAndTrackIsolatedAgentDir("pi-context-files-paired-destination-"),
       cwd: process.cwd(),
     });
+    expect(restored.manager.getBranch()).toEqual(boundary.entries);
     const messages = restored.manager.buildSessionContext().messages;
     expect(messages.some((message) => message.role === "compactionSummary")).toBe(true);
     expect(
@@ -280,6 +282,167 @@ describe("orchestrator context session file boundary", () => {
         leafId: tip,
       }),
     ).rejects.toMatchObject({ code: "broken_parent_chain" });
+  });
+
+  it("excludes an interrupted tool call from effective pairing after an SDK retry", async () => {
+    const directory = makeAndTrackIsolatedAgentDir("pi-context-files-retry-");
+    const manager = SessionManager.create(process.cwd(), directory);
+    manager.appendMessage({ role: "user", content: "request", timestamp: 1 });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "interrupted", name: "delegate", arguments: {} }],
+      api: "anthropic-messages",
+      provider: "stub",
+      model: "stub-model",
+      usage: {
+        input: 7,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 10,
+        cost: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0, total: 0.02 },
+      },
+      stopReason: "error",
+      errorMessage: "WebSocket idle timeout",
+      timestamp: 2,
+    });
+    const tip = appendAssistant(manager, "retry succeeded", 3);
+    const file = manager.getSessionFile();
+    if (!file) throw new Error("expected retry fixture");
+
+    const captured = await captureOrchestratorContextBoundary({
+      roleSessionId: "retry-recovered",
+      sessionFile: file,
+      conversationId: manager.getSessionId(),
+      leafId: tip,
+    });
+
+    expect(captured.entries).toHaveLength(3);
+  });
+
+  it("rejects an interrupted tool call when SDK retry is exhausted", async () => {
+    const directory = makeAndTrackIsolatedAgentDir("pi-context-files-retry-exhausted-");
+    const manager = SessionManager.create(process.cwd(), directory);
+    manager.appendMessage({ role: "user", content: "request", timestamp: 1 });
+    const tip = manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "interrupted", name: "delegate", arguments: {} }],
+      api: "anthropic-messages",
+      provider: "stub",
+      model: "stub-model",
+      usage: {
+        input: 7,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 10,
+        cost: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0, total: 0.02 },
+      },
+      stopReason: "error",
+      errorMessage: "WebSocket idle timeout",
+      timestamp: 2,
+    });
+    const file = manager.getSessionFile();
+    if (!file) throw new Error("expected retry-exhausted fixture");
+
+    await expect(
+      captureOrchestratorContextBoundary({
+        roleSessionId: "retry-exhausted",
+        sessionFile: file,
+        conversationId: manager.getSessionId(),
+        leafId: tip,
+      }),
+    ).rejects.toMatchObject({ code: "unresolved_tool_call" });
+  });
+
+  it("repairs compaction's kept entry when it omits a superseded retry failure", async () => {
+    const directory = makeAndTrackIsolatedAgentDir("pi-context-files-retry-compaction-");
+    const manager = SessionManager.create(process.cwd(), directory);
+    manager.appendMessage({ role: "user", content: "request", timestamp: 1 });
+    const failed = manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "interrupted", name: "delegate", arguments: {} }],
+      api: "anthropic-messages",
+      provider: "stub",
+      model: "stub-model",
+      usage: {
+        input: 7,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 10,
+        cost: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0, total: 0.02 },
+      },
+      stopReason: "error",
+      errorMessage: "WebSocket idle timeout",
+      timestamp: 2,
+    });
+    const recovered = appendAssistant(manager, "retry succeeded", 3);
+    const compaction = manager.appendCompaction("retry summary", failed, 10);
+    const file = manager.getSessionFile();
+    if (!file) throw new Error("expected retry-compaction fixture");
+
+    const captured = await captureOrchestratorContextBoundary({
+      roleSessionId: "retry-compaction",
+      sessionFile: file,
+      conversationId: manager.getSessionId(),
+      leafId: compaction,
+    });
+    const projectedCompaction = captured.effectiveEntries.find(
+      (entry) => entry.type === "compaction",
+    );
+    if (projectedCompaction?.type !== "compaction") {
+      throw new Error("expected projected compaction");
+    }
+    expect(projectedCompaction.firstKeptEntryId).toBe(recovered);
+
+    const restored = await restoreOrchestratorContextBoundary({
+      boundary: captured.reference,
+      destinationSessionDir: makeAndTrackIsolatedAgentDir(
+        "pi-context-files-retry-compaction-destination-",
+      ),
+      cwd: process.cwd(),
+    });
+    expect(JSON.stringify(restored.manager.buildSessionContext().messages)).not.toContain(
+      "interrupted",
+    );
+  });
+
+  it("rejects an interrupted retry-shaped call with execution evidence", async () => {
+    const directory = makeAndTrackIsolatedAgentDir("pi-context-files-retry-evidence-");
+    const manager = SessionManager.create(process.cwd(), directory);
+    manager.appendMessage({ role: "user", content: "request", timestamp: 1 });
+    manager.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "executed", name: "delegate", arguments: {} }],
+      api: "anthropic-messages",
+      provider: "stub",
+      model: "stub-model",
+      usage: {
+        input: 7,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 10,
+        cost: { input: 0.01, output: 0.01, cacheRead: 0, cacheWrite: 0, total: 0.02 },
+      },
+      stopReason: "error",
+      errorMessage: "WebSocket idle timeout",
+      timestamp: 2,
+    });
+    const tip = appendAssistant(manager, "retry succeeded", 3);
+    const file = manager.getSessionFile();
+    if (!file) throw new Error("expected retry-evidence fixture");
+
+    await expect(
+      captureOrchestratorContextBoundary({
+        roleSessionId: "retry-evidence",
+        sessionFile: file,
+        conversationId: manager.getSessionId(),
+        leafId: tip,
+        executedToolCallIds: new Set(["executed"]),
+      }),
+    ).rejects.toMatchObject({ code: "unresolved_tool_call" });
   });
 
   it.each([

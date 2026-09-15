@@ -103,6 +103,31 @@ describe("formatConductStatus", () => {
     expect(line).toBe("conduct: worker · session_failed · handoffs=0 · $0.000");
   });
 
+  it("renders the durable finalization phase and code", () => {
+    const line = formatConductStatus(
+      makeStats({
+        state: "worker",
+        exitReason: "session_failed",
+        finalizationFailure: {
+          schema_version: 1,
+          type: "run_finalization_failed",
+          run_id: "test-run",
+          role: "worker",
+          role_session_id: "role-session-1",
+          session_file: "session.jsonl",
+          phase: "session_dispose",
+          code: "dispose_failed",
+          diagnostic: "dispose failed",
+          recovery: "inspect_disposal",
+          ts: 1,
+        },
+      }),
+    );
+    expect(line).toContain(
+      "finalization=session_dispose:dispose_failed · recovery=inspect and stop resources on original host, then start a fresh run",
+    );
+  });
+
   it("renders the aborted terminal", () => {
     const line = formatConductStatus(makeStats({ state: "implementer", exitReason: "aborted" }));
     expect(line).toBe("conduct: implementer · aborted · handoffs=0 · $0.000");

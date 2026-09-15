@@ -12,6 +12,10 @@ import {
 import type { ContextBoundaryReference } from "../persistence/orchestrator-context.js";
 import { OrchestratorContextFileError } from "./orchestrator-context-file-errors.js";
 import { validateOrchestratorContextMessage } from "./orchestrator-context-message-validation.js";
+import {
+  projectEffectiveRetryContext,
+  projectEffectiveRetryEntries,
+} from "./orchestrator-context-retry-projection.js";
 
 export { OrchestratorContextFileError } from "./orchestrator-context-file-errors.js";
 export { restoreOrchestratorContextBoundary } from "./orchestrator-context-file-restore.js";
@@ -22,6 +26,8 @@ export interface CaptureContextBoundaryOptions {
   readonly sessionFile: string;
   readonly conversationId: string;
   readonly leafId: string;
+  /** Tool calls with durable execution/admission evidence must remain settled. */
+  readonly executedToolCallIds?: ReadonlySet<string>;
 }
 
 /** A validated source file and its selected SDK branch. */
@@ -29,6 +35,8 @@ export interface CapturedContextBoundary {
   readonly reference: ContextBoundaryReference;
   readonly header: SessionHeader;
   readonly entries: readonly SessionEntry[];
+  /** SDK-effective entries used when a recovered retry must be restored. */
+  readonly effectiveEntries: readonly SessionEntry[];
 }
 
 /** Destination for an exact-tip branch restoration. */
@@ -36,6 +44,8 @@ export interface RestoreContextBoundaryOptions {
   readonly boundary: ContextBoundaryReference;
   readonly destinationSessionDir: string;
   readonly cwd: string;
+  /** Tool calls with durable execution/admission evidence must remain settled. */
+  readonly executedToolCallIds?: ReadonlySet<string>;
 }
 
 /** Result of creating a new physical session from a committed boundary. */
@@ -365,7 +375,11 @@ export async function captureOrchestratorContextBoundary(
       `SDK context reconstruction failed: ${detail}`,
     );
   }
-  assertToolPairing(context.messages);
+  const projection = projectEffectiveRetryContext(
+    context.messages,
+    options.executedToolCallIds ?? new Set<string>(),
+  );
+  assertToolPairing(projection.messages);
   const reference: ContextBoundaryReference = {
     role_session_id: options.roleSessionId,
     conversation_id: validated.header.id,
@@ -373,5 +387,13 @@ export async function captureOrchestratorContextBoundary(
     leaf_id: options.leafId,
     history_sha256: validated.canonicalHash,
   };
-  return { reference, header: validated.header, entries: validated.selectedBranch };
+  return {
+    reference,
+    header: validated.header,
+    entries: validated.selectedBranch,
+    effectiveEntries: projectEffectiveRetryEntries(
+      validated.selectedBranch,
+      projection.omittedMessages,
+    ),
+  };
 }

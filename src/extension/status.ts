@@ -79,6 +79,16 @@ function formatContextToken(stats: RunStats): string {
   return context === undefined ? "" : ` · context=${context.status}`;
 }
 
+function formatFinalizationToken(stats: RunStats): string {
+  const failure = stats.finalizationFailure;
+  if (failure === undefined) return "";
+  const recovery =
+    failure.recovery === "inspect_disposal"
+      ? "inspect and stop resources on original host, then start a fresh run"
+      : "resume with --reset-orchestrator-context";
+  return ` · finalization=${failure.phase}:${failure.code} · recovery=${recovery}`;
+}
+
 function formatCostToken(stats: RunStats): string {
   const cost = `$${stats.costRollup.perRun.cost.toFixed(3)}`;
   return stats.costRollup.contextCompactionUsageComplete === false ? `${cost} + unknown` : cost;
@@ -107,8 +117,9 @@ export function formatConductStatus(stats: RunStats, now = Date.now()): string {
   const subagentTokens = formatSubagentTokens(stats);
   const toolExecutionTokens = formatToolExecutionTokens(stats, now);
   const contextToken = formatContextToken(stats);
+  const finalizationToken = formatFinalizationToken(stats);
   const escapeHint = reason === "running" ? " · Esc abort" : "";
-  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens}${contextToken} · handoffs=${handoffs} · ${cost}${escapeHint}`;
+  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens}${contextToken}${finalizationToken} · handoffs=${handoffs} · ${cost}${escapeHint}`;
 }
 
 /** Spinner interval and minimum free time between durable stats refreshes. */
