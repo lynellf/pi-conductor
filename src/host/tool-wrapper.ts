@@ -48,6 +48,7 @@
  */
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { formatHostRejection, type HostRejection } from "./host-rejection.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -81,6 +82,7 @@ export function wrapToolWithSeal(
   // biome-ignore lint/suspicious/noExplicitAny: ToolDefinition is generic; the SDK erases generics at the customTools[] boundary (matching the Model<any> pattern in src/host/host.ts). See module-level JSDoc.
   tool: ToolDefinition<any, any, any>,
   sealCheck: SealCheck,
+  getHostRejection?: () => HostRejection | false,
   // biome-ignore lint/suspicious/noExplicitAny: see above.
 ): ToolDefinition<any, any, any> {
   // Capture the original execute. Type-erased because the SDK erases
@@ -101,6 +103,8 @@ export function wrapToolWithSeal(
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate, ctx) => {
+      const rejection = getHostRejection?.();
+      if (rejection) return formatHostRejection(tool.name, rejection);
       if (sealCheck()) {
         return {
           content: [{ type: "text", text: SEALED_ERROR_TEXT }],

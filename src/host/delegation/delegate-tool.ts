@@ -87,6 +87,8 @@ export interface DelegateToolOptions {
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
   /** Deterministic resolver race injection for tests; never exposed by the delegate tool schema. */
   readonly contextArtifactTestHook?: ResolveContextArtifactBatchOptions["testHook"];
+  /** Synchronous host assertion after preparation and before filesystem or pool work. */
+  readonly assertAdmissionOpen?: () => void;
   readonly isAdmissionClosed?: () => boolean;
   readonly onChildStarted?: (info: PoolChildStartedInfo) => void;
   readonly onChildCompleted?: (result: PoolCompletedResult) => void;
@@ -157,6 +159,7 @@ export interface ChildTerminal {
 /** Validate, create worktrees, run bounded children, and preserve input order. */
 export async function executeDelegate(options: DelegateToolOptions): Promise<DelegateResult> {
   const prepared = await prepareDelegateSubmission(options);
+  options.assertAdmissionOpen?.();
   const tasks = prepared.tasks.map((child) => ({
     taskId: child.taskId,
     subagent: child.profile.name,

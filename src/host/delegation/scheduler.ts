@@ -58,6 +58,8 @@ export interface DelegationSchedulerOptions {
   readonly onTerminal: (result: PoolChildResult) => void;
   readonly onFatal?: (cause: unknown) => void;
   readonly isBudgetExhausted?: () => boolean;
+  /** Synchronous host guard checked at both sides of asynchronous preparation. */
+  readonly assertAdmissionOpen?: () => void;
 }
 
 interface TaskState {
@@ -144,6 +146,7 @@ export class DelegationScheduler {
     }
     if (this.isClosed() || this.isBudgetExhausted())
       throw new Error("delegation admission is closed");
+    this.options.assertAdmissionOpen?.();
     const prepared = await this.options.prepareSubmission(
       input,
       this.options.maxChildren -
@@ -154,6 +157,7 @@ export class DelegationScheduler {
     const fingerprint = hasSandbox ? acceptedFingerprint(input, tasks) : rawRequestFingerprint;
     if (this.isClosed() || this.isBudgetExhausted())
       throw new Error("delegation admission is closed");
+    this.options.assertAdmissionOpen?.();
     if (tasks.length === 0) throw new Error("delegation submission requires a task");
     const spent = spentDelegationSlots(
       this.options.records(),

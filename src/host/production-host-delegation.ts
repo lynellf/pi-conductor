@@ -12,6 +12,7 @@ import { createSandboxAdmissionAdapter } from "./delegation/sandbox-admission.js
 import type { DisplaySink } from "./display-sink.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import { initializeProtectedRunLayout } from "./execution/sandbox/protected-run-layout.js";
+import type { HostRejection } from "./host-rejection.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { DelegateBridgeHandler, DelegateBridgeResult } from "./rpc/delegate-bridge.js";
 import { DelegateBridgeConfigError } from "./rpc/delegate-bridge.js";
@@ -77,6 +78,7 @@ export async function createDelegateTool(
   getCurrentParentUsage?: () => number,
   onTaskTerminal?: (result: PoolChildResult) => void,
   onFatal?: (cause: unknown) => void,
+  getHostRejection?: () => HostRejection | false,
 ): Promise<ReturnType<typeof import("./delegation/delegate-tool-factory.js").createDelegateTool>> {
   if (!hasDelegateConfiguration(roleConfig)) {
     throw new DelegateBridgeConfigError(`role '${String(role)}' is not authorized to delegate`);
@@ -137,6 +139,7 @@ export async function createDelegateTool(
     },
     ...(onTaskTerminal === undefined ? {} : { onTaskTerminal }),
     ...(onFatal === undefined ? {} : { onFatal }),
+    ...(getHostRejection === undefined ? {} : { getHostRejection }),
     ...(ctx.loadedManifest.legacyDelegationMode === true ||
     ctx.loadedManifest.legacyDelegationRoles?.includes(role) === true
       ? { legacyDelegationMode: true }

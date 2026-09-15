@@ -10,6 +10,9 @@
 
 ### Bug fixes
 
+- Clear intermediate parent model errors only on SDK-confirmed retry; retain usage
+  and terminal guards, block terminal work/delegation admission, and report specific
+  bounded host rejection causes instead of schema errors (#112).
 - Deliver accepted structured handoff fields to both workers and returning
   orchestrators across restart, without transcript recovery; reject envelopes
   over 64 KiB explicitly and preserve verified artifact delivery authority (#110).

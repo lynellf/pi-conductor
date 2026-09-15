@@ -20,6 +20,7 @@ import {
 } from "../../seam/schema.js";
 import type { DisplaySink } from "../display-sink.js";
 import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js";
+import { formatHostRejection, type HostRejection } from "../host-rejection.js";
 import { mapPoolResult } from "./child-result-mapping.js";
 import { buildSpawnCallback } from "./child-session.js";
 import {
@@ -28,6 +29,7 @@ import {
   type SandboxAdmissionAdapter,
 } from "./delegate-tool.js";
 import { appendCompleted, appendFailed, errorMessage } from "./factory-records.js";
+import { HostDelegationRejectedError } from "./factory-scheduler.js";
 import type { DelegationManager } from "./manager.js";
 import type { PoolChildResult } from "./pool.js";
 import type { DelegationScheduler } from "./scheduler.js";
@@ -53,6 +55,8 @@ export interface DelegateToolFactoryOptions {
   readonly records?: () => readonly PersistedRecord[];
   readonly onFatal?: (cause: unknown) => void;
   readonly isBudgetExhausted?: () => boolean;
+  /** Host terminal gate for new submissions; controls remain available for settlement. */
+  readonly getHostRejection?: () => HostRejection | false;
   /** Advisory notification after the durable child terminal is appended. */
   readonly onTaskTerminal?: (result: PoolChildResult) => void;
   /** Optional #77 scheduler supplied by the host-owned lifecycle. */
@@ -101,6 +105,8 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           terminate: false,
         };
       }
+      const initialRejection = opts.getHostRejection?.() ?? false;
+      if (initialRejection !== false) return formatHostRejection("delegate", initialRejection);
       const effectiveMode = configuredMode ?? args.mode ?? "blocking";
       if (configuredMode !== undefined && args.mode !== undefined && args.mode !== configuredMode) {
         return {
@@ -136,6 +142,8 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           throw new Error("nonblocking delegation requires the shared scheduler");
         }
         await previousExecution;
+        const queuedRejection = opts.getHostRejection?.() ?? false;
+        if (queuedRejection !== false) return formatHostRejection("delegate", queuedRejection);
         if (opts.scheduler !== undefined) {
           const scheduler = opts.scheduler;
           const childIds = await scheduler.submit(_toolCallId, args);
@@ -170,7 +178,16 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           primaryCheckout: opts.primaryCheckout,
           systemPromptRoot: opts.systemPromptRoot,
           spawnAndRunChild: buildSpawnCallback(opts),
-          isAdmissionClosed: () => opts.manager.isClosed(),
+          ...(opts.getHostRejection === undefined
+            ? {}
+            : {
+                assertAdmissionOpen: () => {
+                  const rejection = opts.getHostRejection?.() ?? false;
+                  if (rejection !== false) throw new HostDelegationRejectedError(rejection);
+                },
+              }),
+          isAdmissionClosed: () =>
+            opts.manager.isClosed() || (opts.getHostRejection?.() ?? false) !== false,
           onChildStarted: () => {},
           onChildCompleted: (child) => appendCompleted(opts.persistRecord, opts.runId, child),
           onChildFailed: (child) => appendFailed(opts.persistRecord, opts.runId, child),
@@ -185,6 +202,9 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           terminate: false,
         };
       } catch (cause) {
+        if (cause instanceof HostDelegationRejectedError) {
+          return formatHostRejection("delegate", cause.rejection);
+        }
         const error = cause instanceof DelegateToolError ? cause : undefined;
         const code = error?.code ?? "delegate_execution_failed";
         if (error?.code === "batch_validation_failed") {

@@ -209,9 +209,24 @@ export class SessionState {
     ) {
       return;
     }
+
+    // Provider errors are lower-priority than a cause already set by the
+    // host. In particular, a late abort message must not turn a cost cap or
+    // user cancellation into a model fallback.
+    if (
+      reason === "model_error" &&
+      this._terminalReason !== null &&
+      this._terminalReason !== "model_error"
+    ) {
+      return;
+    }
+
+    const didChange = this._terminalReason !== reason;
     this._terminalReason = reason;
     if (failureDetail !== undefined && failureDetail.length > 0) {
       this._failureDetail = failureDetail;
+    } else if (didChange) {
+      this._failureDetail = null;
     }
   }
 

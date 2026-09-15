@@ -6,6 +6,7 @@ import {
 } from "../../persistence/tool-execution.js";
 import type { DelegateSubmissionArgs } from "../../seam/schema.js";
 import { assertNoUnfinishedToolExecutions } from "../execution/tool-execution-controller.js";
+import type { HostRejection } from "../host-rejection.js";
 import { prepareDelegateSubmission } from "./admission.js";
 import { isPoolCompleted } from "./child-result-mapping.js";
 import { DelegationChildSafetyError } from "./child-safety-error.js";
@@ -15,6 +16,14 @@ import type { DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
 import { appendCompleted, appendFailed } from "./factory-records.js";
 import type { PoolChildResult } from "./pool.js";
 import { DelegationScheduler } from "./scheduler.js";
+
+/** Preserves the exact host terminal observed after asynchronous preparation. */
+export class HostDelegationRejectedError extends Error {
+  constructor(readonly rejection: HostRejection) {
+    super("delegation rejected by terminal parent");
+    this.name = "HostDelegationRejectedError";
+  }
+}
 
 /** Construct one scheduler with the factory's pinned preparation and child adapter. */
 export function createDelegateScheduler(
@@ -93,6 +102,14 @@ export function createDelegateScheduler(
     onTerminal: (result) => persistTerminal(opts, result),
     ...(opts.onFatal === undefined ? {} : { onFatal: opts.onFatal }),
     ...(opts.isBudgetExhausted === undefined ? {} : { isBudgetExhausted: opts.isBudgetExhausted }),
+    ...(opts.getHostRejection === undefined
+      ? {}
+      : {
+          assertAdmissionOpen: () => {
+            const rejection = opts.getHostRejection?.() ?? false;
+            if (rejection !== false) throw new HostDelegationRejectedError(rejection);
+          },
+        }),
   });
   return scheduler;
 }

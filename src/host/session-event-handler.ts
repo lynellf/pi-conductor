@@ -49,6 +49,7 @@ import {
   extractFileHunks,
   extractFileMutations,
 } from "./display-sink.js";
+import type { HostRejection } from "./host-rejection.js";
 import { loadWriteHunksForArgs } from "./hunk-diff.js";
 import type { RoleTurnTelemetryAttachment } from "./role-turn-producer.js";
 import { formatToolCallSummary, formatToolCompletedLine } from "./tool-summary.js";
@@ -172,6 +173,8 @@ export interface FileMutationTelemetry {
 export interface CaptureRejector {
   bindState(state: SessionState): void;
   shouldRejectCapture(): boolean;
+  /** Read the current invocation's concrete cause without exposing session state. */
+  getRejection(): HostRejection | false;
 }
 
 export function createCaptureRejector(): CaptureRejector {
@@ -179,6 +182,15 @@ export function createCaptureRejector(): CaptureRejector {
   return {
     bindState(state: SessionState) {
       bound = state;
+    },
+    getRejection(): HostRejection | false {
+      if (bound === null) return false;
+      const cause = bound.terminalReason ?? (bound.aborted ? "aborted" : null);
+      if (cause === null) return false;
+      return {
+        cause,
+        ...(bound.failureDetail === null ? {} : { diagnostic: bound.failureDetail }),
+      };
     },
     shouldRejectCapture(): boolean {
       if (bound === null) return false;
@@ -311,6 +323,14 @@ function onSessionEvent(
   // progressive text events. Text is accumulated in the session and
   // emitted once on `message_end` as a single `"text"` event.
   if (event.type === "message_start" || event.type === "message_update") {
+    return;
+  }
+
+  if (event.type === "agent_end") {
+    // `message_end(stopReason: "error")` precedes this event. `willRetry`
+    // means the SDK has accepted that provider failure for automatic retry,
+    // so it cannot remain this invocation's terminal cause.
+    if (event.willRetry) state.clearRetryableModelError();
     return;
   }
 

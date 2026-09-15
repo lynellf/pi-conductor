@@ -14,6 +14,7 @@ import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import type { RoleSession, SpawnRoleOptions } from "./host.js";
+import type { HostRejection } from "./host-rejection.js";
 import { spawnIsolatedRoleSession } from "./isolated-role-spawn.js";
 import type { LoadedManifest } from "./manifest.js";
 import { OrchestratorContextCoordinator } from "./orchestrator-context-coordinator.js";
@@ -86,6 +87,7 @@ export interface SpawnRoleContext {
       (() => number) | undefined,
       ((result: PoolChildResult) => void) | undefined,
       ((cause: unknown) => void) | undefined,
+      (() => HostRejection | false)?,
     ]
   ) => Promise<ReturnType<typeof createDelegateToolFactory>>;
   readonly persistRecord: (record: PersistedRecord) => void;
@@ -281,6 +283,7 @@ export async function spawnRole(
       sharedParent === null ||
       host.delegationSessionKeys.get(sharedParent.sessionId) === undefined ||
       host.inactiveDelegationSessions.has(sharedParent.sessionId) ||
+      host.sessionState.sessionTerminalReason(sharedParent) !== null ||
       sharedParent.isSealed?.() === true ||
       sharedParent.steer === undefined
     )
@@ -293,6 +296,16 @@ export async function spawnRole(
     if (sharedParent !== null) void host.sessionState.abort(sharedParent).catch(() => undefined);
     void cause;
   };
+  const getHostRejection = (): HostRejection | false => {
+    if (sharedParent === null) return false;
+    const state = host.sessionStates.get(sharedParent.sessionId);
+    const cause = state?.terminalReason ?? (state?.aborted ? "aborted" : null);
+    if (cause === null) return false;
+    return {
+      cause,
+      ...(state?.failureDetail == null ? {} : { diagnostic: state.failureDetail }),
+    };
+  };
   const delegateTool = hasDelegateConfiguration(roleConfig)
     ? await host.createDelegateTool(
         role,
@@ -304,6 +317,7 @@ export async function spawnRole(
         opts.getCurrentParentUsage,
         notifyTerminal,
         fatalDelegation,
+        getHostRejection,
       )
     : null;
 

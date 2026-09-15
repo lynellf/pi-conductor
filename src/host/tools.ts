@@ -70,6 +70,7 @@ import {
   type HandoffContractContext,
   validateRoleHandoff,
 } from "./handoff-contract.js";
+import { formatHostRejection, type HostRejection } from "./host-rejection.js";
 import type { SessionSeam } from "./seam.js";
 
 // ─── Structured details for the tool result ────────────────────────────
@@ -89,7 +90,10 @@ export interface EmissionToolDetails {
     | "extra_emission"
     | "handoff_incomplete"
     | "handoff_envelope_not_json"
-    | "handoff_envelope_too_large";
+    | "handoff_envelope_too_large"
+    | "host_terminated";
+  readonly cause?: HostRejection["cause"];
+  readonly diagnostic?: string;
   readonly target_role?: string;
   readonly missing_fields?: readonly string[];
   readonly invalid_fields?: readonly string[];
@@ -125,7 +129,7 @@ interface EmissionToolFactoryOptions {
    * Default: no predicate (the tool always writes — backward
    * compat with Phase 4 / Task 14 behavior).
    */
-  readonly shouldRejectCapture?: () => boolean;
+  readonly shouldRejectCapture?: () => boolean | HostRejection;
 }
 
 function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
@@ -140,7 +144,7 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
     description,
     parameters: schema,
     execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
-      // ── Abort-signal check (Task 17 §11.7) ──────────────────
+      // ── Host rejection and abort-signal checks (issue #112) ──
       // The host calls `session.abort()` from its message_end
       // listener when the per-session cap trips. The SDK
       // propagates the abort via the tool's `signal` parameter.
@@ -154,40 +158,15 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // processed (SDK events flow in order), so the abort
       // signal is the authoritative cross-event visibility
       // for the cap decision.
-      if (signal?.aborted === true) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `${toolName} was rejected: the session was aborted (signal aborted). The loop will record this as session_failed with the host's reason (§11.7 / §8.2).`,
-            },
-          ],
-          details: { ok: false, reason: "schema_invalid" } satisfies EmissionToolDetails,
-          terminate: true,
-        };
+      // A specific host reason wins over a concurrently aborted SDK signal.
+      const hostRejection = shouldRejectCapture?.();
+      if (hostRejection !== undefined && hostRejection !== false) {
+        const rejection: HostRejection =
+          hostRejection === true ? { cause: "host_terminated" } : hostRejection;
+        return formatHostRejection(toolName, rejection);
       }
-
-      // ── Host-driven reject (Task 17 / Task 18) ────────────────
-      // If the host's predicate says "the session is over (cap
-      // tripped, model errored)", the tool returns an error
-      // result WITHOUT touching the capture buffer. The loop's
-      // `validateEmission` then reads an empty buffer and the
-      // host's `sessionTerminalReason` is honored, producing a
-      // `session_failed` record with the host's reason. The
-      // §11.3 contract-breach vocabulary is preserved: this is
-      // not a `transition_rejected`, it's a `session_failed` for
-      // a host-driven cause.
-      if (shouldRejectCapture?.() === true) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `host rejected ${toolName}: session was terminated by a host-driven cause (per-session cap or model error, §11.7/§8.2). The loop will record this as session_failed with the host's reason.`,
-            },
-          ],
-          details: { ok: false, reason: "schema_invalid" } satisfies EmissionToolDetails,
-          terminate: true,
-        };
+      if (signal?.aborted === true) {
+        return formatHostRejection(toolName, { cause: "aborted" });
       }
 
       // ── §3 rule 1, §11.3: extra emission ────────────────────────────
@@ -342,7 +321,7 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
  */
 export function createHandoffTool(
   seam: SessionSeam | (() => SessionSeam),
-  shouldRejectCapture?: () => boolean,
+  shouldRejectCapture?: () => boolean | HostRejection,
   context?: HandoffContractContext | (() => HandoffContractContext),
   /** Use when a shared session may later change roles; no source authority leaks into the schema description. */
   transportNeutralDescription = false,
@@ -373,7 +352,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
  */
 export function createEndTool(
   seam: SessionSeam | (() => SessionSeam),
-  shouldRejectCapture?: () => boolean,
+  shouldRejectCapture?: () => boolean | HostRejection,
 ): ToolDefinition {
   return createEmissionTool({
     seam,

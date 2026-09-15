@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createDelegateTool } from "../../src/host/delegation/delegate-tool-factory.js";
 import { appendFailed } from "../../src/host/delegation/factory-records.js";
+import { HostDelegationRejectedError } from "../../src/host/delegation/factory-scheduler.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
 import type { RoleConfig } from "../../src/manifest/types.js";
 import { child, completed, deferred, fixture } from "./delegation-scheduler-review-fixture.js";
@@ -44,6 +45,7 @@ function makeTool(
   pool: ReturnType<typeof fixture>,
   roleConfig: RoleConfig = role,
   legacyDelegationMode = false,
+  getHostRejection?: () => import("../../src/host/host-rejection.js").HostRejection | false,
 ) {
   return createDelegateTool({
     role: roleConfig,
@@ -61,11 +63,93 @@ function makeTool(
     sessionDir: "/tmp/delegation-factory-sessions",
     manager: new DelegationManager(),
     scheduler: pool.scheduler,
+    ...(getHostRejection === undefined ? {} : { getHostRejection }),
     ...(legacyDelegationMode ? { legacyDelegationMode: true } : {}),
   });
 }
 
 describe("delegate factory asynchronous boundary", () => {
+  it("does not durably accept when the host terminates during asynchronous preparation", async () => {
+    const preparation = deferred<{
+      baseCommit: string;
+      materializedParentPaths: readonly string[];
+      tasks: readonly ReturnType<typeof child>[];
+    }>();
+    let rejection: import("../../src/host/host-rejection.js").HostRejection | false = false;
+    const pool = fixture({
+      maxParallel: 1,
+      maxChildren: 1,
+      prepare: async () => preparation.promise,
+      assertAdmissionOpen: () => {
+        if (rejection !== false) throw new HostDelegationRejectedError(rejection);
+      },
+      runTask: async (task) => completed(task),
+    });
+    const pending = pool.scheduler.submit("during-prepare", {
+      tasks: submission("blocked").tasks.map((task) => ({ ...task })),
+    });
+    while (pool.prepares() === 0) await Promise.resolve();
+    rejection = { cause: "model_error" };
+    preparation.resolve({
+      baseCommit: "base",
+      materializedParentPaths: [],
+      tasks: [child("blocked")],
+    });
+
+    await expect(pending).rejects.toMatchObject({ rejection: { cause: "model_error" } });
+    expect(pool.log.records("run")).toEqual([]);
+    expect(pool.starts).toEqual([]);
+    await pool.scheduler.close("test cleanup");
+  });
+
+  it("rejects a terminal parent's new submission without scheduler admission", async () => {
+    const pool = fixture({
+      maxParallel: 1,
+      maxChildren: 2,
+      runTask: async (task) => completed(task),
+    });
+    const tool = makeTool(pool, role, false, () => ({ cause: "model_error" }));
+
+    const result = await invoke(tool, "terminal-call", submission("blocked"));
+
+    expect(result).toMatchObject({
+      terminate: true,
+      details: { ok: false, reason: "host_terminated", cause: "model_error" },
+    });
+    expect(pool.scheduler.status()).toEqual([]);
+    expect(pool.starts).toEqual([]);
+    await pool.scheduler.close("test cleanup");
+  });
+
+  it("rechecks terminal state after a queued submission acquires the execution turn", async () => {
+    const first = deferred<ReturnType<typeof completed>>();
+    const pool = fixture({
+      maxParallel: 1,
+      maxChildren: 2,
+      runTask: async (task) => (task.taskId === "first" ? first.promise : completed(task)),
+    });
+    let rejection: import("../../src/host/host-rejection.js").HostRejection | false = false;
+    const tool = makeTool(pool, role, false, () => rejection);
+    const firstCall = invoke(tool, "first-call", submission("first", "blocking"));
+    while (pool.starts.length === 0) await Promise.resolve();
+    const queuedCall = invoke(tool, "queued-call", submission("queued", "blocking"));
+    rejection = { cause: "session_cost_cap_exceeded" };
+    first.resolve(completed(child("first")));
+    await firstCall;
+
+    await expect(queuedCall).resolves.toMatchObject({
+      terminate: true,
+      details: {
+        ok: false,
+        reason: "host_terminated",
+        cause: "session_cost_cap_exceeded",
+      },
+    });
+    expect(pool.starts).toEqual(["first"]);
+    expect(pool.scheduler.status().map((item) => item.taskId)).toEqual(["first"]);
+    await pool.scheduler.close("test cleanup");
+  });
+
   it("admits A/B, retrieves B, starts C before A, and preserves controls", async () => {
     const gates = new Map<string, ReturnType<typeof deferred<ReturnType<typeof completed>>>>();
     const pool = fixture({

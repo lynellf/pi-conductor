@@ -50,6 +50,7 @@ import {
   createSharedSdkStartupCleanup,
   runSharedSdkStartupStep,
 } from "./shared-sdk-startup-cleanup.js";
+import { wrapToolWithSeal } from "./tool-wrapper.js";
 import { createEndTool, createHandoffTool } from "./tools.js";
 import { createTrajectorySettingsManager } from "./trajectory-settings.js";
 
@@ -148,12 +149,14 @@ export async function spawnSharedSdkRoleSession(options: {
   const rejector = createCaptureRejector();
   const handoff = createHandoffTool(
     () => activeSeam,
-    rejector.shouldRejectCapture,
+    rejector.getRejection,
     () => activeHandoffContext,
     options.disableAutoCompaction === true || options.isTrajectory === true,
   );
-  const end = createEndTool(() => activeSeam, rejector.shouldRejectCapture);
+  const end = createEndTool(() => activeSeam, rejector.getRejection);
   const askUser = createAskUserTool() as ToolDefinition;
+  const guardTool = (tool: ToolDefinition): ToolDefinition =>
+    wrapToolWithSeal(tool, () => activeSeam.isSealed, rejector.getRejection);
   let controller: ToolExecutionController | null = null;
   let activePolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
   const executionRecords = [...(options.priorToolExecutionRecords ?? [])];
@@ -196,11 +199,13 @@ export async function spawnSharedSdkRoleSession(options: {
       options.sessionManager ??
       SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
-      ...supervisedTools,
+      ...supervisedTools.map(guardTool),
       handoff,
       end,
-      askUser,
-      ...(handoffContext === null ? [] : [handoffContext]),
+      guardTool(askUser),
+      ...(handoffContext === null ? [] : [guardTool(handoffContext)]),
+      // Delegate checks admission again after its asynchronous queue; controls
+      // remain available to retrieve or cancel work already accepted.
       ...(options.delegateTool === null ? [] : [options.delegateTool]),
     ],
     // Pi registers custom tools only when their names are present in `tools`.

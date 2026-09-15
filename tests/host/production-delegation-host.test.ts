@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionState } from "../../src/host/cost.js";
 import type { DelegateToolFactoryOptions } from "../../src/host/delegation/delegate-tool-factory.js";
 import type { PoolChildResult } from "../../src/host/delegation/pool.js";
 import type { RoleSession } from "../../src/host/host.js";
@@ -30,6 +31,7 @@ async function fixture() {
     abort: ReturnType<typeof vi.fn>;
     steer: ReturnType<typeof vi.fn>;
     seal: () => void;
+    state: SessionState;
   }> = [];
   vi.doMock("../../src/host/delegation/factory-scheduler.js", async () => {
     const actual = await vi.importActual<
@@ -65,10 +67,12 @@ async function fixture() {
         steer,
         isSealed: () => sealed,
       };
-      options.sessionStates.set(session.sessionId, new SessionState({ cap: null, model: null }));
+      const state = new SessionState({ cap: null, model: null });
+      options.sessionStates.set(session.sessionId, state);
       options.agentsBySessionId.set(session.sessionId, { subscribe: () => () => {}, abort });
       parents.push({
         session,
+        state,
         abort,
         steer,
         seal: () => {
@@ -113,6 +117,26 @@ subagents:
 }
 
 const notice = { childId: "child-a", status: "completed" } as PoolChildResult;
+
+it("binds delegation admission and notifications to the live parent's retry state", async () => {
+  const f = await fixture();
+  const session = await f.host.spawnRole("orchestrator", { visitIndex: 1, executionVisitIndex: 1 });
+  const parent = f.parents[0];
+  const options = f.captured[0];
+  if (parent === undefined || options === undefined) throw new Error("missing parent wiring");
+  parent.state.setTerminalReason("model_error", "provider idle timeout");
+  expect(options.getHostRejection?.()).toEqual({
+    cause: "model_error",
+    diagnostic: "provider idle timeout",
+  });
+  options.onTaskTerminal?.(notice);
+  expect(parent.steer).not.toHaveBeenCalled();
+  parent.state.clearRetryableModelError();
+  expect(options.getHostRejection?.()).toBe(false);
+  options.onTaskTerminal?.(notice);
+  expect(parent.steer).toHaveBeenCalledOnce();
+  await f.host.settleDelegation(session, "test cleanup");
+});
 
 it("routes a background delegation fatal to the actual parent abort and preserves diagnosis", async () => {
   const f = await fixture();

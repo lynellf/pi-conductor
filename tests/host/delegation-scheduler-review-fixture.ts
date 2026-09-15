@@ -131,6 +131,7 @@ export function fixture(options: {
   readonly prepare?: DelegationSchedulerOptions["prepareSubmission"];
   readonly persist?: (record: PersistedRecord, append: () => void) => void;
   readonly exhausted?: () => boolean;
+  readonly assertAdmissionOpen?: () => void;
   readonly maxParallel?: number;
   readonly maxChildren?: number;
   readonly notifyFatal?: boolean;
@@ -195,6 +196,9 @@ export function fixture(options: {
           },
         }),
     ...(options.exhausted ? { isBudgetExhausted: options.exhausted } : {}),
+    ...(options.assertAdmissionOpen === undefined
+      ? {}
+      : { assertAdmissionOpen: options.assertAdmissionOpen }),
   });
   return { scheduler, log, starts, fatals, prepares: () => prepares };
 }

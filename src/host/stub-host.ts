@@ -256,8 +256,8 @@ export class StubHost implements Host {
       this.loadedManifestValue === undefined
         ? undefined
         : { role, def: this.loadedManifestValue.def };
-    const handoff = createHandoffTool(seam, rejector.shouldRejectCapture, handoffContractContext);
-    const end = createEndTool(seam, rejector.shouldRejectCapture);
+    const handoff = createHandoffTool(seam, rejector.getRejection, handoffContractContext);
+    const end = createEndTool(seam, rejector.getRejection);
     const handoffContext =
       opts.handoffContextRef === undefined
         ? null

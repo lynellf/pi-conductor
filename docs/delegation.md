@@ -186,6 +186,13 @@ cancel before emitting the transition again. Abort, budget exhaustion and parent
 failure close admission and settle owned children before the parent terminal or
 replacement. Model fallback retains spent admission and completed results.
 
+An SDK-confirmed retry clears only the parent's intermediate model error and
+retains its charged usage. A terminal parent cannot submit more work, including
+calls queued before failure. Rejections report `host_terminated` with the concrete
+cause and a bounded diagnostic; changing handoff arguments cannot repair a terminal
+invocation. Accepted-child retrieval and cancellation remain available. See the
+[parent retry repair](issue-112-parent-retry.md) for boundaries and regression evidence.
+
 Completed results remain retrievable by the same parent role after fallback,
 handoff and resume. Retrieval contributes no additional usage: the existing
 `subagent_completed` or `subagent_failed` record is the sole terminal/accounting
