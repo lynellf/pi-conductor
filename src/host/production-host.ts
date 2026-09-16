@@ -113,6 +113,9 @@ export class ProductionHost extends ProductionHostContext implements Host {
   // ─── Host methods ──────────────────────────────────────────────────
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
+    // Keep the opt-in contract closed until the controller driver is integrated.
+    if (this.loadedManifest.manifest.controller !== undefined)
+      throw new Error("controller host execution is not available in this staged build");
     const context: SpawnRoleContext = {
       modelRegistry: this.modelRegistry,
       cwd: this.cwd,

@@ -1,34 +1,39 @@
 # Issue #115 proposed implementation outline
 
-Status: pending acknowledgment of [spec](spec.md). No implementation task is
-complete. This outline prepares the review; it does not authorize crossing the
-new-spec gate. Each task should remain a focused change of roughly five files;
+Status: [spec](spec.md) acknowledged; implementation in progress with Terra,
+Luna, and Sol. No further human approval gates precede completion.
+Each task should remain a focused change of roughly five files;
 split schema consumer migrations into successive verified slices if necessary.
 
 ## A. Durable contracts and native identity
 
-- [ ] Add controller configuration/protocol schemas and incompatible-field checks.
+- [x] Add controller configuration/protocol schemas and incompatible-field checks.
   - Acceptance: opt-in is explicit; bounded closed schemas; existing manifests
     parse unchanged; controller-owned delegation policy needs no fake SDK tool
     or orchestrator model; steering is explicitly unsupported.
   - Files: controller manifest module, manifest schema/validator, focused tests.
   - Verify: table-driven valid/invalid manifest and protocol tests; typecheck.
-- [ ] Add definition, activation, plan, action receipt and event-cursor records.
+- [x] Add definition, activation, plan, action receipt and event-cursor records.
   - Acceptance: validate chronology, stable IDs, duplicate/conflicting action
     fingerprints and interrupted/uncertain/repair outcomes; inline recoverable
     requests; decision revision separate from event cursor; host-agnostic persistence.
   - Files: controller persistence schemas/timeline, record union, tests.
   - Verify: malformed/mixed chronology tests and grep guard.
-- [ ] Version native admission origins and extract shared structured admission.
+- [x] Version native admission origins and extract shared structured admission.
   - Acceptance: legacy SDK IDs remain unchanged; controller IDs are distinct;
     accepted arguments/bindings retrievable; no second scheduler/child runner.
   - Files: delegation persistence identity, scheduler, facade, tests.
   - Verify: legacy replay, mixed origins/scope isolation, capacity and
     duplicate-submission tests across activations.
-- [ ] Migrate affected native consumers and stable controller budget scoping.
+- [x] Migrate affected native consumers and stable controller budget scoping.
   - Acceptance: no assumed tool-call field; resume cannot refill lifetime slots.
   - Files: delegation factory/coordinator/reconcile and focused tests, in slices.
   - Verify: existing native admission/cancellation/reconciliation suites.
+
+Phase A verified: 2,906 tests across 272 files; typecheck, build, lint and
+format checks pass. Production audit is clean; the full audit retains the
+existing two moderate and one low development advisories, with no high/critical
+findings. The controller runtime remains fail-closed until integration lands.
 
 ## B. Approved executable mechanics
 

@@ -1,6 +1,8 @@
 # Durable repository controller (#115)
 
-Status: proposed; awaiting overseer acknowledgment before implementation.
+Status: acknowledged by the overseer; implementation in progress. The overseer
+approved the reviewed scope and requested Terra/Luna/Sol implementation without
+further approval prompts.
 
 Authority: the FSM spec §§8, 11, and 12 remains authoritative. This proposal adds
 an opt-in host driver and versioned persistence contracts; it does not introduce

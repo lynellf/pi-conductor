@@ -26,6 +26,7 @@ import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
+import { parseControllerConfig } from "./controller.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
 import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
@@ -103,6 +104,8 @@ export function parseManifestFromObject(raw: unknown): Manifest {
       ? toNonEmptyStringArray(endRequestRolesRaw, "end_request_roles")
       : undefined;
   const end_guard = obj.end_guard === undefined ? undefined : parseEndGuardConfig(obj.end_guard);
+  const controller =
+    obj.controller === undefined ? undefined : parseControllerConfig(obj.controller);
 
   const manifest = Object.freeze({
     version,
@@ -111,6 +114,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     roles: Object.freeze(roles),
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
     ...(end_guard === undefined ? {} : { end_guard }),
+    ...(controller === undefined ? {} : { controller }),
   }) as Manifest;
   return manifest;
 }

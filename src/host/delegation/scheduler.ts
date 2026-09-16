@@ -10,7 +10,6 @@ import {
   acceptedDelegationResults,
   assertDelegationSubmissionAccepted,
   type DelegationSubmissionAcceptedRecord,
-  delegationSubmissionId,
   spentDelegationSlots,
 } from "../../persistence/delegation-task.js";
 import type { PersistedRecord } from "../../persistence/log.js";
@@ -19,14 +18,22 @@ import type { PreparedDelegateChild, PreparedDelegateSubmission } from "./admiss
 import { DelegationChildSafetyError, failedSafetyResult } from "./child-safety-error.js";
 import type { PoolChildResult } from "./pool.js";
 import { acceptedFingerprint, requestFingerprint } from "./scheduler-fingerprint.js";
+import {
+  acceptedDelegationRecord,
+  type ControllerSchedulerSubmission,
+  controllerScope,
+  type DelegationSchedulerIdentity,
+  matchesSchedulerScope,
+  type SchedulerSubmission,
+  schedulerSubmissionId,
+} from "./scheduler-identity.js";
 import { cancelledResult, resultState, terminalToPoolResult } from "./scheduler-results.js";
 
-export interface DelegationSchedulerIdentity {
-  readonly runId: string;
-  readonly logicalParentId: string;
-  readonly parentRole: string;
-  readonly parentVisitIndex: number;
-}
+export type {
+  ControllerSchedulerSubmission,
+  DelegationSchedulerIdentity,
+  DelegationSchedulerOrigin,
+} from "./scheduler-identity.js";
 
 export type DelegationTaskState =
   | "queued"
@@ -118,8 +125,25 @@ export class DelegationScheduler {
 
   /** Atomically persist acceptance before putting children on the queue. */
   submit(toolCallId: string, input: DelegateSubmissionArgs): Promise<readonly string[]> {
+    return this.submitSource(toolCallId, input);
+  }
+
+  /** Submit host-owned controller work without fabricating an SDK tool call. */
+  submitController(
+    action: ControllerSchedulerSubmission,
+    input: DelegateSubmissionArgs,
+  ): Promise<readonly string[]> {
+    if (input.mode !== undefined && input.mode !== "nonblocking")
+      return Promise.reject(new Error("controller delegation requires nonblocking mode"));
+    return this.submitSource(action, input);
+  }
+
+  private submitSource(
+    source: SchedulerSubmission,
+    input: DelegateSubmissionArgs,
+  ): Promise<readonly string[]> {
     const frozenInput = structuredClone(input);
-    const operation = this.admissionTail.then(() => this.submitOne(toolCallId, frozenInput));
+    const operation = this.admissionTail.then(() => this.submitOne(source, frozenInput));
     this.admissionTail = operation.then(
       () => undefined,
       () => undefined,
@@ -128,14 +152,10 @@ export class DelegationScheduler {
   }
 
   private async submitOne(
-    toolCallId: string,
+    source: SchedulerSubmission,
     input: DelegateSubmissionArgs,
   ): Promise<readonly string[]> {
-    const submissionId = delegationSubmissionId(
-      this.options.identity.runId,
-      this.options.identity.logicalParentId,
-      toolCallId,
-    );
+    const submissionId = schedulerSubmissionId(this.options.identity, source);
     const rawRequestFingerprint = requestFingerprint(input);
     const prior = this.submissions.get(submissionId);
     if (prior !== undefined) {
@@ -165,38 +185,15 @@ export class DelegationScheduler {
     );
     if (spent + tasks.length > this.options.maxChildren)
       throw new Error("delegation admission allowance exhausted");
-    const accepted: DelegationSubmissionAcceptedRecord = {
-      type: "delegation_submission_accepted",
-      schema_version: 1,
-      run_id: this.options.identity.runId,
-      submission_id: submissionId,
-      logical_parent_id: this.options.identity.logicalParentId,
-      parent_role: this.options.identity.parentRole,
-      parent_visit_index: this.options.identity.parentVisitIndex,
-      tool_call_id: toolCallId,
-      input_fingerprint: fingerprint,
-      ...(hasSandbox ? { request_fingerprint: rawRequestFingerprint } : {}),
-      children: tasks.map((task) => ({
-        child_id: task.childId,
-        task_id: task.taskId,
-        subagent: task.profile.name,
-        model:
-          task.profile.models[0]?.model ??
-          (() => {
-            throw new Error(`subagent '${task.profile.name}' has no model`);
-          })(),
-        branch: task.branch,
-        worktree_path: task.worktreePath,
-        base_commit: task.baseCommit,
-        task_fingerprint: task.taskFingerprint,
-        profile_fingerprint: task.profileFingerprint,
-        context_fingerprint: task.contextFingerprint,
-        prompt_fingerprint: task.promptFingerprint,
-        projection_fingerprint: task.projectionFingerprint,
-        ...(task.sandbox === undefined ? {} : { sandbox: task.sandbox }),
-      })),
-      ts: Date.now(),
-    };
+    const accepted = acceptedDelegationRecord(
+      this.options.identity,
+      source,
+      input,
+      submissionId,
+      fingerprint,
+      rawRequestFingerprint,
+      tasks,
+    );
     assertDelegationSubmissionAccepted(accepted);
     try {
       this.options.persistRecord(accepted);
@@ -259,6 +256,25 @@ export class DelegationScheduler {
       this.options.maxChildren -
         spentDelegationSlots(this.options.records(), this.options.identity.logicalParentId),
     );
+  }
+
+  /** Retrieve the exact durable acceptance for one controller action. */
+  acceptedControllerSubmission(actionId: string): DelegationSubmissionAcceptedRecord | null {
+    const scope = controllerScope(this.options.identity);
+    if (scope === null) return null;
+    for (const record of this.options.records()) {
+      if (
+        record.type === "delegation_submission_accepted" &&
+        record.schema_version === 2 &&
+        record.logical_parent_id === this.options.identity.logicalParentId &&
+        record.origin.kind === "controller_action" &&
+        record.origin.controller_id === scope.controllerId &&
+        record.origin.definition_digest === scope.definitionDigest &&
+        record.origin.action_id === actionId
+      )
+        return record;
+    }
+    return null;
   }
 
   wait(childId: string, signal?: AbortSignal): Promise<PoolChildResult> {
@@ -455,11 +471,7 @@ export class DelegationScheduler {
       acceptedDelegationResults(records).map((record) => [record.child_id, record] as const),
     );
     for (const submission of accepted) {
-      if (
-        submission.run_id !== this.options.identity.runId ||
-        submission.parent_role !== this.options.identity.parentRole
-      )
-        continue;
+      if (!matchesSchedulerScope(submission, this.options.identity)) continue;
       const states = submission.children.map((child) => {
         const terminal = terminals.get(child.child_id);
         const result = terminal === undefined ? undefined : terminalToPoolResult(terminal);

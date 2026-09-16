@@ -34,9 +34,8 @@ import type { DelegationManager } from "./manager.js";
 import type { PoolChildResult } from "./pool.js";
 import type { DelegationScheduler } from "./scheduler.js";
 
-/** Dependencies for a parent role's delegate tool. */
-export interface DelegateToolFactoryOptions {
-  readonly role: RoleConfig;
+/** Shared child-runtime dependencies for SDK-tool and controller-native admission. */
+export interface DelegateChildFactoryOptions {
   readonly subagents: readonly SubagentProfile[];
   readonly remainingChildren: number;
   readonly runId: string;
@@ -68,6 +67,11 @@ export interface DelegateToolFactoryOptions {
   /** Host-owned prepared-runtime admission for explicit sandbox profiles. */
   readonly sandboxAdmission?: SandboxAdmissionAdapter;
   readonly sandboxHostApproval?: SandboxHostApproval;
+}
+
+/** Dependencies for a parent role's SDK-visible delegate tool. */
+export interface DelegateToolFactoryOptions extends DelegateChildFactoryOptions {
+  readonly role: RoleConfig;
 }
 
 /** Create a parent-only delegate tool; it never creates an FSM event. */

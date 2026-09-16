@@ -7,6 +7,8 @@ import {
   acceptedDelegationResults,
   assertDelegationSubmissionAccepted,
   assertDelegationTaskTimeline,
+  controllerDelegationSubmissionId,
+  controllerLogicalParentId,
   DelegationTaskRecordError,
   delegationSubmissionId,
   pendingDelegationChildren,
@@ -17,6 +19,7 @@ import {
   sandboxBoundFingerprint,
   subagentSandboxDescriptorSchema,
 } from "../../src/persistence/subagent-sandbox.js";
+import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
 
 const child = {
   child_id: "child-1",
@@ -88,6 +91,110 @@ const sandbox = {
 };
 
 describe("delegation submission acceptance ledger", () => {
+  it("uses a stable controller submission identity across activations and retains accepted args", () => {
+    const logicalParentId = controllerLogicalParentId(
+      "run-1",
+      "repository-controller",
+      "a".repeat(64),
+    );
+    const acceptedArgs = {
+      tasks: [
+        {
+          id: "controller-task",
+          subagent: "worker",
+          objective: "implement the bounded change",
+          expected_output: "a focused patch",
+        },
+      ],
+    };
+    const controllerAccepted = {
+      type: "delegation_submission_accepted" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      submission_id: controllerDelegationSubmissionId("run-1", logicalParentId, "action-1"),
+      logical_parent_id: logicalParentId,
+      parent_role: "orchestrator",
+      parent_visit_index: 1,
+      origin: {
+        kind: "controller_action" as const,
+        controller_id: "repository-controller",
+        definition_digest: "a".repeat(64),
+        action_id: "action-1",
+        activation_id: "activation-2",
+      },
+      input_fingerprint: sha256Canonical(acceptedArgs),
+      accepted_args: acceptedArgs,
+      children: [child],
+      ts: 1,
+    };
+
+    assertDelegationSubmissionAccepted(controllerAccepted);
+    expect(controllerAccepted.submission_id).toBe(
+      controllerDelegationSubmissionId("run-1", logicalParentId, "action-1"),
+    );
+    expect(controllerAccepted.accepted_args).toEqual(acceptedArgs);
+    expect(spentDelegationSlots([controllerAccepted], logicalParentId)).toBe(1);
+  });
+
+  it("binds controller accepted arguments to unsandboxed and sandboxed request hashes", () => {
+    const logicalParentId = controllerLogicalParentId(
+      "run-1",
+      "repository-controller",
+      "a".repeat(64),
+    );
+    const acceptedArgs = {
+      tasks: [
+        {
+          id: "controller-task",
+          subagent: "worker",
+          objective: "implement the bounded change",
+          expected_output: "a focused patch",
+        },
+      ],
+    };
+    const requestFingerprint = sha256Canonical(acceptedArgs);
+    const controllerAccepted = {
+      type: "delegation_submission_accepted" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      submission_id: controllerDelegationSubmissionId("run-1", logicalParentId, "action-1"),
+      logical_parent_id: logicalParentId,
+      parent_role: "orchestrator",
+      parent_visit_index: 1,
+      origin: {
+        kind: "controller_action" as const,
+        controller_id: "repository-controller",
+        definition_digest: "a".repeat(64),
+        action_id: "action-1",
+        activation_id: "activation-2",
+      },
+      input_fingerprint: requestFingerprint,
+      accepted_args: acceptedArgs,
+      children: [child],
+      ts: 1,
+    };
+    const sandboxed = {
+      ...controllerAccepted,
+      request_fingerprint: requestFingerprint,
+      input_fingerprint: sandboxBoundFingerprint(requestFingerprint, [sandbox]),
+      children: [{ ...child, sandbox }],
+    };
+
+    expect(() => assertDelegationSubmissionAccepted(controllerAccepted)).not.toThrow();
+    expect(() => assertDelegationSubmissionAccepted(sandboxed)).not.toThrow();
+    for (const record of [controllerAccepted, sandboxed]) {
+      expect(() =>
+        assertDelegationSubmissionAccepted({
+          ...record,
+          accepted_args: {
+            ...acceptedArgs,
+            tasks: [{ ...acceptedArgs.tasks[0], objective: "altered after acceptance" }],
+          },
+        }),
+      ).toThrow("accepted arguments");
+    }
+  });
+
   it("validates one atomic batch and derives pending, result, and spent state", () => {
     assertDelegationSubmissionAccepted(accepted);
     const records = [accepted, terminal] satisfies readonly PersistedRecord[];

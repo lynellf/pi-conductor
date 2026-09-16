@@ -1,77 +1,35 @@
 /** Atomic delegated-task acceptance ledger — asynchronous delegation §1. */
 
-import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import type { DelegateSubmissionArgs } from "../seam/schema.js";
 import { assertAcceptedChildLifecycle } from "./delegation-lifecycle-schema.js";
+import {
+  type DelegationAcceptedChild,
+  type DelegationSubmissionAcceptedRecord,
+  delegationSubmissionAcceptedSchema,
+} from "./delegation-task-schema.js";
 import type {
   PersistedRecord,
   SubagentCompletedRecord,
   SubagentFailedRecord,
   SubagentStartedRecord,
 } from "./log.js";
-import {
-  type SubagentSandboxDescriptor,
-  sandboxBoundFingerprint,
-  subagentSandboxDescriptorSchema,
-} from "./subagent-sandbox.js";
+import { type SubagentSandboxDescriptor, sandboxBoundFingerprint } from "./subagent-sandbox.js";
+import { sha256Canonical } from "./trajectory-records.js";
 
-const id = Type.String({ minLength: 1 });
-const sha256 = Type.String({ pattern: "^[a-f0-9]{64}$" });
-const nonNegativeInteger = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-
-const projectionFingerprint = Type.Object(
-  {
-    kind: Type.Union([Type.Literal("exact"), Type.Literal("full_materialized")]),
-    path_count: nonNegativeInteger,
-    sha256,
-  },
-  { additionalProperties: false },
-);
-
-const child = Type.Object(
-  {
-    child_id: id,
-    task_id: id,
-    subagent: id,
-    model: id,
-    branch: id,
-    worktree_path: id,
-    base_commit: id,
-    task_fingerprint: sha256,
-    profile_fingerprint: sha256,
-    context_fingerprint: sha256,
-    prompt_fingerprint: sha256,
-    projection_fingerprint: projectionFingerprint,
-    sandbox: Type.Optional(subagentSandboxDescriptorSchema),
-  },
-  { additionalProperties: false },
-);
-
-/** Strict atomic acceptance record for one delegated batch. */
-export const delegationSubmissionAcceptedSchema = Type.Object(
-  {
-    type: Type.Literal("delegation_submission_accepted"),
-    schema_version: Type.Literal(1),
-    run_id: id,
-    submission_id: id,
-    logical_parent_id: id,
-    parent_role: id,
-    parent_visit_index: nonNegativeInteger,
-    tool_call_id: id,
-    input_fingerprint: sha256,
-    request_fingerprint: Type.Optional(sha256),
-    children: Type.Array(child, { minItems: 1 }),
-    ts: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
-
-/** Persisted atomic acceptance record. */
-export type DelegationSubmissionAcceptedRecord = Readonly<
-  Static<typeof delegationSubmissionAcceptedSchema>
->;
-/** Child metadata retained in an accepted submission. */
-export type DelegationAcceptedChild = Readonly<Static<typeof child>>;
+export type {
+  ControllerAdmissionOrigin,
+  DelegationAcceptedChild,
+  DelegationSubmissionAcceptedRecord,
+} from "./delegation-task-schema.js";
+export {
+  controllerActionAdmissionOriginSchema,
+  delegationAdmissionOriginSchema,
+  delegationSubmissionAcceptedSchema,
+  delegationSubmissionAcceptedV1Schema,
+  delegationSubmissionAcceptedV2Schema,
+  sdkToolCallAdmissionOriginSchema,
+} from "./delegation-task-schema.js";
 
 /** Typed rejection for malformed or inconsistent accepted-task records. */
 export class DelegationTaskRecordError extends Error {
@@ -106,6 +64,22 @@ export function assertDelegationSubmissionAccepted(
       )
   )
     throw new DelegationTaskRecordError("sandbox acceptance fingerprint does not bind authority");
+  if (record.schema_version === 2 && record.origin.kind === "controller_action") {
+    const acceptedArgsFingerprint = sha256Canonical(record.accepted_args);
+    if (acceptedArgsFingerprint !== (record.request_fingerprint ?? record.input_fingerprint))
+      throw new DelegationTaskRecordError(
+        "controller accepted arguments do not match the durable request fingerprint",
+      );
+    if (
+      record.logical_parent_id !==
+      controllerLogicalParentId(
+        record.run_id,
+        record.origin.controller_id,
+        record.origin.definition_digest,
+      )
+    )
+      throw new DelegationTaskRecordError("controller logical parent identity mismatch");
+  }
 }
 
 /** Derive the canonical submission identity from its durable parent/tool tuple. */
@@ -117,6 +91,37 @@ export function delegationSubmissionId(
   if (runId.length === 0 || logicalParentId.length === 0 || toolCallId.length === 0)
     throw new DelegationTaskRecordError("submission identity fields must be non-empty");
   return JSON.stringify([runId, logicalParentId, toolCallId]);
+}
+
+/** Derive a controller's stable parent identity independently of activation epochs. */
+export function controllerLogicalParentId(
+  runId: string,
+  controllerId: string,
+  definitionDigest: string,
+): string {
+  if (runId.length === 0 || controllerId.length === 0 || !/^[a-f0-9]{64}$/.test(definitionDigest))
+    throw new DelegationTaskRecordError("controller logical parent identity fields are invalid");
+  return JSON.stringify(["controller", runId, controllerId, definitionDigest]);
+}
+
+/** Derive a controller submission ID without fabricating an SDK tool call. */
+export function controllerDelegationSubmissionId(
+  runId: string,
+  logicalParentId: string,
+  actionId: string,
+): string {
+  if (runId.length === 0 || logicalParentId.length === 0 || actionId.length === 0)
+    throw new DelegationTaskRecordError("controller submission identity fields must be non-empty");
+  return JSON.stringify(["controller", runId, logicalParentId, actionId]);
+}
+
+/** Return controller-retained exact accepted arguments, if this record has them. */
+export function acceptedDelegationArgs(
+  record: DelegationSubmissionAcceptedRecord,
+): DelegateSubmissionArgs | null {
+  return record.schema_version === 2 && record.origin.kind === "controller_action"
+    ? record.accepted_args
+    : null;
 }
 
 function isAccepted(record: PersistedRecord): record is DelegationSubmissionAcceptedRecord {
@@ -188,10 +193,7 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
       assertDelegationSubmissionAccepted(record);
       if (submissions.has(record.submission_id))
         throw new DelegationTaskRecordError("duplicate delegation submission acceptance");
-      if (
-        record.submission_id !==
-        delegationSubmissionId(record.run_id, record.logical_parent_id, record.tool_call_id)
-      )
+      if (record.submission_id !== expectedSubmissionId(record))
         throw new DelegationTaskRecordError("delegation submission identity mismatch");
       submissions.add(record.submission_id);
       for (const entry of record.children) {
@@ -279,6 +281,22 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
     }
     terminals.add(record.child_id);
   }
+}
+
+function expectedSubmissionId(record: DelegationSubmissionAcceptedRecord): string {
+  if (record.schema_version === 1)
+    return delegationSubmissionId(record.run_id, record.logical_parent_id, record.tool_call_id);
+  if (record.origin.kind === "sdk_tool_call")
+    return delegationSubmissionId(
+      record.run_id,
+      record.logical_parent_id,
+      record.origin.tool_call_id,
+    );
+  return controllerDelegationSubmissionId(
+    record.run_id,
+    record.logical_parent_id,
+    record.origin.action_id,
+  );
 }
 
 /** Return accepted child entries that have no terminal result yet. */

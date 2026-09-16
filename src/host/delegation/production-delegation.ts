@@ -2,8 +2,17 @@
 
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
+import { controllerLogicalParentId } from "../../persistence/delegation-task.js";
+import {
+  createDelegationAdmissionService,
+  type DelegationAdmissionService,
+} from "./admission-service.js";
 import { createDelegateTool, type DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
-import { createDelegateScheduler } from "./factory-scheduler.js";
+import {
+  createControllerDelegateScheduler,
+  createDelegateScheduler,
+  type NativeDelegationSchedulerFactoryOptions,
+} from "./factory-scheduler.js";
 import { DelegationManager } from "./manager.js";
 import type { DelegationScheduler } from "./scheduler.js";
 
@@ -63,6 +72,45 @@ export class ProductionDelegationCoordinator {
       this.scopes.set(logicalParentId, scope);
     }
     return createDelegateTool({ ...options, manager: scope.manager, scheduler: scope.scheduler });
+  }
+
+  /** Build controller-owned native admission without creating an SDK tool. */
+  async createControllerAdmissionService(
+    options: Omit<NativeDelegationSchedulerFactoryOptions, "manager">,
+    controller: { readonly controllerId: string; readonly definitionDigest: string },
+  ): Promise<{ readonly logicalParentId: string; readonly service: DelegationAdmissionService }> {
+    const logicalParentId = controllerLogicalParentId(
+      options.runId,
+      controller.controllerId,
+      controller.definitionDigest,
+    );
+    const existingFailure = this.failures.get(logicalParentId);
+    if (existingFailure !== undefined) throw existingFailure;
+    let scope = this.scopes.get(logicalParentId);
+    if (scope === undefined) {
+      const manager = new DelegationManager();
+      const scopedOptions = {
+        ...options,
+        manager,
+        onFatal: (cause: unknown): void => {
+          if (!this.failures.has(logicalParentId)) this.failures.set(logicalParentId, cause);
+          options.onFatal?.(cause);
+        },
+      };
+      scope = {
+        manager,
+        scheduler: createControllerDelegateScheduler(scopedOptions, logicalParentId, {
+          kind: "controller",
+          controllerId: controller.controllerId,
+          definitionDigest: controller.definitionDigest,
+        }),
+      };
+      this.scopes.set(logicalParentId, scope);
+    }
+    return Object.freeze({
+      logicalParentId,
+      service: createDelegationAdmissionService(scope.scheduler),
+    });
   }
 
   /** Settle all parent scopes before the host disposes or replaces a role. */

@@ -20,6 +20,7 @@
 
 import type { ModelEffort, Role } from "../core/types.js";
 import { validateContextRetention } from "./context-retention.js";
+import { validateControllerConfig } from "./controller-validation.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
 import { validateSubagentExecutionPolicy } from "./subagent-execution-policy.js";
@@ -97,7 +98,16 @@ export type ManifestErrorCode =
   /** Issue #75: end guard contains malformed values or keys. */
   | "invalid-end-guard"
   /** Prewalk is unavailable until Pi extension loading is supported (issue #94). */
-  | "prewalk-unavailable";
+  | "prewalk-unavailable"
+  | "invalid-controller-config"
+  | "controller-workers-unsupported"
+  | "controller-orchestrator-model-unsupported"
+  | "controller-orchestrator-tools-unsupported"
+  | "controller-orchestrator-context-unsupported"
+  | "controller-orchestrator-delegation-unsupported"
+  | "controller-end-request-roles-unsupported"
+  | "controller-missing-delegation"
+  | "controller-duplicate-adapter-id";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -213,6 +223,8 @@ function isSafeProgressiveDisclosurePath(path: string): boolean {
 export function validateManifest(m: Manifest): ManifestReport {
   const errors: ManifestError[] = [];
   const warnings: ManifestWarning[] = [];
+
+  validateControllerConfig(m, errors);
 
   for (const message of validateEndGuardConfig(m.end_guard)) {
     errors.push({ code: "invalid-end-guard", message });

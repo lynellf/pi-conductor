@@ -24,7 +24,7 @@ import { buildReportResultTool, childTaskSeed } from "./child-sdk-tools.js";
 import { contextArtifactsAudit } from "./context-artifact-audit.js";
 import { DelegationOwnershipError } from "./delegate-error.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
-import type { DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
+import type { DelegateChildFactoryOptions } from "./delegate-tool-factory.js";
 import { failedTerminal, zeroUsage } from "./factory-records.js";
 import { buildChildTools, childToolNames } from "./run-tool.js";
 import { createSandboxChildContext, type SandboxChildContext } from "./sandbox-child-context.js";
@@ -39,7 +39,7 @@ export interface CreatedChild {
 }
 
 /** Build the standalone child callback used by the delegate scheduler. */
-export function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
+export function buildSpawnCallback(opts: DelegateChildFactoryOptions) {
   return async (config: SpawnChildConfig): Promise<ChildTerminal> => {
     if (cancelled(opts, config.childId))
       return withSandboxInspection(
@@ -193,7 +193,7 @@ export function buildSpawnCallback(opts: DelegateToolFactoryOptions) {
 }
 
 async function finalizeRegisteredChild(
-  opts: DelegateToolFactoryOptions,
+  opts: DelegateChildFactoryOptions,
   childId: string,
   child: CreatedChild,
   sandboxToolsClosed: boolean,
@@ -230,7 +230,7 @@ async function finalizeRegisteredChild(
 
 /** Create a child SDK session after admission and cancellation checks. */
 export async function createChildSession(
-  opts: DelegateToolFactoryOptions,
+  opts: DelegateChildFactoryOptions,
   config: SpawnChildConfig,
 ): Promise<CreatedChild> {
   if (cancelled(opts, config.childId)) throw new Error("child cancelled before creation");
@@ -285,11 +285,11 @@ export async function createChildSession(
 }
 
 async function initializeSdkChild(
-  opts: DelegateToolFactoryOptions,
+  opts: DelegateChildFactoryOptions,
   config: SpawnChildConfig,
   modelName: string,
   effort: string,
-  model: NonNullable<ReturnType<DelegateToolFactoryOptions["modelRegistry"]["find"]>>,
+  model: NonNullable<ReturnType<DelegateChildFactoryOptions["modelRegistry"]["find"]>>,
   sandboxContext: SandboxChildContext | undefined,
   getController: () => ToolExecutionController | null,
   setController: (controller: ToolExecutionController) => void,
@@ -421,7 +421,7 @@ async function cleanupCreatedChild(
 }
 
 function persistStarted(
-  opts: DelegateToolFactoryOptions,
+  opts: DelegateChildFactoryOptions,
   config: SpawnChildConfig,
   child: CreatedChild,
   sessionFile: string,
@@ -451,7 +451,7 @@ function persistStarted(
   } satisfies SubagentStartedRecord);
 }
 
-function cancelled(opts: DelegateToolFactoryOptions, childId: string): boolean {
+function cancelled(opts: DelegateChildFactoryOptions, childId: string): boolean {
   return opts.manager.isClosed() || opts.manager.wasCancelled(childId);
 }
 

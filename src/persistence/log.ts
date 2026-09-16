@@ -45,6 +45,7 @@ import type {
   ChildCompletionProtocol,
   ChildProjectionFingerprint,
 } from "./child-completion.js";
+import type { ControllerRecord } from "./controller-records.js";
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
@@ -73,6 +74,33 @@ import type {
   WorkspaceProvisionedRecord,
 } from "./workspace-artifact-records.js";
 
+export type {
+  ControllerActionIntent,
+  ControllerActionReceiptRecord,
+  ControllerActivationStartedRecord,
+  ControllerDecisionCommittedRecord,
+  ControllerDefinitionPinnedRecord,
+  ControllerRecord,
+  ControllerRepairRecord,
+  ControllerSourceCursor,
+} from "./controller-records.js";
+export {
+  assertControllerRecord,
+  ControllerRecordError,
+  controllerDefinitionDigest,
+  isControllerRecord,
+} from "./controller-records.js";
+export type {
+  ControllerActionState,
+  ControllerRecoveryMaterialization,
+  ControllerRecoveryRequirement,
+  ControllerTimeline,
+} from "./controller-timeline.js";
+export {
+  getControllerAction,
+  materializeControllerRecovery,
+  reconstructControllerTimeline,
+} from "./controller-timeline.js";
 export type {
   DelegationAcceptedChild,
   DelegationSubmissionAcceptedRecord,
@@ -435,7 +463,8 @@ export type PersistedRecord =
   | EndGuardRecord
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord
-  | RunFinalizationFailedRecord;
+  | RunFinalizationFailedRecord
+  | ControllerRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

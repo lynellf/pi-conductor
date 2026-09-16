@@ -1,6 +1,7 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import { assertControllerRecord, isControllerRecord } from "./controller-records.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
@@ -47,6 +48,11 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   assertNoSandboxGuarantee(record);
 
   if (!isRecord(record)) return;
+
+  if (isControllerRecord(record)) {
+    assertControllerRecord(record);
+    return;
+  }
 
   if (typeof record.type === "string" && record.type.startsWith("prewalk_")) {
     throw new Error("Prewalk run records cannot be resumed by this release: see issue #94");

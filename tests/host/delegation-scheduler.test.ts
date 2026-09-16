@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { PreparedDelegateChild } from "../../src/host/delegation/admission.js";
+import { createDelegationAdmissionService } from "../../src/host/delegation/admission-service.js";
 import {
   DelegationChildSafetyError,
   safetyFailureReason,
 } from "../../src/host/delegation/child-safety-error.js";
 import type { PoolChildResult } from "../../src/host/delegation/pool.js";
-import { DelegationScheduler } from "../../src/host/delegation/scheduler.js";
+import {
+  DelegationScheduler,
+  type DelegationSchedulerOptions,
+} from "../../src/host/delegation/scheduler.js";
 import { acceptedFingerprint } from "../../src/host/delegation/scheduler-fingerprint.js";
+import {
+  controllerLogicalParentId,
+  delegationSubmissionId,
+} from "../../src/persistence/delegation-task.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 import type { SubagentSandboxDescriptor } from "../../src/persistence/subagent-sandbox.js";
 
@@ -67,9 +75,10 @@ function makeScheduler(
   onTerminal?: (result: PoolChildResult) => void,
   sandbox?: SubagentSandboxDescriptor,
   onPrepare?: () => void,
+  identity?: DelegationSchedulerOptions["identity"],
 ) {
   return new DelegationScheduler({
-    identity: {
+    identity: identity ?? {
       runId: "run",
       logicalParentId: "parent",
       parentRole: "orchestrator",
@@ -114,6 +123,113 @@ function makeScheduler(
 }
 
 describe("DelegationScheduler", () => {
+  it("admits controller actions without an SDK tool-call identity", async () => {
+    const definitionDigest = "a".repeat(64);
+    const logicalParentId = controllerLogicalParentId("run", "repo-controller", definitionDigest);
+    const scheduler = makeScheduler(
+      async (task) => result(task),
+      [],
+      1,
+      undefined,
+      undefined,
+      undefined,
+      {
+        runId: "run",
+        logicalParentId,
+        parentRole: "orchestrator",
+        parentVisitIndex: 1,
+        origin: { kind: "controller", controllerId: "repo-controller", definitionDigest },
+      },
+    );
+    const service = createDelegationAdmissionService(scheduler);
+    const args = {
+      tasks: [
+        {
+          id: "controller-task",
+          subagent: "worker",
+          objective: "implement",
+          expected_output: "patch",
+        },
+      ],
+    };
+
+    const ids = await service.submit(
+      { kind: "controller_action", actionId: "action-1", activationId: "activation-1" },
+      args,
+    );
+    const accepted = service.acceptedSubmission("action-1");
+
+    expect(ids).toEqual(["child-controller-task"]);
+    expect(accepted).toMatchObject({
+      schema_version: 2,
+      origin: {
+        kind: "controller_action",
+        controller_id: "repo-controller",
+        definition_digest: definitionDigest,
+        action_id: "action-1",
+        activation_id: "activation-1",
+      },
+      accepted_args: args,
+    });
+    expect(accepted).not.toHaveProperty("tool_call_id");
+  });
+
+  it("does not replay another logical parent's accepted children", () => {
+    const foreign = child("foreign");
+    const records: PersistedRecord[] = [
+      {
+        type: "delegation_submission_accepted",
+        schema_version: 1,
+        run_id: "run",
+        submission_id: delegationSubmissionId("run", "other-parent", "call-1"),
+        logical_parent_id: "other-parent",
+        parent_role: "orchestrator",
+        parent_visit_index: 1,
+        tool_call_id: "call-1",
+        input_fingerprint: "f".repeat(64),
+        children: [
+          {
+            child_id: foreign.childId,
+            task_id: foreign.taskId,
+            subagent: foreign.profile.name,
+            model: "provider:model",
+            branch: foreign.branch,
+            worktree_path: foreign.worktreePath,
+            base_commit: foreign.baseCommit,
+            task_fingerprint: foreign.taskFingerprint,
+            profile_fingerprint: foreign.profileFingerprint,
+            context_fingerprint: foreign.contextFingerprint,
+            prompt_fingerprint: foreign.promptFingerprint,
+            projection_fingerprint: foreign.projectionFingerprint,
+          },
+        ],
+        ts: 1,
+      },
+      {
+        type: "subagent_failed",
+        run_id: "run",
+        child_id: foreign.childId,
+        task_id: foreign.taskId,
+        subagent: foreign.profile.name,
+        model: "provider:model",
+        status: "cancelled",
+        failure_reason: "settled",
+        branch: foreign.branch,
+        worktree_path: foreign.worktreePath,
+        base_commit: foreign.baseCommit,
+        head_commit: null,
+        session_file: null,
+        usage: null,
+        ts: 2,
+      },
+    ];
+
+    const scheduler = makeScheduler(async (task) => result(task), records);
+
+    expect(scheduler.status()).toEqual([]);
+    expect(scheduler.remainingChildren()).toBe(8);
+  });
+
   it("returns accepted sandbox IDs across duplicates and terminal replay without preparing again", async () => {
     const sandbox: SubagentSandboxDescriptor = {
       backend: "bubblewrap",

@@ -12,10 +12,13 @@ import { isPoolCompleted } from "./child-result-mapping.js";
 import { DelegationChildSafetyError } from "./child-safety-error.js";
 import { buildSpawnCallback } from "./child-session.js";
 import { runPreparedChild } from "./delegate-tool.js";
-import type { DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
+import type {
+  DelegateChildFactoryOptions,
+  DelegateToolFactoryOptions,
+} from "./delegate-tool-factory.js";
 import { appendCompleted, appendFailed } from "./factory-records.js";
 import type { PoolChildResult } from "./pool.js";
-import { DelegationScheduler } from "./scheduler.js";
+import { DelegationScheduler, type DelegationSchedulerOrigin } from "./scheduler.js";
 
 /** Preserves the exact host terminal observed after asynchronous preparation. */
 export class HostDelegationRejectedError extends Error {
@@ -25,10 +28,35 @@ export class HostDelegationRejectedError extends Error {
   }
 }
 
+/** Dependencies for host-native scheduler admission without an SDK delegate tool. */
+export interface NativeDelegationSchedulerFactoryOptions extends DelegateChildFactoryOptions {
+  readonly delegationPolicy: import("../../manifest/types.js").DelegationPolicy;
+}
+
 /** Construct one scheduler with the factory's pinned preparation and child adapter. */
 export function createDelegateScheduler(
   opts: DelegateToolFactoryOptions,
   logicalParentId: string,
+): DelegationScheduler {
+  return createNativeDelegateScheduler(
+    { ...opts, delegationPolicy: delegationPolicy(opts) },
+    logicalParentId,
+  );
+}
+
+/** Construct controller-native scheduler admission with explicit policy and provenance. */
+export function createControllerDelegateScheduler(
+  opts: NativeDelegationSchedulerFactoryOptions,
+  logicalParentId: string,
+  origin: Extract<DelegationSchedulerOrigin, { readonly kind: "controller" }>,
+): DelegationScheduler {
+  return createNativeDelegateScheduler(opts, logicalParentId, origin);
+}
+
+function createNativeDelegateScheduler(
+  opts: NativeDelegationSchedulerFactoryOptions,
+  logicalParentId: string,
+  origin?: DelegationSchedulerOrigin,
 ): DelegationScheduler {
   const materializedPaths = new Map<string, readonly string[]>();
   const scheduler = new DelegationScheduler({
@@ -37,15 +65,16 @@ export function createDelegateScheduler(
       logicalParentId,
       parentRole: opts.parentRole,
       parentVisitIndex: opts.parentVisitIndex,
+      ...(origin === undefined ? {} : { origin }),
     },
-    maxParallel: delegationMaxParallel(opts),
-    maxChildren: Math.min(opts.remainingChildren, delegationMaxChildren(opts)),
+    maxParallel: opts.delegationPolicy.max_parallel,
+    maxChildren: Math.min(opts.remainingChildren, opts.delegationPolicy.max_children_per_session),
     records: requiredRecords(opts),
     persistRecord: opts.persistRecord,
     prepareSubmission: async (input: DelegateSubmissionArgs, remainingChildren) => {
       const prepared = await prepareDelegateSubmission({
         args: input,
-        policy: delegationPolicy(opts),
+        policy: opts.delegationPolicy,
         profiles: opts.subagents,
         remainingChildren,
         runStateDir: opts.runStateDir,
@@ -114,7 +143,7 @@ export function createDelegateScheduler(
   return scheduler;
 }
 
-function persistTerminal(opts: DelegateToolFactoryOptions, result: PoolChildResult): void {
+function persistTerminal(opts: DelegateChildFactoryOptions, result: PoolChildResult): void {
   if (isPoolCompleted(result)) appendCompleted(opts.persistRecord, opts.runId, result);
   else appendFailed(opts.persistRecord, opts.runId, result, true);
   try {
@@ -130,15 +159,8 @@ function delegationPolicy(opts: DelegateToolFactoryOptions) {
   return opts.role.delegation;
 }
 
-function delegationMaxParallel(opts: DelegateToolFactoryOptions): number {
-  return delegationPolicy(opts).max_parallel;
-}
-function delegationMaxChildren(opts: DelegateToolFactoryOptions): number {
-  return delegationPolicy(opts).max_children_per_session;
-}
-
 function requiredRecords(
-  opts: DelegateToolFactoryOptions,
+  opts: DelegateChildFactoryOptions,
 ): () => readonly import("../../persistence/log.js").PersistedRecord[] {
   if (opts.records === undefined)
     throw new Error("async delegation scheduler requires durable records");

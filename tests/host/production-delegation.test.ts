@@ -1,6 +1,7 @@
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { DelegateToolFactoryOptions } from "../../src/host/delegation/delegate-tool-factory.js";
+import type { NativeDelegationSchedulerFactoryOptions } from "../../src/host/delegation/factory-scheduler.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
 import { ProductionDelegationCoordinator } from "../../src/host/delegation/production-delegation.js";
 
@@ -28,6 +29,12 @@ function options(): Omit<DelegateToolFactoryOptions, "manager" | "scheduler"> {
     sessionDir: process.cwd(),
     records: () => [],
   };
+}
+
+function controllerOptions(): Omit<NativeDelegationSchedulerFactoryOptions, "manager"> {
+  const { role, ...shared } = options();
+  if (role.delegation === undefined) throw new Error("test role requires delegation policy");
+  return { ...shared, delegationPolicy: role.delegation };
 }
 
 function deferred<T>() {
@@ -60,6 +67,20 @@ function internals(coordinator: ProductionDelegationCoordinator): PrivateCoordin
 }
 
 describe("production delegation scopes", () => {
+  it("creates controller admission from direct policy without an SDK role", async () => {
+    const coordinator = new ProductionDelegationCoordinator();
+    const created = await coordinator.createControllerAdmissionService(controllerOptions(), {
+      controllerId: "repo-controller",
+      definitionDigest: "a".repeat(64),
+    });
+
+    expect(created.logicalParentId).toBe(
+      '["controller","run-1","repo-controller","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]',
+    );
+    expect(created.service.remainingChildren()).toBe(0);
+    await coordinator.close("test cleanup");
+  });
+
   it("keeps independent parent scopes and settles them independently", async () => {
     const coordinator = new ProductionDelegationCoordinator();
     await coordinator.createTool(options(), '["run-1","worker",1]');

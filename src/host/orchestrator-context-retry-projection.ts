@@ -60,7 +60,8 @@ export function executedToolCallIdsForRoleSession(
     // are SDK-minted, so an accepted ID for this role is contradictory
     // execution evidence and must retain fail-closed pairing.
     if (record.type === "delegation_submission_accepted" && record.parent_role === role) {
-      ids.add(record.tool_call_id);
+      if (record.schema_version === 1) ids.add(record.tool_call_id);
+      else if (record.origin.kind === "sdk_tool_call") ids.add(record.origin.tool_call_id);
     }
   }
   return ids;
