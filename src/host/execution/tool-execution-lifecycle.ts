@@ -2,12 +2,14 @@
 
 import type { SandboxExecutionTerminal } from "../../persistence/sandbox-command.js";
 import type {
+  AnyToolExecutionSandboxReadyRecord,
+  ControllerExecutionSandboxReadyRecord,
   SandboxReadyEvidence,
   ToolExecutionSandboxReadyRecord,
 } from "../../persistence/sandbox-execution.js";
 import {
+  type AnyToolExecutionStartedRecord,
   reconstructToolExecutionTimeline,
-  type ToolExecutionStartedRecord,
 } from "../../persistence/tool-execution.js";
 import { ToolExecutionError, type ToolExecutionScope } from "./tool-execution-contract.js";
 
@@ -29,23 +31,33 @@ export interface SandboxToolExecutionAdapter<T>
 
 /** Author the correlation fields and validate namespace/authority evidence before append. */
 export function persistSandboxReadiness(
-  started: ToolExecutionStartedRecord,
+  started: AnyToolExecutionStartedRecord,
   evidence: SandboxReadyEvidence,
-  append: (record: ToolExecutionSandboxReadyRecord) => void,
+  append: (record: AnyToolExecutionSandboxReadyRecord) => void,
 ): void {
-  const record: ToolExecutionSandboxReadyRecord = {
+  const common = {
     ...structuredClone(evidence),
-    type: "tool_execution_sandbox_ready",
-    schema_version: 1,
+    type: "tool_execution_sandbox_ready" as const,
     run_id: started.run_id,
     execution_id: started.execution_id,
     supervision_id: started.supervision_id,
-    logical_session_id: started.logical_session_id,
-    role_session_id: started.role_session_id,
-    tool_call_id: started.tool_call_id,
-    tool_name: started.tool_name,
     ts: Date.now(),
   };
+  const record: AnyToolExecutionSandboxReadyRecord =
+    started.schema_version === 1
+      ? ({
+          ...common,
+          schema_version: 1,
+          logical_session_id: started.logical_session_id,
+          role_session_id: started.role_session_id,
+          tool_call_id: started.tool_call_id,
+          tool_name: started.tool_name,
+        } as ToolExecutionSandboxReadyRecord)
+      : ({
+          ...common,
+          schema_version: 2,
+          origin: structuredClone(started.origin),
+        } as ControllerExecutionSandboxReadyRecord);
   reconstructToolExecutionTimeline([started, record]);
   append(record);
 }

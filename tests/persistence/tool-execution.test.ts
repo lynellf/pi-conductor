@@ -6,13 +6,28 @@ import { describe, expect, it } from "vitest";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import {
   assertToolExecutionRecord,
+  controllerOperationMayReinvokeAfterCleanup,
   isToolExecutionRecord,
+  materializeControllerExecutionRecovery,
   reconstructToolExecutionTimeline,
   type ToolExecutionCleanupConfirmedRecord,
   type ToolExecutionFinishedRecord,
   ToolExecutionRecordError,
   type ToolExecutionStartedRecord,
 } from "../../src/persistence/tool-execution.js";
+import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
+
+const controllerOrigin = {
+  kind: "controller_operation" as const,
+  controller_id: "repo-controller",
+  definition_digest: "a".repeat(64),
+  activation_id: "activation-1",
+  owner_epoch: 1,
+  operation_id: "planner-revision-1",
+  operation_kind: "planner" as const,
+  action_id: null,
+  request_sha256: "b".repeat(64),
+};
 
 const started: ToolExecutionStartedRecord = {
   type: "tool_execution_started",
@@ -64,6 +79,111 @@ const cleanupConfirmed: ToolExecutionCleanupConfirmedRecord = {
 };
 
 describe("tool execution persistence contract", () => {
+  it("correlates controller v2 execution without fabricated SDK identities", () => {
+    const controllerStarted = {
+      type: "tool_execution_started" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      execution_id: "controller-exec",
+      supervision_id: "controller-supervision",
+      origin: controllerOrigin,
+      timeout_ms: 30_000,
+      recovery_count: 0,
+      ts: 10,
+    };
+    const controllerFinished = {
+      type: "tool_execution_finished" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      execution_id: "controller-exec",
+      supervision_id: "controller-supervision",
+      origin: controllerOrigin,
+      elapsed_ms: 5,
+      recovery_count: 0,
+      outcome: "completed" as const,
+      cleanup: "confirmed" as const,
+      ts: 15,
+    };
+
+    expect(
+      reconstructToolExecutionTimeline([controllerStarted, controllerFinished]).unresolved,
+    ).toEqual([]);
+    expect(controllerStarted).not.toHaveProperty("tool_call_id");
+    expect(controllerStarted).not.toHaveProperty("logical_session_id");
+    expect(controllerOperationMayReinvokeAfterCleanup(controllerOrigin)).toBe(true);
+    expect(
+      controllerOperationMayReinvokeAfterCleanup({
+        ...controllerOrigin,
+        operation_kind: "adapter",
+        action_id: "action-1",
+      }),
+    ).toBe(false);
+    expect(() =>
+      reconstructToolExecutionTimeline([
+        controllerStarted,
+        { ...controllerFinished, origin: { ...controllerOrigin, owner_epoch: 2 } },
+      ]),
+    ).toThrow("controller origin");
+  });
+
+  it("binds controller repair to the actual start and only permits planner reinvocation", () => {
+    const controllerStarted = {
+      type: "tool_execution_started" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      execution_id: "controller-exec",
+      supervision_id: "controller-supervision",
+      origin: controllerOrigin,
+      timeout_ms: 30_000,
+      recovery_count: 0,
+      ts: 10,
+    };
+    const repair = {
+      type: "tool_execution_cleanup_confirmed" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      execution_id: "controller-exec",
+      supervision_id: "controller-supervision",
+      origin: controllerOrigin,
+      start_record_digest: sha256Canonical(controllerStarted),
+      partial_effects: "none_observed" as const,
+      cleanup: "confirmed" as const,
+      verification: "operator_confirmed_owner_marker_absent" as const,
+      operator_note: "Original ownership and partial effects were inspected.",
+      operator: "operator",
+      ts: 20,
+    };
+    const repaired = reconstructToolExecutionTimeline([controllerStarted, repair]);
+    const repairedEntry = repaired.entries[0];
+    if (repairedEntry === undefined) throw new Error("missing repaired execution fixture");
+
+    expect(materializeControllerExecutionRecovery(repairedEntry)).toEqual({
+      kind: "planner_reinvoke_allowed",
+    });
+    expect(() =>
+      reconstructToolExecutionTimeline([
+        controllerStarted,
+        { ...repair, start_record_digest: "c".repeat(64) },
+      ]),
+    ).toThrow("does not bind its execution start");
+
+    const adapterStarted = {
+      ...controllerStarted,
+      origin: { ...controllerOrigin, operation_kind: "adapter" as const, action_id: "action-1" },
+    };
+    const adapterRepair = {
+      ...repair,
+      origin: adapterStarted.origin,
+      start_record_digest: sha256Canonical(adapterStarted),
+      partial_effects: "inspected_unpublished" as const,
+    };
+    const adapterTimeline = reconstructToolExecutionTimeline([adapterStarted, adapterRepair]);
+    const adapterEntry = adapterTimeline.entries[0];
+    if (adapterEntry === undefined) throw new Error("missing adapter execution fixture");
+    expect(materializeControllerExecutionRecovery(adapterEntry)).toEqual({
+      kind: "fresh_action_required",
+    });
+  });
   it("rejects corrupt admission evidence with recovery guidance", () => {
     expect(() =>
       assertToolExecutionRecord({ ...started, admission: { preexisting_before: "PRIVATE" } }),

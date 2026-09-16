@@ -53,13 +53,8 @@ import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
 import type { RunFinalizationFailedRecord } from "./run-finalization.js";
-import type { ToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
 import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
-import type {
-  ToolExecutionCleanupConfirmedRecord,
-  ToolExecutionFinishedRecord,
-  ToolExecutionStartedRecord,
-} from "./tool-execution.js";
+import type { ToolExecutionRecord } from "./tool-execution.js";
 import type {
   HandoffTransportSelectedRecord,
   ManifestSnapshotRecord,
@@ -300,6 +295,20 @@ export type ContextArtifactAuditEntry =
       };
       readonly byte_length: number;
       readonly sha256: string;
+    }
+  | {
+      readonly ordinal: number;
+      readonly id: string;
+      readonly source: "host_artifact";
+      readonly provenance: {
+        readonly kind: "controller_artifact";
+        readonly ref: string;
+        readonly artifact_sha256: string;
+        readonly producing_action_id: string;
+      };
+      readonly byte_length: number;
+      /** Context digest; source artifact digest remains in provenance. */
+      readonly sha256: string;
     };
 
 /** Issue #60 versioned ordered inventory retained on newly written child starts. */
@@ -456,10 +465,7 @@ export type PersistedRecord =
   | TrajectoryHandoffFailedRecord
   | TrajectoryTargetSeedDeliveredRecord
   | RoleTurnRecord
-  | ToolExecutionStartedRecord
-  | ToolExecutionFinishedRecord
-  | ToolExecutionCleanupConfirmedRecord
-  | ToolExecutionSandboxReadyRecord
+  | ToolExecutionRecord
   | EndGuardRecord
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord

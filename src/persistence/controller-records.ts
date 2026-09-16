@@ -198,6 +198,18 @@ export type ControllerRecord =
   | ControllerActionReceiptRecord
   | ControllerRepairRecord;
 
+/** Digest one action request in the pinned controller-definition authority domain. */
+export function controllerActionRequestDigest(
+  definitionDigest: string,
+  request: ControllerAction,
+): string {
+  return sha256Canonical({
+    domain: "pi-conductor/controller-action-request/v1",
+    definition_digest: definitionDigest,
+    request,
+  });
+}
+
 /** Typed rejection for malformed or inconsistent controller records. */
 export class ControllerRecordError extends Error {
   constructor(message: string) {
@@ -278,7 +290,10 @@ export function assertControllerRecord(value: unknown): asserts value is Control
       assertBoundedJson(intent.request, MAX_JSON_BYTES, "canonical action request");
       if (intent.request.action_id !== intent.action_id || intent.request.kind !== intent.kind)
         throw new ControllerRecordError("action intent wrapper disagrees with its closed request");
-      if (sha256Canonical(intent.request) !== intent.request_sha256)
+      if (
+        controllerActionRequestDigest(record.definition_digest, intent.request) !==
+        intent.request_sha256
+      )
         throw new ControllerRecordError("action request digest does not match canonical content");
     }
   }

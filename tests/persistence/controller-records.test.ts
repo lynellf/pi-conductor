@@ -8,6 +8,7 @@ import {
   type ControllerDefinitionPinnedRecord,
   ControllerRecordError,
   type ControllerRepairRecord,
+  controllerActionRequestDigest,
   controllerDefinitionDigest,
 } from "../../src/persistence/controller-records.js";
 import {
@@ -92,7 +93,7 @@ const decision: ControllerDecisionCommittedRecord = {
     {
       action_id: "delegate-a",
       kind: "delegate",
-      request_sha256: sha256Canonical(request),
+      request_sha256: controllerActionRequestDigest(definition.definition_digest, request),
       request,
     },
   ],
@@ -133,6 +134,13 @@ function receipt(
 }
 
 describe("controller durable timeline", () => {
+  it("binds identical action requests to their pinned definition", () => {
+    const changedDefinition = "d".repeat(64);
+    expect(controllerActionRequestDigest(definition.definition_digest, request)).not.toBe(
+      controllerActionRequestDigest(changedDefinition, request),
+    );
+  });
+
   it("materializes strict controller records through the shared log boundary", () => {
     const log = new InMemoryRecordLog();
     try {
@@ -224,7 +232,10 @@ describe("controller durable timeline", () => {
         {
           ...actionIntent,
           request: changedRequest,
-          request_sha256: sha256Canonical(changedRequest),
+          request_sha256: controllerActionRequestDigest(
+            definition.definition_digest,
+            changedRequest,
+          ),
         },
       ],
       ts: 4,
@@ -436,12 +447,21 @@ describe("controller durable timeline", () => {
     const twoActions: ControllerDecisionCommittedRecord = {
       ...constrainedDecision,
       actions: [
-        actionIntent,
+        {
+          ...actionIntent,
+          request_sha256: controllerActionRequestDigest(
+            constrained.definition_digest,
+            actionIntent.request,
+          ),
+        },
         {
           action_id: "cancel-a",
           kind: "cancel",
           request: secondRequest,
-          request_sha256: sha256Canonical(secondRequest),
+          request_sha256: controllerActionRequestDigest(
+            constrained.definition_digest,
+            secondRequest,
+          ),
         },
       ],
     };

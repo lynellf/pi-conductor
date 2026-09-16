@@ -2,11 +2,11 @@
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import type {
-  SandboxExecutionOwner,
-  ToolExecutionSandboxReadyRecord,
+  AnySandboxExecutionOwner,
+  AnyToolExecutionSandboxReadyRecord,
 } from "./sandbox-execution.js";
 import { sandboxOutputFinalRecordSchema } from "./sandbox-output.js";
-import type { ToolExecutionFinishedRecord } from "./tool-execution.js";
+import type { AnyToolExecutionFinishedRecord } from "./tool-execution.js";
 
 /** Metadata-only terminal evidence from a settled or explicitly uncertain sandbox. */
 export const sandboxExecutionTerminalSchema = Type.Object(
@@ -67,9 +67,9 @@ export function assertSandboxExecutionTerminal(
 
 /** Bind terminal evidence to the start owner and any durable authorization record. */
 export function assertSandboxTerminalCorrelation(
-  owner: SandboxExecutionOwner | undefined,
-  ready: ToolExecutionSandboxReadyRecord | undefined,
-  finished: ToolExecutionFinishedRecord,
+  owner: AnySandboxExecutionOwner | undefined,
+  ready: AnyToolExecutionSandboxReadyRecord | undefined,
+  finished: AnyToolExecutionFinishedRecord,
 ): void {
   if ((owner === undefined) !== (finished.sandbox === undefined))
     throw new SandboxCommandRecordError(

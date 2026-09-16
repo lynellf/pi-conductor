@@ -3,11 +3,18 @@ import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, readdir, readFile, readlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { captureSandboxAdmission } from "../../src/host/execution/sandbox/admission-store.js";
+import { createControllerCommandRunner } from "../../src/host/controller/controller-command-runner.js";
+import {
+  captureSandboxAdmission,
+  readSandboxAdmission,
+} from "../../src/host/execution/sandbox/admission-store.js";
 import { createSandboxCommandRunner } from "../../src/host/execution/sandbox/command-runner.js";
 import type { HostApprovedBubblewrapBuild } from "../../src/host/execution/sandbox/prerequisites.js";
 import { classifySandboxProcess } from "../../src/host/execution/sandbox/process-observation.js";
-import { materializeSandboxProject } from "../../src/host/execution/sandbox/project-materialization.js";
+import {
+  materializeSandboxProject,
+  verifySandboxProjectBase,
+} from "../../src/host/execution/sandbox/project-materialization.js";
 import type { HostApprovedBootstrapRuntime } from "../../src/host/execution/sandbox/runtime-types.js";
 import type { ToolExecutionScope } from "../../src/host/execution/tool-execution-contract.js";
 import { ToolExecutionController } from "../../src/host/execution/tool-execution-controller.js";
@@ -167,6 +174,98 @@ describe("real production Bubblewrap command runner", () => {
     const observed = result.previews.stdout.data.trim().split("\n").sort();
     expect(observed).toEqual(["0", "1", "2"]);
     expect(runner.terminalEvidence()).toMatchObject({ cleanup: "confirmed" });
+  }, 15_000);
+
+  it("delivers a large JSON request on FD 0 to a fixed executable and literal argv", async () => {
+    const request = { payload: "x".repeat(128 * 1024) };
+    const literalArgument = "$(touch /workspace/src/escaped); $HOME";
+    const origin = {
+      kind: "controller_operation" as const,
+      controller_id: "controller-1",
+      definition_digest: "a".repeat(64),
+      activation_id: "activation-1",
+      owner_epoch: 1,
+      operation_id: "operation-1",
+      operation_kind: "planner" as const,
+      action_id: null,
+      request_sha256: "b".repeat(64),
+    };
+    const owner = {
+      kind: "controller_operation" as const,
+      origin,
+      runtime: {
+        runtime_id: "runtime-1",
+        approval_id: "approval-1",
+        runtime_digest: "c".repeat(64),
+        executable_digest: "d".repeat(64),
+        capability_digest: "e".repeat(64),
+      },
+    };
+    const runner = createControllerCommandRunner({
+      binaryPath: runnerOptions.binaryPath,
+      approvedBuilds: runnerOptions.approvedBuilds,
+      runStateDir: runnerOptions.runStateDir,
+      executable: "/bin/bash",
+      argv: [
+        "--noprofile",
+        "--norc",
+        "-c",
+        'IFS= read -r -d "" request || :; printf "%s" "$request"; printf "%s" "$1" >&2',
+        "controller-test",
+        literalArgument,
+      ],
+      request,
+      loadVerifiedContext: async (executionScope) => {
+        expect(executionScope.executionId).toBe("controller-execution");
+        executionScope.assertOpen();
+        const admission = await readSandboxAdmission({
+          runStateDir: runnerOptions.runStateDir,
+          expectedRunId: runnerOptions.admission.runId,
+          expectedChildId: runnerOptions.admission.childId,
+          expectedSandbox: runnerOptions.admission.sandbox,
+          bootstrapApproval: runnerOptions.bootstrapApproval,
+        });
+        const project = await verifySandboxProjectBase(runnerOptions.project, {
+          admission,
+          runStateDir: runnerOptions.runStateDir,
+          expectedRunId: admission.runId,
+          expectedChildId: admission.childId,
+        });
+        return {
+          runtime: admission.runtime,
+          readonlyWorkspaceRoot: project.basePath,
+          privateWritableRoot: project.writablePath,
+          bootstrapPath: project.bootstrapPath,
+          owner,
+          writableMounts: [],
+          environment: admission.policy.execution.environment,
+          runId: admission.runId,
+          outputCaps: { maxBytes: 1024 * 1024 + 4096 },
+        };
+      },
+    });
+    active.push(runner);
+
+    const ready = await runner.prepare(scope("controller-execution", "controller-supervision"));
+    await runner.authorize();
+    const result = await runner.settle();
+
+    expect(ready.sandbox).toEqual(owner);
+    expect(result.normalizedStatus).toBe(0);
+    expect(result.output.stdout.byteCount).toBe(Buffer.byteLength(JSON.stringify(request)));
+    expect(result.previews.stdout).toMatchObject({
+      encoding: "utf8",
+      data: JSON.stringify(request).slice(0, 64 * 1024),
+      truncated: true,
+    });
+    expect(result.previews.stderr).toMatchObject({
+      encoding: "utf8",
+      data: literalArgument,
+      truncated: false,
+    });
+    expect(
+      await lstat(join(runnerOptions.project.writablePath, "src/escaped")).catch(() => null),
+    ).toBeNull();
   }, 15_000);
 
   it("controller timeout kills a TERM-resistant namespace and retains terminal evidence", async () => {

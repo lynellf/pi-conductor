@@ -10,7 +10,9 @@ import { formatObservationDiagnostic } from "./cli-observation-diagnostic.js";
 
 /** Usage and acknowledgment semantics for the reconciliation CLI. */
 export const RECONCILE_USAGE =
-  "Usage: conduct reconcile-tools --log-dir <path> <run-id> [--execution <id> [--confirm-cleanup --note <text>]]\n  --execution inspects one execution without scanning unrelated entries.\n  --confirm-cleanup attests the original host namespaces, canonical storage, ALL original processes and writers (including unmarked descendants) stopped, and partial effects inspected.";
+  "Usage: conduct reconcile-tools --log-dir <path> <run-id> [--execution <id> [--confirm-cleanup --note <text> [--partial-effects <none_observed|inspected_unpublished|immutable_publication_verified>]]]\n  --execution inspects one execution without scanning unrelated entries.\n  --confirm-cleanup attests the original host namespaces, canonical storage, ALL original processes and writers (including unmarked descendants) stopped, and partial effects inspected. Controller executions require --partial-effects.";
+
+type PartialEffects = "none_observed" | "inspected_unpublished" | "immutable_publication_verified";
 
 interface Parsed {
   readonly baseDir: string;
@@ -18,6 +20,7 @@ interface Parsed {
   readonly executionId?: string;
   readonly note?: string;
   readonly confirmed: boolean;
+  readonly partialEffects?: PartialEffects;
 }
 
 function parse(argv: readonly string[]): Parsed {
@@ -27,6 +30,7 @@ function parse(argv: readonly string[]): Parsed {
   let note: string | undefined;
   let runId: string | undefined;
   let confirmed = false;
+  let partialEffects: PartialEffects | undefined;
   for (let i = 1; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === undefined) throw new Error(RECONCILE_USAGE);
@@ -48,6 +52,16 @@ function parse(argv: readonly string[]): Parsed {
     } else if (arg === "--confirm-cleanup") {
       if (confirmed) throw new Error(RECONCILE_USAGE);
       confirmed = true;
+    } else if (arg === "--partial-effects") {
+      const value = argv[++i];
+      if (
+        (value !== "none_observed" &&
+          value !== "inspected_unpublished" &&
+          value !== "immutable_publication_verified") ||
+        partialEffects !== undefined
+      )
+        throw new Error(RECONCILE_USAGE);
+      partialEffects = value;
     } else if (arg.startsWith("-")) throw new Error(RECONCILE_USAGE);
     else if (runId === undefined) runId = arg;
     else throw new Error(RECONCILE_USAGE);
@@ -55,6 +69,7 @@ function parse(argv: readonly string[]): Parsed {
   if (baseDir === undefined || runId === undefined) throw new Error(RECONCILE_USAGE);
   if (
     (note !== undefined && !confirmed) ||
+    (partialEffects !== undefined && !confirmed) ||
     (confirmed && (executionId === undefined || note === undefined))
   )
     throw new Error(RECONCILE_USAGE);
@@ -64,6 +79,7 @@ function parse(argv: readonly string[]): Parsed {
     confirmed,
     ...(executionId !== undefined && { executionId }),
     ...(note !== undefined && { note }),
+    ...(partialEffects !== undefined && { partialEffects }),
   };
 }
 
@@ -89,6 +105,9 @@ export async function runReconcileCli(
         baseDir: args.baseDir,
         acknowledgment: true,
         operatorNote: args.note,
+        ...(args.partialEffects === undefined
+          ? {}
+          : { controllerPartialEffects: args.partialEffects }),
       });
       output.log(JSON.stringify(record));
     } else {

@@ -200,10 +200,27 @@ export const fileContextArtifactSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Closed host-issued controller-output context descriptor (Issue #115 §6). */
+export const hostArtifactContextArtifactSchema = Type.Object(
+  {
+    id: contextArtifactIdSchema,
+    source: Type.Literal("host_artifact"),
+    ref: Type.String({
+      pattern: "^artifact/v1/[a-f0-9]{64}/[a-f0-9]{64}$",
+      maxLength: 160,
+    }),
+    sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    byte_length: Type.Integer({ minimum: 0, maximum: 1024 * 1024 }),
+    media_type: Type.Literal("application/json"),
+  },
+  { additionalProperties: false },
+);
+
 /** Single closed context-artifact descriptor union (Issue #60 §3). */
 export const contextArtifactSchema = Type.Union([
   inlineContextArtifactSchema,
   fileContextArtifactSchema,
+  hostArtifactContextArtifactSchema,
 ]);
 
 /** Bounded non-empty context-artifact inventory (Issue #60 §3). */

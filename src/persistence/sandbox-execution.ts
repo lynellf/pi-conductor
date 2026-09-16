@@ -9,6 +9,10 @@ import {
 } from "./sandbox-process.js";
 import { preparedRuntimeIdentitySchema } from "./sandbox-runtime.js";
 import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
+import { controllerExecutionOriginSchema } from "./tool-execution-origin.js";
+
+export type { ControllerExecutionOrigin } from "./tool-execution-origin.js";
+export { controllerExecutionOriginSchema } from "./tool-execution-origin.js";
 
 const id = Type.String({ minLength: 1 });
 const safePid = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
@@ -19,10 +23,43 @@ const namespace = (name: string) =>
   Type.String({ pattern: `^${name}:\\[[0-9]+\\]$`, maxLength: 64 });
 
 /** Owner binding for a sandbox-enabled delegated child start. */
-export const sandboxExecutionOwnerSchema = Type.Object(
-  { child_id: id, descriptor: subagentSandboxDescriptorSchema },
+export const childSandboxExecutionOwnerSchema = Type.Object(
+  {
+    child_id: id,
+    descriptor: subagentSandboxDescriptorSchema,
+    kind: Type.Optional(Type.Never()),
+    origin: Type.Optional(Type.Never()),
+    runtime: Type.Optional(Type.Never()),
+  },
   { additionalProperties: false },
 );
+
+/** Pinned runtime authority for a controller-owned sandbox process. */
+export const controllerSandboxExecutionOwnerSchema = Type.Object(
+  {
+    kind: Type.Literal("controller_operation"),
+    origin: controllerExecutionOriginSchema,
+    runtime: Type.Object(
+      {
+        runtime_id: id,
+        approval_id: id,
+        runtime_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+        executable_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+        capability_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+      },
+      { additionalProperties: false },
+    ),
+    child_id: Type.Optional(Type.Never()),
+    descriptor: Type.Optional(Type.Never()),
+  },
+  { additionalProperties: false },
+);
+
+/** Child or controller provenance for one sandbox-owned process tree. */
+export const sandboxExecutionOwnerSchema = Type.Union([
+  childSandboxExecutionOwnerSchema,
+  controllerSandboxExecutionOwnerSchema,
+]);
 
 /** Host origin used to interpret process start ticks after observer restart. */
 export const sandboxExecutionHostObserverSchema = Type.Object(
@@ -50,7 +87,19 @@ export const verifiedSandboxBinarySchema = Type.Object(
 );
 
 /** Exact correlated READY record; metadata contains no command, environment, or output bytes. */
-export const toolExecutionSandboxReadySchema = Type.Object(
+const readinessEvidenceFields = {
+  boot_id: uuid,
+  host_observer: sandboxExecutionHostObserverSchema,
+  launcher: launcherSchema,
+  early_init: sandboxProcessObservationSchema,
+  final_init: sandboxProcessObservationSchema,
+  startup_pid_namespace: safeNonNegative,
+  verified_binary: verifiedSandboxBinarySchema,
+  output_ref: uuid,
+  ts: Type.Number({ minimum: 0 }),
+};
+
+export const toolExecutionSandboxReadyV1Schema = Type.Object(
   {
     type: Type.Literal("tool_execution_sandbox_ready"),
     schema_version: Type.Literal(1),
@@ -61,22 +110,43 @@ export const toolExecutionSandboxReadySchema = Type.Object(
     role_session_id: id,
     tool_call_id: id,
     tool_name: id,
-    sandbox: sandboxExecutionOwnerSchema,
-    boot_id: uuid,
-    host_observer: sandboxExecutionHostObserverSchema,
-    launcher: launcherSchema,
-    early_init: sandboxProcessObservationSchema,
-    final_init: sandboxProcessObservationSchema,
-    startup_pid_namespace: safeNonNegative,
-    verified_binary: verifiedSandboxBinarySchema,
-    output_ref: uuid,
-    ts: Type.Number({ minimum: 0 }),
+    origin: Type.Optional(Type.Never()),
+    sandbox: childSandboxExecutionOwnerSchema,
+    ...readinessEvidenceFields,
   },
   { additionalProperties: false },
 );
 
+/** READY evidence for a controller operation without fabricated SDK identity. */
+export const toolExecutionSandboxReadyV2Schema = Type.Object(
+  {
+    type: Type.Literal("tool_execution_sandbox_ready"),
+    schema_version: Type.Literal(2),
+    run_id: id,
+    execution_id: id,
+    supervision_id: id,
+    origin: controllerExecutionOriginSchema,
+    logical_session_id: Type.Optional(Type.Never()),
+    role_session_id: Type.Optional(Type.Never()),
+    tool_call_id: Type.Optional(Type.Never()),
+    tool_name: Type.Optional(Type.Never()),
+    sandbox: controllerSandboxExecutionOwnerSchema,
+    ...readinessEvidenceFields,
+  },
+  { additionalProperties: false },
+);
+
+export const toolExecutionSandboxReadySchema = Type.Union([
+  toolExecutionSandboxReadyV1Schema,
+  toolExecutionSandboxReadyV2Schema,
+]);
+
 /** Child and immutable descriptor binding for a sandbox execution. */
-export type SandboxExecutionOwner = Readonly<Static<typeof sandboxExecutionOwnerSchema>>;
+export type SandboxExecutionOwner = Readonly<Static<typeof childSandboxExecutionOwnerSchema>>;
+export type ControllerSandboxExecutionOwner = Readonly<
+  Static<typeof controllerSandboxExecutionOwnerSchema>
+>;
+export type AnySandboxExecutionOwner = SandboxExecutionOwner | ControllerSandboxExecutionOwner;
 /** Host process and time namespace identity retained in READY evidence. */
 export type SandboxExecutionHostObserver = Readonly<
   Static<typeof sandboxExecutionHostObserverSchema>
@@ -85,11 +155,16 @@ export type SandboxExecutionHostObserver = Readonly<
 export type VerifiedSandboxBinary = Readonly<Static<typeof verifiedSandboxBinarySchema>>;
 /** Complete durable READY record emitted after sandbox verification. */
 export type ToolExecutionSandboxReadyRecord = Readonly<
-  Static<typeof toolExecutionSandboxReadySchema>
+  Static<typeof toolExecutionSandboxReadyV1Schema>
 >;
+export type ControllerExecutionSandboxReadyRecord = Readonly<
+  Static<typeof toolExecutionSandboxReadyV2Schema>
+>;
+export type AnyToolExecutionSandboxReadyRecord =
+  | ToolExecutionSandboxReadyRecord
+  | ControllerExecutionSandboxReadyRecord;
 /** READY fields supplied by the sandbox lifecycle owner before correlation metadata. */
-export type SandboxReadyEvidence = Omit<
-  ToolExecutionSandboxReadyRecord,
+type ReadyCorrelationFields =
   | "type"
   | "schema_version"
   | "run_id"
@@ -99,8 +174,11 @@ export type SandboxReadyEvidence = Omit<
   | "role_session_id"
   | "tool_call_id"
   | "tool_name"
-  | "ts"
->;
+  | "origin"
+  | "ts";
+export type SandboxReadyEvidence =
+  | Omit<ToolExecutionSandboxReadyRecord, ReadyCorrelationFields>
+  | Omit<ControllerExecutionSandboxReadyRecord, ReadyCorrelationFields>;
 
 /** Typed rejection for malformed or inconsistent sandbox lifecycle evidence. */
 export class SandboxExecutionRecordError extends Error {

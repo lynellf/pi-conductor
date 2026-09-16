@@ -25,6 +25,7 @@ import {
   selectedSummary,
 } from "./child-result-mapping.js";
 import type { PreparedTask } from "./context-artifact-admission.js";
+import type { HostArtifactContextResolver } from "./context-artifact-contract.js";
 import type {
   ResolveContextArtifactBatchOptions,
   ResolvedContextArtifact,
@@ -87,6 +88,8 @@ export interface DelegateToolOptions {
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
   /** Deterministic resolver race injection for tests; never exposed by the delegate tool schema. */
   readonly contextArtifactTestHook?: ResolveContextArtifactBatchOptions["testHook"];
+  /** Controller-only resolver for host-issued immutable outputs; model input never supplies paths. */
+  readonly hostArtifactResolver?: HostArtifactContextResolver;
   /** Synchronous host assertion after preparation and before filesystem or pool work. */
   readonly assertAdmissionOpen?: () => void;
   readonly isAdmissionClosed?: () => boolean;

@@ -12,21 +12,30 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import type { SandboxExecutionTerminal } from "../../persistence/sandbox-command.js";
 import {
+  type AnySandboxExecutionOwner,
+  type ControllerSandboxExecutionOwner,
   type SandboxExecutionOwner,
   sandboxExecutionOwnerSchema,
 } from "../../persistence/sandbox-execution.js";
-import {
-  reconstructToolExecutionTimeline,
-  type ToolExecutionFinishedRecord,
-  type ToolExecutionRecord,
-  type ToolExecutionStartedRecord,
+import type {
+  AnyToolExecutionStartedRecord,
+  ControllerExecutionOrigin,
+  ToolExecutionFinishedRecord,
+  ToolExecutionRecord,
 } from "../../persistence/tool-execution.js";
-import { SupervisedProcessError } from "./supervised-process.js";
+import { sameControllerExecutionOrigin } from "../../persistence/tool-execution-origin.js";
 import {
-  executeToolLifecycle,
-  persistSandboxReadiness,
-  type SandboxToolExecutionAdapter,
-} from "./tool-execution-lifecycle.js";
+  buildExecutionStart,
+  controllerLifecycleOperation,
+  diagnosticFrom,
+  type ExecutionInvocation,
+  effectiveTimeoutSeconds,
+  executionTimeoutCount,
+  isSupervisedAbort,
+  isSupervisedTimeout,
+  safeMilliseconds,
+} from "./tool-execution-controller-support.js";
+import type { SandboxToolExecutionAdapter } from "./tool-execution-lifecycle.js";
 import { buildToolExecutionTerminal } from "./tool-execution-terminal.js";
 import {
   hasUnconfirmedCleanup,
@@ -41,6 +50,7 @@ export {
   type ToolExecutionRunOptions,
   type ToolExecutionScope,
 } from "./tool-execution-contract.js";
+export { assertNoUnfinishedToolExecutions } from "./tool-execution-resume.js";
 
 import {
   type ToolExecutionControllerOptions,
@@ -48,24 +58,6 @@ import {
   type ToolExecutionRunOptions,
   type ToolExecutionScope,
 } from "./tool-execution-contract.js";
-
-/** Stop resume when an execution has no durable terminal and no trusted owner. */
-export function assertNoUnfinishedToolExecutions(records: readonly ToolExecutionRecord[]): void {
-  const timeline = reconstructToolExecutionTimeline(records);
-  if (timeline.unresolved.length > 0) {
-    const details = timeline.unresolved
-      .map(
-        (entry) =>
-          `execution_id=${entry.started.execution_id} tool_call_id=${entry.started.tool_call_id} supervision_id=${entry.started.supervision_id}`,
-      )
-      .join(", ");
-    throw new ToolExecutionError(
-      "tool_resume_unknown_owner",
-      `unfinished tool execution has unknown ownership; cleanup must be confirmed before resume (${details}). Partial effects may remain; inspect and reconcile-tools before retrying or resuming.`,
-      { cleanup: "unconfirmed" },
-    );
-  }
-}
 
 /** Controls one logical invocation's physical attempts across model replacement. */
 export class ToolExecutionController {
@@ -99,7 +91,16 @@ export class ToolExecutionController {
     operation: (scope: ToolExecutionScope) => Promise<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
-    return this.runAttempt(toolName, toolCallId, operation, runOptions);
+    return this.runAttempt({ kind: "sdk", toolName, toolCallId }, operation, runOptions);
+  }
+
+  /** Run a controller executable with real non-SDK operation provenance. */
+  async runController<T>(
+    origin: ControllerExecutionOrigin,
+    operation: (scope: ToolExecutionScope) => Promise<T>,
+    runOptions: ToolExecutionRunOptions = {},
+  ): Promise<T> {
+    return this.runAttempt({ kind: "controller", origin }, operation, runOptions);
   }
 
   /** Use a verified backend lifecycle while retaining controller deadlines and records (#106 §6). */
@@ -120,18 +121,43 @@ export class ToolExecutionController {
       );
     const owner = structuredClone(sandbox);
     return this.runAttempt(
-      toolName,
-      toolCallId,
-      (scope) =>
-        executeToolLifecycle(adapter, scope, (evidence) => {
-          const started = this.generated.find(
-            (record) =>
-              record.type === "tool_execution_started" && record.execution_id === scope.executionId,
-          );
-          if (started?.type !== "tool_execution_started")
-            throw new Error("sandbox execution start is missing");
-          persistSandboxReadiness(started, evidence, (record) => this.append(record));
-        }),
+      { kind: "sdk", toolName, toolCallId },
+      controllerLifecycleOperation(
+        adapter,
+        (executionId) => this.started(executionId),
+        (record) => this.append(record),
+      ),
+      runOptions,
+      owner,
+      () => adapter.terminalEvidence(),
+    );
+  }
+
+  /** Run a verified controller backend while preserving its non-SDK owner identity. */
+  async runControllerLifecycle<T>(
+    origin: ControllerExecutionOrigin,
+    sandbox: ControllerSandboxExecutionOwner,
+    adapter: SandboxToolExecutionAdapter<T>,
+    runOptions: ToolExecutionRunOptions = {},
+  ): Promise<T> {
+    if (
+      runOptions.captureAdmission !== undefined ||
+      !Value.Check(sandboxExecutionOwnerSchema, sandbox) ||
+      sandbox.kind !== "controller_operation" ||
+      !sameControllerExecutionOrigin(origin, sandbox.origin)
+    )
+      throw new ToolExecutionError(
+        "tool_input_invalid",
+        "controller sandbox execution requires matching pinned ownership evidence",
+      );
+    const owner = structuredClone(sandbox);
+    return this.runAttempt(
+      { kind: "controller", origin },
+      controllerLifecycleOperation(
+        adapter,
+        (executionId) => this.started(executionId),
+        (record) => this.append(record),
+      ),
       runOptions,
       owner,
       () => adapter.terminalEvidence(),
@@ -139,20 +165,24 @@ export class ToolExecutionController {
   }
 
   private async runAttempt<T>(
-    toolName: string,
-    toolCallId: string,
+    identity: ExecutionInvocation,
     operation: (scope: ToolExecutionScope) => Promise<T>,
     runOptions: ToolExecutionRunOptions,
-    sandbox?: SandboxExecutionOwner,
+    sandbox?: AnySandboxExecutionOwner,
     terminalEvidence?: () => SandboxExecutionTerminal,
   ): Promise<T> {
     if (this.closed) {
       throw new ToolExecutionError("tool_closed", "tool execution admission is closed");
     }
-    const timeoutSeconds = this.effectiveTimeoutSeconds(runOptions.modelTimeoutSeconds);
+    const timeoutSeconds = effectiveTimeoutSeconds(
+      this.options.policy.timeout_seconds,
+      runOptions.modelTimeoutSeconds,
+    );
     const executionId = this.idFactory();
     const supervisionId = this.idFactory();
-    const recoveryCount = this.timeoutCountForSession();
+    const recoveryCount = this.timeoutCountForInvocation(identity);
+    if (recoveryCount > this.options.policy.max_recoverable_timeouts)
+      throw new ToolExecutionError("tool_closed", "tool execution timeout budget is exhausted");
     const startedAt = Date.now();
     const timeoutMs = safeMilliseconds(timeoutSeconds);
     const admission =
@@ -160,22 +190,19 @@ export class ToolExecutionController {
     if (this.closed) {
       throw new ToolExecutionError("tool_closed", "tool execution admission is closed");
     }
-    const started: ToolExecutionStartedRecord = {
-      type: "tool_execution_started",
-      schema_version: 1,
-      run_id: this.options.runId,
-      execution_id: executionId,
-      supervision_id: supervisionId,
-      logical_session_id: this.options.logicalSessionId,
-      role_session_id: this.options.roleSessionId,
-      tool_call_id: toolCallId,
-      tool_name: toolName,
-      timeout_ms: timeoutMs,
-      recovery_count: recoveryCount,
+    const started = buildExecutionStart({
+      identity,
+      runId: this.options.runId,
+      logicalSessionId: this.options.logicalSessionId,
+      roleSessionId: this.options.roleSessionId,
+      executionId,
+      supervisionId,
+      timeoutMs,
+      recoveryCount,
+      startedAt,
       ...(admission === undefined ? {} : { admission }),
       ...(sandbox === undefined ? {} : { sandbox }),
-      ts: startedAt,
-    };
+    });
     this.append(started);
     if (terminalEvidence !== undefined) this.terminalEvidence.set(executionId, terminalEvidence);
 
@@ -301,28 +328,33 @@ export class ToolExecutionController {
     }
   }
 
-  private effectiveTimeoutSeconds(modelTimeoutSeconds: number | undefined): number {
-    if (modelTimeoutSeconds === undefined) return this.options.policy.timeout_seconds;
-    if (!Number.isInteger(modelTimeoutSeconds) || !Number.isFinite(modelTimeoutSeconds)) {
-      throw new ToolExecutionError("tool_input_invalid", "model timeout must be a finite integer");
-    }
-    if (modelTimeoutSeconds <= 0 || modelTimeoutSeconds > this.options.policy.timeout_seconds) {
-      throw new ToolExecutionError(
-        "tool_input_invalid",
-        "model timeout must be positive and no greater than the pinned deadline",
-      );
-    }
-    return modelTimeoutSeconds;
+  private timeoutCountForSession(): number {
+    return executionTimeoutCount([...this.priorRecords, ...this.generated], this.options.runId, {
+      kind: "sdk",
+      logicalSessionId: this.options.logicalSessionId,
+    });
   }
 
-  private timeoutCountForSession(): number {
-    return [...this.priorRecords, ...this.generated].filter(
-      (record) =>
-        record.type === "tool_execution_finished" &&
-        record.outcome === "timed_out" &&
-        record.run_id === this.options.runId &&
-        record.logical_session_id === this.options.logicalSessionId,
-    ).length;
+  private started(executionId: string): AnyToolExecutionStartedRecord | undefined {
+    const record = this.generated.find(
+      (candidate) =>
+        candidate.type === "tool_execution_started" && candidate.execution_id === executionId,
+    );
+    return record?.type === "tool_execution_started" ? record : undefined;
+  }
+
+  private timeoutCountForInvocation(identity: ExecutionInvocation): number {
+    if (identity.kind === "sdk") return this.timeoutCountForSession();
+    return executionTimeoutCount([...this.priorRecords, ...this.generated], this.options.runId, {
+      kind: "controller",
+      origin: identity.origin,
+    });
+  }
+
+  private timeoutCountForStart(started: AnyToolExecutionStartedRecord): number {
+    return started.schema_version === 1
+      ? this.timeoutCountForSession()
+      : this.timeoutCountForInvocation({ kind: "controller", origin: started.origin });
   }
 
   private append(record: ToolExecutionRecord): void {
@@ -342,12 +374,12 @@ export class ToolExecutionController {
   }
 
   private finishTimeout(
-    started: ToolExecutionStartedRecord,
+    started: AnyToolExecutionStartedRecord,
     executionId: string,
     _recoveryCount: number,
     cause: unknown,
   ): never {
-    const priorTimeouts = this.timeoutCountForSession();
+    const priorTimeouts = this.timeoutCountForStart(started);
     const diagnostic = diagnosticFrom(cause);
     this.appendFinished(started, "timed_out", "confirmed", diagnostic);
     const code =
@@ -367,7 +399,7 @@ export class ToolExecutionController {
   }
 
   private finishAborted(
-    started: ToolExecutionStartedRecord,
+    started: AnyToolExecutionStartedRecord,
     executionId: string,
     _recoveryCount: number,
     cause: unknown,
@@ -383,7 +415,7 @@ export class ToolExecutionController {
   }
 
   private finishUnconfirmed(
-    started: ToolExecutionStartedRecord,
+    started: AnyToolExecutionStartedRecord,
     executionId: string,
     _recoveryCount: number,
     cause: unknown,
@@ -405,7 +437,7 @@ export class ToolExecutionController {
   }
 
   private finishFailed(
-    started: ToolExecutionStartedRecord,
+    started: AnyToolExecutionStartedRecord,
     executionId: string,
     _recoveryCount: number,
     cause: unknown,
@@ -418,13 +450,13 @@ export class ToolExecutionController {
     });
   }
 
-  private failBeforeOperation(started: ToolExecutionStartedRecord, cause: unknown): never {
+  private failBeforeOperation(started: AnyToolExecutionStartedRecord, cause: unknown): never {
     this.appendFinished(started, "aborted", "confirmed");
     throw cause;
   }
 
   private appendFinished(
-    started: ToolExecutionStartedRecord,
+    started: AnyToolExecutionStartedRecord,
     outcome: ToolExecutionFinishedRecord["outcome"],
     cleanup: ToolExecutionFinishedRecord["cleanup"],
     diagnostic?: ToolExecutionFinishedRecord["diagnostic"],
@@ -435,7 +467,7 @@ export class ToolExecutionController {
         record.type === "tool_execution_sandbox_ready" &&
         record.execution_id === started.execution_id,
     );
-    let record: ToolExecutionFinishedRecord;
+    let record: import("../../persistence/tool-execution.js").AnyToolExecutionFinishedRecord;
     try {
       record = buildToolExecutionTerminal(
         started,
@@ -464,27 +496,4 @@ export class ToolExecutionController {
     for (const abort of this.activeAborts) abort.abort();
     this.onFatal?.(error);
   }
-}
-
-function diagnosticFrom(cause: unknown): ToolExecutionFinishedRecord["diagnostic"] {
-  return cause instanceof SupervisedProcessError ? cause.diagnostic : undefined;
-}
-
-function isSupervisedTimeout(error: unknown): boolean {
-  return error instanceof SupervisedProcessError && error.code === "supervised-process-timeout";
-}
-
-function isSupervisedAbort(error: unknown): boolean {
-  return error instanceof SupervisedProcessError && error.code === "supervised-process-aborted";
-}
-
-function safeMilliseconds(seconds: number): number {
-  const milliseconds = seconds * 1_000;
-  if (!Number.isSafeInteger(milliseconds) || milliseconds < 1) {
-    throw new ToolExecutionError(
-      "tool_input_invalid",
-      "tool deadline cannot be represented safely",
-    );
-  }
-  return milliseconds;
 }

@@ -28,6 +28,19 @@ export type ResolvedContextArtifact =
       readonly text: string;
       readonly byte_length: number;
       readonly sha256: string;
+    }
+  | {
+      readonly id: string;
+      readonly source: "host_artifact";
+      readonly provenance: {
+        readonly kind: "controller_artifact";
+        readonly ref: string;
+        readonly artifact_sha256: string;
+        readonly producing_action_id: string;
+      };
+      readonly text: string;
+      readonly byte_length: number;
+      readonly sha256: string;
     };
 
 /** Stable semantic failure codes persisted by delegate admission. */
@@ -47,7 +60,25 @@ export type ContextArtifactErrorCode =
   | "context-artifact-invalid-inline-text"
   | "context-artifact-invalid-utf8"
   | "context-artifact-oversized"
-  | "context-artifact-total-oversized";
+  | "context-artifact-total-oversized"
+  | "host-artifact-resolver-unavailable"
+  | "host-artifact-binding-mismatch"
+  | "host-artifact-unreadable";
+
+/** Closed host resolver for opaque controller publications; actions never receive filesystem paths. */
+export interface HostArtifactContextResolver {
+  readonly resolve: (input: {
+    readonly ref: string;
+    readonly consumerProfileId: string;
+    readonly maxBytes: number;
+  }) => Promise<{
+    readonly bytes: Buffer;
+    readonly sha256: string;
+    readonly byteLength: number;
+    readonly producingActionId: string;
+    readonly mediaType: "application/json";
+  }>;
+}
 
 /** Safe structured context-artifact admission diagnostic. */
 export interface ContextArtifactResolutionError {
@@ -62,6 +93,8 @@ export interface ContextArtifactResolutionError {
 export interface ContextArtifactResolutionTask {
   readonly taskId: string;
   readonly artifacts?: readonly ContextArtifact[];
+  /** Profile identity used to authorize a host-issued artifact for one native child. */
+  readonly consumerProfileId?: string;
 }
 
 /** Closed host Git operations for consumers that require constructed-environment access. */
@@ -82,6 +115,8 @@ export interface ResolveContextArtifactBatchOptions {
   readonly materializedParentPaths: readonly string[];
   readonly limits: ContextArtifactLimits;
   readonly tasks: readonly ContextArtifactResolutionTask[];
+  /** Host-injected controller output resolver; absent rejects the opaque source. */
+  readonly hostArtifactResolver?: HostArtifactContextResolver;
   /** Deterministic race injection for host tests; production admission never supplies it. */
   readonly testHook?: (stage: "after-source-lstat" | "before-final-check") => Promise<void> | void;
 }

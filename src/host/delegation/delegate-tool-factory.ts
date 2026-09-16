@@ -23,6 +23,7 @@ import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js"
 import { formatHostRejection, type HostRejection } from "../host-rejection.js";
 import { mapPoolResult } from "./child-result-mapping.js";
 import { buildSpawnCallback } from "./child-session.js";
+import type { HostArtifactContextResolver } from "./context-artifact-contract.js";
 import {
   DelegateToolError,
   executeDelegate,
@@ -67,6 +68,8 @@ export interface DelegateChildFactoryOptions {
   /** Host-owned prepared-runtime admission for explicit sandbox profiles. */
   readonly sandboxAdmission?: SandboxAdmissionAdapter;
   readonly sandboxHostApproval?: SandboxHostApproval;
+  /** Controller-native artifact resolver; absent leaves host-artifact descriptors fail-closed. */
+  readonly hostArtifactResolver?: HostArtifactContextResolver;
 }
 
 /** Dependencies for a parent role's SDK-visible delegate tool. */
@@ -198,6 +201,9 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           ...(opts.sandboxAdmission === undefined
             ? {}
             : { sandboxAdmission: opts.sandboxAdmission }),
+          ...(opts.hostArtifactResolver === undefined
+            ? {}
+            : { hostArtifactResolver: opts.hostArtifactResolver }),
         });
         remaining -= args.tasks.length;
         return {

@@ -1,6 +1,7 @@
 /** Strict private output metadata contracts for Issue #106 §7. */
 
 import { type Static, Type } from "typebox";
+import { controllerExecutionOriginSchema } from "./tool-execution-origin.js";
 
 const identifier = Type.String({ minLength: 1, maxLength: 256 });
 const outputReference = Type.String({
@@ -11,7 +12,8 @@ const byteCount = Type.Integer({ minimum: 0, maximum: 67_108_864 });
 const positiveByteCount = Type.Integer({ minimum: 1, maximum: 67_108_864 });
 
 /** Immutable owner binding persisted before a launcher can start. */
-export const sandboxOutputAttributionSchema = Type.Object(
+/** Legacy child-owned output attribution. */
+export const sandboxOutputAttributionV1Schema = Type.Object(
   {
     schemaVersion: Type.Literal(1),
     outputRef: outputReference,
@@ -23,6 +25,26 @@ export const sandboxOutputAttributionSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/** Controller-owned output attribution with real executable provenance. */
+export const sandboxOutputAttributionV2Schema = Type.Object(
+  {
+    schemaVersion: Type.Literal(2),
+    outputRef: outputReference,
+    runId: identifier,
+    controller_origin: controllerExecutionOriginSchema,
+    executionId: identifier,
+    supervisionId: identifier,
+    maxBytes: positiveByteCount,
+  },
+  { additionalProperties: false },
+);
+
+/** All retained output ownership contracts. */
+export const sandboxOutputAttributionSchema = Type.Union([
+  sandboxOutputAttributionV1Schema,
+  sandboxOutputAttributionV2Schema,
+]);
 
 /** Output owner binding derived from its strict persisted schema. */
 export type SandboxOutputAttribution = Readonly<Static<typeof sandboxOutputAttributionSchema>>;

@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import { nextExecutionVisitIndexes } from "../../src/host/execution/execution-visit-index.js";
-import type { ToolExecutionRecord } from "../../src/persistence/tool-execution.js";
+import type {
+  ToolExecutionFinishedRecord,
+  ToolExecutionStartedRecord,
+} from "../../src/persistence/tool-execution.js";
 
 const started = (
   runId: string,
   role: string,
   index: unknown,
   executionId: string,
-): ToolExecutionRecord => ({
+): ToolExecutionStartedRecord => ({
   type: "tool_execution_started",
   schema_version: 1,
   run_id: runId,
@@ -28,7 +31,7 @@ const finished = (
   role: string,
   index: unknown,
   executionId: string,
-): ToolExecutionRecord => ({
+): ToolExecutionFinishedRecord => ({
   type: "tool_execution_finished",
   schema_version: 1,
   run_id: runId,

@@ -66,7 +66,14 @@ function formatToolExecutionTokens(stats: RunStats, now: number): string {
   const tokens: string[] = [];
   if (execution.active !== null) {
     const elapsedSeconds = Math.max(0, Math.floor((now - execution.active.startedAt) / 1000));
-    tokens.push(`tool=${execution.active.toolName}`, `tool_elapsed=${elapsedSeconds}s`);
+    if (execution.active.controllerOrigin === undefined)
+      tokens.push(`tool=${execution.active.toolName}`);
+    else
+      tokens.push(
+        `operation=${execution.active.controllerOrigin.operation_kind}`,
+        `operation_id=${execution.active.controllerOrigin.operation_id}`,
+      );
+    tokens.push(`tool_elapsed=${elapsedSeconds}s`);
     if (execution.activeCount > 1) tokens.push(`tools_active=${execution.activeCount}`);
   }
   if (execution.recoveryCount > 0) tokens.push(`tool_recoveries=${execution.recoveryCount}`);

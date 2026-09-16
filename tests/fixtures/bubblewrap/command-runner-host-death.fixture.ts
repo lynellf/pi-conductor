@@ -43,7 +43,8 @@ describe("command runner host-death fixture", () => {
       idFactory: sequenceIds(),
       persist: (record) => {
         log.append(record);
-        if (record.type === "tool_execution_sandbox_ready") resolveReady(record);
+        if (record.type === "tool_execution_sandbox_ready" && record.schema_version === 1)
+          resolveReady(record);
         if (
           (config.mode === "before_ready" && record.type === "tool_execution_started") ||
           (config.mode === "after_ready" && record.type === "tool_execution_sandbox_ready")

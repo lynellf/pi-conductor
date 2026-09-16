@@ -35,6 +35,37 @@ async function write(stream: NodeJS.WritableStream, bytes: Uint8Array): Promise<
 }
 
 describe("private sandbox output spool", () => {
+  it("retains a controller v2 origin without inventing a child identity", async () => {
+    const value = await fixture();
+    const spool = await createSandboxOutputSpool({
+      ...value,
+      runId: "run-1",
+      controllerOrigin: {
+        kind: "controller_operation",
+        controller_id: "repo-controller",
+        definition_digest: "a".repeat(64),
+        activation_id: "activation-1",
+        owner_epoch: 1,
+        operation_id: "operation-1",
+        operation_kind: "planner",
+        action_id: null,
+        request_sha256: "b".repeat(64),
+      },
+      executionId: "execution-1",
+      supervisionId: "supervision-1",
+      maxBytes: 1024,
+    });
+    spool.stdout.end();
+    spool.stderr.end();
+    await spool.finalize();
+
+    expect(spool.attribution).toMatchObject({
+      schemaVersion: 2,
+      controller_origin: { operation_id: "operation-1" },
+    });
+    expect(spool.attribution).not.toHaveProperty("childId");
+  });
+
   it("rejects a combined output cap above 64 MiB before creating a spool", async () => {
     const value = await fixture();
     await expect(

@@ -12,6 +12,7 @@ export function nextExecutionVisitIndexes(
   for (const record of records) {
     if (!("run_id" in record) || record.run_id !== runId) continue;
     if (!isToolExecutionRecord(record)) continue;
+    if (record.schema_version !== 1) continue;
     let identity: unknown;
     try {
       identity = JSON.parse(record.logical_session_id);

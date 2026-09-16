@@ -30,6 +30,29 @@ function controller(
 }
 
 describe("ToolExecutionController", () => {
+  it("persists a real controller origin before executing without SDK identity fields", async () => {
+    const records: ToolExecutionRecord[] = [];
+    const execution = controller((record) => records.push(record));
+    const origin = {
+      kind: "controller_operation" as const,
+      controller_id: "repo-controller",
+      definition_digest: "a".repeat(64),
+      activation_id: "activation-1",
+      owner_epoch: 1,
+      operation_id: "planner-revision-1",
+      operation_kind: "planner" as const,
+      action_id: null,
+      request_sha256: "b".repeat(64),
+    };
+
+    await expect(execution.runController(origin, async () => "planned")).resolves.toBe("planned");
+    expect(records).toHaveLength(2);
+    for (const record of records) {
+      expect(record).toMatchObject({ schema_version: 2, origin });
+      expect(record).not.toHaveProperty("tool_call_id");
+      expect(record).not.toHaveProperty("logical_session_id");
+    }
+  });
   it("persists the start before invoking the operation and records completion", async () => {
     const records: ToolExecutionRecord[] = [];
     let started = false;

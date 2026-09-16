@@ -19,6 +19,16 @@ export function contextArtifactsAudit(
         text: artifact.text,
       });
     }
+    if (artifact.source === "file") {
+      return Object.freeze({
+        ordinal,
+        id: artifact.id,
+        source: artifact.source,
+        provenance: Object.freeze({ ...artifact.provenance }),
+        byte_length: artifact.byte_length,
+        sha256: artifact.sha256,
+      });
+    }
     return Object.freeze({
       ordinal,
       id: artifact.id,

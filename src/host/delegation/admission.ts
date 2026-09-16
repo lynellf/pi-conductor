@@ -136,6 +136,7 @@ export async function prepareDelegateSubmission(
     materializedParentPaths,
     options.contextArtifactTestHook,
     gitAccess,
+    options.hostArtifactResolver,
   );
   if (!contextResolution.valid) {
     throw new DelegateToolError(

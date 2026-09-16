@@ -99,6 +99,70 @@ const ready: ToolExecutionSandboxReadyRecord = {
 };
 
 describe("sandbox READY persistence", () => {
+  it("correlates controller READY through its pinned operation and runtime owner", () => {
+    const origin = {
+      kind: "controller_operation" as const,
+      controller_id: "repo-controller",
+      definition_digest: "d".repeat(64),
+      activation_id: "activation-1",
+      owner_epoch: 1,
+      operation_id: "adapter-operation-1",
+      operation_kind: "adapter" as const,
+      action_id: "action-1",
+      request_sha256: "e".repeat(64),
+    };
+    const owner = {
+      kind: "controller_operation" as const,
+      origin,
+      runtime: {
+        runtime_id: "runtime-1",
+        approval_id: "approval-1",
+        runtime_digest: "f".repeat(64),
+        executable_digest: "1".repeat(64),
+        capability_digest: "2".repeat(64),
+      },
+    };
+    const controllerStarted = {
+      type: "tool_execution_started" as const,
+      schema_version: 2 as const,
+      run_id: "run-1",
+      execution_id: "controller-exec",
+      supervision_id: "controller-supervision",
+      origin,
+      timeout_ms: 1000,
+      recovery_count: 0,
+      sandbox: owner,
+      ts: 10,
+    };
+    const {
+      logical_session_id: _logicalSessionId,
+      role_session_id: _roleSessionId,
+      tool_call_id: _toolCallId,
+      tool_name: _toolName,
+      ...readyEvidence
+    } = ready;
+    const controllerReady = {
+      ...readyEvidence,
+      schema_version: 2 as const,
+      execution_id: "controller-exec",
+      supervision_id: "controller-supervision",
+      origin,
+      sandbox: owner,
+    };
+    const mismatchedReady = {
+      ...controllerReady,
+      origin: { ...origin, operation_id: "other" },
+    };
+
+    assertToolExecutionSandboxReadyRecord(controllerReady);
+    expect(
+      reconstructToolExecutionTimeline([controllerStarted, controllerReady]).entries[0]?.ready,
+    ).toEqual(controllerReady);
+    expect(() => reconstructToolExecutionTimeline([controllerStarted, mismatchedReady])).toThrow(
+      "controller origin",
+    );
+  });
+
   it.each([
     "pid",
     "mnt",

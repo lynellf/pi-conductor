@@ -1,4 +1,7 @@
-/** Execute only the approved inert probe through the production mount policy (#106 §5). */
+/** Execute only the approved inert probe through the production mount policy (#106 §5).
+ * The shared probe/cleanup arbitration stays together to keep late authorization fenced;
+ * filesystem publication helpers and pipe parsing remain separate boundaries.
+ */
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
 import { constants } from "node:fs";
@@ -14,7 +17,7 @@ import {
 import type { SandboxProcessObservation } from "../../../persistence/sandbox-process.js";
 import { readSandboxAdmission } from "./admission-store.js";
 import { BUBBLEWRAP_BOOTSTRAP_SOURCE } from "./bootstrap.js";
-import { buildSandboxMountPlan } from "./mount-plan.js";
+import { buildSandboxMountPlan, type SandboxWritableMount } from "./mount-plan.js";
 import { collectBubblewrapStaticObservation } from "./observation.js";
 import {
   assessBubblewrapStaticPrerequisites,
@@ -27,7 +30,8 @@ import {
   observeSandboxProcess,
   verifyFinalSandboxNamespaces,
 } from "./process-observation.js";
-import type { HostApprovedBootstrapRuntime } from "./runtime-types.js";
+import { canonicalTrustedSnapshotParent } from "./runtime-capture.js";
+import type { HostApprovedBootstrapRuntime, PreparedRuntimeDescriptor } from "./runtime-types.js";
 
 /** Explicit host-owned approvals and an already persisted private admission. */
 export interface SandboxCapabilityProbeOptions {
@@ -53,13 +57,22 @@ export interface SandboxCapabilityProbeResult {
   readonly artifactPath: string;
 }
 
+/** Cleanup certainty for a failed fixed probe; retained evidence is private host data. */
+export class SandboxCapabilityProbeError extends Error {
+  constructor(
+    message: string,
+    readonly cleanup: "confirmed" | "unconfirmed",
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "SandboxCapabilityProbeError";
+  }
+}
+
 /** Run the fixed probe; failures retain private evidence and never admit user code. */
 export async function runSandboxCapabilityProbe(
   options: SandboxCapabilityProbeOptions,
 ): Promise<SandboxCapabilityProbeResult> {
-  const timeoutMs = options.timeoutMs ?? 5000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
-    throw new TypeError("invalid capability probe deadline");
   const admission = await readSandboxAdmission({
     runStateDir: options.runStateDir,
     expectedRunId: options.admission.runId,
@@ -67,7 +80,47 @@ export async function runSandboxCapabilityProbe(
     expectedSandbox: options.admission.sandbox,
     bootstrapApproval: options.bootstrapApproval,
   });
-  const probe = admission.runtime.inventory.find(
+  return runVerifiedSandboxCapabilityProbe({
+    ...options,
+    loadVerifiedContext: async () => ({
+      runtime: admission.runtime,
+      writableRoots: admission.policy.writableRoots,
+      environment: admission.policy.execution.environment,
+      artifactParent: join(options.runStateDir, "sandboxes", admission.sandbox.materialization_id),
+      owner: admission.sandbox,
+    }),
+  });
+}
+
+/** Already-authorized runtime and private probe location; no synthetic native child identity. */
+export interface VerifiedSandboxProbeContext {
+  readonly runtime: PreparedRuntimeDescriptor;
+  readonly writableRoots: readonly SandboxWritableMount[];
+  readonly environment: Readonly<Record<string, string>>;
+  readonly artifactParent: string;
+  readonly owner: unknown;
+}
+
+/** Controller callers persist a preparation start before this owned, fixed inert probe. */
+export interface VerifiedSandboxCapabilityProbeOptions
+  extends Omit<SandboxCapabilityProbeOptions, "admission" | "bootstrapApproval" | "runStateDir"> {
+  readonly loadVerifiedContext: () => Promise<VerifiedSandboxProbeContext>;
+  readonly signal?: AbortSignal;
+  readonly assertOpen?: () => void;
+}
+
+/** Run the same namespace, mount and process-cleanup probe against a verified controller runtime. */
+export async function runVerifiedSandboxCapabilityProbe(
+  options: VerifiedSandboxCapabilityProbeOptions,
+): Promise<SandboxCapabilityProbeResult> {
+  const timeoutMs = options.timeoutMs ?? 5000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
+    throw new TypeError("invalid capability probe deadline");
+  const context = await options.loadVerifiedContext();
+  options.signal?.throwIfAborted();
+  options.assertOpen?.();
+  await canonicalTrustedSnapshotParent(context.artifactParent);
+  const probe = context.runtime.inventory.find(
     (entry) => entry.path === SANDBOX_CAPABILITY_PROBE_PATH.slice(1),
   );
   if (
@@ -83,13 +136,11 @@ export async function runSandboxCapabilityProbe(
     (probe.executableMode & 0o100) === 0
   )
     throw new Error("runtime requires the exact host-approved executable capability probe");
-  const artifactPath = await mkdtemp(
-    join(options.runStateDir, "sandboxes", admission.sandbox.materialization_id, "probe-"),
-  );
+  const artifactPath = await mkdtemp(join(context.artifactParent, "probe-"));
   const base = join(artifactPath, "base"),
     writable = join(artifactPath, "writable"),
     bootstrap = join(artifactPath, "bootstrap.sh");
-  await prepareProbeFiles(base, writable, bootstrap, admission);
+  await prepareProbeFiles(base, writable, bootstrap, context.writableRoots);
   const sentinel = join(artifactPath, "host-only-sentinel");
   await durableFile(sentinel, "private host probe sentinel\n");
   const connections = new Set<Socket>();
@@ -115,6 +166,16 @@ export async function runSandboxCapabilityProbe(
   let completed: SandboxCapabilityProbeResult | undefined;
   let timer: NodeJS.Timeout | undefined;
   let failed = false;
+  let rejectAbort!: (cause: Error) => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  void aborted.catch(() => undefined);
+  const onAbort = () => {
+    failed = true;
+    rejectAbort(new Error("capability probe aborted"));
+  };
+  options.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const port = await listenAndVerify(server);
     const host = await observeSandboxProcess(process.pid);
@@ -129,13 +190,15 @@ export async function runSandboxCapabilityProbe(
     const assessed = assessBubblewrapStaticPrerequisites(observation, options.approvedBuilds);
     if (assessed.status !== "accepted")
       throw new Error(`Bubblewrap prerequisite rejected: ${assessed.reason}`);
+    options.signal?.throwIfAborted();
+    options.assertOpen?.();
     const args = buildSandboxMountPlan({
-      runtime: admission.runtime,
+      runtime: context.runtime,
       immutableWorkspaceRoot: base,
       privateWritableRoot: writable,
       bootstrapPath: bootstrap,
-      writableRoots: admission.policy.writableRoots,
-      environment: admission.policy.execution.environment,
+      writableRoots: context.writableRoots,
+      environment: context.environment,
     });
     // Static collection rechecks the protected binary immediately before this direct spawn.
     child = spawn(
@@ -174,6 +237,7 @@ export async function runSandboxCapabilityProbe(
       verifiedInit = final;
       await options.testHookBeforeReadyPersistence?.({ final, artifactPath });
       if (failed) throw new Error("capability probe setup was cancelled");
+      options.assertOpen?.();
       await durableFile(
         join(artifactPath, "ready.json"),
         JSON.stringify({
@@ -183,11 +247,12 @@ export async function runSandboxCapabilityProbe(
           early: init,
           final,
           binary: assessed.evidence,
-          sandbox: admission.sandbox,
+          sandbox: context.owner,
           probeApproval: options.probeApproval,
         }),
       );
       if (failed) throw new Error("capability probe release was cancelled");
+      options.assertOpen?.();
       await captured.release();
       const result = await captured.settle();
       if (failed) throw new Error("capability probe settlement was cancelled");
@@ -199,19 +264,19 @@ export async function runSandboxCapabilityProbe(
         if (report.namespace[name] !== final.namespaces[name])
           throw new Error("probe executed in a different final namespace");
       assertSandboxProbeMounts(report.mountinfo, {
-        runtimeDirectories: admission.runtime.inventory
+        runtimeDirectories: context.runtime.inventory
           .filter((entry) => entry.type === "directory" && !entry.path.includes("/"))
           .map((entry) => entry.path),
-        writablePaths: admission.policy.writableRoots.map((root) => root.path),
+        writablePaths: context.writableRoots.map((root) => root.path),
       });
       await durableFile(
         join(artifactPath, "result.json"),
-        JSON.stringify({ schemaVersion: 1, sandbox: admission.sandbox, final, report }),
+        JSON.stringify({ schemaVersion: 1, sandbox: context.owner, final, report }),
       );
       return Object.freeze({ report, final, artifactPath });
     };
     const running = operation();
-    completed = await Promise.race([running, pipes.fault, timeout, listenerFault]);
+    completed = await Promise.race([running, pipes.fault, timeout, listenerFault, aborted]);
   } catch (cause) {
     failed = true;
     pipes?.deny();
@@ -237,10 +302,13 @@ export async function runSandboxCapabilityProbe(
         () => true,
         () => false,
       );
-    const cleanup =
+    const cleanup: "confirmed" | "unconfirmed" =
       verifiedInit === undefined || !launcherSettled
         ? "unconfirmed"
-        : await classifySandboxProcess(verifiedInit).then(
+        : await classifySandboxProcess(verifiedInit).then<
+            "confirmed" | "unconfirmed",
+            "unconfirmed"
+          >(
             (state) => (state === "alive" ? "unconfirmed" : "confirmed"),
             () => "unconfirmed",
           );
@@ -250,17 +318,23 @@ export async function runSandboxCapabilityProbe(
         1000,
       ).catch(() => undefined);
     const detail = cause instanceof Error ? cause.message : "unknown observation failure";
-    primaryFailure = new Error(
+    primaryFailure = new SandboxCapabilityProbeError(
       `sandbox capability probe failed: ${detail}; cleanup=${cleanup}; inspect ${artifactPath}`,
+      cleanup,
       { cause },
     );
   } finally {
+    options.signal?.removeEventListener("abort", onAbort);
     if (timer !== undefined) clearTimeout(timer);
     for (const connection of connections) connection.destroy();
     try {
       await deadline(closeServer(server), 1000);
     } catch (cause) {
-      primaryFailure ??= new Error("capability probe listener cleanup is unconfirmed", { cause });
+      primaryFailure = new SandboxCapabilityProbeError(
+        "capability probe listener cleanup is unconfirmed",
+        "unconfirmed",
+        { cause },
+      );
     }
   }
   if (primaryFailure !== undefined) throw primaryFailure;
@@ -272,11 +346,11 @@ async function prepareProbeFiles(
   base: string,
   writable: string,
   bootstrap: string,
-  admission: SandboxAdmissionRecord,
+  writableRoots: readonly SandboxWritableMount[],
 ): Promise<void> {
   await mkdir(base, { mode: 0o700 });
   await mkdir(writable, { mode: 0o700 });
-  for (const root of admission.policy.writableRoots) {
+  for (const root of writableRoots) {
     for (const parent of [base, writable]) {
       const destination = join(parent, root.path);
       await mkdir(dirname(destination), { recursive: true, mode: 0o700 });

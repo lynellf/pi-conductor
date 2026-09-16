@@ -12,6 +12,7 @@ import {
   sandboxOutputAttributionSchema,
   sandboxOutputFinalRecordSchema,
 } from "../../../persistence/sandbox-output.js";
+import type { ControllerExecutionOrigin } from "../../../persistence/tool-execution-origin.js";
 import {
   assertPrivateAdmissionDirectory,
   syncAdmissionDirectoryChain,
@@ -32,10 +33,9 @@ const MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 const MAX_PREVIEW_BYTES = 64 * 1024;
 
 /** Inputs for one execution-owned private output spool. */
-export interface CreateSandboxOutputSpoolOptions {
+interface CreateSandboxOutputSpoolCommonOptions {
   readonly runStateDir: string;
   readonly runId: string;
-  readonly childId: string;
   readonly executionId: string;
   readonly supervisionId: string;
   readonly maxBytes: number;
@@ -48,6 +48,13 @@ export interface CreateSandboxOutputSpoolOptions {
   /** Fault-injection seam; production callers omit it. */
   readonly testWriteMetadata?: typeof writeOutputMetadata;
 }
+
+/** Child v1 or controller v2 authority retained before output capture. */
+export type CreateSandboxOutputSpoolOptions = CreateSandboxOutputSpoolCommonOptions &
+  (
+    | { readonly childId: string; readonly controllerOrigin?: never }
+    | { readonly childId?: never; readonly controllerOrigin: ControllerExecutionOrigin }
+  );
 
 /** Presentation previews for both output streams. */
 export interface SandboxOutputPreviews {
@@ -86,15 +93,27 @@ export async function createSandboxOutputSpool(
   const previewLimit = options.previewBytes ?? MAX_PREVIEW_BYTES;
   assertBound(previewLimit, 0, MAX_PREVIEW_BYTES, "preview bound");
   const outputRef = randomUUID();
-  const attribution: SandboxOutputAttribution = Object.freeze({
-    schemaVersion: 1,
-    outputRef,
-    runId: options.runId,
-    childId: options.childId,
-    executionId: options.executionId,
-    supervisionId: options.supervisionId,
-    maxBytes: options.maxBytes,
-  });
+  const attribution: SandboxOutputAttribution = Object.freeze(
+    "childId" in options
+      ? {
+          schemaVersion: 1,
+          outputRef,
+          runId: options.runId,
+          childId: options.childId,
+          executionId: options.executionId,
+          supervisionId: options.supervisionId,
+          maxBytes: options.maxBytes,
+        }
+      : {
+          schemaVersion: 2,
+          outputRef,
+          runId: options.runId,
+          controller_origin: options.controllerOrigin,
+          executionId: options.executionId,
+          supervisionId: options.supervisionId,
+          maxBytes: options.maxBytes,
+        },
+  );
   if (!Value.Check(sandboxOutputAttributionSchema, attribution))
     throw new Error("sandbox output attribution is not persistable");
 

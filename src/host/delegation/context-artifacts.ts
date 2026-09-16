@@ -9,6 +9,7 @@ import {
   type ResolvedContextArtifact,
   resolveInlineContextArtifact,
 } from "./context-artifact-contract.js";
+import { resolveHostArtifactContextArtifact } from "./context-artifact-host-source.js";
 import {
   type ContextArtifactFileCapture,
   fileCaptureChanged,
@@ -88,6 +89,23 @@ export async function resolveContextArtifactBatch(
           if (resolved.code === "context-artifact-oversized") {
             totalByteLength += new TextEncoder().encode(descriptor.text).byteLength;
           }
+        } else {
+          taskArtifacts.push(resolved);
+          totalByteLength += resolved.byte_length;
+        }
+        continue;
+      }
+
+      if (descriptor.source === "host_artifact") {
+        const resolved = await resolveHostArtifactContextArtifact(
+          options.hostArtifactResolver,
+          task.taskId,
+          task.consumerProfileId ?? "",
+          descriptor,
+          options.limits.max_item_utf8_bytes,
+        );
+        if ("code" in resolved) {
+          errors.push(resolved);
         } else {
           taskArtifacts.push(resolved);
           totalByteLength += resolved.byte_length;

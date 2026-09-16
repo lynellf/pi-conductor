@@ -85,6 +85,9 @@ function createNativeDelegateScheduler(
         spawnAndRunChild: async () => {
           throw new Error("scheduler preparation cannot spawn directly");
         },
+        ...(opts.hostArtifactResolver === undefined
+          ? {}
+          : { hostArtifactResolver: opts.hostArtifactResolver }),
         ...(opts.sandboxAdmission === undefined ? {} : { sandboxAdmission: opts.sandboxAdmission }),
       });
       for (const task of prepared.tasks)

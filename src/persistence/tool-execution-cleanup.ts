@@ -1,16 +1,18 @@
 /** Backend-specific operator cleanup attestations; absence is never automatic proof (#106 §6). */
 import { type Static, Type } from "typebox";
 import {
+  type AnySandboxExecutionOwner,
+  type AnyToolExecutionSandboxReadyRecord,
   type SandboxExecutionHostObserver,
-  type SandboxExecutionOwner,
   sandboxExecutionHostObserverSchema,
   sandboxExecutionOwnerSchema,
-  type ToolExecutionSandboxReadyRecord,
 } from "./sandbox-execution.js";
 import {
   type SandboxProcessObservation,
   sandboxProcessObservationSchema,
 } from "./sandbox-process.js";
+import { controllerExecutionOriginSchema } from "./tool-execution-origin.js";
+import { sha256Canonical } from "./trajectory-records.js";
 
 const id = Type.String({ minLength: 1 });
 const absent = Type.Union([
@@ -18,7 +20,7 @@ const absent = Type.Union([
   Type.Literal("reused"),
   Type.Literal("settled"),
 ]);
-const fields = {
+const v1Fields = {
   type: Type.Literal("tool_execution_cleanup_confirmed"),
   schema_version: Type.Literal(1),
   run_id: id,
@@ -28,6 +30,29 @@ const fields = {
   role_session_id: id,
   tool_call_id: id,
   tool_name: id,
+  origin: Type.Optional(Type.Never()),
+  cleanup: Type.Literal("confirmed"),
+  operator_note: Type.String({ minLength: 1, maxLength: 1000 }),
+  operator: Type.String({ minLength: 1, maxLength: 256 }),
+  ts: Type.Number({ minimum: 0 }),
+};
+const v2Fields = {
+  type: Type.Literal("tool_execution_cleanup_confirmed"),
+  schema_version: Type.Literal(2),
+  run_id: id,
+  execution_id: id,
+  supervision_id: id,
+  origin: controllerExecutionOriginSchema,
+  start_record_digest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  partial_effects: Type.Union([
+    Type.Literal("none_observed"),
+    Type.Literal("inspected_unpublished"),
+    Type.Literal("immutable_publication_verified"),
+  ]),
+  logical_session_id: Type.Optional(Type.Never()),
+  role_session_id: Type.Optional(Type.Never()),
+  tool_call_id: Type.Optional(Type.Never()),
+  tool_name: Type.Optional(Type.Never()),
   cleanup: Type.Literal("confirmed"),
   operator_note: Type.String({ minLength: 1, maxLength: 1000 }),
   operator: Type.String({ minLength: 1, maxLength: 256 }),
@@ -58,25 +83,47 @@ export const sandboxCleanupEvidenceSchema = Type.Object(
 );
 
 /** Exact legacy or sandbox verification record, with no cross-backend fallback. */
-export const toolExecutionCleanupConfirmedSchema = Type.Union([
+const cleanupVerification = Type.Union([
   Type.Object(
-    { ...fields, verification: Type.Literal("operator_confirmed_owner_marker_absent") },
+    { ...v1Fields, verification: Type.Literal("operator_confirmed_owner_marker_absent") },
     { additionalProperties: false },
   ),
   Type.Object(
     {
-      ...fields,
+      ...v1Fields,
       verification: Type.Literal("operator_confirmed_sandbox_cleanup"),
       sandbox: sandboxCleanupEvidenceSchema,
     },
     { additionalProperties: false },
   ),
 ]);
+const controllerCleanupVerification = Type.Union([
+  Type.Object(
+    { ...v2Fields, verification: Type.Literal("operator_confirmed_owner_marker_absent") },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ...v2Fields,
+      verification: Type.Literal("operator_confirmed_sandbox_cleanup"),
+      sandbox: sandboxCleanupEvidenceSchema,
+    },
+    { additionalProperties: false },
+  ),
+]);
+export const toolExecutionCleanupConfirmedSchema = Type.Union([
+  cleanupVerification,
+  controllerCleanupVerification,
+]);
 
 /** Strict cleanup attestation derived from its durable schema. */
-export type ToolExecutionCleanupConfirmedRecord = Readonly<
-  Static<typeof toolExecutionCleanupConfirmedSchema>
+export type ToolExecutionCleanupConfirmedRecord = Readonly<Static<typeof cleanupVerification>>;
+export type ControllerExecutionCleanupConfirmedRecord = Readonly<
+  Static<typeof controllerCleanupVerification>
 >;
+export type AnyToolExecutionCleanupConfirmedRecord =
+  | ToolExecutionCleanupConfirmedRecord
+  | ControllerExecutionCleanupConfirmedRecord;
 /** Strict origin/identity evidence, without a command result or namespace-death inference. */
 export type SandboxCleanupEvidence = Readonly<Static<typeof sandboxCleanupEvidenceSchema>>;
 
@@ -109,9 +156,9 @@ export function sameSandboxProcessObservation(
 
 /** Reject a confirmation whose backend, origin, init, or output differs from durable READY. */
 export function assertToolCleanupBackend(
-  record: ToolExecutionCleanupConfirmedRecord,
-  owner: SandboxExecutionOwner | undefined,
-  ready: ToolExecutionSandboxReadyRecord | undefined,
+  record: AnyToolExecutionCleanupConfirmedRecord,
+  owner: AnySandboxExecutionOwner | undefined,
+  ready: AnyToolExecutionSandboxReadyRecord | undefined,
 ): void {
   if (record.verification === "operator_confirmed_owner_marker_absent") {
     if (owner !== undefined)
@@ -122,12 +169,7 @@ export function assertToolCleanupBackend(
     throw new Error("sandbox cleanup requires a sandbox start and durable READY");
   const evidence = record.sandbox;
   if (
-    evidence.owner.child_id !== owner.child_id ||
-    evidence.owner.descriptor.backend !== owner.descriptor.backend ||
-    evidence.owner.descriptor.execution_policy_digest !==
-      owner.descriptor.execution_policy_digest ||
-    evidence.owner.descriptor.runtime_digest !== owner.descriptor.runtime_digest ||
-    evidence.owner.descriptor.materialization_id !== owner.descriptor.materialization_id ||
+    sha256Canonical(evidence.owner) !== sha256Canonical(owner) ||
     evidence.boot_id !== ready.boot_id ||
     !sameSandboxObserverOrigin(ready.host_observer, evidence.observer) ||
     !sameSandboxProcessObservation(ready.final_init, evidence.final_init) ||

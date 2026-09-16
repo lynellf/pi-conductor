@@ -11,6 +11,10 @@ import {
   sandboxOutputAttributionSchema,
   sandboxOutputFinalRecordSchema,
 } from "../../../persistence/sandbox-output.js";
+import {
+  type ControllerExecutionOrigin,
+  sameControllerExecutionOrigin,
+} from "../../../persistence/tool-execution-origin.js";
 import { assertPrivateAdmissionDirectory } from "./admission-metadata.js";
 import { checkedFile, DIRECTORY, descend, READ, same } from "./anchored-file-handles.js";
 import { readOutputMetadata } from "./output-metadata.js";
@@ -20,16 +24,25 @@ const OUTPUT_REFERENCE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3
 const MAX_CHUNK_BYTES = 64 * 1024;
 
 /** Child identity and byte range used to authorize one opaque output reference. */
-export interface ReadSandboxExecutionOutputOptions {
+interface ReadSandboxExecutionOutputCommonOptions {
   readonly runStateDir: string;
   readonly expectedRunId: string;
-  readonly expectedChildId: string;
   readonly expectedExecutionId?: string;
   readonly outputRef: string;
   readonly stream: "stdout" | "stderr";
   readonly offset: number;
   readonly maxBytes: number;
 }
+
+/** Child v1 or controller v2 output scope. */
+export type ReadSandboxExecutionOutputOptions = ReadSandboxExecutionOutputCommonOptions &
+  (
+    | { readonly expectedChildId: string; readonly expectedControllerOrigin?: never }
+    | {
+        readonly expectedChildId?: never;
+        readonly expectedControllerOrigin: ControllerExecutionOrigin;
+      }
+  );
 
 /** Verified byte range; EOF refers to retained bytes, with capture completeness explicit. */
 export interface SandboxOutputChunk {
@@ -120,11 +133,21 @@ function assertOwner(
   if (
     attribution.outputRef !== options.outputRef ||
     attribution.runId !== options.expectedRunId ||
-    attribution.childId !== options.expectedChildId ||
     (options.expectedExecutionId !== undefined &&
       attribution.executionId !== options.expectedExecutionId)
   )
     throw new Error("sandbox output attribution does not match the requesting child execution");
+  if (
+    ("expectedChildId" in options &&
+      (attribution.schemaVersion !== 1 || attribution.childId !== options.expectedChildId)) ||
+    ("expectedControllerOrigin" in options &&
+      (attribution.schemaVersion !== 2 ||
+        !sameControllerExecutionOrigin(
+          attribution.controller_origin,
+          options.expectedControllerOrigin,
+        )))
+  )
+    throw new Error("sandbox output attribution does not match the requesting execution owner");
 }
 
 async function verifyAndRead(

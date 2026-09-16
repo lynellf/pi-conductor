@@ -1,21 +1,35 @@
 /** Pure projection of durable executable-tool records for operator status. */
 
 import {
+  type ControllerExecutionOrigin,
   reconstructToolExecutionTimeline,
   type ToolExecutionRecord,
 } from "../../persistence/tool-execution.js";
 
 /** The currently unfinished executable tool, if one exists. */
-export interface ActiveToolExecutionStats {
+interface ActiveExecutionStatsBase {
   readonly executionId: string;
   readonly supervisionId: string;
-  readonly toolName: string;
-  readonly toolCallId: string;
   /** Durable start timestamp; live elapsed time is rendered by the status formatter. */
   readonly startedAt: number;
   readonly recoveryCount: number;
   readonly timeoutMs: number;
 }
+
+/** Active execution with real SDK or controller provenance. */
+export type ActiveToolExecutionStats = ActiveExecutionStatsBase &
+  (
+    | {
+        readonly toolName: string;
+        readonly toolCallId: string;
+        readonly controllerOrigin?: never;
+      }
+    | {
+        readonly toolName?: never;
+        readonly toolCallId?: never;
+        readonly controllerOrigin: ControllerExecutionOrigin;
+      }
+  );
 
 /** Durable execution counters and the active executable identity. */
 export interface ToolExecutionStats {
@@ -35,15 +49,24 @@ export function projectToolExecutionStats(
   const active =
     started === undefined
       ? null
-      : {
-          executionId: started.execution_id,
-          supervisionId: started.supervision_id,
-          toolName: started.tool_name,
-          toolCallId: started.tool_call_id,
-          startedAt: started.ts,
-          recoveryCount: started.recovery_count,
-          timeoutMs: started.timeout_ms,
-        };
+      : started.schema_version === 1
+        ? {
+            executionId: started.execution_id,
+            supervisionId: started.supervision_id,
+            toolName: started.tool_name,
+            toolCallId: started.tool_call_id,
+            startedAt: started.ts,
+            recoveryCount: started.recovery_count,
+            timeoutMs: started.timeout_ms,
+          }
+        : {
+            executionId: started.execution_id,
+            supervisionId: started.supervision_id,
+            controllerOrigin: started.origin,
+            startedAt: started.ts,
+            recoveryCount: started.recovery_count,
+            timeoutMs: started.timeout_ms,
+          };
   const latest = timeline.entries.at(-1);
   const recoveryCount =
     active !== null
@@ -52,7 +75,7 @@ export function projectToolExecutionStats(
         ? 0
         : timeline.entries.filter(
             (entry) =>
-              entry.started.logical_session_id === latest.started.logical_session_id &&
+              executionScope(entry.started) === executionScope(latest.started) &&
               entry.finished?.outcome === "timed_out",
           ).length;
   return Object.freeze({
@@ -61,4 +84,16 @@ export function projectToolExecutionStats(
     timeoutCount: timeline.timeout_count,
     activeCount: timeline.unfinished.length,
   });
+}
+
+function executionScope(
+  started: import("../../persistence/tool-execution.js").AnyToolExecutionStartedRecord,
+): string {
+  return started.schema_version === 1
+    ? started.logical_session_id
+    : JSON.stringify([
+        started.run_id,
+        started.origin.controller_id,
+        started.origin.definition_digest,
+      ]);
 }

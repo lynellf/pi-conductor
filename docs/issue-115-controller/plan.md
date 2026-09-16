@@ -37,27 +37,34 @@ findings. The controller runtime remains fail-closed until integration lands.
 
 ## B. Approved executable mechanics
 
-- [ ] Generalize executable-operation provenance without changing supervision.
+- [x] Generalize executable-operation provenance without changing supervision.
   - Acceptance: planner/adapter execution records identify real operations;
     SDK tool records remain readable; existing ownership gate still fails closed.
   - Files: execution origin schema/controller contracts and consumers, in slices.
   - Verify: tool execution, sandbox lifecycle and legacy timeline tests.
-- [ ] Implement approved pinned controller/adapter runtime preflight and runner.
+- [x] Implement approved pinned controller/adapter runtime preflight and runner.
   - Acceptance: fixed argv, immutable complete runtime, no credentials/network,
     bounded JSON, deadline/abort, exact host approval and no unsafe fallback.
   - Files: host controller runtime, runner, protocol adapter, tests.
   - Verify: malformed/oversized output, changed runtime, denied capability,
     sandbox confinement and cleanup fixtures.
-- [ ] Implement local adapter publication and bounded artifact/receipt reads.
+- [x] Implement local adapter publication and bounded artifact/receipt reads.
   - Acceptance: actual preparation/validation/bookkeeping executes; private
     staging cannot escape; immutable exact outputs consumed by native projection.
   - Files: controller adapter/publication/read modules and focused tests.
   - Verify: escaping symlinks, invalid output, publish crash and binding tests.
-- [ ] Add an explicit host-issued artifact source for native child context.
+- [x] Add an explicit host-issued artifact source for native child context.
   - Acceptance: immutable prepared adapter outputs reach authorized native tasks;
     current Git-file/inline sources remain unchanged; no arbitrary path resolution.
   - Files: context-artifact seam/schema, resolver, admission binding and tests.
   - Verify: producer/consumer authority, changed digest, bounded read and denial.
+
+Phase B verified: the full 280-file suite completed with two failures; the
+packaging test encountered the in-progress module split and the short-deadline
+process test failed under concurrent validation. Both passed after the files
+were frozen, together with the final artifact and executable-host tests (28
+tests in the focused rerun). Seven real Bubblewrap checks pass. Typecheck,
+build, lint and formatting pass; independent review found no remaining blocker.
 
 ## C. Deterministic orchestration
 

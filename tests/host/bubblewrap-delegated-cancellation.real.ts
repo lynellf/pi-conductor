@@ -261,15 +261,19 @@ async function expectSettled(identities: readonly { pid: number; startTime: stri
 function readyCount(records: readonly PersistedRecord[], childId: string): number {
   return records.filter(
     (record) =>
-      record.type === "tool_execution_sandbox_ready" && record.sandbox.child_id === childId,
+      record.type === "tool_execution_sandbox_ready" &&
+      record.schema_version === 1 &&
+      record.sandbox.child_id === childId,
   ).length;
 }
 function ready(records: readonly PersistedRecord[], childId: string) {
   const value = records.find(
     (record) =>
-      record.type === "tool_execution_sandbox_ready" && record.sandbox.child_id === childId,
+      record.type === "tool_execution_sandbox_ready" &&
+      record.schema_version === 1 &&
+      record.sandbox.child_id === childId,
   );
-  if (value?.type !== "tool_execution_sandbox_ready")
+  if (value?.type !== "tool_execution_sandbox_ready" || value.schema_version !== 1)
     throw new Error(`sandbox READY missing for ${childId}`);
   return value;
 }
@@ -279,7 +283,11 @@ function terminal(records: readonly PersistedRecord[], childId: string) {
     .find(
       (record) => record.type === "tool_execution_finished" && record.role_session_id === childId,
     );
-  if (value?.type !== "tool_execution_finished" || value.sandbox === undefined)
+  if (
+    value?.type !== "tool_execution_finished" ||
+    value.schema_version !== 1 ||
+    value.sandbox === undefined
+  )
     throw new Error(`sandbox terminal missing for ${childId}`);
   return value;
 }

@@ -896,10 +896,13 @@ roles:
               .find(
                 (record) =>
                   record.type === "tool_execution_started" &&
+                  record.schema_version === 1 &&
                   record.tool_call_id === "first-resume-read",
               );
             firstResumeExecutionIndex =
-              started?.type === "tool_execution_started" ? started.logical_session_id : null;
+              started?.type === "tool_execution_started" && started.schema_version === 1
+                ? started.logical_session_id
+                : null;
             throw new Error("first resume crash");
           };
           return session;

@@ -5,13 +5,15 @@ import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import type {
-  ToolExecutionCleanupConfirmedRecord,
+  AnyToolExecutionCleanupConfirmedRecord,
+  ControllerExecutionOrigin,
   ToolExecutionTimelineEntry,
 } from "../../persistence/tool-execution.js";
 import {
   isToolExecutionRecord,
   reconstructToolExecutionTimeline,
 } from "../../persistence/tool-execution.js";
+import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import { FileRecordLog } from "../log-file.js";
 import { inspectSandboxCleanup, type SandboxCleanupInspection } from "./sandbox/recovery.js";
 import type { ProcessIdentity } from "./supervised-process-identity.js";
@@ -28,18 +30,32 @@ export interface ToolExecutionCleanupOptions {
   readonly executionId?: string;
 }
 
-/** Safe identity-only view of one unresolved execution. */
-export interface ToolExecutionUnresolvedEntry {
+interface ToolExecutionUnresolvedCommon {
   readonly executionId: string;
   readonly supervisionId: string;
-  readonly logicalSessionId: string;
-  readonly roleSessionId: string;
-  readonly toolCallId: string;
-  readonly toolName: string;
   readonly entry: ToolExecutionTimelineEntry;
   readonly currentProcesses: readonly ProcessIdentity[];
   readonly sandbox?: SandboxCleanupInspection;
 }
+
+/** Safe identity-only view preserving real SDK or controller provenance. */
+export type ToolExecutionUnresolvedEntry = ToolExecutionUnresolvedCommon &
+  (
+    | {
+        readonly logicalSessionId: string;
+        readonly roleSessionId: string;
+        readonly toolCallId: string;
+        readonly toolName: string;
+        readonly controllerOrigin?: never;
+      }
+    | {
+        readonly logicalSessionId?: never;
+        readonly roleSessionId?: never;
+        readonly toolCallId?: never;
+        readonly toolName?: never;
+        readonly controllerOrigin: ControllerExecutionOrigin;
+      }
+  );
 
 /** Inspection result containing unresolved executions and marked processes. */
 export interface ToolExecutionCleanupInspection {
@@ -123,17 +139,24 @@ async function inspectWithLog(
         ? []
         : await processIdentity.findProcessesByOwnerToken(started.supervision_id, undefined, scope);
     currentProcesses.push(...processes);
-    unresolved.push({
+    const common = {
       executionId: started.execution_id,
       supervisionId: started.supervision_id,
-      logicalSessionId: started.logical_session_id,
-      roleSessionId: started.role_session_id,
-      toolCallId: started.tool_call_id,
-      toolName: started.tool_name,
       entry,
       currentProcesses: processes,
       ...(sandbox === undefined ? {} : { sandbox }),
-    });
+    };
+    unresolved.push(
+      started.schema_version === 1
+        ? {
+            ...common,
+            logicalSessionId: started.logical_session_id,
+            roleSessionId: started.role_session_id,
+            toolCallId: started.tool_call_id,
+            toolName: started.tool_name,
+          }
+        : { ...common, controllerOrigin: started.origin },
+    );
   }
   if (executionId !== undefined && unresolved.length === 0)
     throw new ToolExecutionReconciliationError(
@@ -175,8 +198,12 @@ export async function reconcileToolExecutionCleanup(
   options: ToolExecutionCleanupOptions & {
     readonly acknowledgment: true;
     readonly operatorNote: string;
+    readonly controllerPartialEffects?:
+      | "none_observed"
+      | "inspected_unpublished"
+      | "immutable_publication_verified";
   },
-): Promise<ToolExecutionCleanupConfirmedRecord> {
+): Promise<AnyToolExecutionCleanupConfirmedRecord> {
   const log = logFor(runId, options.baseDir);
   valid(executionId, "execution_id");
   if (options.acknowledgment !== true)
@@ -224,23 +251,23 @@ export async function reconcileToolExecutionCleanup(
       );
     }
     const started = target.entry.started;
+    if (started.schema_version === 2 && options.controllerPartialEffects === undefined)
+      throw new ToolExecutionReconciliationError(
+        "invalid_request",
+        "controller reconciliation requires an explicit partial-effects classification",
+      );
     const sandbox = target.sandbox;
     if (
       sandbox !== undefined &&
       (sandbox.status !== "attestation_required" || sandbox.evidence === undefined)
     )
       throw new ToolExecutionReconciliationError("sandbox_cleanup_unconfirmed", sandbox.guidance);
-    const record: ToolExecutionCleanupConfirmedRecord = {
-      type: "tool_execution_cleanup_confirmed",
-      schema_version: 1,
+    const common = {
+      type: "tool_execution_cleanup_confirmed" as const,
       run_id: runId,
       execution_id: started.execution_id,
       supervision_id: started.supervision_id,
-      logical_session_id: started.logical_session_id,
-      role_session_id: started.role_session_id,
-      tool_call_id: started.tool_call_id,
-      tool_name: started.tool_name,
-      cleanup: "confirmed",
+      cleanup: "confirmed" as const,
       ...(sandbox?.evidence === undefined
         ? { verification: "operator_confirmed_owner_marker_absent" as const }
         : {
@@ -251,6 +278,25 @@ export async function reconcileToolExecutionCleanup(
       operator: userInfo().username,
       ts: Date.now(),
     };
+    const record: AnyToolExecutionCleanupConfirmedRecord =
+      started.schema_version === 1
+        ? {
+            ...common,
+            schema_version: 1,
+            logical_session_id: started.logical_session_id,
+            role_session_id: started.role_session_id,
+            tool_call_id: started.tool_call_id,
+            tool_name: started.tool_name,
+          }
+        : {
+            ...common,
+            schema_version: 2,
+            origin: structuredClone(started.origin),
+            start_record_digest: sha256Canonical(started),
+            partial_effects: options.controllerPartialEffects as NonNullable<
+              typeof options.controllerPartialEffects
+            >,
+          };
     // Validate the complete post-append timeline before touching the file. This
     // keeps malformed correlations/timestamps append-only safe.
     reconstructToolExecutionTimeline([...log.records(runId).filter(isToolExecutionRecord), record]);

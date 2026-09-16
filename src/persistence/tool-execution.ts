@@ -1,21 +1,22 @@
 /** Durable execution identities and timeline checks for issue #76. */
 
-import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   assertSandboxExecutionTerminal,
   assertSandboxTerminalCorrelation,
-  sandboxExecutionTerminalSchema,
 } from "./sandbox-command.js";
-import type { ToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
+import type { AnyToolExecutionSandboxReadyRecord } from "./sandbox-execution.js";
 import {
   assertToolExecutionSandboxReadyRecord,
   toolExecutionSandboxReadySchema,
 } from "./sandbox-execution.js";
-import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
-import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
+import { sha256Canonical } from "./trajectory-records.js";
 
 export type {
+  AnySandboxExecutionOwner,
+  AnyToolExecutionSandboxReadyRecord,
+  ControllerExecutionSandboxReadyRecord,
+  ControllerSandboxExecutionOwner,
   SandboxExecutionHostObserver,
   SandboxExecutionOwner,
   SandboxReadyEvidence,
@@ -31,88 +32,63 @@ export {
 
 import { toolAdmissionSchema } from "./tool-admission.js";
 import {
+  type AnyToolExecutionCleanupConfirmedRecord,
   assertToolCleanupBackend,
-  type ToolExecutionCleanupConfirmedRecord,
   toolExecutionCleanupConfirmedSchema,
 } from "./tool-execution-cleanup.js";
 
 export {
+  type AnyToolExecutionCleanupConfirmedRecord,
+  type ControllerExecutionCleanupConfirmedRecord,
   type ToolExecutionCleanupConfirmedRecord,
   toolExecutionCleanupConfirmedSchema,
 } from "./tool-execution-cleanup.js";
 
-import { toolExecutionDiagnosticSchema } from "./tool-execution-diagnostic.js";
+import { sameControllerExecutionOrigin } from "./tool-execution-origin.js";
 
-const id = Type.String({ minLength: 1 });
-const nonNegativeInteger = Type.Integer({ minimum: 0 });
+export type { ControllerExecutionOrigin } from "./tool-execution-origin.js";
+export {
+  controllerExecutionOriginSchema,
+  controllerOperationMayReinvokeAfterCleanup,
+} from "./tool-execution-origin.js";
 
-/** TypeBox schema for the exact JSON shape retained at process execution start. */
-export const toolExecutionStartedSchema = Type.Object(
-  {
-    type: Type.Literal("tool_execution_started"),
-    schema_version: Type.Literal(1),
-    run_id: id,
-    execution_id: id,
-    supervision_id: id,
-    logical_session_id: id,
-    role_session_id: id,
-    tool_call_id: id,
-    tool_name: id,
-    timeout_ms: Type.Integer({ minimum: 1 }),
-    recovery_count: nonNegativeInteger,
-    admission: Type.Optional(toolAdmissionSchema),
-    sandbox: Type.Optional(
-      Type.Object(
-        { child_id: id, descriptor: subagentSandboxDescriptorSchema },
-        { additionalProperties: false },
-      ),
-    ),
-    ts: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+export type {
+  AnyToolExecutionFinishedRecord,
+  AnyToolExecutionStartedRecord,
+  ControllerToolExecutionFinishedRecord,
+  ControllerToolExecutionStartedRecord,
+  ToolExecutionFinishedRecord,
+  ToolExecutionFinishedV1Record,
+  ToolExecutionFinishedV2Record,
+  ToolExecutionStartedRecord,
+  ToolExecutionStartedV1Record,
+  ToolExecutionStartedV2Record,
+} from "./tool-execution-schema.js";
+export {
+  toolExecutionFinishedSchema,
+  toolExecutionFinishedV1Schema,
+  toolExecutionFinishedV2Schema,
+  toolExecutionStartedSchema,
+  toolExecutionStartedV1Schema,
+  toolExecutionStartedV2Schema,
+} from "./tool-execution-schema.js";
 
-/** TypeBox schema for the exact JSON shape retained at process execution terminal. */
-export const toolExecutionFinishedSchema = Type.Object(
-  {
-    type: Type.Literal("tool_execution_finished"),
-    schema_version: Type.Literal(1),
-    run_id: id,
-    execution_id: id,
-    supervision_id: id,
-    logical_session_id: id,
-    role_session_id: id,
-    tool_call_id: id,
-    tool_name: id,
-    elapsed_ms: Type.Number({ minimum: 0 }),
-    recovery_count: nonNegativeInteger,
-    outcome: Type.Union([
-      Type.Literal("completed"),
-      Type.Literal("failed"),
-      Type.Literal("timed_out"),
-      Type.Literal("aborted"),
-      Type.Literal("cleanup_unconfirmed"),
-      Type.Literal("interrupted"),
-    ]),
-    cleanup: Type.Union([Type.Literal("confirmed"), Type.Literal("unconfirmed")]),
-    diagnostic: Type.Optional(toolExecutionDiagnosticSchema),
-    sandbox: Type.Optional(sandboxExecutionTerminalSchema),
-    ts: Type.Number({ minimum: 0 }),
-  },
-  { additionalProperties: false },
-);
+import type {
+  AnyToolExecutionFinishedRecord,
+  AnyToolExecutionStartedRecord,
+} from "./tool-execution-schema.js";
+import {
+  toolExecutionFinishedSchema,
+  toolExecutionStartedSchema,
+} from "./tool-execution-schema.js";
 
-/** Durable identity and deadline captured before an executable tool starts. */
-export type ToolExecutionStartedRecord = Readonly<Static<typeof toolExecutionStartedSchema>>;
-/** Durable terminal result correlated with one started executable tool. */
-export type ToolExecutionFinishedRecord = Readonly<Static<typeof toolExecutionFinishedSchema>>;
 export type { ToolExecutionDiagnostic } from "./tool-execution-diagnostic.js";
 /** Union of durable executable tool record shapes. */
 export type ToolExecutionRecord =
-  | ToolExecutionStartedRecord
-  | ToolExecutionFinishedRecord
-  | ToolExecutionCleanupConfirmedRecord
-  | ToolExecutionSandboxReadyRecord;
+  | AnyToolExecutionStartedRecord
+  | AnyToolExecutionFinishedRecord
+  | AnyToolExecutionCleanupConfirmedRecord
+  | AnyToolExecutionSandboxReadyRecord;
 
 /** Typed rejection for malformed or inconsistent execution records. */
 export class ToolExecutionRecordError extends Error {
@@ -197,18 +173,42 @@ export function assertToolExecutionRecord(value: unknown): asserts value is Tool
 
 /** One execution start and its optional terminal result. */
 export interface ToolExecutionTimelineEntry {
-  readonly started: ToolExecutionStartedRecord;
-  readonly ready?: ToolExecutionSandboxReadyRecord;
-  readonly finished?: ToolExecutionFinishedRecord;
-  readonly cleanupConfirmed?: ToolExecutionCleanupConfirmedRecord;
+  readonly started: AnyToolExecutionStartedRecord;
+  readonly ready?: AnyToolExecutionSandboxReadyRecord;
+  readonly finished?: AnyToolExecutionFinishedRecord;
+  readonly cleanupConfirmed?: AnyToolExecutionCleanupConfirmedRecord;
 }
 
 /** Pure materialized execution state used by restart/status consumers. */
 export interface ToolExecutionTimeline {
   readonly entries: readonly ToolExecutionTimelineEntry[];
-  readonly unfinished: readonly ToolExecutionStartedRecord[];
+  readonly unfinished: readonly AnyToolExecutionStartedRecord[];
   readonly unresolved: readonly ToolExecutionTimelineEntry[];
   readonly timeout_count: number;
+}
+
+export type ControllerExecutionRecovery =
+  | { readonly kind: "settled"; readonly outcome: AnyToolExecutionFinishedRecord["outcome"] }
+  | { readonly kind: "cleanup_required" }
+  | { readonly kind: "planner_reinvoke_allowed" }
+  | { readonly kind: "fresh_action_required" };
+
+/** Classify controller recovery without replaying adapter or preparation effects. */
+export function materializeControllerExecutionRecovery(
+  entry: ToolExecutionTimelineEntry,
+): ControllerExecutionRecovery {
+  const start = entry.started;
+  if (start.schema_version !== 2)
+    throw new ToolExecutionRecordError("controller recovery requires a controller execution");
+  if (entry.finished !== undefined && entry.finished.outcome !== "cleanup_unconfirmed")
+    return Object.freeze({ kind: "settled", outcome: entry.finished.outcome });
+  if (entry.cleanupConfirmed === undefined) return Object.freeze({ kind: "cleanup_required" });
+  return Object.freeze({
+    kind:
+      start.origin.operation_kind === "planner"
+        ? "planner_reinvoke_allowed"
+        : "fresh_action_required",
+  });
 }
 
 /** Reconstruct and validate execution identity order without performing I/O. */
@@ -245,6 +245,11 @@ export function reconstructToolExecutionTimeline(
       if (entry.cleanupConfirmed !== undefined) {
         throw new ToolExecutionRecordError("duplicate cleanup confirmation");
       }
+      if (
+        record.schema_version === 2 &&
+        record.start_record_digest !== sha256Canonical(entry.started)
+      )
+        throw new ToolExecutionRecordError("controller cleanup does not bind its execution start");
       if (entry.finished !== undefined && entry.finished.outcome !== "cleanup_unconfirmed")
         throw new ToolExecutionRecordError("cleanup confirmation requires an unconfirmed terminal");
       assertMatchingIdentity(record, entry.started, "cleanup confirmation");
@@ -270,10 +275,7 @@ export function reconstructToolExecutionTimeline(
       if (entry.started.sandbox === undefined)
         throw new ToolExecutionRecordError("sandbox ready requires a sandbox-enabled start");
       assertMatchingIdentity(record, entry.started, "sandbox ready");
-      if (
-        record.sandbox.child_id !== entry.started.sandbox.child_id ||
-        !sameSandboxDescriptor(record.sandbox.descriptor, entry.started.sandbox.descriptor)
-      )
+      if (sha256Canonical(record.sandbox) !== sha256Canonical(entry.started.sandbox))
         throw new ToolExecutionRecordError("sandbox ready mismatches sandbox owner");
       if (record.ts < entry.started.ts)
         throw new ToolExecutionRecordError("sandbox ready precedes execution start");
@@ -325,44 +327,37 @@ export function reconstructToolExecutionTimeline(
   };
 }
 
-function sameSandboxDescriptor(
-  left: SubagentSandboxDescriptor,
-  right: SubagentSandboxDescriptor,
-): boolean {
-  return (
-    left.backend === right.backend &&
-    left.execution_policy_digest === right.execution_policy_digest &&
-    left.runtime_digest === right.runtime_digest &&
-    left.materialization_id === right.materialization_id
-  );
-}
-
 function assertMatchingIdentity(
-  record: Pick<
-    ToolExecutionStartedRecord,
-    | "run_id"
-    | "execution_id"
-    | "supervision_id"
-    | "logical_session_id"
-    | "role_session_id"
-    | "tool_call_id"
-    | "tool_name"
-  >,
-  start: ToolExecutionStartedRecord,
+  record:
+    | AnyToolExecutionFinishedRecord
+    | AnyToolExecutionCleanupConfirmedRecord
+    | AnyToolExecutionSandboxReadyRecord,
+  start: AnyToolExecutionStartedRecord,
   kind: string,
 ): void {
-  for (const field of [
-    "run_id",
-    "execution_id",
-    "supervision_id",
-    "logical_session_id",
-    "role_session_id",
-    "tool_call_id",
-    "tool_name",
-  ] as const) {
+  for (const field of ["run_id", "execution_id", "supervision_id"] as const) {
     if (record[field] !== start[field])
       throw new ToolExecutionRecordError(`${kind} mismatches ${field}`);
   }
+  if (record.schema_version !== start.schema_version)
+    throw new ToolExecutionRecordError(`${kind} mismatches schema_version`);
+  if (start.schema_version === 1 && record.schema_version === 1) {
+    for (const field of [
+      "logical_session_id",
+      "role_session_id",
+      "tool_call_id",
+      "tool_name",
+    ] as const)
+      if (record[field] !== start[field])
+        throw new ToolExecutionRecordError(`${kind} mismatches ${field}`);
+    return;
+  }
+  if (
+    start.schema_version !== 2 ||
+    record.schema_version !== 2 ||
+    !sameControllerExecutionOrigin(record.origin, start.origin)
+  )
+    throw new ToolExecutionRecordError(`${kind} mismatches controller origin`);
 }
 
 /** Recognize tool execution records before full schema validation. */
