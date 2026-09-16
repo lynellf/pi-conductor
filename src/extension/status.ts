@@ -118,15 +118,19 @@ export function formatConductStatus(stats: RunStats, now = Date.now()): string {
   const cost = formatCostToken(stats);
   const activeSession = stats.activeSession;
   const modelPart =
-    activeSession === undefined || activeSession === null
+    stats.controller !== undefined || activeSession === undefined || activeSession === null
       ? ""
       : ` · model=${formatActiveModelToken(activeSession.model)} · effort=${formatEffortToken(activeSession.effort)}`;
+  const controllerPart =
+    stats.controller === undefined
+      ? ""
+      : ` · controller=${stats.controller.controllerId} · native=${stats.controller.capacity.running}/${stats.controller.capacity.maxParallel} · free=${stats.controller.capacity.free} · model_turns=${stats.controller.coordinatorModelTurns}`;
   const subagentTokens = formatSubagentTokens(stats);
   const toolExecutionTokens = formatToolExecutionTokens(stats, now);
   const contextToken = formatContextToken(stats);
   const finalizationToken = formatFinalizationToken(stats);
   const escapeHint = reason === "running" ? " · Esc abort" : "";
-  return `conduct: ${state} · ${reason}${modelPart}${subagentTokens}${toolExecutionTokens}${contextToken}${finalizationToken} · handoffs=${handoffs} · ${cost}${escapeHint}`;
+  return `conduct: ${state} · ${reason}${modelPart}${controllerPart}${subagentTokens}${toolExecutionTokens}${contextToken}${finalizationToken} · handoffs=${handoffs} · ${cost}${escapeHint}`;
 }
 
 /** Spinner interval and minimum free time between durable stats refreshes. */

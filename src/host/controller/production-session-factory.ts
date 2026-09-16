@@ -1,4 +1,9 @@
-/** Assemble one controller activation from protected production-host dependencies. */
+/**
+ * Assemble one controller activation from protected production-host dependencies.
+ *
+ * This cohesive activation transaction exceeds the usual 400-line target: splitting its ordered
+ * admission, recovery, fence, dispatcher, and session wiring would obscure the effect boundaries.
+ */
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -10,7 +15,10 @@ import type { ControllerActivationStartedRecord } from "../../persistence/contro
 import { controllerActionRequestDigest } from "../../persistence/controller-records.js";
 import type { PersistedRecord, RecordLog } from "../../persistence/log.js";
 import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
+import { sha256Canonical } from "../../persistence/trajectory-records.js";
+import { assertPrivateAdmissionDirectory } from "../execution/sandbox/admission-metadata.js";
 import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js";
+import { canonicalTrustedSnapshotParent } from "../execution/sandbox/runtime-capture.js";
 import type { RuntimeHostProtection } from "../execution/sandbox/runtime-types.js";
 import type { ToolExecutionScope } from "../execution/tool-execution-controller.js";
 import {
@@ -33,6 +41,11 @@ import {
 import { ArtifactStore } from "./artifact-store.js";
 import { createExecutableControllerHost } from "./executable-host.js";
 import type { ControllerHostApproval } from "./host-approval.js";
+import {
+  createControllerMetricsObserver,
+  mergeControllerMetrics,
+  projectControllerMetrics,
+} from "./metrics.js";
 import { appendControllerRecovery, planControllerRecovery } from "./recovery.js";
 import { createControllerRoleSession } from "./role-session.js";
 import type { ControllerRoleSession } from "./session-contract.js";
@@ -75,6 +88,7 @@ export async function createProductionControllerSession(
   const definition = approvedDefinition(options, approval);
   const records = () => options.log.records(options.runId);
   const runStateDir = dirname(options.sessionDir);
+  await initializeControllerRunState(runStateDir);
   const artifactRoot = join(runStateDir, "controller-artifacts");
   await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
   let fence: ControllerActivationFence | undefined;
@@ -94,12 +108,22 @@ export async function createProductionControllerSession(
   if (!recovery.canActivate)
     throw new Error(`controller recovery is blocked: ${recovery.blocked.join("; ")}`);
   const activation = activationRecord(definition, recovery);
+  const metrics = createControllerMetricsObserver({
+    runId: options.runId,
+    maxChildren: config.delegation.max_children_per_session,
+    maxParallel: config.delegation.max_parallel,
+    controllerId: config.controller_id,
+    definitionDigest: definition.record.definition_digest,
+    activationId: activation.activation_id,
+    ownerEpoch: activation.owner_epoch,
+  });
   appendControllerRecovery(recovery, activation, (record) => options.persist(record));
   fence = new ControllerActivationFence(activation, records);
   const activationFence = fence;
   const persist = (record: PersistedRecord): void => {
     activationFence.assertAppend(record);
     options.persist(record);
+    metrics.record(record, { ordinal: records().length - 1, digest: sha256Canonical(record) });
   };
   const ownedAbort = new AbortController();
   const sessionId = randomUUID();
@@ -189,6 +213,16 @@ export async function createProductionControllerSession(
       definitionDigest: definition.record.definition_digest,
     },
   );
+  const initialStatuses = admission.service.status();
+  const initialRunning = initialStatuses.filter((entry) => entry.status === "running").length;
+  metrics.seedCapacity({
+    accepted: initialStatuses.length,
+    running: initialRunning,
+    free: Math.max(0, config.delegation.max_parallel - initialRunning),
+    maxParallel: config.delegation.max_parallel,
+    remainingAllowance: admission.service.remainingChildren(),
+    eligible: "unknown",
+  });
   const executable = createExecutableControllerHost({
     approvedDefinition: definition,
     getCurrentApproval: loadControllerHostApproval,
@@ -200,6 +234,7 @@ export async function createProductionControllerSession(
     toolExecutionController: toolExecutions,
     assertOpen: assertActivationOpen,
     artifactStore: artifacts,
+    metrics,
     resolveRef: (ref) => {
       if (dispatcher === undefined) throw new Error("controller dispatcher is not initialized");
       return dispatcher.resolveRef(ref);
@@ -284,7 +319,23 @@ export async function createProductionControllerSession(
     activation,
     readRecords: records,
     persist,
-    invokePlanner: executable.invokePlanner,
+    invokePlanner: async (request, signal) => {
+      metrics.plannerStarted();
+      try {
+        const response = await executable.invokePlanner(request, signal);
+        metrics.plannerFinished(
+          response.decision === "plan"
+            ? response.actions
+                .filter((action) => action.kind === "delegate")
+                .map((action) => action.action_id)
+            : [],
+        );
+        return response;
+      } catch (cause) {
+        metrics.plannerFinished([]);
+        throw cause;
+      }
+    },
     dispatcher,
     fence: activationFence,
     maxParallel: config.delegation.max_parallel,
@@ -295,6 +346,11 @@ export async function createProductionControllerSession(
       ownedAbort.abort();
       await Promise.all([toolExecutions.close(), closeNativeScope("controller activation closed")]);
     },
+    getControllerMetrics: () =>
+      mergeControllerMetrics(
+        projectControllerMetrics(records(), options.runId),
+        metrics.snapshot(),
+      ),
   });
   return Object.freeze({ session, logicalParentId: admission.logicalParentId });
 }
@@ -348,7 +404,16 @@ function activationRecord(
 function hostProtection(primaryCheckout: string, runStateDir: string): RuntimeHostProtection {
   return {
     primaryCheckout,
-    stateRoots: [join(primaryCheckout, ".pi-conductor"), runStateDir],
+    stateRoots: [runStateDir],
     childWorkspaceRoots: [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")],
   };
+}
+
+/** Create the private host-owned roots required by runtime capture before any controller launch. */
+async function initializeControllerRunState(runStateDir: string): Promise<void> {
+  await canonicalTrustedSnapshotParent(runStateDir);
+  for (const path of [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")]) {
+    await mkdir(path, { recursive: true, mode: 0o700 });
+    await assertPrivateAdmissionDirectory(path);
+  }
 }

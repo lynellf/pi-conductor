@@ -5,7 +5,6 @@
  * each transition shares the same poison/cleanup barrier; this intentionally stays
  * just under the repository's 500-line coherent-module exception.
  */
-
 import {
   acceptedDelegationResults,
   assertDelegationSubmissionAccepted,

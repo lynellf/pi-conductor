@@ -1,7 +1,7 @@
-# Issue #115 proposed implementation outline
+# Issue #115 implementation outline
 
-Status: [spec](spec.md) acknowledged; implementation in progress with Terra,
-Luna, and Sol. No further human approval gates precede completion.
+Status: [spec](spec.md) implemented and verified with Terra/Sol implementation
+and independent review. The linked CLI is rebuilt for local testing.
 Each task should remain a focused change of roughly five files;
 split schema consumer migrations into successive verified slices if necessary.
 
@@ -114,21 +114,21 @@ The full suite will run again on frozen files at the final delivery gate.
 
 ## D. Evidence, delivery, and review
 
-- [ ] Add phase metrics and bounded status with durable source references.
+- [x] Add phase metrics and bounded status with durable source references.
   - Acceptance: separate planner, admission, setup, worker and idle delays;
     no false cross-restart duration or coordinator model usage.
   - Files: controller metrics, status consumers, tests.
   - Verify: fake-clock metrics tests and missing-notification replay.
-- [ ] Add generic executable example, migration documentation and public exports.
+- [x] Add generic executable example, migration documentation and public exports.
   - Acceptance: preparation → native delegation → validation → receipt → finish
     works with synthetic workers; repository scheduling responsibility explicit.
   - Files: examples/controller, docs guide, public barrel, example test.
   - Verify: real approved sandboxed planner/adapter JSON stdin/stdout smoke through
     the CLI with synthetic native workers: runtime verification, staging
     publication, delegation, result validation, receipt retrieval and finish.
-- [ ] Run independent review and full repository gates, addressing findings.
+- [x] Run independent review and full repository gates, addressing findings.
   - Verify: pnpm typecheck/build/test/lint/format:check/audit; record actual results.
-- [ ] Rebuild and verify the linked CLI contains the implementation for testing.
+- [x] Rebuild and verify the linked CLI contains the implementation for testing.
   - Verify: resolve `conduct` to this checkout and run the synthetic example.
 
 Terra owns native execution/lifecycle slices; Luna can own independent protocol,
@@ -136,3 +136,15 @@ fixtures and documentation slices once their contracts are agreed. Sol reviews
 durability, authority and cancellation after each integrated contract boundary.
 Shared-file changes remain serial. No per-phase human approval is required after
 the initial spec acknowledgment; evidence and checked boxes gate progression.
+
+Phase D final evidence (2026-09-16): all 3,045 tests across 298 files pass on
+frozen implementation files. Typecheck, build, lint, formatting, and diff checks
+pass. The complete approved Bubblewrap CLI example passes, together with seven
+additional real preflight/command-runner checks. The example performs preparation,
+native artifact delegation, result validation, receipt reading, and ordinary
+finish using synthetic workers and zero coordinator model turns. Independent
+review covered metrics replay/merge, exact adapter authority, recovery, and
+cleanup; all findings are addressed. Production dependency audit is clean; the
+full audit retains two moderate and one low development advisories, with no
+high/critical findings. `conduct` resolves to this checkout's rebuilt
+`dist/bin/conduct.js`; no reinstall or relink is required.

@@ -136,6 +136,9 @@ function assertExactProgram(
     value.executable_digest === input.authority.executable_digest &&
     value.capability_digest === input.authority.capability_digest;
   if (
+    input.adapterId === null &&
+    input.origin.operation_kind === "planner" &&
+    input.origin.action_id === null &&
     input.capability === "read_only" &&
     same(definition.config.runtime_id, definition.config.executable, definition.config.argv) &&
     authority(definition.record.controller_authority)
@@ -143,7 +146,9 @@ function assertExactProgram(
     return;
   const adapter = definition.config.adapters.find(
     (entry) =>
-      entry.capability === input.capability && same(entry.runtime_id, entry.executable, entry.argv),
+      entry.id === input.adapterId &&
+      entry.capability === input.capability &&
+      same(entry.runtime_id, entry.executable, entry.argv),
   );
   const found =
     adapter === undefined

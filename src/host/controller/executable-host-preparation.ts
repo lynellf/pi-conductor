@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import type { PreparedRuntimeDescriptor } from "../../persistence/sandbox-runtime.js";
 import {
   runVerifiedSandboxCapabilityProbe,
   SandboxCapabilityProbeError,
@@ -45,7 +46,13 @@ export function createRuntimePreparation(input: {
         };
         fence();
         await input.currentDefinition();
-        const runtime = await input.runtimeStore.prepare(runtimeId, fence);
+        input.options.metrics?.runtimeCaptureStarted(scope.executionId);
+        let runtime: PreparedRuntimeDescriptor;
+        try {
+          runtime = await input.runtimeStore.prepare(runtimeId, fence);
+        } finally {
+          input.options.metrics?.runtimeCaptureFinished(scope.executionId);
+        }
         fence();
         await mkdir(join(input.options.runStateDir, "controller-probes"), {
           recursive: true,

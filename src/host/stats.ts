@@ -1,5 +1,6 @@
 /**
  * `runStats` host function — spec §11.6, §11.8, plan Task 19.
+ * Aggregate lifecycle projections share one snapshot; active-session lookup is split out.
  *
  * `runStats(records, runId, def, exitReason)` is the pure computation
  * behind the `RunHandle.runStats` method. The function renders:
@@ -31,8 +32,7 @@
  * Host-agnostic. No SDK runtime imports.
  */
 
-import type { Checkpoint, MachineDefinition } from "../core/types.js";
-import { DEFAULT_MODEL_EFFORT, type ModelEffort, type Role } from "../core/types.js";
+import type { Checkpoint, MachineDefinition, ModelEffort, Role } from "../core/types.js";
 import { type RunRollup, rollup } from "../cost/rollup.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { PersistedRecord } from "../persistence/log.js";
@@ -45,7 +45,9 @@ import {
   type RunFinalizationFailedRecord,
 } from "../persistence/run-finalization.js";
 import { isToolExecutionRecord, type ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { type ControllerMetricsSnapshot, projectControllerMetrics } from "./controller/metrics.js";
 import { projectToolExecutionStats, type ToolExecutionStats } from "./execution/execution-stats.js";
+import { findActiveSession } from "./stats-active-session.js";
 
 export type {
   OrchestratorContextBoundaryInspection,
@@ -145,6 +147,8 @@ export interface RunStats {
   /** Bounded retained orchestrator context state; omitted for context_retention: none. */
   readonly context?: OrchestratorContextInspection;
   readonly finalizationFailure?: RunFinalizationFailedRecord;
+  /** Bounded controller phase metrics; historical clock durations remain unknown. */
+  readonly controller?: ControllerMetricsSnapshot;
 }
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -181,6 +185,7 @@ export function runStats(
   );
   const toolExecution = projectToolExecutionStats(toolRecords);
   const finalizationFailure = latestRunFinalizationFailure(records, runId);
+  const controller = projectControllerMetrics(records, runId);
 
   // §11.8: `state` is the current role from the latest checkpoint.
   // If no checkpoint exists yet (the run hasn't started), fall
@@ -200,6 +205,7 @@ export function runStats(
     activeSession,
     subagents,
     toolExecution,
+    ...(controller === null ? {} : { controller }),
     ...(context === null ? {} : { context }),
     ...(finalizationFailure === null ? {} : { finalizationFailure }),
   } as RunStats;
@@ -344,97 +350,6 @@ function findLatestCheckpoint(
       record.checkpoint.run_id === runId
     ) {
       return record.checkpoint;
-    }
-  }
-  return null;
-}
-
-/**
- * Find the active session record that matches the checkpoint's live
- * role session. Returns null when the checkpoint and lifecycle data
- * are inconsistent.
- */
-function findActiveSession(
-  records: readonly PersistedRecord[],
-  runId: string,
-  latestCheckpoint: Checkpoint | null,
-): ActiveSessionStats | null {
-  if (latestCheckpoint === null) {
-    return null;
-  }
-  const activeRoleSession = latestCheckpoint.active_role_session;
-  if (activeRoleSession === null) {
-    return null;
-  }
-  if (activeRoleSession.role !== latestCheckpoint.current_role) {
-    return null;
-  }
-
-  const started = findMatchingSessionStarted(
-    records,
-    runId,
-    activeRoleSession.role,
-    activeRoleSession.session_file,
-  );
-  if (started === null) {
-    return null;
-  }
-  return Object.freeze({
-    role: started.role,
-    sessionFile: started.session_file,
-    model: started.model,
-    effort: started.model_effort ?? DEFAULT_MODEL_EFFORT,
-  });
-}
-
-/**
- * `session_started` record projected to the fields the active-session
- * derivation needs.
- */
-type SessionStartedRecord = {
-  readonly type: "session_started";
-  readonly run_id: string;
-  readonly role: Role;
-  readonly visit_index: number;
-  readonly state: Role | "done";
-  readonly model: string | null;
-  readonly model_effort?: ModelEffort;
-  readonly session_file: string;
-  readonly parent_session: string | null;
-  readonly ts: number;
-};
-
-/**
- * Find the most recent `session_started` record for the active role
- * session, matching by run, role, and session file.
- */
-function findMatchingSessionStarted(
-  records: readonly PersistedRecord[],
-  runId: string,
-  role: Role,
-  sessionFile: string,
-): SessionStartedRecord | null {
-  for (let i = records.length - 1; i >= 0; i--) {
-    const record = records[i];
-    if (
-      record !== undefined &&
-      record.type === "session_started" &&
-      record.run_id === runId &&
-      record.role === role &&
-      record.session_file === sessionFile
-    ) {
-      return {
-        type: "session_started",
-        run_id: record.run_id,
-        role: record.role,
-        visit_index: record.visit_index,
-        state: record.state,
-        model: record.model,
-        ...(record.model_effort !== undefined ? { model_effort: record.model_effort } : {}),
-        session_file: record.session_file,
-        parent_session: record.parent_session,
-        ts: record.ts,
-      };
     }
   }
   return null;

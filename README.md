@@ -58,6 +58,7 @@ Plus a flag:
 ```text
 --conduct-manifest <path>          Override the default manifest path
 --conduct-sandbox-approval <path>  Load host-owned sandbox approval JSON
+--conduct-controller-approval <path> Load host-owned controller registry JSON
 ```
 
 A thin CLI fallback (`bin/conduct`) also ships, for non-pi consumers and
@@ -144,6 +145,18 @@ admission rejects group-writable or other-writable paths rather than changing
 their modes. See
 [sandboxed delegation](docs/delegation.md#bubblewrap-command-sandbox-issue-106)
 for approval preparation, guarantees, limits, and recovery.
+
+### Opt-in executable controller
+
+A manifest may replace its orchestrator model session with a fixed-argv,
+Bubblewrap-sandboxed repository controller. The controller owns scheduling and
+semantic gates; the host retains admission, persistence, artifacts, costs,
+cleanup, and final state transitions. Controller mode requires both the sandbox
+approval and a separate protected controller registry. Pass
+`--controller-approval <path>` to the standalone CLI or set Pi's
+`--conduct-controller-approval <path>` flag. See
+[sandboxed repository controllers](docs/controller.md) and the
+[`examples/controller`](examples/controller) runnable example.
 
 ### Two layers, kept strictly apart
 
@@ -270,6 +283,8 @@ The reference material is split into focused pages:
   projections, optional Bubblewrap commands, artifacts, and branch integration.
 - [Per-role isolated workspaces](docs/workspaces.md) — workspace backends,
   artifacts, mounts, and progressive disclosure.
+- [Sandboxed repository controllers](docs/controller.md) — fixed-argv planner
+  setup, operator approval, protocol, recovery, and migration.
 - [Advanced: library use](docs/library.md) — embedding the engine in a library
   or application.
 - [Hooking into the record stream](docs/record-stream.md) — the emitter,

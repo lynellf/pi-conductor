@@ -1,5 +1,6 @@
 /**
  * File-backed `RecordLog` — spec §11.1, plan Task 13.5.
+ * Canonical run paths, leases and append ownership form one coherent file-log boundary.
  *
  * One JSONL file per `run_id` under `baseDir/<run_id>.jsonl`. Each
  * line is a single JSON-encoded `PersistedRecord`. Append-only;
@@ -105,6 +106,7 @@ export interface RunExecutionLease {
 export class FileRecordLog implements RecordLog {
   private readonly baseDir: string;
   private readonly controllerRuns = new Map<string, boolean>();
+  private readonly controllerDirectorySynced = new Set<string>();
 
   constructor(opts: FileRecordLogOptions) {
     mkdirSync(opts.baseDir, { recursive: true });
@@ -128,7 +130,9 @@ export class FileRecordLog implements RecordLog {
     }
     const controllerMode = this.isControllerRun(runId, materialized.record.type);
     if (controllerMode) {
-      appendControllerLogRecord(this.filePath(runId), materialized.json);
+      const firstControllerAppend = !this.controllerDirectorySynced.has(runId);
+      appendControllerLogRecord(this.filePath(runId), materialized.json, firstControllerAppend);
+      this.controllerDirectorySynced.add(runId);
       return;
     }
     appendFileSync(this.filePath(runId), `${materialized.json}\n`, "utf8");

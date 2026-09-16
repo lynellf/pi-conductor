@@ -485,6 +485,68 @@ describe("controller durable timeline", () => {
     ).toThrow("outstanding-action limit exceeded");
   });
 
+  it.each([
+    { limit: "max_decisions" as const, message: "controller decision budget exceeded" },
+    { limit: "max_actions" as const, message: "controller action budget exceeded" },
+  ])("enforces the pinned $limit budget", ({ limit, message }) => {
+    const limitedWithoutDigest = {
+      ...definition,
+      limits: { ...definition.limits, [limit]: 1 },
+    };
+    const limited = {
+      ...limitedWithoutDigest,
+      definition_digest: controllerDefinitionDigest(limitedWithoutDigest),
+    };
+    const limitedActivation = { ...activation, definition_digest: limited.definition_digest };
+    const first = {
+      ...decision,
+      definition_digest: limited.definition_digest,
+      consumed_cursor: { ordinal: 1, record_digest: sha256Canonical(limitedActivation) },
+      actions: [
+        {
+          ...actionIntent,
+          request_sha256: controllerActionRequestDigest(
+            limited.definition_digest,
+            actionIntent.request,
+          ),
+        },
+      ],
+    };
+    const secondRequest = {
+      kind: "cancel" as const,
+      action_id: "cancel-b",
+      child_ids: ["child-b"],
+    };
+    const second: ControllerDecisionCommittedRecord = {
+      ...first,
+      decision_id: "decision-2",
+      prior_revision: 1,
+      state_revision: 2,
+      prior_cursor: first.consumed_cursor,
+      consumed_cursor: { ordinal: 2, record_digest: sha256Canonical(first) },
+      actions:
+        limit === "max_actions"
+          ? [
+              {
+                action_id: "cancel-b",
+                kind: "cancel",
+                request: secondRequest,
+                request_sha256: controllerActionRequestDigest(
+                  limited.definition_digest,
+                  secondRequest,
+                ),
+              },
+            ]
+          : [],
+      response_kind: limit === "max_actions" ? "plan" : "wait",
+      decision_payload: null,
+      ts: 4,
+    };
+    expect(() =>
+      reconstructControllerTimeline([limited, limitedActivation, first, second]),
+    ).toThrow(message);
+  });
+
   it("accepts receipt recovery transitions but rejects a second terminal", () => {
     const pending = receipt("pending");
     const accepted = receipt("accepted", { ts: 5 });

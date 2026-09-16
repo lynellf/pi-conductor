@@ -148,6 +148,9 @@ export async function createControllerRoleSession(
     wake,
     fail,
     stopForRunCostCap,
+    ...(options.getControllerMetrics === undefined
+      ? {}
+      : { getControllerMetrics: options.getControllerMetrics }),
     // Cleanup/persistence failure outranks a latched cap; the loop must classify the failure.
     getHostTermination: () => (failure === undefined ? termination : null),
     notifyController,

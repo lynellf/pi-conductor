@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type { MachineDefinition, SessionLifecycleEvent } from "../../src/core/types.js";
 import type { LoadedManifest } from "../../src/host/manifest.js";
-import type { RunControl, RunResponse } from "../../src/host/run-control.js";
+import { RunControl, type RunResponse } from "../../src/host/run-control.js";
 import { RunHandle } from "../../src/host/run-handle.js";
 import { type CheckpointSnapshot, InMemoryRecordLog } from "../../src/persistence/log.js";
 
@@ -44,7 +44,9 @@ function makeHandleWithControl(runControl: RunControl): RunHandle {
 
 describe("RunHandle operator controls", () => {
   it("reads one log snapshot for each status result", () => {
-    const handle = makeHandleWithControl({} as RunControl);
+    const handle = makeHandleWithControl(
+      new RunControl({ runId: "controlled-run", abortSession: async () => undefined }),
+    );
     const reads = vi.spyOn(handle.log, "records");
 
     expect(handle.runStats()).toMatchObject({ state: "orchestrator", exitReason: "running" });

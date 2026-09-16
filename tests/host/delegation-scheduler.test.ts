@@ -76,6 +76,7 @@ function makeScheduler(
   sandbox?: SubagentSandboxDescriptor,
   onPrepare?: () => void,
   identity?: DelegationSchedulerOptions["identity"],
+  maxChildren = 8,
 ) {
   return new DelegationScheduler({
     identity: identity ?? {
@@ -85,7 +86,7 @@ function makeScheduler(
       parentVisitIndex: 1,
     },
     maxParallel,
-    maxChildren: 8,
+    maxChildren,
     records: () => records,
     persistRecord: (record) => records.push(record),
     prepareSubmission: async (input) => {
@@ -172,6 +173,93 @@ describe("DelegationScheduler", () => {
       accepted_args: args,
     });
     expect(accepted).not.toHaveProperty("tool_call_id");
+  });
+
+  it("preserves controller allowance and accepted work across activation changes", async () => {
+    const definitionDigest = "a".repeat(64);
+    const records: PersistedRecord[] = [];
+    let preparations = 0;
+    const identity: DelegationSchedulerOptions["identity"] = {
+      runId: "run",
+      logicalParentId: controllerLogicalParentId("run", "repo-controller", definitionDigest),
+      parentRole: "orchestrator",
+      parentVisitIndex: 1,
+      origin: { kind: "controller", controllerId: "repo-controller", definitionDigest },
+    };
+    const args = {
+      tasks: [
+        { id: "first", subagent: "worker", objective: "implement", expected_output: "patch" },
+      ],
+    };
+    const first = createDelegationAdmissionService(
+      makeScheduler(
+        async (task) => {
+          records.push({
+            type: "subagent_started",
+            run_id: "run",
+            child_id: task.childId,
+            task_id: task.taskId,
+            subagent: task.profile.name,
+            parent_role: "orchestrator",
+            parent_visit_index: 1,
+            model: "provider:model",
+            session_file: "session",
+            worktree_path: task.worktreePath,
+            branch: task.branch,
+            base_commit: task.baseCommit,
+            ts: Date.now(),
+          });
+          return result(task, "failed");
+        },
+        records,
+        1,
+        undefined,
+        undefined,
+        () => {
+          preparations += 1;
+        },
+        identity,
+        1,
+      ),
+    );
+    const ids = await first.submit(
+      { kind: "controller_action", actionId: "stable-action", activationId: "activation-1" },
+      args,
+    );
+    await first.wait(ids[0] ?? "");
+
+    const resumed = createDelegationAdmissionService(
+      makeScheduler(
+        async (task) => result(task),
+        records,
+        1,
+        undefined,
+        undefined,
+        () => {
+          preparations += 1;
+        },
+        identity,
+        1,
+      ),
+    );
+    expect(
+      await resumed.submit(
+        { kind: "controller_action", actionId: "stable-action", activationId: "activation-2" },
+        args,
+      ),
+    ).toEqual(ids);
+    expect(preparations).toBe(1);
+    expect(resumed.remainingChildren()).toBe(0);
+    await expect(
+      resumed.submit(
+        { kind: "controller_action", actionId: "new-action", activationId: "activation-2" },
+        {
+          tasks: [
+            { id: "second", subagent: "worker", objective: "implement", expected_output: "patch" },
+          ],
+        },
+      ),
+    ).rejects.toThrow(/allowance/u);
   });
 
   it("does not replay another logical parent's accepted children", () => {

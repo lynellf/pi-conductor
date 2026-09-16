@@ -106,6 +106,26 @@ describe("controller durable recovery", () => {
     });
   });
 
+  it("does not re-emit a receipt whose prior terminal notification was lost", async () => {
+    const fixture = controllerFixture();
+    const terminalReceipt = actionReceipt(fixture, "failed", null);
+    const plan = await planControllerRecovery({
+      approvedDefinition: fixture.approvedDefinition,
+      records: [
+        ...fixture.records,
+        acceptedSubmission(fixture),
+        failedChild(fixture),
+        terminalReceipt,
+      ],
+      artifacts: noArtifacts,
+    });
+
+    expect(plan).toMatchObject({ canActivate: true, receipts: [], freshActionRequired: [] });
+    const appended: ControllerRecord[] = [];
+    appendControllerRecovery(plan, fixture.resumeActivation, (record) => appended.push(record));
+    expect(appended).toEqual([fixture.resumeActivation]);
+  });
+
   it("blocks activation when an accepted native child has no terminal fact", async () => {
     const fixture = controllerFixture();
     const plan = await planControllerRecovery({
@@ -133,6 +153,40 @@ describe("controller durable recovery", () => {
 
     expect(plan.canActivate).toBe(false);
     expect(plan.blocked).toContain("controller executable execution-a has unresolved ownership");
+  });
+
+  it("blocks an uncommitted planner start, then resumes without reconstructing its response", async () => {
+    const fixture = controllerFixture();
+    const planner = {
+      ...executionStart(fixture),
+      origin: {
+        ...executionStart(fixture).origin,
+        operation_kind: "planner" as const,
+        action_id: null,
+      },
+    };
+    const beforeDecision = [fixture.definition, fixture.activation] as const;
+    const blocked = await planControllerRecovery({
+      approvedDefinition: fixture.approvedDefinition,
+      records: [...beforeDecision, planner],
+      artifacts: noArtifacts,
+    });
+    expect(blocked.canActivate).toBe(false);
+
+    const resolved = await planControllerRecovery({
+      approvedDefinition: fixture.approvedDefinition,
+      records: [...beforeDecision, planner, executionTerminal(planner)],
+      artifacts: noArtifacts,
+    });
+    expect(resolved).toMatchObject({
+      canActivate: true,
+      nextOwnerEpoch: 2,
+      receipts: [],
+      freshActionRequired: [],
+    });
+    const appended: ControllerRecord[] = [];
+    appendControllerRecovery(resolved, fixture.resumeActivation, (record) => appended.push(record));
+    expect(appended).toEqual([fixture.resumeActivation]);
   });
 
   it("keeps repaired uncertain work as a fresh action requirement", async () => {

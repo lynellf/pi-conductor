@@ -1,13 +1,13 @@
 # Durable repository controller (#115)
 
-Status: acknowledged by the overseer; implementation in progress. The overseer
-approved the reviewed scope and requested Terra/Luna/Sol implementation without
-further approval prompts.
+Status: implemented and verified. The overseer approved this scope and requested
+Terra/Luna/Sol implementation without further approval prompts. See the plan and
+verification evidence for completed gates.
 
 Authority: the FSM spec §§8, 11, and 12 remains authoritative. This proposal adds
 an opt-in host driver and versioned persistence contracts; it does not introduce
 another reducer owner. See [verification](verification.md) for acceptance evidence
-and [implementation outline](plan.md) for the proposed sequence.
+and [implementation outline](plan.md) for the completed sequence.
 
 ## 1. Objective and scope decisions
 
@@ -17,7 +17,7 @@ without a coordinator model turn. Repository code owns task selection, ordering,
 semantic gates, and delivery policy. The host owns admission, identities,
 persistence, execution authority, cleanup, and accounting.
 
-Proposed first-version decisions for acknowledgment:
+Approved first-version decisions:
 
 - Controller mode replaces the orchestrator model invocation. It supports a
   coordinator-only FSM with native delegated agents, including discovery,
@@ -35,8 +35,9 @@ Proposed first-version decisions for acknowledgment:
   Unknown effects block automatic replay. Controller failures escalate with
   evidence; they do not silently become model turns.
 
-These are scope choices, not claims that the current implementation supports
-them. Model-driven runs and blocking/nonblocking `delegate` remain unchanged.
+These scope choices are implemented with the evidence recorded in the companion
+verification document. Model-driven runs and blocking/nonblocking `delegate`
+remain unchanged.
 
 ## 2. Configuration, identity, and authority
 

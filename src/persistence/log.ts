@@ -1,34 +1,5 @@
-/**
- * `PersistedRecord` union and the `RecordLog` interface — spec §11.1–§11.5 / issue-17-delegation-lite §7.
- *
- * Every record the host appends to its `run_id`-keyed append-only log is
- * a member of `PersistedRecord`. The union covers:
- *
- *  - §11.2 `transition_accepted`
- *  - §11.3 `transition_rejected`
- *  - §11.4 `session_started` / `session_ended` / `session_failed`
- *  - §11.5 `model_fallback`
- *  - §11.1 `checkpoint_snapshot` (the wrapper around the full `Checkpoint`
- *    the host appends after every accepted/rejected transition so
- *    `latestCheckpoint(runId)` is a read of the last snapshot, not an
- *    event-sourced replay — §11.1 explicitly forbids replay).
- *  - `run_seeded` (host-owned, non-machine-event record carrying the
- *    run's original goal at `startRun` time; used by `resumeRun` to
- *    restore the goal context).
- *  - `run_context` (host-owned, additive analytics context carrying the
- *    exact accepted original prompt; it never affects resume or FSM state).
- *  - Delegation lite §7: `subagent_started` / `subagent_completed` /
- *    `subagent_failed` (host-owned child session observability records).
- *  - Issue #22: `file_mutation` (successful `write` / `edit` telemetry).
- *  - Issue #68: `role_turn` (bounded readable assistant text / thinking).
- *
- * **`RecordLog`** is the host-side persistence contract. The pure core
- * ships the interface and an in-memory implementation for unit tests.
- * The Phase 4 host driver owns the file-backed implementation
- * (append-only JSONL keyed by `run_id`; no SDK branch scoping, §11.1).
- *
- * Host-agnostic. No pi imports, no real I/O.
- */
+/** Persisted-record contracts and host-log interface — spec §11. */
+// The record union and its public re-exports stay together as one persistence contract.
 
 import type {
   Checkpoint,
@@ -479,57 +450,24 @@ export type PersistedRecord =
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 
-/**
- * Persistence contract for the host's run_id-keyed append-only log.
- *
- * `latestCheckpoint(runId)` reads the most recent `CheckpointSnapshot`
- * for the run. It does NOT scan or replay all records (§11.1: "the
- * snapshot *is* the state"). A snapshot taken with a non-null
- * `active_role_session` whose session never reached a terminal
- * lifecycle record is treated by the host as a crash mid-session
- * (§11.1: the host records a `session_failed("crashed")` for that
- * session before re-entering the loop).
- */
+/** Append-only host record log; snapshots remain the resume source of truth (§11.1). */
 export interface RecordLog {
-  /**
-   * Append a single record. Append-only: implementations MUST NOT
-   * mutate or remove previously-appended records. Order is preserved
-   * within a single `run_id`.
-   */
+  /** Append without mutating prior records; preserve order within each run. */
   append(record: PersistedRecord): void;
 
-  /**
-   * The latest `CheckpointSnapshot.checkpoint` for the run, or `null`
-   * if no snapshot has been appended yet (run not started).
-   */
+  /** Read the latest snapshot; resume never reconstructs machine state by replay (§11.1). */
   latestCheckpoint(runId: string): Checkpoint | null;
 
-  /**
-   * The goal from the latest `RunSeededRecord` for the run, or `null`
-   * if no seed record has been appended yet (run started before this
-   * feature shipped, or the log is empty). Used by `resumeRun` to
-   * restore the original goal context.
-   */
+  /** Read the original goal seed, or null for older or empty runs. */
   latestRunSeed(runId: string): string | null;
 
-  /**
-   * All records for the run in append order. The Phase 4 host may use
-   * this for `runStats()` (§11.8) and roll-up queries; the pure core
-   * uses it for `rollup` (§11.6) and `buildRunMemory` (§8.4).
-   */
+  /** Return all records belonging to the run in append order. */
   records(runId: string): readonly PersistedRecord[];
 
-  /**
-   * The set of `run_id`s known to this log. Used by the Phase 4
-   * `listRuns()` (§11.9) entry point; the pure core does not call it.
-   */
+  /** List known runs for host inspection (§11.9). */
   listRunIds(): readonly string[];
 
-  /**
-   * Release any underlying resources (file handles, etc.). The in-memory
-   * implementation is a no-op. The Phase 4 file-backed impl MUST close
-   * its file descriptor here.
-   */
+  /** Release resources owned by the log implementation. */
   close(): void;
 }
 

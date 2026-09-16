@@ -50,6 +50,10 @@ export interface CreateExecutableControllerHostOptions {
   readonly assertOpen: () => void;
   readonly artifactStore: ArtifactStore;
   readonly resolveRef: (ref: string) => Promise<unknown>;
+  readonly metrics?: {
+    runtimeCaptureStarted(executionId: string): void;
+    runtimeCaptureFinished(executionId: string): void;
+  };
 }
 export interface ControllerAdapterInvocationResult {
   readonly artifact: PublishedArtifact;
@@ -74,6 +78,8 @@ export interface ProgramInvocation {
   readonly runtimeId: string;
   readonly executable: string;
   readonly argv: readonly string[];
+  /** The pinned adapter identity, or null for the controller planner. */
+  readonly adapterId: string | null;
   readonly authority: Authority;
   readonly capability: "read_only" | "private_staging";
   readonly request: unknown;

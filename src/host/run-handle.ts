@@ -212,7 +212,9 @@ export class RunHandle {
     const records = this.log.records(this.runId);
     // Status and exit reason must share one validated snapshot (#104).
     const exitReason = this.computeExitReason(records);
-    return runStats(records, this.runId, this.def, exitReason);
+    const stats = runStats(records, this.runId, this.def, exitReason);
+    const controller = this.runControl?.getControllerMetrics();
+    return controller == null ? stats : Object.freeze({ ...stats, controller });
   }
 
   /**
@@ -225,7 +227,8 @@ export class RunHandle {
    *    the loop's existing run-cap check + §11.7 `pendingForcedEnd`
    *    handle the breach on the next terminal. The synthesized
    *    `end` fires on the next orchestrator-current moment
-   *    (same path as a naturally-occurring run-cap breach).
+   *    (same path as a naturally-occurring run-cap breach). Controller sessions
+   *    receive a host-only wakeup immediately, including while waiting.
    *  - Raising the cap is always allowed.
    *
    * The override is a no-op after the run terminates — the loop
@@ -236,6 +239,7 @@ export class RunHandle {
     const runCostSoFar = this.computeRunCostSoFar(records);
     const result = applyRunConfigOverride({ runCostSoFar }, override);
     this.configOverrideContainer.current = { maxRunCostUsd: result.newCap };
+    if (result.immediateBreach) this.runControl?.stopControllerForRunCostCap();
   }
 
   /** Read the current override (used by the loop on each terminal

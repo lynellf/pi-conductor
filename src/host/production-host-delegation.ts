@@ -81,7 +81,7 @@ export async function createControllerAdmission(
               })(),
             hostProtection: {
               primaryCheckout: ctx.cwd,
-              stateRoots: [join(ctx.cwd, ".pi-conductor"), runStateDir],
+              stateRoots: [runStateDir],
               childWorkspaceRoots: [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")],
             },
             binaryPath: ctx.sandboxHostApproval.binaryPath,

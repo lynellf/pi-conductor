@@ -63,6 +63,30 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // parser + the typed error so consumers can `import { parseManifest }`
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
+export type { ControllerAdapterConfig, ControllerConfig } from "./manifest/controller.js";
+export {
+  controllerAdapterSchema,
+  controllerCapabilitySchema,
+  controllerConfigSchema,
+  controllerLimitsSchema,
+  DEFAULT_CONTROLLER_LIMITS,
+  parseControllerConfig,
+  resolveControllerLimits,
+} from "./manifest/controller.js";
+export type {
+  ControllerAction,
+  ControllerRequest,
+  ControllerResponse,
+} from "./manifest/controller-protocol.js";
+export {
+  controllerActionSchema,
+  controllerAdapterActionSchema,
+  controllerCancelActionSchema,
+  controllerDelegateActionSchema,
+  controllerReadActionSchema,
+  controllerRequestSchema,
+  controllerResponseSchema,
+} from "./manifest/controller-protocol.js";
 export {
   assertDelegationMode,
   DEFAULT_DELEGATION_MODE,
@@ -318,7 +342,16 @@ export type {
   ActiveSessionStats,
   applyRunConfigOverride,
   ChildDisplayOrigin,
+  ControllerActionRepairOptions,
+  ControllerCapacity,
   ControllerHostApproval,
+  ControllerIdleInterval,
+  ControllerLatency,
+  ControllerMetricName,
+  ControllerMetricSource,
+  ControllerMetricsSnapshot,
+  ControllerProtocolErrorCode,
+  ControllerRuntimeApproval,
   ControllerSessionNotification,
   CreateProductionHostInputs,
   DefaultBundle,
@@ -362,10 +395,14 @@ export type {
 export {
   AskUserUnavailableError,
   buildToolsAllowlist,
+  CONTROLLER_JSON_MAX_BYTES,
   controllerHostApprovalSchema,
   createAskUserTool,
   createHandoffContextTool,
   createProductionHost,
+  decodeControllerResponse,
+  encodeBoundedControllerJson,
+  encodeControllerRequest,
   FileRecordLog,
   formatRunMemorySeed,
   HostManifestError,
@@ -386,6 +423,7 @@ export {
   RunHandle,
   RunInProgressError,
   RunLeaseUnavailableError,
+  reconcileControllerActionEffects,
   reconcileToolExecutionCleanup,
   resolveModel,
   resumeRun,
@@ -395,5 +433,6 @@ export {
   startRun,
   subscribeToRecords,
   ToolExecutionReconciliationError,
+  TypedControllerProtocolError,
   validateControllerHostApproval,
 } from "./host/index.js";

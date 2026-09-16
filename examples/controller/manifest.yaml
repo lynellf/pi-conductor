@@ -1,0 +1,43 @@
+version: 1
+controller:
+  protocol_version: 1
+  controller_id: packet-controller
+  runtime_id: controller-example-v1
+  executable: /usr/bin/node
+  argv: [/opt/pi-conductor-example/planner.mjs]
+  adapters:
+    - id: prepare
+      runtime_id: controller-example-v1
+      executable: /usr/bin/node
+      argv: [/opt/pi-conductor-example/adapter.mjs]
+      input_schema_id: adapter-input-v1
+      output_schema_id: packet-v1
+      capability: private_staging
+    - id: validate
+      runtime_id: controller-example-v1
+      executable: /usr/bin/node
+      argv: [/opt/pi-conductor-example/adapter.mjs]
+      input_schema_id: adapter-input-v1
+      output_schema_id: packet-v1
+      capability: private_staging
+  delegation:
+    allowed_subagents: [worker]
+    max_children_per_session: 1
+    max_parallel: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+subagents:
+  - name: worker
+    models: [{ model: stub:worker, effort: medium }]
+    max_session_cost_usd: 1
+    system_prompt: worker.md
+    completion_protocol: minimal
+    execution:
+      backend: bubblewrap
+      runtime_root: .pi/runtime
+      writable_paths: [worker-output.txt]
+    workspace:
+      projection:
+        required: true
+        allowed_paths: [worker-output.txt]

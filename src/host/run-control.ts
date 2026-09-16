@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
+import type { ControllerMetricsSnapshot } from "./controller/metrics.js";
 import { extractAssistantText } from "./display-sink.js";
 import type { RoleSession } from "./host.js";
 
@@ -59,6 +60,7 @@ export class RunControl {
   private nextGuidanceId = 1;
   private open = true;
   private latest: RunResponse | null = null;
+  private finalControllerMetrics: ControllerMetricsSnapshot | null = null;
   private abortReason: string | null = null;
   private readonly guidancePolicy: "enabled" | "unsupported";
 
@@ -119,6 +121,17 @@ export class RunControl {
     return this.latest === null ? null : Object.freeze({ ...this.latest });
   }
 
+  /** Read live controller metrics, retaining the final snapshot after session release. */
+  getControllerMetrics(): ControllerMetricsSnapshot | null {
+    return this.active?.session.getControllerMetrics?.() ?? this.finalControllerMetrics;
+  }
+
+  /** Deliver a host-only cap breach to a controller even while its pump is idle. */
+  stopControllerForRunCostCap(): void {
+    const session = this.active?.session;
+    if (session?.sessionOrigin?.kind === "controller") session.stopForRunCostCap?.();
+  }
+
   /** Install the role session currently owned by the orchestration loop. */
   async setActiveSession(session: RoleSession | null): Promise<void> {
     if (session === null) {
@@ -147,6 +160,8 @@ export class RunControl {
   releaseActiveSession(session?: RoleSession): void {
     const active = this.active;
     if (active === null || (session !== undefined && active.session !== session)) return;
+    this.finalControllerMetrics =
+      active.session.getControllerMetrics?.() ?? this.finalControllerMetrics;
     this.reclaimUnconsumedSteering(active, !active.addressable);
     active.unsubscribeEvents();
     active.unsubscribeSealed();

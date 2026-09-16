@@ -1,6 +1,4 @@
-/** Prompt, admission, failure, cost-cap, and end-guard handling for one role session. */
-// This retry boundary keeps prompt, terminal, and cost-cap precedence together;
-// transport validation and persistence helpers are split out to stay under 500 lines.
+/** One role-session retry boundary keeps prompt, cleanup, cost-cap, and end-guard precedence together. */
 import { reduce } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
 import type { HandoffContextRef, UsageRecord } from "../core/types.js";
@@ -11,6 +9,7 @@ import {
   persistHandoffValidationFailures,
   prepareAcceptedHandoffAtLoopBoundary,
 } from "./accepted-handoff-validation.js";
+import { formatControllerFailure } from "./controller/failure-diagnostic.js";
 import { runEndGuardAttempt } from "./end-guard-loop.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type { SessionTerminalReason } from "./host.js";
@@ -167,7 +166,6 @@ export async function runSessionTurn(
     const validated = validateEmission(captures);
 
     if (validated.kind === "breach") {
-      // ── §11.3 contract breach: session_failed, NO reduce call ──
       // The host may also have terminated the session (e.g., the
       // per-session cap fired on `turn_end` and called `abort()`,
       // Task 17). The host's reason, when set, takes precedence
@@ -191,11 +189,13 @@ export async function runSessionTurn(
       const failureDetail =
         hostReason !== null
           ? (host.sessionFailureDetail?.(session) ?? null)
-          : hostReason === null &&
-              promptFailureReason === null &&
-              validated.reason === "no_emission"
-            ? `${state.noEmissionRecoveryPrompts} recovery prompts attempted`
-            : null;
+          : promptFailureReason === "controller_failed"
+            ? formatControllerFailure(promptError)
+            : hostReason === null &&
+                promptFailureReason === null &&
+                validated.reason === "no_emission"
+              ? `${state.noEmissionRecoveryPrompts} recovery prompts attempted`
+              : null;
       await settleDelegationBeforeLifecycle(failureReason);
       const failed = reduceLifecycle(ctx.checkpoint, "session_failed", def, {
         role,

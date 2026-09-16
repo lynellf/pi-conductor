@@ -9,6 +9,7 @@ import type {
   ControllerRequest,
 } from "../../src/manifest/controller-protocol.js";
 import { controllerLogicalParentId } from "../../src/persistence/delegation-task.js";
+import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
 import {
   child,
   completed,
@@ -243,6 +244,35 @@ describe("controller role session", () => {
     await fixture.session.dispose();
   });
 
+  it("fails after three unchanged plans without redispatching known work", async () => {
+    let fixture!: Awaited<ReturnType<typeof controllerSessionFixture>>;
+    let calls = 0;
+    let dispatches = 0;
+    fixture = await controllerSessionFixture({
+      dispatcher: {
+        dispatchCommitted: (actionId) => {
+          dispatches += 1;
+          queueMicrotask(() => {
+            appendReceipt(fixture, actionId, "pending");
+            appendReceipt(fixture, actionId, "completed");
+          });
+        },
+      },
+      invokePlanner: async (request) => {
+        calls += 1;
+        return plan(request, [delegate("known")]);
+      },
+    });
+    roots.push(fixture.root);
+
+    await expect(fixture.session.prompt("ignored")).rejects.toThrow(
+      "three unchanged decisions without new work",
+    );
+    expect(calls).toBe(4);
+    expect(dispatches).toBe(1);
+    await fixture.session.dispose();
+  });
+
   it("bounds repeated stale planner identities to three attempts", async () => {
     let calls = 0;
     const fixture = await controllerSessionFixture({
@@ -373,7 +403,7 @@ describe("controller role session", () => {
       controller_owner_epoch: fixture.activation.owner_epoch,
       ts: 3,
     });
-    fixture.persist({
+    const rejected = {
       type: "transition_rejected",
       run_id: fixture.activation.run_id,
       state: "orchestrator",
@@ -385,7 +415,8 @@ describe("controller role session", () => {
       role: "orchestrator",
       session_file: fixture.session.sessionFile,
       ts: 4,
-    });
+    } as const;
+    fixture.persist(rejected);
     release();
     await until(() => requests.length === 2);
     await prompting;
@@ -394,6 +425,11 @@ describe("controller role session", () => {
       fixture.records.filter((record) => record.type === "controller_decision_committed"),
     ).toHaveLength(2);
     expect(requests[1]?.event_cursor).not.toEqual(requests[0]?.event_cursor);
+    const finishRejected = requests[1]?.events.find((event) => event.kind === "finish_rejected");
+    if (finishRejected?.source === null || finishRejected?.source === undefined)
+      throw new Error("expected finish rejection with a durable source");
+    expect(finishRejected?.source.ordinal).toBe(fixture.records.indexOf(rejected));
+    expect(finishRejected?.source.record_digest).toBe(sha256Canonical(rejected));
     expect(fixture.session.readCaptureBuffer()).toEqual([
       { toolName: "end", args: { reason: "controller complete" } },
     ]);

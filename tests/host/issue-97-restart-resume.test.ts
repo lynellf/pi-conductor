@@ -34,6 +34,7 @@ roles:
 
 describe("issue 97 disk-backed restart recovery", () => {
   it("rejects legacy unconfirmed work, then resumes fresh work after audited confirmation", async () => {
+    // Three disk-backed SDK initializations can exceed Vitest's default 5s on a loaded host.
     // The fixture has no real owner marker; process identity behavior is
     // covered by the dedicated reconciliation tests.
     vi.spyOn(processIdentity, "findProcessesByOwnerToken").mockResolvedValue([]);
@@ -168,5 +169,5 @@ describe("issue 97 disk-backed restart recovery", () => {
     expect(finalToolRecords.filter((record) => record.tool_call_id === "call-fresh")).toHaveLength(
       2,
     );
-  });
+  }, 15_000);
 });

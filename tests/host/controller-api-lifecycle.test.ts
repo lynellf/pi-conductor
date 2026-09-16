@@ -6,6 +6,7 @@ import { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type { MachineDefinition } from "../../src/core/types.js";
 import type { HostFactoryContext } from "../../src/host/api.js";
 import { reconcileCrash, resumeRun, startRun } from "../../src/host/api.js";
+import { formatControllerFailure } from "../../src/host/controller/failure-diagnostic.js";
 import type { RoleSession } from "../../src/host/host.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import { StubHost } from "../../src/host/stub-host.js";
@@ -172,7 +173,10 @@ describe("controller public run lifecycle", () => {
           resetCaptureBuffer: () => undefined,
           subscribe: () => () => undefined,
           prompt: async () => {
-            throw new Error("controller driver failed");
+            const cause = new Error("protected host root is missing");
+            const failure = new Error("controller preflight failed", { cause });
+            Object.assign(failure, { code: "PREFLIGHT_REJECTED" });
+            throw failure;
           },
           dispose: async () => undefined,
         };
@@ -187,10 +191,22 @@ describe("controller public run lifecycle", () => {
       expect.objectContaining({
         type: "session_failed",
         failure_reason: "controller_failed",
+        failure_detail: expect.stringContaining(
+          "Error [PREFLIGHT_REJECTED]: controller preflight failed",
+        ),
         session_origin: "controller",
       }),
     );
     expect(records.some((record) => record.type === "model_fallback")).toBe(false);
     expect(records.some((record) => record.type === "model_retry")).toBe(false);
+  });
+
+  it("bounds controller failure details and safely handles unknown thrown values", () => {
+    expect(formatControllerFailure({ secret: "must not be inspected" })).toBe(
+      "Unknown controller failure",
+    );
+    const detail = formatControllerFailure(new Error("é".repeat(5000)));
+    expect(Buffer.byteLength(detail, "utf8")).toBeLessThanOrEqual(4 * 1024);
+    expect(detail.endsWith("…")).toBe(true);
   });
 });

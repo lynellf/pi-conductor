@@ -29,12 +29,60 @@
  * `src/manifest`, `src/seam`, `src/cost`) intentionally excludes it.
  */
 
-export type { ControllerHostApproval } from "./controller/host-approval.js";
+export type {
+  ControllerAdapterConfig,
+  ControllerConfig,
+} from "../manifest/controller.js";
+export {
+  controllerAdapterSchema,
+  controllerCapabilitySchema,
+  controllerConfigSchema,
+  controllerLimitsSchema,
+  DEFAULT_CONTROLLER_LIMITS,
+  parseControllerConfig,
+  resolveControllerLimits,
+} from "../manifest/controller.js";
+export type {
+  ControllerAction,
+  ControllerRequest,
+  ControllerResponse,
+} from "../manifest/controller-protocol.js";
+export {
+  controllerActionSchema,
+  controllerAdapterActionSchema,
+  controllerCancelActionSchema,
+  controllerDelegateActionSchema,
+  controllerReadActionSchema,
+  controllerRequestSchema,
+  controllerResponseSchema,
+} from "../manifest/controller-protocol.js";
+export type { ControllerActionRepairOptions } from "./controller/action-reconciliation.js";
+export { reconcileControllerActionEffects } from "./controller/action-reconciliation.js";
+export type {
+  ControllerHostApproval,
+  ControllerRuntimeApproval,
+} from "./controller/host-approval.js";
 export {
   controllerHostApprovalSchema,
   loadControllerHostApproval,
   validateControllerHostApproval,
 } from "./controller/host-approval.js";
+export type {
+  ControllerCapacity,
+  ControllerIdleInterval,
+  ControllerLatency,
+  ControllerMetricName,
+  ControllerMetricSource,
+  ControllerMetricsSnapshot,
+} from "./controller/metrics.js";
+export type { ControllerProtocolErrorCode } from "./controller/protocol-codec.js";
+export {
+  CONTROLLER_JSON_MAX_BYTES,
+  decodeControllerResponse,
+  encodeBoundedControllerJson,
+  encodeControllerRequest,
+  TypedControllerProtocolError,
+} from "./controller/protocol-codec.js";
 export type {
   Host,
   RoleSession,

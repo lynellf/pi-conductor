@@ -7,6 +7,7 @@ import type { ToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { ContextBoundaryReference } from "../persistence/orchestrator-context.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
+import type { ControllerMetricsSnapshot } from "./controller/metrics.js";
 
 /** Physical session provenance; omission reads legacy SDK sessions only. */
 export type RoleSessionOrigin =
@@ -65,6 +66,8 @@ export interface HostTermination {
  * runtime error.
  */
 export interface RoleSession {
+  /** Live controller-only metrics; absent for SDK-backed sessions and historical runs. */
+  getControllerMetrics?(): ControllerMetricsSnapshot;
   /** Explicit controller provenance; omitted only by legacy SDK adapters. */
   readonly sessionOrigin?: RoleSessionOrigin;
   /** The role this session was spawned for. */
@@ -123,6 +126,9 @@ export interface RoleSession {
 
   /** Return a latched host termination after the prompt lifetime settles. */
   getHostTermination?(): HostTermination | null;
+
+  /** Close controller work when an operator lowers the run cap below durable spend. */
+  stopForRunCostCap?(): void;
 
   /** Return and clear incomplete-handoff attempts for loop persistence. */
   takeHandoffValidationFailures?(): readonly {

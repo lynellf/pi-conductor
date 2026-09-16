@@ -21,8 +21,8 @@
  * the loop reads the updated cap via `getRunCostCap()` on every
  * terminal, and the §11.7 `pendingForcedEnd` mechanism synthesizes
  * the `end` event on the next orchestrator-current moment. The
- * `RunHandle` does not need a separate "force end" path — updating
- * the cap is sufficient.
+ * Controller sessions also receive a host-only cap signal from `RunHandle`
+ * so a waiting pump closes immediately; the loop still owns the reducer-fed end.
  *
  * **Raising the cap is always allowed.** No breach check on the
  * upper side; the override is a pure update.

@@ -1,4 +1,5 @@
 /** Physical executable-tool attempt controller — September execution controls §76. */
+// Attempt admission, fatal-error precedence and cleanup share this single lifetime owner.
 
 import { randomUUID } from "node:crypto";
 import type { SandboxExecutionTerminal } from "../../persistence/sandbox-command.js";

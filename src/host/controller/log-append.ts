@@ -20,7 +20,11 @@ export class ControllerLogAppendError extends Error {
 }
 
 /** Append a controller record only after the full line and filesystem metadata are verified. */
-export function appendControllerLogRecord(filePath: string, json: string): void {
+export function appendControllerLogRecord(
+  filePath: string,
+  json: string,
+  forceDirectorySync = false,
+): void {
   const existed = existsSync(filePath);
   const descriptor = openControllerLog(filePath);
   try {
@@ -36,7 +40,7 @@ export function appendControllerLogRecord(filePath: string, json: string): void 
   } finally {
     closeSync(descriptor);
   }
-  if (!existed) syncParentDirectory(filePath);
+  if (!existed || forceDirectorySync) syncDirectoryChain(filePath);
 }
 
 function openControllerLog(filePath: string): number {
@@ -83,11 +87,20 @@ function writeAll(descriptor: number, bytes: Buffer): void {
   }
 }
 
-function syncParentDirectory(filePath: string): void {
-  const descriptor = openSync(dirname(filePath), constants.O_RDONLY | (constants.O_DIRECTORY ?? 0));
-  try {
-    fsyncSync(descriptor);
-  } finally {
-    closeSync(descriptor);
+function syncDirectoryChain(filePath: string): void {
+  let directory = dirname(filePath);
+  for (;;) {
+    const descriptor = openSync(
+      directory,
+      constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
+    );
+    try {
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
   }
 }

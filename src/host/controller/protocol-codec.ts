@@ -13,6 +13,7 @@ export const CONTROLLER_JSON_MAX_BYTES = 1024 * 1024;
 const MAX_DEPTH = 32;
 const MAX_STATE_BYTES = 64 * 1024;
 
+/** Stable controller protocol failure categories for embedding error handling. */
 export type ControllerProtocolErrorCode = "invalid" | "stale_identity" | "bounds";
 
 /** Typed failure raised at the controller JSON boundary. */

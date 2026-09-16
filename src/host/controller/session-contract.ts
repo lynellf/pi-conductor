@@ -7,6 +7,7 @@ import type { DelegationAdmissionService } from "../delegation/admission-service
 import type { RoleSession } from "../role-session-contract.js";
 import type { ControllerActionDispatcher } from "./action-dispatcher-contract.js";
 import type { ControllerActivationFence } from "./activation-fence.js";
+import type { ControllerMetricsSnapshot } from "./metrics.js";
 
 /** Host callbacks share the durable writer and the existing native admission service. */
 export interface ControllerRoleSessionOptions {
@@ -27,10 +28,12 @@ export interface ControllerRoleSessionOptions {
   readonly isRunCostCapReached: () => boolean;
   /** Permanently close executables and native scope and await owned cleanup. */
   readonly closeOwnedWork: () => Promise<void>;
+  readonly getControllerMetrics?: () => ControllerMetricsSnapshot;
 }
 /** Host-only wake/failure controls; neither accepts repository-supplied authority. */
 export interface ControllerRoleSession extends RoleSession {
   wake(): void;
   fail(cause: unknown): void;
   stopForRunCostCap(): void;
+  getControllerMetrics?(): ControllerMetricsSnapshot;
 }

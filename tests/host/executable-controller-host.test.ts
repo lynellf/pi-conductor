@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   runner: vi.fn(),
@@ -38,10 +38,7 @@ import {
   approveControllerDefinition,
 } from "../../src/host/controller/approved-definition.js";
 import { ArtifactStore } from "../../src/host/controller/artifact-store.js";
-import {
-  type ControllerExecutionDriver,
-  createExecutableControllerHost,
-} from "../../src/host/controller/executable-host.js";
+import { type ControllerExecutionDriver } from "../../src/host/controller/executable-host.js";
 import { validateControllerHostApproval } from "../../src/host/controller/host-approval.js";
 import { inventoryRuntimeTree } from "../../src/host/execution/sandbox/runtime-files.js";
 import type { ToolExecutionScope } from "../../src/host/execution/tool-execution-controller.js";
@@ -55,6 +52,15 @@ import type { ControllerExecutionOrigin } from "../../src/persistence/tool-execu
 import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
 
 const roots: string[] = [];
+
+let createExecutableControllerHost: typeof import("../../src/host/controller/executable-host.js").createExecutableControllerHost;
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ createExecutableControllerHost } = await import(
+    "../../src/host/controller/executable-host.js"
+  ));
+});
 
 afterEach(async () => {
   mocks.runner.mockReset();
@@ -70,6 +76,13 @@ afterEach(async () => {
       await rm(root, { recursive: true, force: true });
     }),
   );
+});
+
+afterAll(() => {
+  vi.doUnmock("../../src/host/controller/controller-command-runner.js");
+  vi.doUnmock("../../src/host/execution/sandbox/probe-runner.js");
+  vi.doUnmock("../../src/host/execution/sandbox/output-retrieval.js");
+  vi.resetModules();
 });
 
 describe("Issue #115 executable controller host", () => {
@@ -206,7 +219,7 @@ describe("Issue #115 executable controller host", () => {
     expect(execution.origins).toEqual([]);
   });
 
-  it("uses the exact pinned authority when adapters share a runtime and capability", async () => {
+  it("uses the exact pinned authority when adapters share a runtime, executable, and capability", async () => {
     const fixture = await makeFixture({ adapter: true, secondAdapter: true });
     const stdout = Buffer.from('{"output":"result.json"}');
     mocks.probe.mockImplementation(
@@ -249,7 +262,17 @@ describe("Issue #115 executable controller host", () => {
         controllerActionRequestDigest(fixture.definition.record.definition_digest, action),
       ),
     ).resolves.toMatchObject({ artifact: { binding: { actionId: "second" } } });
-    expect(execution.owners.at(-1)?.runtime.executable_digest).toBe(fixture.adapterTwoDigest);
+    const authority = fixture.definition.record.adapter_authorities.find(
+      (entry) => entry.adapter_id === "prepare-two",
+    );
+    if (authority === undefined) throw new Error("second adapter authority is missing");
+    expect(execution.owners.at(-1)?.runtime).toEqual({
+      runtime_id: "runtime",
+      approval_id: authority.approval_id,
+      runtime_digest: authority.runtime_digest,
+      executable_digest: authority.executable_digest,
+      capability_digest: authority.capability_digest,
+    });
   });
 });
 
@@ -269,12 +292,10 @@ async function makeFixture(
     mkdir(artifactsRoot, { mode: 0o700 }),
   ]);
   const bytes = Buffer.from("approved executable");
-  const adapterTwo = Buffer.from("second approved executable");
   await Promise.all([
     writeFile(join(source, "bin", "bash"), bytes, { mode: 0o700 }),
     writeFile(join(source, "bin", "planner"), bytes, { mode: 0o700 }),
     writeFile(join(source, "bin", "adapter"), bytes, { mode: 0o700 }),
-    writeFile(join(source, "bin", "adapter-two"), adapterTwo, { mode: 0o700 }),
   ]);
   const packetSchema = Type.Object({ packet: Type.String() }, { additionalProperties: false });
   const inputSchema = Type.Object(
@@ -310,8 +331,8 @@ async function makeFixture(
                 {
                   id: "prepare-two",
                   runtime_id: "runtime",
-                  executable: "/bin/adapter-two",
-                  argv: ["--two"],
+                  executable: "/bin/adapter",
+                  argv: [],
                   input_schema_id: "adapter-input",
                   output_schema_id: "packet",
                   capability: "private_staging" as const,
@@ -338,7 +359,6 @@ async function makeFixture(
             { path: "bin/bash", sha256: digest(bytes) },
             { path: "bin/planner", sha256: digest(bytes) },
             { path: "bin/adapter", sha256: digest(bytes) },
-            { path: "bin/adapter-two", sha256: digest(adapterTwo) },
           ],
         },
       },
@@ -385,7 +405,6 @@ async function makeFixture(
     assertOpen: () => {},
     artifactStore,
     resolveRef: async (ref: string) => ({ ref, value: "resolved" }),
-    adapterTwoDigest: digest(adapterTwo),
   };
 }
 
