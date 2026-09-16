@@ -60,6 +60,82 @@ async function store(): Promise<ArtifactStore> {
 }
 
 describe("Issue #115 immutable controller artifact publication", () => {
+  it("keeps derived private adapter bytes from the controller and unrelated native profiles", async () => {
+    const artifacts = await store();
+    const staging = await artifacts.createStaging("publish-result");
+    await writeFile(staging.outputPath, '{"private":"review-canary"}');
+    const published = await artifacts.publish({
+      staging,
+      binding: binding({
+        audience: [
+          { kind: "adapter", adapter_id: "integrator" },
+          { kind: "native", profile_id: "reviewer" },
+        ],
+      }),
+      validate: validJson,
+    });
+    const request = {
+      ref: published.ref,
+      runId: "run-115",
+      definitionDigest: digest("a"),
+      offset: 0,
+      length: 1024,
+    };
+    await expect(artifacts.rangeReadForController(request)).rejects.toMatchObject({
+      code: "artifact-consumer-denied",
+    });
+    await expect(
+      artifacts.rangeRead({ ...request, consumerProfileId: "worker" }),
+    ).rejects.toMatchObject({ code: "artifact-consumer-denied" });
+    expect(
+      (await artifacts.rangeRead({ ...request, consumerProfileId: "reviewer" })).bytes.toString(),
+    ).toContain("review-canary");
+    expect(
+      (
+        await artifacts.rangeReadForPrincipal({
+          ...request,
+          principal: { kind: "adapter", adapter_id: "integrator" },
+        })
+      ).bytes.toString(),
+    ).toContain("review-canary");
+    await expect(
+      artifacts.rangeReadForPrincipal({
+        ...request,
+        principal: { kind: "effect", effect_id: "integrator" },
+      }),
+    ).rejects.toMatchObject({ code: "artifact-consumer-denied" });
+  });
+
+  it("recovers request, selected source, and result independently under the same real action", async () => {
+    const artifacts = await store();
+    const request = binding();
+    const source = binding({
+      publication: { kind: "effect_source", operationId: digest("a"), effectId: "integrate" },
+    });
+    const result = binding({
+      publication: { kind: "effect_result", operationId: digest("a"), effectId: "integrate" },
+    });
+    const published = [];
+    for (const [index, authority] of [request, source, result].entries()) {
+      const staging = await artifacts.createStaging(authority.actionId);
+      await writeFile(staging.outputPath, JSON.stringify({ slot: index }));
+      published.push(await artifacts.publish({ staging, binding: authority, validate: validJson }));
+    }
+    expect(new Set(published.map((artifact) => artifact.ref)).size).toBe(3);
+    for (const [index, authority] of [request, source, result].entries()) {
+      const recovered = await artifacts.recoverAction(authority);
+      expect(recovered).toEqual(published[index]);
+      expect(recovered?.binding.actionId).toBe("publish-result");
+    }
+    await expect(
+      artifacts.recoverAction(
+        binding({
+          publication: { kind: "effect_result", operationId: digest("b"), effectId: "integrate" },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "artifact-missing" });
+  });
+
   it("publishes host-created staging bytes and authorizes an exact bounded native read", async () => {
     const artifacts = await store();
     const staging = await artifacts.createStaging("publish-result");

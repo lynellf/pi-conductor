@@ -33,6 +33,10 @@ export function appendCompleted(
     ...(child.completionEvidence === undefined
       ? {}
       : { completion_evidence: child.completionEvidence }),
+    ...(child.outputCapture === undefined ? {} : { output_capture: child.outputCapture }),
+    ...(child.outputCaptureFailure === undefined
+      ? {}
+      : { output_capture_failure: child.outputCaptureFailure }),
     ts: Date.now(),
   } satisfies SubagentCompletedRecord);
 }
@@ -65,6 +69,10 @@ export function appendFailed(
     ...(child.completionEvidence === undefined
       ? {}
       : { completion_evidence: child.completionEvidence }),
+    ...(child.outputCapture === undefined ? {} : { output_capture: child.outputCapture }),
+    ...(child.outputCaptureFailure === undefined
+      ? {}
+      : { output_capture_failure: child.outputCaptureFailure }),
     ts: Date.now(),
   } satisfies SubagentFailedRecord);
 }

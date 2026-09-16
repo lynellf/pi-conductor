@@ -11,15 +11,11 @@ import type { Role } from "../../core/types.js";
 import { resolveControllerLimits } from "../../manifest/controller.js";
 import type { ControllerAction } from "../../manifest/controller-protocol.js";
 import { resolveToolExecutionPolicy } from "../../manifest/execution-policy.js";
-import type { ControllerActivationStartedRecord } from "../../persistence/controller-records.js";
 import { controllerActionRequestDigest } from "../../persistence/controller-records.js";
 import type { PersistedRecord, RecordLog } from "../../persistence/log.js";
 import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
-import { assertPrivateAdmissionDirectory } from "../execution/sandbox/admission-metadata.js";
 import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js";
-import { canonicalTrustedSnapshotParent } from "../execution/sandbox/runtime-capture.js";
-import type { RuntimeHostProtection } from "../execution/sandbox/runtime-types.js";
 import type { ToolExecutionScope } from "../execution/tool-execution-controller.js";
 import {
   ToolExecutionController,
@@ -33,12 +29,7 @@ import type {
 import { createControllerAdmission } from "../production-host-delegation.js";
 import { createControllerActionDispatcher } from "./action-dispatcher.js";
 import { ControllerActivationFence } from "./activation-fence.js";
-import {
-  type ApprovedControllerDefinition,
-  approveControllerDefinition,
-  verifyControllerApproval,
-} from "./approved-definition.js";
-import { ArtifactStore } from "./artifact-store.js";
+import { verifyControllerApproval } from "./approved-definition.js";
 import { createExecutableControllerHost } from "./executable-host.js";
 import type { ControllerHostApproval } from "./host-approval.js";
 import {
@@ -46,7 +37,16 @@ import {
   mergeControllerMetrics,
   projectControllerMetrics,
 } from "./metrics.js";
-import { appendControllerRecovery, planControllerRecovery } from "./recovery.js";
+import { createConfiguredProductionEffects } from "./production-effects.js";
+import { createProductionOutputs } from "./production-outputs.js";
+import { openAndPrepareProductionRecovery } from "./production-recovery.js";
+import {
+  approvedProductionDefinition,
+  initializeControllerRunState,
+  productionActivationRecord,
+  productionHostProtection,
+} from "./production-session-support.js";
+import { appendControllerRecovery } from "./recovery.js";
 import { createControllerRoleSession } from "./role-session.js";
 import type { ControllerRoleSession } from "./session-contract.js";
 
@@ -85,29 +85,36 @@ export async function createProductionControllerSession(
   if (options.sandboxHostApproval === undefined)
     throw new Error("controller mode requires protected Bubblewrap host approval");
   const approval = await loadControllerHostApproval();
-  const definition = approvedDefinition(options, approval);
+  const definition = approvedProductionDefinition(options, approval);
   const records = () => options.log.records(options.runId);
   const runStateDir = dirname(options.sessionDir);
   await initializeControllerRunState(runStateDir);
   const artifactRoot = join(runStateDir, "controller-artifacts");
   await mkdir(artifactRoot, { recursive: true, mode: 0o700 });
-  let fence: ControllerActivationFence | undefined;
+  const previousActivation = [...records()]
+    .reverse()
+    .find((record) => record.type === "controller_activation_started");
+  let fence: ControllerActivationFence | undefined =
+    previousActivation?.type === "controller_activation_started"
+      ? new ControllerActivationFence(previousActivation, records)
+      : undefined;
   const assertActivationOpen = (): void => {
     if (fence === undefined) throw new Error("controller activation is not durable");
     fence.assertOpen();
   };
-  const artifacts = await ArtifactStore.open({
-    root: artifactRoot,
-    assertPublicationOpen: assertActivationOpen,
+  const prepared = await openAndPrepareProductionRecovery({
+    definition,
+    records,
+    persist: options.persist,
+    loadApproval: loadControllerHostApproval,
+    runStateDir,
+    artifactRoot,
+    assertOpen: assertActivationOpen,
   });
-  const recovery = await planControllerRecovery({
-    approvedDefinition: definition,
-    records: records(),
-    artifacts,
-  });
+  const { artifacts, outputs: openedOutputs, recovery } = prepared;
   if (!recovery.canActivate)
     throw new Error(`controller recovery is blocked: ${recovery.blocked.join("; ")}`);
-  const activation = activationRecord(definition, recovery);
+  const activation = productionActivationRecord(definition, recovery);
   const metrics = createControllerMetricsObserver({
     runId: options.runId,
     maxChildren: config.delegation.max_children_per_session,
@@ -151,44 +158,18 @@ export async function createProductionControllerSession(
     const cap = options.getRunCostCap?.();
     return cap !== undefined && cap !== null && options.runCostSoFar() >= cap;
   };
-  const hostArtifactResolver = {
-    resolve: async (input: {
-      readonly ref: string;
-      readonly consumerProfileId: string;
-      readonly maxBytes: number;
-    }) => {
-      const firstLength = Math.min(input.maxBytes, 32 * 1024);
-      const first = await artifacts.rangeRead({
-        ref: input.ref,
-        runId: options.runId,
-        definitionDigest: definition.record.definition_digest,
-        consumerProfileId: input.consumerProfileId,
-        offset: 0,
-        length: firstLength,
-      });
-      if (first.byteLength > input.maxBytes)
-        throw new Error("controller artifact exceeds the admitted context limit");
-      const chunks: Buffer[] = [first.bytes];
-      for (let offset = first.bytes.byteLength; offset < first.byteLength; offset += 32 * 1024) {
-        const chunk = await artifacts.rangeRead({
-          ref: input.ref,
-          runId: options.runId,
-          definitionDigest: definition.record.definition_digest,
-          consumerProfileId: input.consumerProfileId,
-          offset,
-          length: Math.min(32 * 1024, first.byteLength - offset),
-        });
-        chunks.push(chunk.bytes);
-      }
-      return {
-        bytes: Buffer.concat(chunks),
-        sha256: first.sha256,
-        byteLength: first.byteLength,
-        producingActionId: first.binding.actionId,
-        mediaType: first.mediaType,
-      } as const;
-    },
-  };
+  const outputs = await createProductionOutputs({
+    activation,
+    config,
+    runStateDir,
+    artifacts,
+    records,
+    persist,
+    assertOpen: assertActivationOpen,
+    wake: () => session?.wake(),
+    onFatal: (cause) => session?.fail(cause),
+    opened: openedOutputs,
+  });
   const rejection: ControllerAdmissionOptions["getHostRejection"] = () => {
     try {
       currentNativeScope?.assertOpen();
@@ -205,9 +186,13 @@ export async function createProductionControllerSession(
       runStateDir,
       parentRole: options.role,
       parentVisitIndex: options.visitIndex,
-      hostArtifactResolver,
+      hostArtifactResolver: outputs.hostArtifactResolver,
+      captureTaskOutputs: outputs.publication.capture,
       ...(options.getRunCostCap === undefined ? {} : { getRunCostCap: options.getRunCostCap }),
-      onTaskTerminal: () => session?.wake(),
+      onTaskTerminal: (result) => {
+        outputs.publication.terminal(result);
+        session?.wake();
+      },
       onFatal: (cause) => session?.fail(cause),
       getHostRejection: rejection,
       definitionDigest: definition.record.definition_digest,
@@ -227,7 +212,7 @@ export async function createProductionControllerSession(
     approvedDefinition: definition,
     getCurrentApproval: loadControllerHostApproval,
     runStateDir,
-    protection: hostProtection(options.cwd, runStateDir),
+    protection: productionHostProtection(options.cwd, runStateDir),
     sandboxHostApproval: options.sandboxHostApproval,
     activationId: activation.activation_id,
     ownerEpoch: activation.owner_epoch,
@@ -235,10 +220,22 @@ export async function createProductionControllerSession(
     assertOpen: assertActivationOpen,
     artifactStore: artifacts,
     metrics,
-    resolveRef: (ref) => {
+    resolveRef: (ref, principal) => {
       if (dispatcher === undefined) throw new Error("controller dispatcher is not initialized");
-      return dispatcher.resolveRef(ref);
+      return dispatcher.resolveRef(ref, principal);
     },
+  });
+  const productionEffects = await createConfiguredProductionEffects({
+    definition,
+    activation,
+    artifacts,
+    outputResolver: outputs.resolver,
+    records,
+    persist,
+    loadApproval: loadControllerHostApproval,
+    runStateDir,
+    assertOpen: assertActivationOpen,
+    approval,
   });
   let nativeClose: Promise<void> | undefined;
   const closeNativeScope = (reason: string): Promise<void> => {
@@ -305,12 +302,24 @@ export async function createProductionControllerSession(
     admission: admission.service,
     executables: executable,
     artifacts,
+    outputResolver: outputs.resolver,
+    externalPendingCount: outputs.publication.pendingCount,
+    externalSettle: outputs.publication.settle,
     assertOpen: assertActivationOpen,
     runNativePreparation,
     signal: ownedAbort.signal,
     wake: () => session?.wake(),
     onFatal: (cause) => session?.fail(cause),
     maxAdapters: resolveControllerLimits(config.limits).max_outstanding_adapters,
+    ...(productionEffects === undefined
+      ? {}
+      : {
+          runAdapterEffect: (action, result, signal) =>
+            config.adapters.find((adapter) => adapter.id === action.adapter_id)?.effect_id ===
+            undefined
+              ? null
+              : productionEffects.runAdapterEffect(action, result, signal),
+        }),
   });
   session = await createControllerRoleSession({
     role: options.role,
@@ -352,68 +361,6 @@ export async function createProductionControllerSession(
         metrics.snapshot(),
       ),
   });
+  outputs.publication.recover();
   return Object.freeze({ session, logicalParentId: admission.logicalParentId });
-}
-
-function approvedDefinition(
-  options: ProductionControllerSessionOptions,
-  approval: ControllerHostApproval,
-): ApprovedControllerDefinition {
-  const config = options.loadedManifest.manifest.controller;
-  if (config === undefined) throw new Error("controller configuration is missing");
-  const definitions = options.log
-    .records(options.runId)
-    .filter((record) => record.type === "controller_definition_pinned");
-  if (definitions.length > 1) throw new Error("controller definition is duplicated");
-  const pinned = definitions[0];
-  if (pinned?.type === "controller_definition_pinned") {
-    const verified = verifyControllerApproval(pinned, approval);
-    const requested = approveControllerDefinition(options.runId, config, approval, pinned.ts);
-    if (requested.record.definition_digest !== pinned.definition_digest)
-      throw new Error("pinned controller definition does not match the run manifest");
-    return verified;
-  }
-  const created = approveControllerDefinition(options.runId, config, approval, Date.now());
-  options.persist(created.record);
-  return created;
-}
-
-function activationRecord(
-  definition: ApprovedControllerDefinition,
-  recovery: Awaited<ReturnType<typeof planControllerRecovery>>,
-): ControllerActivationStartedRecord {
-  return {
-    type: "controller_activation_started",
-    schema_version: 1,
-    run_id: definition.record.run_id,
-    controller_id: definition.record.controller_id,
-    definition_digest: definition.record.definition_digest,
-    activation_id: randomUUID(),
-    owner_epoch: recovery.nextOwnerEpoch,
-    reason:
-      recovery.previousActivationId === null
-        ? "start"
-        : recovery.freshActionRequired.length > 0
-          ? "resume_after_repair"
-          : "resume",
-    previous_activation_id: recovery.previousActivationId,
-    ts: Date.now(),
-  };
-}
-
-function hostProtection(primaryCheckout: string, runStateDir: string): RuntimeHostProtection {
-  return {
-    primaryCheckout,
-    stateRoots: [runStateDir],
-    childWorkspaceRoots: [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")],
-  };
-}
-
-/** Create the private host-owned roots required by runtime capture before any controller launch. */
-async function initializeControllerRunState(runStateDir: string): Promise<void> {
-  await canonicalTrustedSnapshotParent(runStateDir);
-  for (const path of [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")]) {
-    await mkdir(path, { recursive: true, mode: 0o700 });
-    await assertPrivateAdmissionDirectory(path);
-  }
 }

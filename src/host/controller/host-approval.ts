@@ -5,9 +5,15 @@ import { basename, dirname, posix } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import { controllerAdapterSchema } from "../../manifest/controller.js";
+import {
+  controllerChildOutputPolicySchema,
+  validateControllerChildOutputPolicies,
+} from "../../manifest/controller-output.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import { withSandboxDirectory } from "../execution/sandbox/anchored-file-access.js";
 import { canonicalTrustedSnapshotParent } from "../execution/sandbox/runtime-capture.js";
+
+import { effectGrantSchema, validateEffectGrant } from "./effect-registry.js";
 
 const id = Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$" });
 const path = Type.String({ minLength: 1, maxLength: 4096 });
@@ -57,6 +63,11 @@ export const controllerHostApprovalSchema = Type.Object(
     controllers: Type.Array(controller, { minItems: 1, maxItems: 64 }),
     adapters: Type.Array(controllerAdapterSchema, { maxItems: 64 }),
     schemas: Type.Array(registeredSchema, { maxItems: 128 }),
+    credential_sources: Type.Optional(
+      Type.Array(Type.Object({ id, path }, { additionalProperties: false }), { maxItems: 64 }),
+    ),
+    effects: Type.Optional(Type.Array(effectGrantSchema, { maxItems: 64 })),
+    child_outputs: Type.Optional(Type.Array(controllerChildOutputPolicySchema, { maxItems: 64 })),
   },
   { additionalProperties: false },
 );
@@ -77,6 +88,39 @@ export function validateControllerHostApproval(input: unknown): ControllerHostAp
   if (Buffer.byteLength(JSON.stringify(input), "utf8") > MAX_BYTES)
     throw new Error("controller host approval exceeds the byte limit");
   const value = structuredClone(input);
+  if (value.child_outputs !== undefined) {
+    const errors = validateControllerChildOutputPolicies(value.child_outputs);
+    if (errors.length > 0) throw new Error(errors.join("; "));
+  }
+  unique(
+    (value.credential_sources ?? []).map((source) => source.id),
+    "credential source",
+  );
+  for (const source of value.credential_sources ?? []) absolute(source.path);
+  unique(
+    (value.effects ?? []).map((entry) => entry.id),
+    "effect",
+  );
+  for (const grant of value.effects ?? []) validateEffectGrant(grant);
+  for (const adapter of value.adapters) {
+    if (
+      adapter.effect_id !== undefined &&
+      !(value.effects ?? []).some(
+        (grant) =>
+          grant.id === adapter.effect_id &&
+          grant.adapter_id === adapter.id &&
+          grant.request_schema_id === adapter.output_schema_id,
+      )
+    )
+      throw new Error("controller adapter effect is not approved");
+    if (
+      adapter.effect_id !== undefined &&
+      !adapter.output_consumers?.some(
+        (principal) => principal.kind === "effect" && principal.effect_id === adapter.effect_id,
+      )
+    )
+      throw new Error("effect adapter output must authorize its own effect principal");
+  }
   const runtimes = unique(
     value.runtimes.map((entry) => entry.runtime_id),
     "runtime",
@@ -115,6 +159,15 @@ export function validateControllerHostApproval(input: unknown): ControllerHostAp
   for (const entry of value.adapters)
     if (!schemas.has(entry.input_schema_id) || !schemas.has(entry.output_schema_id))
       throw new Error("controller adapter uses an unapproved schema");
+  for (const adapter of value.adapters) {
+    if (adapter.effect_id === undefined) continue;
+    const grant = value.effects?.find((effect) => effect.id === adapter.effect_id);
+    const requestSchema = value.schemas.find(
+      (schema) => schema.schema_id === adapter.output_schema_id,
+    );
+    if (grant === undefined || requestSchema?.schema_digest !== grant.request_schema_digest)
+      throw new Error("controller effect request schema differs from its approved adapter schema");
+  }
   for (const entry of value.schemas)
     if (sha256Canonical(entry.schema) !== entry.schema_digest)
       throw new Error("controller schema digest does not match its approved definition");

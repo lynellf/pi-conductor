@@ -1,6 +1,12 @@
 /** Immutable controller artifact contracts and deterministic manifest primitives — issue #115 §6. */
 
 import { createHash } from "node:crypto";
+import { Value } from "typebox/value";
+import {
+  type ControllerOutputPrincipal,
+  controllerOutputPrincipalSchema,
+} from "../../manifest/controller-output.js";
+import { outputPrincipalKey } from "../../manifest/output-audience.js";
 
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 
@@ -20,6 +26,14 @@ export interface ArtifactBinding {
   readonly capabilityDigest: string;
   readonly mediaType: "application/json";
   readonly allowedConsumerProfileIds: readonly string[];
+  /** Explicit derived authority; absent preserves the pre-#116 consumer rules. */
+  readonly audience?: readonly ControllerOutputPrincipal[];
+  /** Separate real effect publications from the adapter request in the same action. */
+  readonly publication?: {
+    readonly kind: "effect_source" | "effect_result";
+    readonly operationId: string;
+    readonly effectId: string;
+  };
 }
 
 /** Opaque private staging allocation. Its output path is never action input. */
@@ -142,6 +156,8 @@ export function assertArtifactBinding(value: unknown): asserts value is Artifact
       "capabilityDigest",
       "mediaType",
       "allowedConsumerProfileIds",
+      ...(binding.audience === undefined ? [] : ["audience"]),
+      ...(binding.publication === undefined ? [] : ["publication"]),
     ]) ||
     !isPlainObject(binding.outputSchema) ||
     !hasExactKeys(binding.outputSchema, ["id", "digest"])
@@ -163,6 +179,27 @@ export function assertArtifactBinding(value: unknown): asserts value is Artifact
     binding.allowedConsumerProfileIds.length > 64
   )
     throw new ArtifactStoreError("artifact-binding-invalid");
+  if (
+    binding.audience !== undefined &&
+    (!Array.isArray(binding.audience) ||
+      binding.audience.length > 64 ||
+      binding.audience.some(
+        (principal) => !Value.Check(controllerOutputPrincipalSchema, principal),
+      ) ||
+      new Set(binding.audience.map(outputPrincipalKey)).size !== binding.audience.length)
+  )
+    throw new ArtifactStoreError("artifact-binding-invalid");
+  if (binding.publication !== undefined) {
+    const publication = binding.publication;
+    if (
+      !isPlainObject(publication) ||
+      !hasExactKeys(publication, ["kind", "operationId", "effectId"]) ||
+      (publication.kind !== "effect_source" && publication.kind !== "effect_result") ||
+      !isSha256(publication.operationId)
+    )
+      throw new ArtifactStoreError("artifact-binding-invalid");
+    assertArtifactIdentifier(publication.effectId, "effect publication identity");
+  }
   const profiles = new Set<string>();
   for (const profile of binding.allowedConsumerProfileIds) {
     assertArtifactIdentifier(profile, "consumer profile identifier");
@@ -267,6 +304,7 @@ export function artifactActionNamespace(binding: ArtifactBinding): string {
     run_id: binding.runId,
     definition_digest: binding.definitionDigest,
     action_id: binding.actionId,
+    ...(binding.publication === undefined ? {} : { publication: binding.publication }),
   });
 }
 
@@ -304,8 +342,18 @@ function freezeBinding(binding: ArtifactBinding): ArtifactBinding {
   return Object.freeze({
     ...binding,
     producer: Object.freeze({ ...binding.producer }),
+    ...(binding.publication === undefined
+      ? {}
+      : { publication: Object.freeze({ ...binding.publication }) }),
     outputSchema: Object.freeze({ ...binding.outputSchema }),
     allowedConsumerProfileIds: Object.freeze([...binding.allowedConsumerProfileIds]),
+    ...(binding.audience === undefined
+      ? {}
+      : {
+          audience: Object.freeze(
+            binding.audience.map((principal) => Object.freeze({ ...principal })),
+          ),
+        }),
   });
 }
 

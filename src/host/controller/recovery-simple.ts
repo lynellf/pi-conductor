@@ -12,6 +12,7 @@ import { intentCursor, parseStrictJson } from "./action-dispatcher-query.js";
 import type { ApprovedControllerDefinition } from "./approved-definition.js";
 import { type ArtifactBinding, ArtifactStoreError } from "./artifact-store.js";
 import { assertControllerReadResult, controllerReadResultSchemaDigest } from "./read-result.js";
+import { recoveryInputAudience } from "./recovery-audience.js";
 import {
   type ControllerRecoveryArtifacts,
   type ControllerRecoveryReceipt,
@@ -48,7 +49,15 @@ async function recoverRead(
   readonly receipts: readonly ControllerRecoveryReceipt[];
   readonly blocked: readonly string[];
 }> {
-  const binding = readBinding(definition, action, records);
+  if (action.intent.request.kind !== "read") throw new Error("read recovery requires read action");
+  const inputAudience = await recoveryInputAudience(
+    artifacts,
+    [action.intent.request.ref],
+    { kind: "controller" },
+    action.intent.request.ref.startsWith("child-output/v2/") ||
+      definition.config.child_outputs !== undefined,
+  );
+  const binding = readBinding(definition, action, records, inputAudience);
   try {
     const artifact = await artifacts.recoverAction(binding);
     if (sha256Canonical(artifact.binding) !== sha256Canonical(binding))
@@ -126,6 +135,9 @@ function readBinding(
   definition: ApprovedControllerDefinition,
   action: ControllerActionState,
   records: readonly PersistedRecord[],
+  inputAudience:
+    | readonly import("../../manifest/controller-output.js").ControllerOutputPrincipal[]
+    | null,
 ): ArtifactBinding {
   if (action.intent.request.kind !== "read")
     throw new Error("read recovery requires a read action");
@@ -147,6 +159,7 @@ function readBinding(
     capabilityDigest: sha256Canonical({ capability: "controller-read" }),
     mediaType: "application/json",
     allowedConsumerProfileIds: [],
+    ...(inputAudience === null ? {} : { audience: Object.freeze([...inputAudience]) }),
   });
 }
 

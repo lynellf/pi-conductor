@@ -392,6 +392,7 @@ export type {
   ToolExecutionUnresolvedEntry,
   TransitionRecord,
 } from "./host/index.js";
+/** Operator setup and closed request schemas for controller delivery (#116). */
 export {
   AskUserUnavailableError,
   buildToolsAllowlist,
@@ -401,6 +402,7 @@ export {
   createHandoffContextTool,
   createProductionHost,
   decodeControllerResponse,
+  type EffectGrant,
   encodeBoundedControllerJson,
   encodeControllerRequest,
   FileRecordLog,
@@ -415,6 +417,8 @@ export {
   loadSystemPrompt,
   MalformedModelEntryError,
   ModelNotFoundError,
+  measureBuiltinEffectImplementations,
+  measureGitEffectRepository,
   NoMoreModelsError,
   ProductionHost,
   RecordLogError,
@@ -435,4 +439,15 @@ export {
   ToolExecutionReconciliationError,
   TypedControllerProtocolError,
   validateControllerHostApproval,
+  validateEffectGrant,
 } from "./host/index.js";
+export {
+  effectRequestSchemaDigest,
+  effectRequestSchemaFor,
+  effectResultSchemaDigest,
+  effectResultSchemaFor,
+} from "./manifest/controller-effect.js";
+export type {
+  ControllerChildOutputPolicy,
+  ControllerOutputPrincipal,
+} from "./manifest/controller-output.js";

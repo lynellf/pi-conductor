@@ -1,6 +1,7 @@
 /** Bounded concurrent child pool — delegation lite §4. */
 
 import type { ChildCompletionEvidence } from "../../persistence/child-completion.js";
+import type { ChildOutputCapture } from "../../persistence/child-output-records.js";
 import type { SubagentUsage } from "../../persistence/log.js";
 import type { ChildId } from "./ids.js";
 import type { ValidatedTask } from "./validate-batch.js";
@@ -22,6 +23,8 @@ export interface PoolCompletedResult {
   readonly usage: SubagentUsage;
   /** Issue #57 host-normalization evidence; absent only on pre-feature test doubles. */
   readonly completionEvidence?: ChildCompletionEvidence;
+  readonly outputCapture?: ChildOutputCapture;
+  readonly outputCaptureFailure?: string;
 }
 
 /** Failed, blocked, or cancelled child result. */
@@ -43,6 +46,8 @@ export interface PoolFailedResult {
   readonly lifecycleStarted: boolean;
   /** Issue #57 host-normalization evidence; absent only on pre-feature test doubles. */
   readonly completionEvidence?: ChildCompletionEvidence;
+  readonly outputCapture?: ChildOutputCapture;
+  readonly outputCaptureFailure?: string;
 }
 
 /** One child terminal result. */

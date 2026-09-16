@@ -16,19 +16,12 @@ import type {
   CreateControllerActionDispatcherOptions,
   ReceiptFields,
 } from "./action-dispatcher-contract.js";
-import {
-  artifactRefs,
-  findControllerRef,
-  intentCursor,
-  operationIdForExecution,
-  parseStrictJson,
-} from "./action-dispatcher-query.js";
-import {
-  controllerAcceptedSubmissionRef,
-  controllerRefNamespace,
-  parseControllerRef,
-} from "./controller-refs.js";
+import { intentCursor, operationIdForExecution } from "./action-dispatcher-query.js";
+import { assertControllerReadRange, createControllerActionReader } from "./action-reader.js";
+import { controllerAcceptedSubmissionRef } from "./controller-refs.js";
+import { EffectBrokerPoisonedError } from "./effect-broker.js";
 import { getControllerEvents } from "./event-page.js";
+import { ControllerEffectPendingError } from "./production-effects.js";
 import { assertControllerReadResult, controllerReadResultSchemaDigest } from "./read-result.js";
 
 const MAX_READ_BYTES = 32 * 1024;
@@ -47,8 +40,9 @@ export function createControllerActionDispatcher(
   const adapterQueue: string[] = [];
 
   const timeline = () => reconstructControllerTimeline(options.readRecords());
-  const action = (actionId: string) => getControllerAction(timeline(), actionId);
   const identity = options.activation;
+  const action = (actionId: string) => getControllerAction(timeline(), actionId);
+  const legacyReader = createControllerActionReader({ dispatcher: options, identity, timeline });
 
   const receipt = (state: ControllerActionState, fields: ReceiptFields): void => {
     if (
@@ -100,7 +94,17 @@ export function createControllerActionDispatcher(
     );
   };
   const terminalFailure = (state: ControllerActionState, cause: unknown, fatal = false): void => {
-    if (cause instanceof ToolExecutionError && cause.code === "tool_persistence_ambiguous") {
+    if (
+      cause instanceof ControllerEffectPendingError ||
+      cause instanceof EffectBrokerPoisonedError ||
+      options
+        .readRecords()
+        .some(
+          (record) =>
+            record.type === "controller_effect_intent" && record.action_id === state.actionId,
+        ) ||
+      (cause instanceof ToolExecutionError && cause.code === "tool_persistence_ambiguous")
+    ) {
       options.onFatal(cause);
       throw cause;
     }
@@ -146,6 +150,16 @@ export function createControllerActionDispatcher(
         options.signal,
       );
       options.assertOpen();
+      const effect = options.runAdapterEffect?.(request, result, options.signal) ?? null;
+      if (effect !== null) {
+        // The sandboxed adapter lane is released while the host broker awaits its own resource lane.
+        track(
+          effect
+            .then((fields) => receipt(state, fields))
+            .catch((cause: unknown) => terminalFailure(state, cause)),
+        );
+        return;
+      }
       receipt(state, {
         outcome: "completed",
         operation_id: result.operationId,
@@ -225,52 +239,30 @@ export function createControllerActionDispatcher(
     offset = 0,
     limit = MAX_READ_BYTES,
   ): Promise<ControllerReadResult> => {
+    assertControllerReadRange(offset, limit);
     if (
-      !Number.isSafeInteger(offset) ||
-      offset < 0 ||
-      !Number.isSafeInteger(limit) ||
-      limit < 1 ||
-      limit > MAX_READ_BYTES
-    )
-      throw new Error("controller read range is invalid");
-    if (ref.startsWith("artifact/v1/")) {
+      options.outputResolver !== undefined &&
+      (ref.startsWith("artifact/v1/") || ref.startsWith("child-output/v2/"))
+    ) {
+      const value = await options.outputResolver.resolveRef(ref, { kind: "controller" });
+      if (offset > value.byteLength) throw new Error("controller read range is invalid");
+      const bytes = value.bytes.subarray(
+        offset,
+        offset + Math.min(limit, value.byteLength - offset),
+      );
       return {
-        kind: "artifact",
-        value: await options.artifacts.rangeReadForController({
-          ref,
-          runId: identity.run_id,
-          definitionDigest: identity.definition_digest,
+        kind: "child_output" as const,
+        value: {
+          encoding: "base64",
+          data: bytes.toString("base64"),
           offset,
-          length: limit,
-        }),
+          next_offset: offset + bytes.byteLength,
+          total_bytes: value.byteLength,
+          eof: offset + bytes.byteLength === value.byteLength,
+        },
       };
     }
-    const parsed = parseControllerRef(ref);
-    if (parsed.namespace !== controllerRefNamespace(identity))
-      throw new Error("controller ref is outside active namespace");
-    const value = findControllerRef(
-      parsed.kind,
-      parsed.digest,
-      timeline(),
-      options.admission,
-      options.readRecords(),
-      identity.run_id,
-    );
-    if (value === undefined) throw new Error("controller ref is unavailable");
-    const bytes = Buffer.from(JSON.stringify(value), "utf8");
-    if (offset > bytes.byteLength) throw new Error("controller read range is invalid");
-    const page = bytes.subarray(offset, offset + Math.min(limit, bytes.byteLength - offset));
-    return {
-      kind: parsed.kind,
-      value: {
-        encoding: "base64",
-        data: page.toString("base64"),
-        offset,
-        next_offset: offset + page.byteLength,
-        total_bytes: bytes.byteLength,
-        eof: offset + page.byteLength === bytes.byteLength,
-      },
-    };
+    return legacyReader.read(ref, offset, limit);
   };
 
   const publishRead = async (
@@ -278,6 +270,11 @@ export function createControllerActionDispatcher(
     request: Extract<ControllerActionState["intent"]["request"], { readonly kind: "read" }>,
   ): Promise<{ readonly ref: string; readonly result: unknown }> => {
     const result = await read(request.ref, request.offset, request.limit);
+    const inputAudience =
+      options.outputResolver === undefined ||
+      (!request.ref.startsWith("artifact/v1/") && !request.ref.startsWith("child-output/v2/"))
+        ? null
+        : await options.outputResolver.getInputAudience(request.ref, { kind: "controller" });
     const document = {
       source_ref: request.ref,
       result:
@@ -311,6 +308,7 @@ export function createControllerActionDispatcher(
         capabilityDigest: sha256Canonical({ capability: "controller-read" }),
         mediaType: "application/json",
         allowedConsumerProfileIds: [],
+        ...(inputAudience === null ? {} : { audience: [...inputAudience] }),
       },
       validate: (candidate) => assertControllerReadResult(JSON.parse(candidate.toString("utf8"))),
     });
@@ -321,11 +319,26 @@ export function createControllerActionDispatcher(
     async validateReferences(actions) {
       for (const candidate of actions) {
         if (candidate.kind === "adapter") {
-          for (const ref of candidate.input_refs) await read(ref, 0, 1);
+          for (const ref of candidate.input_refs) {
+            await dispatcher.resolveRef(ref, {
+              kind: "adapter",
+              adapter_id: candidate.adapter_id,
+            });
+          }
         } else if (candidate.kind === "read") {
           await read(candidate.ref, candidate.offset, candidate.limit);
         } else if (candidate.kind === "delegate") {
-          for (const ref of artifactRefs(candidate)) await read(ref, 0, 1);
+          for (const task of candidate.tasks) {
+            for (const artifact of task.context_artifacts ?? []) {
+              if (artifact.source !== "host_artifact") continue;
+              if (options.outputResolver !== undefined)
+                await options.outputResolver.resolveRef(artifact.ref, {
+                  kind: "native",
+                  profile_id: task.subagent,
+                });
+              else await read(artifact.ref, 0, 1);
+            }
+          }
         }
       }
     },
@@ -343,39 +356,23 @@ export function createControllerActionDispatcher(
     },
     async settle() {
       while (running.size > 0) await Promise.allSettled([...running]);
+      await options.externalSettle?.();
     },
     getAction: action,
     getAcceptedSubmission: (actionId: string) => options.admission.acceptedSubmission(actionId),
     getEvents: (cursor, limit) =>
       getControllerEvents(options.readRecords(), identity, cursor, limit),
     read,
-    async resolveRef(ref) {
-      if (!ref.startsWith("artifact/v1/")) {
-        const first = await read(ref, 0, MAX_READ_BYTES);
-        if (first.kind === "artifact") throw new Error("unexpected artifact resolver result");
-        if (!first.value.eof)
-          throw new Error("controller reference exceeds bounded resolver limit");
-        return parseStrictJson(Buffer.from(first.value.data, "base64"));
-      }
-      const chunks: Buffer[] = [];
-      let offset = 0;
-      let total: number | undefined;
-      while (true) {
-        const page = await read(ref, offset, MAX_READ_BYTES);
-        if (page.kind !== "artifact")
-          throw new Error("artifact reference resolved to non-artifact");
-        if (total === undefined) total = page.value.byteLength;
-        if (page.value.byteLength !== total || page.value.bytes.byteLength > MAX_READ_BYTES)
-          throw new Error("artifact range binding changed during resolution");
-        chunks.push(page.value.bytes);
-        offset += page.value.bytes.byteLength;
-        if (offset === total) break;
-        if (page.value.bytes.byteLength === 0 || total > 1024 * 1024)
-          throw new Error("artifact cannot be fully resolved within bounds");
-      }
-      return parseStrictJson(Buffer.concat(chunks));
+    async resolveRef(ref, principal = { kind: "controller" }) {
+      if (
+        options.outputResolver !== undefined &&
+        (ref.startsWith("artifact/v1/") || ref.startsWith("child-output/v2/"))
+      )
+        return options.outputResolver.resolveRef(ref, principal);
+      return legacyReader.resolveLegacyRef(ref);
     },
-    pendingCount: () => running.size + adapterQueue.length,
+    pendingCount: () =>
+      running.size + adapterQueue.length + (options.externalPendingCount?.() ?? 0),
   };
   return Object.freeze(dispatcher);
 }

@@ -85,6 +85,19 @@ export function getControllerEvents(
               action_ref: controllerActionRef(activation, record.action_id),
             }
           : {}),
+        ...(record.type === "controller_child_output_published"
+          ? {
+              outputs: record.outputs.map((output) => ({
+                ref: output.ref,
+                sha256: output.sha256,
+                byte_length: output.byte_length,
+                media_type: output.media_type,
+                output: output.binding.output,
+              })),
+            }
+          : record.type === "controller_child_output_failed"
+            ? { code: record.code }
+            : {}),
         ...(record.type === "controller_action_receipt"
           ? {
               outcome: record.outcome,
@@ -130,6 +143,20 @@ function eventKind(
     case "subagent_completed":
     case "subagent_failed":
       return children.has(record.child_id) ? "child_terminal" : null;
+    case "controller_child_output_published":
+      return record.definition_digest === activation.definition_digest &&
+        record.controller_id === activation.controller_id &&
+        record.activation_id === activation.activation_id &&
+        record.owner_epoch === activation.owner_epoch
+        ? "child_output_ready"
+        : null;
+    case "controller_child_output_failed":
+      return record.definition_digest === activation.definition_digest &&
+        record.controller_id === activation.controller_id &&
+        record.activation_id === activation.activation_id &&
+        record.owner_epoch === activation.owner_epoch
+        ? "child_output_failed"
+        : null;
     case "transition_rejected":
       return record.event === "end" && sessionFiles.has(record.session_file)
         ? "finish_rejected"

@@ -206,12 +206,18 @@ export const hostArtifactContextArtifactSchema = Type.Object(
     id: contextArtifactIdSchema,
     source: Type.Literal("host_artifact"),
     ref: Type.String({
-      pattern: "^artifact/v1/[a-f0-9]{64}/[a-f0-9]{64}$",
+      pattern: "^(?:artifact/v1|child-output/v2)/[a-f0-9]{64}/[a-f0-9]{64}$",
       maxLength: 160,
     }),
     sha256: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     byte_length: Type.Integer({ minimum: 0, maximum: 1024 * 1024 }),
-    media_type: Type.Literal("application/json"),
+    media_type: Type.Union([
+      Type.Literal("application/json"),
+      Type.Literal("text/plain"),
+      Type.Literal("text/markdown"),
+      Type.Literal("application/octet-stream"),
+      Type.Literal("application/x-git-patch"),
+    ]),
   },
   { additionalProperties: false },
 );

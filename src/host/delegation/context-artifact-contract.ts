@@ -76,7 +76,12 @@ export interface HostArtifactContextResolver {
     readonly sha256: string;
     readonly byteLength: number;
     readonly producingActionId: string;
-    readonly mediaType: "application/json";
+    readonly mediaType:
+      | "application/json"
+      | "text/plain"
+      | "text/markdown"
+      | "application/octet-stream"
+      | "application/x-git-patch";
   }>;
 }
 

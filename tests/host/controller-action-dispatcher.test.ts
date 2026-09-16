@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createControllerActionDispatcher } from "../../src/host/controller/action-dispatcher.js";
-import type { CreateControllerActionDispatcherOptions } from "../../src/host/controller/action-dispatcher-contract.js";
+import type {
+  CreateControllerActionDispatcherOptions,
+  ReceiptFields,
+} from "../../src/host/controller/action-dispatcher-contract.js";
 import { controllerActionRef } from "../../src/host/controller/controller-refs.js";
+import { ControllerEffectPendingError } from "../../src/host/controller/production-effects.js";
 import { ToolExecutionError } from "../../src/host/execution/tool-execution-controller.js";
 import type { ControllerAction } from "../../src/manifest/controller-protocol.js";
 import {
@@ -43,6 +47,111 @@ const activation: ControllerActivationStartedRecord = {
 };
 
 describe("controller action dispatcher", () => {
+  it.each([
+    [-1, 1],
+    [0.5, 1],
+    [Number.NaN, 1],
+    [0, 0],
+    [0, 0.5],
+    [0, 32769],
+  ])("rejects output range %s/%s before reading private bytes", async (offset, limit) => {
+    const fixture = dispatcherFixture(
+      [],
+      false,
+      {},
+      {
+        outputResolver: {
+          resolveRef: async () => {
+            throw new Error("must not read bytes");
+          },
+          getInputAudience: async () => null,
+        },
+      },
+    );
+    await expect(fixture.dispatcher.read("child-output/v2/example", offset, limit)).rejects.toThrow(
+      "controller read range is invalid",
+    );
+  });
+
+  it("validates adapter record inputs through the record reader when output resolution is installed", async () => {
+    const adapter: Extract<ControllerAction, { kind: "adapter" }> = {
+      kind: "adapter",
+      action_id: "validate-record",
+      adapter_id: "adapter",
+      input_refs: [controllerActionRef(activation, "validate-record")],
+    };
+    const fixture = dispatcherFixture(
+      [adapter],
+      false,
+      {},
+      {
+        outputResolver: {
+          resolveRef: async () => {
+            throw new Error("record is not an artifact");
+          },
+          getInputAudience: async () => {
+            throw new Error("record has no artifact audience");
+          },
+        },
+      },
+    );
+    await expect(fixture.dispatcher.validateReferences([adapter])).resolves.toBeUndefined();
+    await expect(
+      fixture.dispatcher.resolveRef(adapter.input_refs[0] ?? "", {
+        kind: "adapter",
+        adapter_id: "adapter",
+      }),
+    ).resolves.toHaveProperty("actionId", "validate-record");
+  });
+
+  it("releases the adapter slot while a delivery effect is gated and admits a native successor", async () => {
+    let release: ((fields: ReceiptFields) => void) | undefined;
+    const gate = new Promise<ReceiptFields>((resolve) => {
+      release = resolve;
+    });
+    const fixture = dispatcherFixture(
+      [adapterAction("deliver"), adapterAction("validate"), delegateAction("successor")],
+      false,
+      {},
+      {
+        maxAdapters: 1,
+        runAdapterEffect: (request) => (request.action_id === "deliver" ? gate : null),
+      },
+    );
+    fixture.dispatcher.dispatchCommitted("deliver");
+    fixture.dispatcher.dispatchCommitted("validate");
+    fixture.dispatcher.dispatchCommitted("successor");
+    await until(() => fixture.adapterCalls === 2 && fixture.submits.length === 1);
+    await until(() => fixture.receipts("validate").includes("completed"));
+    expect(fixture.receipts("deliver")).toEqual(["pending"]);
+    expect(fixture.submits).toEqual(["successor"]);
+    await until(() => fixture.receipts("successor").includes("accepted"));
+    release?.({ outcome: "completed", operation_id: "effect", result_refs: [], diagnostic: null });
+    fixture.finishChildren();
+    await fixture.dispatcher.settle();
+    expect(fixture.receipts("deliver")).toEqual(["pending", "completed"]);
+  });
+  it("keeps uncertain delivery pending for journal reconciliation instead of claiming failure", async () => {
+    const failures: unknown[] = [];
+    const fixture = dispatcherFixture(
+      [adapterAction("deliver")],
+      false,
+      {},
+      {
+        runAdapterEffect: async () => {
+          throw new ControllerEffectPendingError("a".repeat(64));
+        },
+        onFatal: (cause) => {
+          failures.push(cause);
+        },
+      },
+    );
+    fixture.dispatcher.dispatchCommitted("deliver");
+    await fixture.dispatcher.settle();
+    expect(fixture.receipts("deliver")).toEqual(["pending"]);
+    expect(failures.some((cause) => cause instanceof ControllerEffectPendingError)).toBe(true);
+  });
+
   it("binds an uncertain receipt to the operation rather than the supervision execution ID", async () => {
     const action = adapterAction("adapter-a");
     const failures: unknown[] = [];
@@ -206,6 +315,44 @@ describe("controller action dispatcher", () => {
     if (page.kind === "artifact") throw new Error("expected controller page");
     expect(page.value.offset).toBe(2);
     expect(Buffer.from(page.value.data, "base64").byteLength).toBeLessThanOrEqual(5);
+  });
+
+  it("completes a record read when an output resolver is installed", async () => {
+    const action: Extract<ControllerAction, { readonly kind: "read" }> = {
+      kind: "read",
+      action_id: "read-record",
+      ref: controllerActionRef(activation, "read-record"),
+    };
+    const fixture = dispatcherFixture(
+      [action],
+      false,
+      {},
+      {
+        outputResolver: {
+          resolveRef: async () => {
+            throw new Error("record reads must not resolve an output");
+          },
+          getInputAudience: async () => {
+            throw new Error("record reads must not query output audience");
+          },
+        },
+        artifacts: {
+          rangeReadForController: async () => {
+            throw new Error("not used");
+          },
+          createStaging: async () => ({
+            actionId: "read-record",
+            directory: "/tmp",
+            outputPath: `/tmp/pi-conductor-read-${process.pid}-${Date.now()}`,
+          }),
+          publish: async () => ({ ref: "artifact/v1/a/b" }) as never,
+        },
+      },
+    );
+
+    fixture.dispatcher.dispatchCommitted(action.action_id);
+    await fixture.dispatcher.settle();
+    expect(fixture.receipts(action.action_id)).toEqual(["pending", "completed"]);
   });
 });
 

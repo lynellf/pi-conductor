@@ -1,6 +1,10 @@
 /** In-memory append-only RecordLog implementation — spec §11.1. */
 
 import type { Checkpoint } from "../core/types.js";
+import { isChildOutputRecord } from "./child-output-records.js";
+import { reconstructChildOutputTimeline } from "./child-output-timeline.js";
+import { assertControllerEffectHistory } from "./controller-effect-history.js";
+import { isControllerEffectRecord } from "./controller-effect-records.js";
 import { isControllerRecord } from "./controller-records.js";
 import { reconstructControllerTimeline } from "./controller-timeline.js";
 import { assertDelegationTaskTimeline } from "./delegation-task.js";
@@ -32,6 +36,10 @@ export class InMemoryRecordLog implements RecordLog {
     if (isDelegationTaskRecord(snapshot)) {
       assertDelegationTaskTimeline([...this.records(runId), snapshot]);
     }
+    if (isControllerEffectRecord(snapshot))
+      assertControllerEffectHistory([...this.records(runId), snapshot]);
+    if (isChildOutputRecord(snapshot))
+      reconstructChildOutputTimeline([...this.records(runId), snapshot]);
     if (isControllerRecord(snapshot)) {
       reconstructControllerTimeline([...this.records(runId), snapshot]);
     }

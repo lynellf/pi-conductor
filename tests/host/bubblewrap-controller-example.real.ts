@@ -346,6 +346,7 @@ const code = await runCli([
   cwd: ${JSON.stringify(values.cwd)},
   stdout,
 });
+if (output.join("").trim().length === 0) throw new Error(JSON.stringify({ code, exits, diagnostics }));
 const cli = JSON.parse(output.join(""));
 const records = new FileRecordLog({ baseDir: ${JSON.stringify(join(fixture.root, "runs"))} }).records(cli.run_id);
 const failed = records.find((record) => record.type === "session_failed");

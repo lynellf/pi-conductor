@@ -1,5 +1,6 @@
 /** Controller action dispatcher contracts — issue #115 §§4, 6. */
 
+import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
 import type { ControllerAction } from "../../manifest/controller-protocol.js";
 import type { ControllerSourceCursor } from "../../persistence/controller-records.js";
 import type { DelegationSubmissionAcceptedRecord } from "../../persistence/delegation-task.js";
@@ -13,12 +14,13 @@ import type { DelegationAdmissionService } from "../delegation/admission-service
 import type { ArtifactRangeRead, ArtifactStore } from "./artifact-store.js";
 import type { ControllerEventPage } from "./event-page.js";
 import type { ExecutableControllerHost } from "./executable-host-contract.js";
+import type { ResolvedControllerOutput } from "./output-resolver.js";
 
 /** One safe host result returned for a controller opaque read. */
 export type ControllerReadResult =
   | { readonly kind: "artifact"; readonly value: ArtifactRangeRead }
   | {
-      readonly kind: "action" | "request" | "accepted" | "record";
+      readonly kind: "action" | "request" | "accepted" | "record" | "child_output";
       readonly value: {
         readonly encoding: "base64";
         readonly data: string;
@@ -47,6 +49,24 @@ export interface CreateControllerActionDispatcherOptions {
   readonly wake: () => void;
   readonly onFatal: (cause: unknown) => void;
   readonly maxAdapters?: number;
+  /** A fixed adapter may hand a validated request to an independently tracked host effect. */
+  readonly runAdapterEffect?: (
+    action: Extract<ControllerAction, { readonly kind: "adapter" }>,
+    result: import("./executable-host-contract.js").ControllerAdapterInvocationResult,
+    signal?: AbortSignal,
+  ) => Promise<ReceiptFields> | null;
+  readonly outputResolver?: {
+    readonly resolveRef: (
+      ref: string,
+      principal: ControllerOutputPrincipal,
+    ) => Promise<ResolvedControllerOutput>;
+    readonly getInputAudience: (
+      ref: string,
+      principal?: ControllerOutputPrincipal,
+    ) => Promise<readonly ControllerOutputPrincipal[] | null>;
+  };
+  readonly externalPendingCount?: () => number;
+  readonly externalSettle?: () => Promise<void>;
 }
 
 /** Async dispatcher for effects that already have durable controller intents. */
@@ -58,7 +78,7 @@ export interface ControllerActionDispatcher {
   getAcceptedSubmission(actionId: string): DelegationSubmissionAcceptedRecord | null;
   getEvents(cursor: ControllerSourceCursor | null, limit?: number): ControllerEventPage;
   read(ref: string, offset?: number, limit?: number): Promise<ControllerReadResult>;
-  resolveRef(ref: string): Promise<unknown>;
+  resolveRef(ref: string, principal?: ControllerOutputPrincipal): Promise<unknown>;
   pendingCount(): number;
 }
 

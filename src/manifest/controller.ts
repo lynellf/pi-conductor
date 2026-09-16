@@ -2,6 +2,12 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import {
+  controllerChildOutputPolicySchema,
+  controllerOutputPrincipalSchema,
+  validateControllerChildOutputPolicies,
+} from "./controller-output.js";
+import { outputPrincipalKey } from "./output-audience.js";
 import { ManifestParseError } from "./types.js";
 
 const id = Type.String({
@@ -36,6 +42,10 @@ export const controllerAdapterSchema = Type.Object(
     input_schema_id: id,
     output_schema_id: id,
     capability: controllerCapabilitySchema,
+    effect_id: Type.Optional(id),
+    output_consumers: Type.Optional(Type.Array(controllerOutputPrincipalSchema, { maxItems: 64 })),
+    source_consumers: Type.Optional(Type.Array(controllerOutputPrincipalSchema, { maxItems: 64 })),
+    result_consumers: Type.Optional(Type.Array(controllerOutputPrincipalSchema, { maxItems: 64 })),
   },
   { additionalProperties: false },
 );
@@ -61,6 +71,7 @@ export const controllerConfigSchema = Type.Object(
     executable,
     argv,
     adapters: Type.Array(controllerAdapterSchema, { maxItems: 64 }),
+    child_outputs: Type.Optional(Type.Array(controllerChildOutputPolicySchema, { maxItems: 64 })),
     delegation: Type.Object(
       {
         allowed_subagents: Type.Array(id, { minItems: 1, maxItems: 64 }),
@@ -93,6 +104,7 @@ export function parseControllerConfig(raw: unknown): ControllerConfig {
     "executable",
     "argv",
     "adapters",
+    "child_outputs",
     "delegation",
     "limits",
   ]);
@@ -101,6 +113,61 @@ export function parseControllerConfig(raw: unknown): ControllerConfig {
   const candidate = structuredClone(entry);
   if (!Value.Check(controllerConfigSchema, candidate))
     throw new ManifestParseError("controller does not match the version 1 configuration schema");
+  if (candidate.child_outputs !== undefined) {
+    const errors = validateControllerChildOutputPolicies(candidate.child_outputs);
+    if (errors.length > 0) throw new ManifestParseError(errors.join("; "));
+  }
+  const profiles = new Set(candidate.delegation.allowed_subagents);
+  const adapters = new Set(candidate.adapters.map((adapter) => adapter.id));
+  const effects = new Set(
+    candidate.adapters.flatMap((adapter) =>
+      adapter.effect_id === undefined ? [] : [adapter.effect_id],
+    ),
+  );
+  for (const adapter of candidate.adapters)
+    if (
+      adapter.effect_id === undefined &&
+      (adapter.source_consumers !== undefined || adapter.result_consumers !== undefined)
+    )
+      throw new ManifestParseError("effect publication consumers require an adapter effect");
+    else if (
+      adapter.effect_id !== undefined &&
+      !adapter.output_consumers?.some(
+        (principal) => principal.kind === "effect" && principal.effect_id === adapter.effect_id,
+      )
+    )
+      throw new ManifestParseError("effect adapter output must authorize its own effect principal");
+  for (const policy of candidate.child_outputs ?? []) {
+    if (!profiles.has(policy.profile_id))
+      throw new ManifestParseError("output producer is not an allowed native profile");
+  }
+  const audiences = [
+    ...(candidate.child_outputs ?? []).flatMap((policy) => [
+      ...policy.reports.map((report) => report.consumers),
+      ...(policy.patch === undefined ? [] : [policy.patch.consumers]),
+    ]),
+    ...candidate.adapters.flatMap((adapter) =>
+      adapter.output_consumers === undefined ? [] : [adapter.output_consumers],
+    ),
+    ...candidate.adapters.flatMap((adapter) =>
+      adapter.source_consumers === undefined ? [] : [adapter.source_consumers],
+    ),
+    ...candidate.adapters.flatMap((adapter) =>
+      adapter.result_consumers === undefined ? [] : [adapter.result_consumers],
+    ),
+  ];
+  for (const audience of audiences) {
+    if (new Set(audience.map(outputPrincipalKey)).size !== audience.length)
+      throw new ManifestParseError("output audience repeats a principal");
+    for (const principal of audience) {
+      if (
+        (principal.kind === "native" && !profiles.has(principal.profile_id)) ||
+        (principal.kind === "adapter" && !adapters.has(principal.adapter_id)) ||
+        (principal.kind === "effect" && !effects.has(principal.effect_id))
+      )
+        throw new ManifestParseError("output consumer is not configured for this controller");
+    }
+  }
   return freeze(candidate) as ControllerConfig;
 }
 

@@ -1,6 +1,15 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
 import type { WorkspaceGuarantee } from "../core/types.js";
+import {
+  assertChildOutputCapture,
+  assertChildOutputRecord,
+  isChildOutputRecord,
+} from "./child-output-records.js";
+import {
+  assertControllerEffectRecord,
+  isControllerEffectRecord,
+} from "./controller-effect-records.js";
 import { assertControllerRecord, isControllerRecord } from "./controller-records.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
@@ -49,6 +58,25 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
 
   if (!isRecord(record)) return;
 
+  if (isControllerEffectRecord(record)) {
+    assertControllerEffectRecord(record);
+    return;
+  }
+  if (isChildOutputRecord(record)) {
+    assertChildOutputRecord(record);
+    return;
+  }
+  if (record.type === "subagent_completed" || record.type === "subagent_failed") {
+    if (record.output_capture !== undefined) assertChildOutputCapture(record.output_capture);
+    if (
+      record.output_capture_failure !== undefined &&
+      (typeof record.output_capture_failure !== "string" ||
+        !/^[a-z][a-z0-9-]{0,95}$/.test(record.output_capture_failure))
+    )
+      throw new Error("invalid child output capture failure");
+    if (record.output_capture !== undefined && record.output_capture_failure !== undefined)
+      throw new Error("ambiguous child output capture outcome");
+  }
   if (isControllerRecord(record)) {
     assertControllerRecord(record);
     return;

@@ -51,8 +51,11 @@ import {
 } from "node:fs";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
-
 import type { Checkpoint } from "../core/types.js";
+import { isChildOutputRecord } from "../persistence/child-output-records.js";
+import { reconstructChildOutputTimeline } from "../persistence/child-output-timeline.js";
+import { assertControllerEffectHistory } from "../persistence/controller-effect-history.js";
+import { isControllerEffectRecord } from "../persistence/controller-effect-records.js";
 import { isControllerRecord } from "../persistence/controller-records.js";
 import { reconstructControllerTimeline } from "../persistence/controller-timeline.js";
 import { assertDelegationTaskTimeline } from "../persistence/delegation-task.js";
@@ -125,6 +128,10 @@ export class FileRecordLog implements RecordLog {
     if (isDelegationTaskRecord(materialized.record)) {
       assertDelegationTaskTimeline([...this.records(runId), materialized.record]);
     }
+    if (isControllerEffectRecord(materialized.record))
+      assertControllerEffectHistory([...this.records(runId), materialized.record]);
+    if (isChildOutputRecord(materialized.record))
+      reconstructChildOutputTimeline([...this.records(runId), materialized.record]);
     if (isControllerRecord(materialized.record)) {
       reconstructControllerTimeline([...this.records(runId), materialized.record]);
     }
@@ -246,6 +253,8 @@ export class FileRecordLog implements RecordLog {
     const endGuardRecords = records.filter(isEndGuardRecord);
     unfinishedEndGuardAttempts(endGuardRecords);
     assertDelegationTaskTimeline(records);
+    reconstructChildOutputTimeline(records);
+    assertControllerEffectHistory(records);
     return Object.freeze(records);
   }
 

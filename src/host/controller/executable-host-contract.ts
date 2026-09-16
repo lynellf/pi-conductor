@@ -1,5 +1,6 @@
 /** Contracts shared by executable host dispatch, preparation, and program modules. */
 import type { ControllerAdapterConfig } from "../../manifest/controller.js";
+import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
 import type {
   ControllerAction,
   ControllerRequest,
@@ -49,7 +50,13 @@ export interface CreateExecutableControllerHostOptions {
   readonly toolExecutionController: ControllerExecutionDriver;
   readonly assertOpen: () => void;
   readonly artifactStore: ArtifactStore;
-  readonly resolveRef: (ref: string) => Promise<unknown>;
+  /** Resolve one immutable input using its actual consumer identity. */
+  readonly resolveRef: (ref: string, principal?: ControllerOutputPrincipal) => Promise<unknown>;
+  /** Optional legacy resolver authority source when `resolveRef` returns an unstructured value. */
+  readonly getInputAudience?: (
+    ref: string,
+    principal?: ControllerOutputPrincipal,
+  ) => Promise<readonly ControllerOutputPrincipal[] | null>;
   readonly metrics?: {
     runtimeCaptureStarted(executionId: string): void;
     runtimeCaptureFinished(executionId: string): void;

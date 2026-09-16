@@ -38,7 +38,7 @@ import {
   approveControllerDefinition,
 } from "../../src/host/controller/approved-definition.js";
 import { ArtifactStore } from "../../src/host/controller/artifact-store.js";
-import { type ControllerExecutionDriver } from "../../src/host/controller/executable-host.js";
+import type { ControllerExecutionDriver } from "../../src/host/controller/executable-host.js";
 import { validateControllerHostApproval } from "../../src/host/controller/host-approval.js";
 import { inventoryRuntimeTree } from "../../src/host/execution/sandbox/runtime-files.js";
 import type { ToolExecutionScope } from "../../src/host/execution/tool-execution-controller.js";

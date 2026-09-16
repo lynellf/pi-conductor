@@ -9,6 +9,7 @@ import type {
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import type { ApprovedControllerDefinition } from "./approved-definition.js";
 import { type ArtifactBinding, ArtifactStoreError } from "./artifact-store.js";
+import { recoveredAdapterAudience, recoveryInputAudience } from "./recovery-audience.js";
 import {
   type ControllerRecoveryArtifacts,
   type ControllerRecoveryReceipt,
@@ -40,12 +41,43 @@ export async function recoverControllerAdapterAction(
         `adapter action ${action.actionId} has no terminal cleanup evidence; requires action repair`,
       ]),
     });
-  const binding = adapterBinding(definition, action, entry);
+  const request = action.intent.request;
+  if (request.kind !== "adapter") throw new Error("adapter recovery requires adapter action");
+  const adapter = definition.config.adapters.find((item) => item.id === request.adapter_id);
+  if (adapter === undefined)
+    throw new Error(`adapter action ${action.actionId} has no exact pinned authority`);
+  const inputAudience = await recoveryInputAudience(
+    artifacts,
+    request.input_refs,
+    { kind: "adapter", adapter_id: adapter.id },
+    adapter.output_consumers !== undefined || definition.config.child_outputs !== undefined,
+  );
+  const binding = adapterBinding(definition, action, entry, inputAudience);
   const origin = controllerOrigin(entry);
   try {
     const artifact = await artifacts.recoverAction(binding);
     if (sha256Canonical(artifact.binding) !== sha256Canonical(binding))
       throw new Error("recovered adapter artifact does not retain its exact binding");
+    if (adapter.effect_id !== undefined) {
+      if (artifacts.recoverEffectAction === undefined)
+        return Object.freeze({
+          receipts: Object.freeze([]),
+          blocked: Object.freeze([
+            `effect-backed adapter action ${action.actionId} has no effect recovery authority`,
+          ]),
+        });
+      const recovered = await artifacts.recoverEffectAction(action, artifact);
+      if (
+        recovered.blocked.length === 0 &&
+        (recovered.receipts.length !== 1 ||
+          recovered.receipts[0]?.actionId !== action.actionId ||
+          recovered.receipts[0].outcome === "accepted")
+      )
+        throw new Error(`effect-backed adapter action ${action.actionId} is not settled`);
+      if (recovered.receipts.some((receipt) => receipt.actionId !== action.actionId))
+        throw new Error(`effect recovery returned a receipt for the wrong action`);
+      return recovered;
+    }
     return Object.freeze({
       receipts: Object.freeze([
         controllerRecoveryReceipt(action, "completed", [artifact.ref], null, origin.operation_id),
@@ -110,6 +142,9 @@ function adapterBinding(
   definition: ApprovedControllerDefinition,
   action: ControllerActionState,
   entry: ToolExecutionTimelineEntry,
+  inputAudience:
+    | readonly import("../../manifest/controller-output.js").ControllerOutputPrincipal[]
+    | null,
 ): ArtifactBinding {
   const request = action.intent.request;
   if (request.kind !== "adapter")
@@ -124,6 +159,7 @@ function adapterBinding(
   );
   if (adapter === undefined || authority === undefined || output === undefined)
     throw new Error(`adapter action ${action.actionId} has no exact pinned authority`);
+  const audience = recoveredAdapterAudience(definition, adapter, inputAudience);
   return Object.freeze({
     runId: definition.record.run_id,
     definitionDigest: definition.record.definition_digest,
@@ -138,6 +174,7 @@ function adapterBinding(
     capabilityDigest: authority.capability_digest,
     mediaType: "application/json",
     allowedConsumerProfileIds: Object.freeze([...definition.config.delegation.allowed_subagents]),
+    ...(audience === undefined ? {} : { audience }),
   });
 }
 

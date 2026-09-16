@@ -14,6 +14,8 @@ const eventKind = Type.Union([
   Type.Literal("action_terminal"),
   Type.Literal("finish_rejected"),
   Type.Literal("repair"),
+  Type.Literal("child_output_ready"),
+  Type.Literal("child_output_failed"),
 ]);
 const sourceCursor = Type.Union([
   Type.Null(),

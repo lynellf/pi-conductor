@@ -54,6 +54,7 @@ export interface ControllerAdmissionOptions {
   readonly parentVisitIndex: number;
   readonly hostArtifactResolver: HostArtifactContextResolver;
   readonly getRunCostCap?: () => number | null;
+  readonly captureTaskOutputs?: import("./delegation/delegate-tool-factory.js").DelegateChildFactoryOptions["captureTaskOutputs"];
   readonly onTaskTerminal: (result: PoolChildResult) => void;
   readonly onFatal: (cause: unknown) => void;
   readonly getHostRejection: () => HostRejection | false;
@@ -117,6 +118,9 @@ export async function createControllerAdmission(
         const cap = options.getRunCostCap?.();
         return cap !== undefined && cap !== null && ctx.runCostSoFar() >= cap;
       },
+      ...(options.captureTaskOutputs === undefined
+        ? {}
+        : { captureTaskOutputs: options.captureTaskOutputs }),
       onTaskTerminal: options.onTaskTerminal,
       onFatal: options.onFatal,
       getHostRejection: options.getHostRejection,

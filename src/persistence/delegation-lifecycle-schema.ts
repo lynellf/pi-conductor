@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { childOutputCaptureSchema } from "./child-output-records.js";
 import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
 
 const id = Type.String({ minLength: 1 });
@@ -125,6 +126,8 @@ export const acceptedChildCompletedSchema = Type.Object(
     session_file: id,
     usage,
     completion_evidence: Type.Optional(evidence),
+    output_capture: Type.Optional(childOutputCaptureSchema),
+    output_capture_failure: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,95}$" })),
   },
   { additionalProperties: false },
 );
@@ -145,6 +148,8 @@ export const acceptedChildFailedSchema = Type.Object(
     session_file: Type.Union([Type.Null(), id]),
     usage: Type.Union([Type.Null(), usage]),
     completion_evidence: Type.Optional(evidence),
+    output_capture: Type.Optional(childOutputCaptureSchema),
+    output_capture_failure: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,95}$" })),
   },
   { additionalProperties: false },
 );

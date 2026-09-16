@@ -126,7 +126,14 @@ function createNativeDelegateScheduler(
         } catch (cause) {
           throw new DelegationChildSafetyError(result, cause);
         }
-        return result;
+        if (opts.captureTaskOutputs === undefined) return result;
+        try {
+          const outputCapture = await opts.captureTaskOutputs(result);
+          return outputCapture === undefined ? result : { ...result, outputCapture };
+        } catch {
+          // Preserve authoritative usage and lifecycle settlement when evidence capture fails.
+          return { ...result, outputCaptureFailure: "child-output-capture-failed" };
+        }
       } finally {
         signal.removeEventListener("abort", abort);
       }

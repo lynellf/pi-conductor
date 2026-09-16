@@ -3,6 +3,8 @@
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
+import { outputPrincipalKey } from "../../manifest/output-audience.js";
 import { canonicalTrustedSnapshotParent } from "../execution/sandbox/runtime-capture.js";
 import {
   type ArtifactBinding,
@@ -254,17 +256,36 @@ export class ArtifactStore {
 
   /** Resolve a host-issued ref for an authorized native consumer with a hard 32KiB default limit. */
   async rangeRead(request: ArtifactRangeReadRequest): Promise<ArtifactRangeRead> {
-    const artifact = await this.#readBounded(request);
-    if (!artifact.binding.allowedConsumerProfileIds.includes(request.consumerProfileId))
-      throw new ArtifactStoreError("artifact-consumer-denied");
-    return artifact;
+    return this.rangeReadForPrincipal({
+      ...request,
+      principal: { kind: "native", profile_id: request.consumerProfileId },
+    });
   }
 
   /** Resolve a host-issued ref for the owning controller without forging a native profile grant. */
   async rangeReadForController(
     request: ArtifactControllerRangeReadRequest,
   ): Promise<ArtifactRangeRead> {
-    return this.#readBounded(request);
+    return this.rangeReadForPrincipal({ ...request, principal: { kind: "controller" } });
+  }
+
+  /** Read using the actual consumer, preserving legacy grants only for legacy bindings. */
+  async rangeReadForPrincipal(
+    request: ArtifactControllerRangeReadRequest & { readonly principal: ControllerOutputPrincipal },
+  ): Promise<ArtifactRangeRead> {
+    const artifact = await this.#readBounded(request);
+    const audience = artifact.binding.audience;
+    const allowed =
+      audience === undefined
+        ? request.principal.kind === "controller" ||
+          request.principal.kind === "adapter" ||
+          (request.principal.kind === "native" &&
+            artifact.binding.allowedConsumerProfileIds.includes(request.principal.profile_id))
+        : audience.some(
+            (principal) => outputPrincipalKey(principal) === outputPrincipalKey(request.principal),
+          );
+    if (!allowed) throw new ArtifactStoreError("artifact-consumer-denied");
+    return artifact;
   }
 
   async #readBounded(

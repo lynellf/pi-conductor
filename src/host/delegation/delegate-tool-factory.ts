@@ -57,6 +57,10 @@ export interface DelegateChildFactoryOptions {
   readonly isBudgetExhausted?: () => boolean;
   /** Host terminal gate for new submissions; controls remain available for settlement. */
   readonly getHostRejection?: () => HostRejection | false;
+  /** Measure selected output bytes after cleanup and before terminal persistence. */
+  readonly captureTaskOutputs?: (
+    result: PoolChildResult,
+  ) => Promise<import("../../persistence/child-output-records.js").ChildOutputCapture | undefined>;
   /** Advisory notification after the durable child terminal is appended. */
   readonly onTaskTerminal?: (result: PoolChildResult) => void;
   /** Optional #77 scheduler supplied by the host-owned lifecycle. */

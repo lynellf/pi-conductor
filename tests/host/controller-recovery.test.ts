@@ -289,19 +289,21 @@ describe("controller durable recovery", () => {
 
   it("recovers a published read result with its exact durable cursor binding", async () => {
     const fixture = controllerFixture();
+    const sourceRef = `child-output/v2/${"a".repeat(64)}/${"b".repeat(64)}`;
     const read: Extract<ControllerAction, { readonly kind: "read" }> = {
       kind: "read",
       action_id: "read-a",
-      ref: "controller/v1/ref",
+      ref: sourceRef,
     };
     const decision = decisionFor(fixture, read);
-    const bytes = Buffer.from('{"source_ref":"controller/v1/ref","result":{"eof":true}}');
+    const bytes = Buffer.from(JSON.stringify({ source_ref: sourceRef, result: { eof: true } }));
     let currentBinding: ArtifactBinding | undefined;
     const artifacts = {
       async recoverAction(binding: ArtifactBinding) {
         expect(binding).toMatchObject({
           actionId: "read-a",
           producer: { kind: "source_cursor", ordinal: 2 },
+          audience: [{ kind: "controller" }],
         });
         currentBinding = binding;
         return {
@@ -322,6 +324,11 @@ describe("controller durable recovery", () => {
           mediaType: "application/json" as const,
         };
       },
+      async getInputAudience(ref: string, principal: { readonly kind: "controller" }) {
+        expect(ref).toBe(sourceRef);
+        expect(principal).toEqual({ kind: "controller" });
+        return [{ kind: "controller" as const }];
+      },
     };
     const plan = await planControllerRecovery({
       approvedDefinition: fixture.approvedDefinition,
@@ -336,7 +343,7 @@ describe("controller durable recovery", () => {
           actionId: "read-a",
           outcome: "completed",
           resultRefs: ["artifact/v1/read-result"],
-          result: { source_ref: "controller/v1/ref", result: { eof: true } },
+          result: { source_ref: sourceRef, result: { eof: true } },
         },
       ],
     });

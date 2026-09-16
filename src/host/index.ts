@@ -285,12 +285,15 @@ export { createProductionHost } from "./production-host-factory.js";
 // is the chokepoint; the loop is unchanged. Fire-and-forget, best-
 // effort; the durable JSONL log is the system of record.
 
+/** Operator setup for explicitly granted controller effects (#116). */
+export { measureBuiltinEffectImplementations } from "./controller/effect-implementation-inventory.js";
+export { type EffectGrant, validateEffectGrant } from "./controller/effect-registry.js";
+export { measureGitEffectRepository } from "./controller/git-effect.js";
 export type {
   ToolExecutionCleanupInspection,
   ToolExecutionCleanupOptions,
   ToolExecutionUnresolvedEntry,
 } from "./execution/tool-execution-reconciliation.js";
-
 export {
   inspectToolExecutionCleanup,
   reconcileToolExecutionCleanup,

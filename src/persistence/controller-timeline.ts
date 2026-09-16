@@ -1,5 +1,7 @@
 /** Pure controller chronology, query, and recovery materialization — issue #115 §§4 and 6. */
 
+import { isChildOutputRecord } from "./child-output-records.js";
+import { isControllerEffectRecord } from "./controller-effect-records.js";
 import {
   assertControllerRecord,
   type ControllerActionIntent,
@@ -84,7 +86,12 @@ export function reconstructControllerTimeline(records: readonly unknown[]): Cont
   const actions = new Map<string, MutableActionState>();
 
   for (const [recordOrdinal, candidate] of records.entries()) {
-    if (!isControllerCandidate(candidate)) continue;
+    if (
+      isChildOutputRecord(candidate) ||
+      isControllerEffectRecord(candidate) ||
+      !isControllerCandidate(candidate)
+    )
+      continue;
     const record = candidate;
     assertControllerRecord(record);
     if (record.type === "controller_definition_pinned") {

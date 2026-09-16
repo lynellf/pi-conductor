@@ -74,6 +74,140 @@ describe("controller adapter publication recovery", () => {
     expect(afterRecovery.receipts).toEqual([]);
   });
 
+  it("reconstructs the exact private-input audience before recovering an adapter artifact", async () => {
+    const fixture = await adapterFixture();
+    const audience = [{ kind: "native" as const, profile_id: "worker" }];
+    await publish(fixture.artifacts, { ...fixture.binding, audience });
+    const plan = await planControllerRecovery({
+      approvedDefinition: fixture.definition,
+      records: [...fixture.records, fixture.start, fixture.finished],
+      artifacts: {
+        recoverAction: (binding) => fixture.artifacts.recoverAction(binding),
+        rangeReadForController: (request) => fixture.artifacts.rangeReadForController(request),
+        async getInputAudience(ref, principal) {
+          expect(ref).toBe("input-a");
+          expect(principal).toEqual({ kind: "adapter", adapter_id: "adapter" });
+          return audience;
+        },
+      },
+    });
+
+    expect(plan).toMatchObject({
+      canActivate: true,
+      receipts: [{ actionId: "adapter-a", outcome: "completed" }],
+    });
+  });
+
+  it("does not silently use legacy authority for a configured output without a resolver", async () => {
+    const fixture = await adapterFixture();
+    const configuredDefinition = {
+      ...fixture.definition,
+      config: {
+        ...fixture.definition.config,
+        adapters: fixture.definition.config.adapters.map((adapter) => ({
+          ...adapter,
+          output_consumers: [{ kind: "controller" as const }],
+        })),
+      },
+    };
+
+    await expect(
+      planControllerRecovery({
+        approvedDefinition: configuredDefinition,
+        records: [...fixture.records, fixture.start, fixture.finished],
+        artifacts: fixture.artifacts,
+      }),
+    ).rejects.toThrow("requires an output audience resolver");
+  });
+
+  it("does not claim an effect-backed adapter completed without journal reconciliation", async () => {
+    const fixture = await adapterFixture();
+    const audience = [{ kind: "effect" as const, effect_id: "git-integrate" }];
+    await publish(fixture.artifacts, { ...fixture.binding, audience });
+    const effectDefinition = {
+      ...fixture.definition,
+      config: {
+        ...fixture.definition.config,
+        adapters: fixture.definition.config.adapters.map((adapter) => ({
+          ...adapter,
+          effect_id: "git-integrate",
+          output_consumers: audience,
+        })),
+      },
+    };
+    const plan = await planControllerRecovery({
+      approvedDefinition: effectDefinition,
+      records: [...fixture.records, fixture.start, fixture.finished],
+      artifacts: {
+        recoverAction: (binding) => fixture.artifacts.recoverAction(binding),
+        rangeReadForController: (request) => fixture.artifacts.rangeReadForController(request),
+        async getInputAudience() {
+          return null;
+        },
+      },
+    });
+
+    expect(plan.receipts).toEqual([]);
+    expect(plan.blocked).toContain(
+      "effect-backed adapter action adapter-a has no effect recovery authority",
+    );
+    expect(plan.canActivate).toBe(false);
+  });
+
+  it("uses the effect journal recovery receipt instead of treating its request artifact as success", async () => {
+    const fixture = await adapterFixture();
+    const audience = [{ kind: "effect" as const, effect_id: "git-integrate" }];
+    await publish(fixture.artifacts, { ...fixture.binding, audience });
+    const effectDefinition = {
+      ...fixture.definition,
+      config: {
+        ...fixture.definition.config,
+        adapters: fixture.definition.config.adapters.map((adapter) => ({
+          ...adapter,
+          effect_id: "git-integrate",
+          output_consumers: audience,
+        })),
+      },
+    };
+    let reconciled = false;
+    const plan = await planControllerRecovery({
+      approvedDefinition: effectDefinition,
+      records: [...fixture.records, fixture.start, fixture.finished],
+      artifacts: {
+        recoverAction: (binding) => fixture.artifacts.recoverAction(binding),
+        rangeReadForController: (request) => fixture.artifacts.rangeReadForController(request),
+        async getInputAudience() {
+          return null;
+        },
+        async recoverEffectAction(action, artifact) {
+          reconciled = true;
+          expect(artifact.binding.actionId).toBe("adapter-a");
+          return {
+            receipts: [
+              {
+                actionId: action.actionId,
+                outcome: "completed" as const,
+                operationId: "effect-operation",
+                resultRefs: ["artifact/v1/effect-result"],
+                diagnostic: null,
+                intentActivationId: action.intentActivationId,
+                causalRevision: action.originalRevision,
+                requestSha256: action.intent.request_sha256,
+                kind: action.intent.kind,
+              },
+            ],
+            blocked: [],
+          };
+        },
+      },
+    });
+
+    expect(reconciled).toBe(true);
+    expect(plan.receipts).toMatchObject([
+      { outcome: "completed", resultRefs: ["artifact/v1/effect-result"] },
+    ]);
+  });
+
   it("rejects a publication whose binding changed after the adapter execution", async () => {
     const fixture = await adapterFixture();
     await publish(fixture.artifacts, { ...fixture.binding, capabilityDigest: "f".repeat(64) });

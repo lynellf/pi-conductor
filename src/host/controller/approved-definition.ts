@@ -10,6 +10,7 @@ import {
   controllerDefinitionDigest,
 } from "../../persistence/controller-records.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
+import { effectAuthorityDigest } from "./effect-registry.js";
 import { type ControllerHostApproval, validateControllerHostApproval } from "./host-approval.js";
 
 /** The exact operator-authorized inputs pinned for one controller definition. */
@@ -28,6 +29,13 @@ export function approveControllerDefinition(
 ): ApprovedControllerDefinition {
   const approval = validateControllerHostApproval(suppliedApproval);
   const config = parseControllerConfig(request);
+  for (const policy of config.child_outputs ?? []) {
+    const registered = approval.child_outputs?.find(
+      (entry) => entry.profile_id === policy.profile_id,
+    );
+    if (registered === undefined || sha256Canonical(registered) !== sha256Canonical(policy))
+      throw new Error(`controller output policy '${policy.profile_id}' is not approved`);
+  }
   const controller = approval.controllers.find(
     (entry) => entry.controller_id === config.controller_id,
   );
@@ -69,7 +77,17 @@ export function approveControllerDefinition(
     config.adapters.flatMap((entry) => [entry.input_schema_id, entry.output_schema_id]),
   );
   // Pin only used registrations: revoking an unrelated program does not change this definition.
+  const effectIds = new Set(
+    config.adapters.flatMap((adapter) =>
+      adapter.effect_id === undefined ? [] : [adapter.effect_id],
+    ),
+  );
+  const effects = (approval.effects ?? [])
+    .filter((grant) => effectIds.has(grant.id))
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((grant) => ({ grant, authority_digest: effectAuthorityDigest(grant) }));
   const pinnedDefinition = {
+    ...(effects.length === 0 ? {} : { effects }),
     config,
     approval_id: approval.approval_id,
     runtimes: approval.runtimes

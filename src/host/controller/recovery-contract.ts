@@ -1,5 +1,6 @@
 /** Contracts shared by controller recovery planners — issue #115 §6. */
 
+import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
 import type { ControllerActionReceiptRecord } from "../../persistence/controller-records.js";
 import type { ControllerActionState } from "../../persistence/controller-timeline.js";
 import type {
@@ -27,6 +28,19 @@ export interface ControllerRecoveryReceipt {
 export interface ControllerRecoveryArtifacts {
   recoverAction(binding: ArtifactBinding): Promise<PublishedArtifact>;
   rangeReadForController(request: ArtifactControllerRangeReadRequest): Promise<ArtifactRangeRead>;
+  /** Optional only for pre-#116 legacy recovery doubles. Production supplies the resolver. */
+  getInputAudience?(
+    ref: string,
+    principal: ControllerOutputPrincipal,
+  ): Promise<readonly ControllerOutputPrincipal[] | null>;
+  /** Reconcile an effect journal; it must never execute or replay the effect. */
+  recoverEffectAction?(
+    action: ControllerActionState,
+    requestArtifact: PublishedArtifact,
+  ): Promise<{
+    readonly receipts: readonly ControllerRecoveryReceipt[];
+    readonly blocked: readonly string[];
+  }>;
 }
 
 /** Pure resume decision. A false gate forbids creating the next controller activation. */

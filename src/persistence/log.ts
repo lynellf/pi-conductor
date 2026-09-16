@@ -16,6 +16,8 @@ import type {
   ChildCompletionProtocol,
   ChildProjectionFingerprint,
 } from "./child-completion.js";
+import type { ChildOutputCapture, ChildOutputRecord } from "./child-output-records.js";
+import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
 import type { EndGuardRecord } from "./end-guard.js";
@@ -368,6 +370,9 @@ export interface SubagentCompletedRecord {
   readonly usage: SubagentUsage;
   /** Issue #57 terminal evidence; optional to read old append-only records. */
   readonly completion_evidence?: ChildCompletionEvidence;
+  /** Host-measured output bytes, captured before authoritative settlement (#116). */
+  readonly output_capture?: ChildOutputCapture;
+  readonly output_capture_failure?: string;
   readonly ts: number;
 }
 
@@ -397,6 +402,9 @@ export interface SubagentFailedRecord {
   readonly usage: SubagentUsage | null;
   /** Issue #57 terminal evidence; optional to read old append-only records. */
   readonly completion_evidence?: ChildCompletionEvidence;
+  /** Host-measured output bytes, captured before authoritative settlement (#116). */
+  readonly output_capture?: ChildOutputCapture;
+  readonly output_capture_failure?: string;
   readonly ts: number;
 }
 
@@ -446,7 +454,9 @@ export type PersistedRecord =
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord
   | RunFinalizationFailedRecord
-  | ControllerRecord;
+  | ControllerRecord
+  | ChildOutputRecord
+  | ControllerEffectRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

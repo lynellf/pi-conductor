@@ -1,0 +1,89 @@
+# Repository-owned controller request graph for the delivery smoke example.
+# Operator-owned approval separately pins each named executable, request/result schema,
+# repository identity, protected refs, and the integrate/promote/deliver effect grants.
+protocol_version: 1
+controller_id: delivery-controller
+runtime_id: controller-runtime
+executable: /opt/pi-conductor/controller
+argv: [--json]
+adapters:
+  # Review consumes sealed child report and patch outputs; it never requests an effect.
+  - id: fixed-reviewer
+    runtime_id: review-runtime
+    executable: /opt/pi-conductor/examples/controller-delivery/review.mjs
+    argv: []
+    input_schema_id: review-input-v1
+    output_schema_id: delivery-review-v1
+    capability: read_only
+    output_consumers:
+      - { kind: effect, effect_id: integrate }
+  # This distinct adapter emits the checked git_integrate request after review evidence exists.
+  - id: choose-integrate
+    runtime_id: integrate-runtime
+    executable: /opt/pi-conductor/adapters/choose-integrate
+    argv: []
+    input_schema_id: integrate-input-v1
+    output_schema_id: git-integrate-request-v1
+    capability: private_staging
+    effect_id: integrate
+    output_consumers: [{ kind: effect, effect_id: integrate }]
+    # Retain the validator's terminal effect audience through its selected-source input.
+    source_consumers:
+      - { kind: adapter, adapter_id: fixed-validator }
+      - { kind: effect, effect_id: promote }
+      - { kind: effect, effect_id: deliver }
+    result_consumers:
+      - { kind: controller }
+  # Validation rereads the selected integrated-source artifact before promotion or delivery.
+  - id: fixed-validator
+    runtime_id: validation-runtime
+    executable: /opt/pi-conductor/examples/controller-delivery/validate.mjs
+    argv: []
+    input_schema_id: selected-source-v1
+    output_schema_id: delivery-validation-v1
+    capability: read_only
+    output_consumers:
+      - { kind: effect, effect_id: promote }
+      - { kind: effect, effect_id: deliver }
+  - id: choose-promote
+    runtime_id: promote-runtime
+    executable: /opt/pi-conductor/adapters/choose-promote
+    argv: []
+    input_schema_id: promote-input-v1
+    output_schema_id: git-promote-request-v1
+    capability: private_staging
+    effect_id: promote
+    output_consumers: [{ kind: effect, effect_id: promote }]
+  - id: choose-deliver
+    runtime_id: deliver-runtime
+    executable: /opt/pi-conductor/adapters/choose-deliver
+    argv: []
+    input_schema_id: deliver-input-v1
+    output_schema_id: deliver-ref-request-v1
+    capability: private_staging
+    effect_id: deliver
+    output_consumers: [{ kind: effect, effect_id: deliver }]
+child_outputs:
+  - profile_id: worker
+    reports:
+      - id: report
+        path: reports/review.txt
+        media_type: text/plain
+        max_bytes: 131072
+        consumers:
+          - { kind: adapter, adapter_id: fixed-reviewer }
+          - { kind: effect, effect_id: integrate }
+    patch:
+      id: patch
+      paths: [value.txt]
+      max_bytes: 524288
+      consumers:
+        - { kind: adapter, adapter_id: fixed-reviewer }
+        - { kind: effect, effect_id: integrate }
+        - { kind: adapter, adapter_id: fixed-validator }
+        - { kind: effect, effect_id: promote }
+        - { kind: effect, effect_id: deliver }
+delegation:
+  allowed_subagents: [worker]
+  max_children_per_session: 2
+  max_parallel: 2

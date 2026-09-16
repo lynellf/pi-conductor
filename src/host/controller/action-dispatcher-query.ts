@@ -8,6 +8,7 @@ import type {
 } from "../../persistence/log.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import type { CreateControllerActionDispatcherOptions } from "./action-dispatcher-contract.js";
+import { projectControllerRecord } from "./raw-controller-projection.js";
 
 export function intentCursor(
   records: readonly unknown[],
@@ -105,7 +106,7 @@ export function findControllerRef(
   runId: string,
 ): unknown | undefined {
   if (kind === "record") {
-    return records.find(
+    const record = records.find(
       (record) =>
         record !== null &&
         typeof record === "object" &&
@@ -113,6 +114,9 @@ export function findControllerRef(
         record.run_id === runId &&
         sha256Canonical(record) === digest,
     );
+    return record === undefined
+      ? undefined
+      : projectControllerRecord(record, timeline.definition.pinned_definition);
   }
   for (const state of timeline.actions) {
     const candidates: readonly ["action" | "request" | "accepted", unknown][] = [

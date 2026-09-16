@@ -8,6 +8,9 @@ const settlingRecords = new Set([
   "tool_execution_cleanup_confirmed",
   "subagent_completed",
   "subagent_failed",
+  "controller_child_output_failed",
+  // Observed effect postconditions remain durable facts while owned cleanup drains.
+  "controller_effect_settled",
   "sandbox_output_recorded",
 ]);
 
