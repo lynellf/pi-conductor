@@ -1,5 +1,6 @@
 /** CLI for inspecting and operator-confirming executable-tool cleanup (issue #97). */
 
+import { reconcileControllerActionEffects } from "../host/controller/action-reconciliation.js";
 import { ProcessObservationError } from "../host/execution/supervised-process-identity.js";
 import {
   inspectToolExecutionCleanup,
@@ -10,7 +11,7 @@ import { formatObservationDiagnostic } from "./cli-observation-diagnostic.js";
 
 /** Usage and acknowledgment semantics for the reconciliation CLI. */
 export const RECONCILE_USAGE =
-  "Usage: conduct reconcile-tools --log-dir <path> <run-id> [--execution <id> [--confirm-cleanup --note <text> [--partial-effects <none_observed|inspected_unpublished|immutable_publication_verified>]]]\n  --execution inspects one execution without scanning unrelated entries.\n  --confirm-cleanup attests the original host namespaces, canonical storage, ALL original processes and writers (including unmarked descendants) stopped, and partial effects inspected. Controller executions require --partial-effects.";
+  "Usage: conduct reconcile-tools --log-dir <path> <run-id> [--execution <id> | --action <controller-action-id>] [--confirm-cleanup --note <text> --partial-effects <none_observed|inspected_unpublished|immutable_publication_verified>]\n  --execution inspects one execution without scanning unrelated entries.\n  --action records inspected controller effects after executable cleanup is already verified; it never asserts success or replays work.\n  --confirm-cleanup attests the original host namespaces, canonical storage, ALL original processes and writers (including unmarked descendants) stopped, and partial effects inspected. Controller executions and actions require --partial-effects.";
 
 type PartialEffects = "none_observed" | "inspected_unpublished" | "immutable_publication_verified";
 
@@ -18,6 +19,7 @@ interface Parsed {
   readonly baseDir: string;
   readonly runId: string;
   readonly executionId?: string;
+  readonly actionId?: string;
   readonly note?: string;
   readonly confirmed: boolean;
   readonly partialEffects?: PartialEffects;
@@ -27,6 +29,7 @@ function parse(argv: readonly string[]): Parsed {
   if (argv[0] !== "reconcile-tools") throw new Error(RECONCILE_USAGE);
   let baseDir: string | undefined;
   let executionId: string | undefined;
+  let actionId: string | undefined;
   let note: string | undefined;
   let runId: string | undefined;
   let confirmed = false;
@@ -44,6 +47,11 @@ function parse(argv: readonly string[]): Parsed {
       if (value === undefined || value.startsWith("--") || executionId !== undefined)
         throw new Error(RECONCILE_USAGE);
       executionId = value;
+    } else if (arg === "--action") {
+      const value = argv[++i];
+      if (value === undefined || value.startsWith("--") || actionId !== undefined)
+        throw new Error(RECONCILE_USAGE);
+      actionId = value;
     } else if (arg === "--note") {
       const value = argv[++i];
       if (value === undefined || value.startsWith("--") || note !== undefined)
@@ -70,7 +78,9 @@ function parse(argv: readonly string[]): Parsed {
   if (
     (note !== undefined && !confirmed) ||
     (partialEffects !== undefined && !confirmed) ||
-    (confirmed && (executionId === undefined || note === undefined))
+    (confirmed && ((executionId === undefined && actionId === undefined) || note === undefined)) ||
+    (actionId !== undefined &&
+      (!confirmed || partialEffects === undefined || executionId !== undefined))
   )
     throw new Error(RECONCILE_USAGE);
   return {
@@ -78,6 +88,7 @@ function parse(argv: readonly string[]): Parsed {
     runId,
     confirmed,
     ...(executionId !== undefined && { executionId }),
+    ...(actionId !== undefined && { actionId }),
     ...(note !== undefined && { note }),
     ...(partialEffects !== undefined && { partialEffects }),
   };
@@ -100,7 +111,19 @@ export async function runReconcileCli(
     return 1;
   }
   try {
-    if (args.executionId !== undefined && args.note !== undefined) {
+    if (
+      args.actionId !== undefined &&
+      args.note !== undefined &&
+      args.partialEffects !== undefined
+    ) {
+      const records = await reconcileControllerActionEffects(args.runId, args.actionId, {
+        baseDir: args.baseDir,
+        acknowledgment: true,
+        operatorNote: args.note,
+        partialEffects: args.partialEffects,
+      });
+      output.log(JSON.stringify(records));
+    } else if (args.executionId !== undefined && args.note !== undefined) {
       const record = await reconcileToolExecutionCleanup(args.runId, args.executionId, {
         baseDir: args.baseDir,
         acknowledgment: true,

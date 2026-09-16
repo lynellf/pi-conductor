@@ -11,10 +11,13 @@ import type { EndGuardConfig, EndGuardRunRequest, EndGuardRunResult } from "./en
 import type { Host, RoleSession } from "./host.js";
 
 /** Result consumed by the loop after one durable guard attempt. */
-export interface EndGuardAttemptOutcome {
-  readonly kind: "passed" | "retry" | "exhausted" | "aborted" | "fatal";
-  readonly diagnostic: string;
-}
+export type EndGuardAttemptOutcome =
+  | { readonly kind: "passed" | "exhausted" | "aborted" | "fatal"; readonly diagnostic: string }
+  | {
+      readonly kind: "retry";
+      readonly diagnostic: string;
+      readonly source: EndGuardFinishedRecord;
+    };
 
 export interface EndGuardAttemptArgs {
   readonly host: Host;
@@ -111,8 +114,7 @@ export async function runEndGuardAttempt(
   if (result.outcome === "cleanup_unconfirmed") {
     return { kind: "fatal", diagnostic: result.output };
   }
-  return {
-    kind: endGuardBudgetExhausted(args.records(), args.requestId) ? "exhausted" : "retry",
-    diagnostic: result.output,
-  };
+  return endGuardBudgetExhausted(args.records(), args.requestId)
+    ? { kind: "exhausted", diagnostic: result.output }
+    : { kind: "retry", diagnostic: result.output, source: finished };
 }

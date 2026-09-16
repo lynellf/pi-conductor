@@ -224,14 +224,17 @@ export async function persistAcceptedTransition(
             }),
           )
         : ctx.nextSeed;
-    const selected = await host.selectAcceptedHandoffTransport?.({
-      from: role,
-      to: nextRole,
-      source: session,
-      targetSeed: trajectoryTargetSeed,
-      targetVisitIndex: ctx.visitIndexByRole.get(nextRole) ?? 1,
-      targetExecutionVisitIndex: ctx.executionVisitIndexByRole.get(nextRole) ?? 1,
-    });
+    const selected =
+      session.sessionOrigin?.kind === "controller"
+        ? undefined
+        : await host.selectAcceptedHandoffTransport?.({
+            from: role,
+            to: nextRole,
+            source: session,
+            targetSeed: trajectoryTargetSeed,
+            targetVisitIndex: ctx.visitIndexByRole.get(nextRole) ?? 1,
+            targetExecutionVisitIndex: ctx.executionVisitIndexByRole.get(nextRole) ?? 1,
+          });
     if (selected?.mode === "trajectory") ctx.pendingTrajectorySession = selected.session;
   } catch (error) {
     if (error instanceof TrajectoryHandoffError) {

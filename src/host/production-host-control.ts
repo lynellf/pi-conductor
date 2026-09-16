@@ -22,11 +22,20 @@ export async function abortSession(
   _reason: string,
 ): Promise<void> {
   await ctx.endGuardRunner.abort(session.sessionId);
+  const abortParent = (): Promise<void> =>
+    session.sessionOrigin?.kind === "controller"
+      ? (session.abortOwnedWork?.() ?? Promise.resolve())
+      : ctx.sessionState.abort(session);
   const key = ctx.delegationSessionKeys.get(session.sessionId);
+  if (session.sessionOrigin?.kind === "controller") {
+    await abortParent();
+    if (key !== undefined) ctx.delegationSessionKeys.delete(session.sessionId);
+    return;
+  }
   if (key !== undefined) {
     ctx.inactiveDelegationSessions.add(session.sessionId);
     let parentAbortFailure: unknown;
-    const parentAbort = ctx.sessionState.abort(session).catch((error: unknown) => {
+    const parentAbort = abortParent().catch((error: unknown) => {
       parentAbortFailure = error;
     });
     let childCloseFailure: unknown;
@@ -45,7 +54,7 @@ export async function abortSession(
     if (parentAbortFailure !== undefined) throw parentAbortFailure;
     return;
   }
-  await ctx.sessionState.abort(session);
+  await abortParent();
 }
 
 /** Return delegation tasks that still require settlement. */

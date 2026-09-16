@@ -58,7 +58,13 @@ import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.j
 
 import type { RoleSession } from "./role-session-contract.js";
 
-export type { RoleSession, TrajectoryContinuationOptions } from "./role-session-contract.js";
+export type {
+  ControllerSessionNotification,
+  HostTermination,
+  RoleSession,
+  RoleSessionOrigin,
+  TrajectoryContinuationOptions,
+} from "./role-session-contract.js";
 
 // ─── Spawn options ─────────────────────────────────────────────────────
 

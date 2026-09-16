@@ -34,6 +34,12 @@ export async function admitOrchestratorContextResume(
       `resume blocked by ${failure.phase} (${failure.code}) for ${failure.role_session_id}: ${failure.diagnostic}. Retry resume with --reset-orchestrator-context to start a fresh context epoch and preserve the accepted checkpoint.`,
     );
   }
+  // Controller JSONL is host audit evidence, not a Pi transcript. Keep the
+  // shared finalization gate above, then bypass every SDK context parser.
+  if (options.loadedManifest.manifest.controller !== undefined) {
+    if (options.reset) throw new Error("controller mode does not use SDK orchestrator context");
+    return options.loadedManifest;
+  }
   const loaded = effectiveHistoricalManifest(options.loadedManifest, options.records);
   const role = contextRole(loaded);
   if (role === null) {

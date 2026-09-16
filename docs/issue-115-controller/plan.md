@@ -68,21 +68,21 @@ build, lint and formatting pass; independent review found no remaining blocker.
 
 ## C. Deterministic orchestration
 
-- [ ] Implement serialized event/cursor pump and atomic plan-intent persistence.
+- [x] Implement serialized event/cursor pump and atomic plan-intent persistence.
   - Acceptance: compare revision before effects; dedup returns original receipt;
     independent completion intake; bounded no-progress/run budgets; no polling;
     every decision kind persists cursor/state, with inline requests before effects.
   - Files: controller state, event pump, plan admission and tests.
   - Verify: simultaneous/out-of-order facts, stale decision, facts arriving during
     planning, duplicate ID within a plan, decision/intent crashpoints.
-- [ ] Implement asynchronous action lanes through the shared native facade.
+- [x] Implement asynchronous action lanes through the shared native facade.
   - Acceptance: verified B terminal supplies C while A remains held; multiple
     free slots fill without parent inference; adapter outcomes produce events;
     one fenced append boundary, per-lane FIFO with no cross-lane dependency claim.
   - Files: dispatcher/native facade binding, receipt handling and tests.
   - Verify: deterministic A/B/C, last-slot contention, cross-lane independence,
     epoch/late-callback and capacity tests from verification.md.
-- [ ] Integrate exclusive controller RoleSession and explicit audit provenance.
+- [x] Integrate exclusive controller RoleSession and explicit audit provenance.
   - Acceptance: existing loop alone reduces; no SDK parent/session transcript;
     failure escalates without provider fallback; abort/end/cost-cap close cannot
     resurrect admission; origin enrichment preserves non-SDK logical session IDs.
@@ -92,13 +92,25 @@ build, lint and formatting pass; independent review found no remaining blocker.
     unsupported steering; typed host-only cap termination before seam validation
     while waiting or planning, reducer-fed end without fabricated capture; abort, cleanup and
     model regressions; audit consumers do not parse controller logs as Pi logs.
-- [ ] Integrate resume and operator reconciliation for controller operations.
+- [x] Integrate resume and operator reconciliation for controller operations.
   - Acceptance: same pinned authority and action namespace; derive missing native
     receipt; no accepted child replay; uncertain ownership/effects block.
   - Files: controller recovery, resume integration, reconciliation command/tests.
   - Verify: every crashpoint in spec §6 and verification.md, including planner
     cleanup then reinvocation, private preparation effects before acceptance,
     explicit repair records, and revocation without authority substitution.
+
+Phase C verified: the 290-file full suite exposed two regressions: persistence
+ambiguity could lose precedence during termination, and a cached filesystem
+mock made the durability test unreliable. Both are fixed; the lifecycle,
+controller-close and log suites pass (57 tests). The dispatcher also now refuses
+a conflicting second terminal receipt after an ambiguous append. Packaging,
+file-worker, RPC and dispatcher reruns pass (19 tests); the final pump/loop/guard
+set passes (57 tests), and the final production/CLI/resume set passes (12 tests).
+The real native A/B/C fixture proves C starts while A is held, with capacity two
+and no coordinator model turn. Typecheck, build, lint and formatting pass.
+Independent review covered recovery, fencing, cleanup and finish/cap precedence.
+The full suite will run again on frozen files at the final delivery gate.
 
 ## D. Evidence, delivery, and review
 

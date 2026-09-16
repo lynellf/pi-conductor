@@ -5,6 +5,7 @@ import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../../src
 import type { EndGuardRunResult } from "../../src/host/end-guard-runner.js";
 import type { Host, RoleSession, SpawnRoleOptions } from "../../src/host/host.js";
 import { runLoop } from "../../src/host/loop.js";
+import type { ControllerSessionNotification } from "../../src/host/role-session-contract.js";
 import { RunControl } from "../../src/host/run-control.js";
 import type { EndGuardRecord } from "../../src/persistence/end-guard.js";
 import { InMemoryRecordLog, type PersistedRecord } from "../../src/persistence/log.js";
@@ -32,6 +33,7 @@ class ScriptedSession {
   readonly sessionFile: string;
   readonly prompts: string[] = [];
   private readonly captures: EmissionCapture[] = [];
+  readonly notifications: ControllerSessionNotification[] = [];
 
   constructor(
     readonly role: Role,
@@ -48,6 +50,16 @@ class ScriptedSession {
       sessionFile: this.sessionFile,
       model: null,
       effort: "medium",
+      sessionOrigin: {
+        kind: "controller",
+        controllerId: "planner",
+        definitionDigest: "a".repeat(64),
+        activationId: "activation-1",
+        ownerEpoch: 1,
+      },
+      notifyController: async (notification) => {
+        this.notifications.push(notification);
+      },
       readCaptureBuffer: () => [...this.captures],
       resetCaptureBuffer: () => this.captures.splice(0),
       subscribe: () => () => undefined,
@@ -210,6 +222,11 @@ describe("end guard run-loop boundary", () => {
     expect(result.exitReason).toBe("done");
     expect(host.guardCalls).toBe(2);
     expect(host.sessions[0]?.prompts[1]).toContain("repair this");
+    expect(host.sessions[0]?.notifications).toHaveLength(1);
+    expect(host.sessions[0]?.notifications[0]).toMatchObject({
+      kind: "end_guard_retry",
+      source: { type: "end_guard_finished", outcome: "failed" },
+    });
   });
 
   it("bypasses the guard for a forced cost-cap close and never runs a worker end guard", async () => {

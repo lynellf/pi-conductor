@@ -1,10 +1,9 @@
 /** Prompt, admission, failure, cost-cap, and end-guard handling for one role session. */
 // This retry boundary keeps prompt, terminal, and cost-cap precedence together;
 // transport validation and persistence helpers are split out to stay under 500 lines.
-
 import { reduce } from "../core/reduce.js";
 import { reduceLifecycle } from "../core/reduce-lifecycle.js";
-import type { HandoffContextRef, MachineEvent, UsageRecord } from "../core/types.js";
+import type { HandoffContextRef, UsageRecord } from "../core/types.js";
 import { sha256Canonical } from "../persistence/trajectory-records.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import { validateEmission } from "../seam/validate-emission.js";
@@ -21,8 +20,10 @@ import {
   formatDelegationSettlementPrompt,
   formatRejectionMessage,
   MAX_NO_EMISSION_RECOVERY_PROMPTS,
+  notifyControllerOfFinishRejection,
   withRoleSessionIdentity,
 } from "./loop-format.js";
+import { finishHostRunCostCap, forceRunCostCapEnd } from "./loop-run-cost-cap.js";
 import type { SessionLoopContext } from "./loop-session.js";
 import { persistAcceptedTransition } from "./loop-session-accepted.js";
 import type { InnerOutcome, RunLoopResult } from "./loop-types.js";
@@ -30,7 +31,6 @@ import { RpcChildExitError } from "./rpc/protocol.js";
 import { formatGuidedPrompt } from "./run-control.js";
 
 const SYNTHESIZED_SESSION_FILE = "<synthesized:end:run-cost-cap>";
-
 /** Mutable state accumulated while one role session is active. */
 export interface SessionTurnState {
   inner: InnerOutcome;
@@ -75,7 +75,6 @@ export async function runSessionTurn(
     finishUserAbort,
     finishEndGuardFailure,
   } = deps;
-  // ── Inner loop: prompt → validate → reduce (with retry on rejection) ──
   while (true) {
     if (opts.runControl !== undefined) {
       await opts.runControl.setActiveSession(session);
@@ -119,10 +118,38 @@ export async function runSessionTurn(
       state.inner = { kind: "failed" };
       return { kind: "terminal", result: await finishUserAbort(state.capturedUsage) };
     }
+    const hostTermination = session.getHostTermination?.() ?? null;
+    if (hostTermination?.kind === "run_cost_cap") {
+      const closed = await finishHostRunCostCap({
+        checkpoint: ctx.checkpoint,
+        def,
+        host,
+        session,
+        visitIndex,
+        parentSessionId: sessionParentId,
+        usage: state.capturedUsage,
+        settle: () => settleDelegationBeforeLifecycle("run cost cap forced close"),
+        collect: () =>
+          collectSessionArtifacts(host, session, { role, visitIndex, terminal: "session_ended" }),
+      });
+      if (closed !== null) {
+        ctx.checkpoint = closed;
+        state.terminalPersisted = true;
+        return {
+          kind: "terminal",
+          result: { finalCheckpoint: ctx.checkpoint, exitReason: "done" },
+        };
+      }
+    }
     // An isolated RPC child exiting before turn settlement is a contract
     // breach. Keep the failure reason stable and loop-owned rather than
     // exposing the child stderr/code or throwing past lifecycle cleanup.
-    const promptFailureReason = promptError instanceof RpcChildExitError ? "rpc_child_exit" : null;
+    const promptFailureReason =
+      promptError instanceof RpcChildExitError
+        ? "rpc_child_exit"
+        : promptError !== null && session.sessionOrigin?.kind === "controller"
+          ? "controller_failed"
+          : null;
     if (promptError !== null && hostReasonOnPrompt === null && promptFailureReason === null) {
       throw promptError;
     }
@@ -199,15 +226,7 @@ export async function runSessionTurn(
       state.inner = { kind: "failed" };
       break;
     }
-    // ── §11.7 run-cap evaluation (Task 17) ──────────────
-    // Evaluate the cap against the persisted rollup PLUS this
-    // terminal's captured usage, before reducing the role's
-    // captured machine event. The hard cap is non-negotiable;
-    // a breach is the single legal mechanism to close the run.
-    //
-    // The cap is only meaningful when the captured emission is
-    // a handoff (not an end). If the orchestrator emitted end,
-    // the run is closing anyway — no synthesis needed.
+    // Evaluate the persisted rollup plus this terminal before the captured event (§11.7).
     const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
     const runCapBreached =
       runCap !== null && host.runCostSoFar() + state.capturedUsage.cost >= runCap;
@@ -228,38 +247,23 @@ export async function runSessionTurn(
       // Known-settled delegation safety failures use the common
       // session_failed path below; never synthesize an accepted end.
       if (host.sessionTerminalReason(session) !== "delegation_failed") {
-        const ended = reduceLifecycle(ctx.checkpoint, "session_ended", def, {
-          role,
-          sessionId,
-          sessionFile,
-          ts: Date.now(),
-          visit_index: visitIndex,
-          parent_session: sessionParentId,
-          usage: state.capturedUsage,
+        ctx.checkpoint = forceRunCostCapEnd({
+          checkpoint: ctx.checkpoint,
+          def,
+          host,
+          active: {
+            session,
+            visitIndex,
+            parentSessionId: sessionParentId,
+            usage: state.capturedUsage,
+          },
         });
-        ctx.checkpoint = ended.checkpoint;
-        host.persistRecord(withRoleSessionIdentity(ended.record, session));
         state.terminalPersisted = true;
-        host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
         await collectSessionArtifacts(host, session, {
           role,
           visitIndex,
           terminal: "session_ended",
         });
-
-        const synthesized: MachineEvent = {
-          type: "end",
-          authority: "run_cost_cap",
-          payload: { reason: "run_cost_cap_exceeded" },
-        };
-        const result = reduce(ctx.checkpoint, synthesized, def, {
-          role: def.orchestrator,
-          sessionFile: SYNTHESIZED_SESSION_FILE,
-          ts: Date.now(),
-        });
-        host.persistRecord(result.record);
-        ctx.checkpoint = result.checkpoint;
-        host.persistRecord({ type: "checkpoint_snapshot", checkpoint: ctx.checkpoint });
         return {
           kind: "terminal",
           result: { finalCheckpoint: ctx.checkpoint, exitReason: "done" },
@@ -279,18 +283,7 @@ export async function runSessionTurn(
       if (host.sessionTerminalReason(session) !== "delegation_failed") ctx.pendingForcedEnd = true;
     }
 
-    // ── Host-driven session termination (Task 17 / Task 18) ──────
-    // The host may have terminated the session (e.g., the
-    // per-session cap fired on a `message_end` and the abort
-    // raced the tool-execution phase — the handoff tool
-    // wrapper may have already written to the capture buffer
-    // before the abort took effect). The host's terminal
-    // reason, when set, takes precedence: the captured
-    // emission is discarded and `session_failed` is recorded
-    // with the host's reason. For model errors (Task 18) the
-    // same path applies — the host's reason reflects the
-    // upstream cause. This is the single point where the host
-    // can override a non-empty capture buffer.
+    // A host terminal reason supersedes even a non-empty capture.
     const hostReasonOnOk = host.sessionTerminalReason(session);
     const terminalReasonOnOk = hostReasonOnOk ?? promptFailureReason;
     if (terminalReasonOnOk !== null) {
@@ -393,7 +386,12 @@ export async function runSessionTurn(
           }
         : reduceResult.record;
     if (reduceResult.kind === "rejected") {
-      host.persistRecord(enrichedRecord);
+      const rejectedRecord = reduceResult.record;
+      host.persistRecord(rejectedRecord);
+      await notifyControllerOfFinishRejection(session, {
+        kind: "machine_rejected",
+        source: rejectedRecord,
+      });
       // A rejected event keeps the live session open, so its next
       // capture must become the sole seam candidate.
       session.resetCaptureBuffer();
@@ -462,6 +460,10 @@ export async function runSessionTurn(
         return { kind: "terminal", result: await finishEndGuardFailure("end_guard_exhausted") };
       }
       if (guardOutcome.kind === "retry" && !forcedCloseAfterGuard) {
+        await notifyControllerOfFinishRejection(session, {
+          kind: "end_guard_retry",
+          source: guardOutcome.source,
+        });
         session.resetCaptureBuffer();
         opts.runControl?.reopenActiveSession(session);
         ctx.nextSeed = `The end guard did not pass. Repair the workspace and emit a valid end request again. Guard diagnostics: ${guardOutcome.diagnostic}`;
@@ -493,6 +495,5 @@ export async function runSessionTurn(
     state.inner = accepted.inner;
     break;
   }
-
   return { kind: "settled", state };
 }

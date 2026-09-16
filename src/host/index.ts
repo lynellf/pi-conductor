@@ -29,15 +29,25 @@
  * `src/manifest`, `src/seam`, `src/cost`) intentionally excludes it.
  */
 
+export type { ControllerHostApproval } from "./controller/host-approval.js";
+export {
+  controllerHostApprovalSchema,
+  loadControllerHostApproval,
+  validateControllerHostApproval,
+} from "./controller/host-approval.js";
 export type {
   Host,
   RoleSession,
   SeedRunMemoryArgs,
   SpawnRoleOptions,
 } from "./host.js";
-
 export type { LoadedManifest } from "./manifest.js";
 export { HostManifestError, loadManifest, loadManifestFromString } from "./manifest.js";
+export type {
+  ControllerSessionNotification,
+  HostTermination,
+  RoleSessionOrigin,
+} from "./role-session-contract.js";
 
 // ─── Per-session seam state (Task 14) ──────────────────────────────
 // Mutable host state per role session: the machine-event capture

@@ -30,6 +30,60 @@ function controller(
 }
 
 describe("ToolExecutionController", () => {
+  it("closes active work, awaits confirmed cleanup, and rejects later admission", async () => {
+    const execution = controller();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const running = execution.run(
+      "bash",
+      "close-active",
+      (scope) =>
+        new Promise<string>((_resolve, reject) => {
+          entered();
+          scope.signal.addEventListener("abort", () => reject(new Error("cleaned")), {
+            once: true,
+          });
+        }),
+    );
+    await started;
+    await expect(execution.close()).resolves.toBeUndefined();
+    await expect(running).rejects.toBeInstanceOf(ToolExecutionError);
+    await expect(execution.run("bash", "after-close", async () => "no")).rejects.toMatchObject({
+      code: "tool_closed",
+    });
+  });
+
+  it("surfaces unconfirmed cleanup while closing", async () => {
+    const execution = controller();
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const running = execution.run(
+      "bash",
+      "close-unconfirmed",
+      (scope) =>
+        new Promise<string>((_resolve, reject) => {
+          entered();
+          scope.signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                new ToolExecutionError("tool_cleanup_unconfirmed", "uncertain", {
+                  cleanup: "unconfirmed",
+                }),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    await started;
+    await expect(execution.close()).rejects.toMatchObject({ cleanup: "unconfirmed" });
+    await expect(running).rejects.toMatchObject({ cleanup: "unconfirmed" });
+  });
+
   it("persists a real controller origin before executing without SDK identity fields", async () => {
     const records: ToolExecutionRecord[] = [];
     const execution = controller((record) => records.push(record));

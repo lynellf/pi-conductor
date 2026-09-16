@@ -8,6 +8,39 @@ import type { ContextBoundaryReference } from "../persistence/orchestrator-conte
 import type { EmissionCapture } from "../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
 
+/** Physical session provenance; omission reads legacy SDK sessions only. */
+export type RoleSessionOrigin =
+  | { readonly kind: "sdk" }
+  | {
+      readonly kind: "controller";
+      readonly controllerId: string;
+      readonly definitionDigest: string;
+      readonly activationId: string;
+      readonly ownerEpoch: number;
+    };
+
+/** Host-only controller wakeups, delivered strictly after their source append. */
+export type ControllerSessionNotification =
+  | {
+      readonly kind: "machine_rejected";
+      readonly source: Extract<
+        import("../persistence/log.js").PersistedRecord,
+        { type: "transition_rejected" }
+      >;
+    }
+  | {
+      readonly kind: "end_guard_retry";
+      readonly source: Extract<
+        import("../persistence/log.js").PersistedRecord,
+        { type: "end_guard_finished" }
+      >;
+    };
+
+/** Typed host termination consumed before seam or prompt-failure classification. */
+export interface HostTermination {
+  readonly kind: "run_cost_cap";
+}
+
 /**
  * A live role session returned by `Host.spawnRole`. The orchestration
  * loop reads its capture buffer after `prompt()` resolves, persists
@@ -32,6 +65,8 @@ import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
  * runtime error.
  */
 export interface RoleSession {
+  /** Explicit controller provenance; omitted only by legacy SDK adapters. */
+  readonly sessionOrigin?: RoleSessionOrigin;
   /** The role this session was spawned for. */
   readonly role: Role;
   /** Host-allocated session id (used in `reduceLifecycle`, §11.4). */
@@ -82,6 +117,12 @@ export interface RoleSession {
    * a no-op on an empty buffer.
    */
   resetCaptureBuffer(): void;
+
+  /** Wake a deterministic controller after the source fact is durable. */
+  notifyController?(notification: ControllerSessionNotification): void | Promise<void>;
+
+  /** Return a latched host termination after the prompt lifetime settles. */
+  getHostTermination?(): HostTermination | null;
 
   /** Return and clear incomplete-handoff attempts for loop persistence. */
   takeHandoffValidationFailures?(): readonly {

@@ -1,21 +1,11 @@
-/**
- * Physical executable-tool attempt controller — September execution controls §76.
- *
- * This module owns attempt identity, deadline admission, timeout recovery, and
- * durable start/terminal records. It deliberately does not replay operations.
- * The lifecycle remains together so admission, cancellation, cleanup evidence,
- * and terminal recording share one arbitration boundary; persistence and timing
- * helpers are kept in neighboring modules.
- */
+/** Physical executable-tool attempt controller — September execution controls §76. */
 
 import { randomUUID } from "node:crypto";
-import { Value } from "typebox/value";
 import type { SandboxExecutionTerminal } from "../../persistence/sandbox-command.js";
-import {
-  type AnySandboxExecutionOwner,
-  type ControllerSandboxExecutionOwner,
-  type SandboxExecutionOwner,
-  sandboxExecutionOwnerSchema,
+import type {
+  AnySandboxExecutionOwner,
+  ControllerSandboxExecutionOwner,
+  SandboxExecutionOwner,
 } from "../../persistence/sandbox-execution.js";
 import type {
   AnyToolExecutionStartedRecord,
@@ -23,10 +13,9 @@ import type {
   ToolExecutionFinishedRecord,
   ToolExecutionRecord,
 } from "../../persistence/tool-execution.js";
-import { sameControllerExecutionOrigin } from "../../persistence/tool-execution-origin.js";
+import { ExecutionAttemptTracker } from "./execution-attempt-tracker.js";
 import {
   buildExecutionStart,
-  controllerLifecycleOperation,
   diagnosticFrom,
   type ExecutionInvocation,
   effectiveTimeoutSeconds,
@@ -36,6 +25,10 @@ import {
   safeMilliseconds,
 } from "./tool-execution-controller-support.js";
 import type { SandboxToolExecutionAdapter } from "./tool-execution-lifecycle.js";
+import {
+  prepareControllerLifecycle,
+  prepareSdkLifecycle,
+} from "./tool-execution-lifecycle-admission.js";
 import { buildToolExecutionTerminal } from "./tool-execution-terminal.js";
 import {
   hasUnconfirmedCleanup,
@@ -67,7 +60,7 @@ export class ToolExecutionController {
   private readonly onFatal: ((error: ToolExecutionError) => void) | undefined;
   private closed = false;
   private readonly finishedIds = new Set<string>();
-  private readonly activeAborts = new Set<AbortController>();
+  private readonly attempts = new ExecutionAttemptTracker();
   private readonly terminalEvidence = new Map<string, () => SandboxExecutionTerminal>();
 
   constructor(private readonly options: ToolExecutionControllerOptions) {
@@ -91,7 +84,9 @@ export class ToolExecutionController {
     operation: (scope: ToolExecutionScope) => Promise<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
-    return this.runAttempt({ kind: "sdk", toolName, toolCallId }, operation, runOptions);
+    return this.attempts.track(
+      this.runAttempt({ kind: "sdk", toolName, toolCallId }, operation, runOptions),
+    );
   }
 
   /** Run a controller executable with real non-SDK operation provenance. */
@@ -100,7 +95,9 @@ export class ToolExecutionController {
     operation: (scope: ToolExecutionScope) => Promise<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
-    return this.runAttempt({ kind: "controller", origin }, operation, runOptions);
+    return this.attempts.track(
+      this.runAttempt({ kind: "controller", origin }, operation, runOptions),
+    );
   }
 
   /** Use a verified backend lifecycle while retaining controller deadlines and records (#106 §6). */
@@ -111,25 +108,18 @@ export class ToolExecutionController {
     adapter: SandboxToolExecutionAdapter<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
-    if (
-      runOptions.captureAdmission !== undefined ||
-      !Value.Check(sandboxExecutionOwnerSchema, sandbox)
-    )
-      throw new ToolExecutionError(
-        "tool_input_invalid",
-        "sandbox execution requires its own valid ownership evidence",
-      );
-    const owner = structuredClone(sandbox);
-    return this.runAttempt(
-      { kind: "sdk", toolName, toolCallId },
-      controllerLifecycleOperation(
-        adapter,
-        (executionId) => this.started(executionId),
-        (record) => this.append(record),
+    const prepared = prepareSdkLifecycle(sandbox, adapter, runOptions, {
+      started: (executionId) => this.started(executionId),
+      append: (record) => this.append(record),
+    });
+    return this.attempts.track(
+      this.runAttempt(
+        { kind: "sdk", toolName, toolCallId },
+        prepared.operation,
+        runOptions,
+        prepared.owner,
+        prepared.terminalEvidence,
       ),
-      runOptions,
-      owner,
-      () => adapter.terminalEvidence(),
     );
   }
 
@@ -140,28 +130,25 @@ export class ToolExecutionController {
     adapter: SandboxToolExecutionAdapter<T>,
     runOptions: ToolExecutionRunOptions = {},
   ): Promise<T> {
-    if (
-      runOptions.captureAdmission !== undefined ||
-      !Value.Check(sandboxExecutionOwnerSchema, sandbox) ||
-      sandbox.kind !== "controller_operation" ||
-      !sameControllerExecutionOrigin(origin, sandbox.origin)
-    )
-      throw new ToolExecutionError(
-        "tool_input_invalid",
-        "controller sandbox execution requires matching pinned ownership evidence",
-      );
-    const owner = structuredClone(sandbox);
-    return this.runAttempt(
-      { kind: "controller", origin },
-      controllerLifecycleOperation(
-        adapter,
-        (executionId) => this.started(executionId),
-        (record) => this.append(record),
+    const prepared = prepareControllerLifecycle(origin, sandbox, adapter, runOptions, {
+      started: (executionId) => this.started(executionId),
+      append: (record) => this.append(record),
+    });
+    return this.attempts.track(
+      this.runAttempt(
+        { kind: "controller", origin },
+        prepared.operation,
+        runOptions,
+        prepared.owner,
+        prepared.terminalEvidence,
       ),
-      runOptions,
-      owner,
-      () => adapter.terminalEvidence(),
     );
+  }
+
+  /** Permanently seal admission and await every owned execution cleanup. */
+  close(): Promise<void> {
+    this.closed = true;
+    return this.attempts.close();
   }
 
   private async runAttempt<T>(
@@ -207,7 +194,7 @@ export class ToolExecutionController {
     if (terminalEvidence !== undefined) this.terminalEvidence.set(executionId, terminalEvidence);
 
     const operationAbort = new AbortController();
-    this.activeAborts.add(operationAbort);
+    this.attempts.addAbort(operationAbort);
     let timeoutRequested = false;
     let externalAbort = runOptions.signal?.aborted === true;
     const deadline = startedAt + timeoutMs;
@@ -249,7 +236,7 @@ export class ToolExecutionController {
       operationPromise = Promise.resolve().then(() => operation(scope));
     } catch (error) {
       runOptions.signal?.removeEventListener("abort", onExternalAbort);
-      this.activeAborts.delete(operationAbort);
+      this.attempts.deleteAbort(operationAbort);
       try {
         return this.failBeforeOperation(started, error);
       } finally {
@@ -271,6 +258,13 @@ export class ToolExecutionController {
       abortReject = reject;
       if (externalAbort) reject(new Error("external abort"));
     });
+    let closeRequested = false;
+    const closeReject = (reason: unknown) => {
+      closeRequested = true;
+      operationAbort.abort();
+      abortReject?.(reason);
+    };
+    this.attempts.addReject(closeReject);
 
     try {
       const result = await Promise.race([operationPromise, timeoutPromise, abortPromise]);
@@ -294,6 +288,7 @@ export class ToolExecutionController {
         isSupervisedTimeout(error) ||
         (error instanceof ToolExecutionError && error.code === "tool_timeout");
       const aborted =
+        closeRequested ||
         externalAbort ||
         isSupervisedAbort(error) ||
         (error instanceof ToolExecutionError && error.code === "tool_aborted");
@@ -315,6 +310,9 @@ export class ToolExecutionController {
       if (!cleanupConfirmed) {
         return this.finishUnconfirmed(started, executionId, recoveryCount, settled.error ?? error);
       }
+      if (hasUnconfirmedCleanup(settled.error)) {
+        return this.finishUnconfirmed(started, executionId, recoveryCount, settled.error);
+      }
       if (aborted && !timedOut) {
         return this.finishAborted(started, executionId, recoveryCount, settled.error ?? error);
       }
@@ -324,7 +322,8 @@ export class ToolExecutionController {
       if (timer !== undefined) clearTimeout(timer);
       if (cleanupTimer !== undefined) clearTimeout(cleanupTimer);
       runOptions.signal?.removeEventListener("abort", onExternalAbort);
-      this.activeAborts.delete(operationAbort);
+      this.attempts.deleteAbort(operationAbort);
+      this.attempts.deleteReject(closeReject);
     }
   }
 
@@ -493,7 +492,7 @@ export class ToolExecutionController {
   private closeOnFatal(error: ToolExecutionError): void {
     if (this.closed) return;
     this.closed = true;
-    for (const abort of this.activeAborts) abort.abort();
+    this.attempts.abort(error);
     this.onFatal?.(error);
   }
 }

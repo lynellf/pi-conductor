@@ -45,10 +45,11 @@
  */
 
 import { access, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { loadControllerHostApproval } from "../host/controller/host-approval.js";
 import type { SandboxHostApproval } from "../host/execution/sandbox/host-approval.js";
 import { loadSandboxHostApproval } from "../host/execution/sandbox/host-approval.js";
 import {
@@ -119,7 +120,7 @@ export interface CliJsonResult {
 // ─── Argv parsing ──────────────────────────────────────────────────────
 
 const USAGE =
-  "Usage: conduct [--non-interactive] [--log-dir <path>] [--sandbox-approval <path>] [--json] <manifestPath> <goal...>";
+  "Usage: conduct [--non-interactive] [--log-dir <path>] [--sandbox-approval <path>] [--controller-approval <path>] [--json] <manifestPath> <goal...>";
 
 interface ParsedArgs {
   readonly manifestPath: string;
@@ -127,6 +128,7 @@ interface ParsedArgs {
   readonly nonInteractive: boolean;
   readonly logDir?: string;
   readonly sandboxApproval?: string;
+  readonly controllerApproval?: string;
   readonly json: boolean;
 }
 
@@ -144,6 +146,7 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
   let nonInteractive = false;
   let logDir: string | undefined;
   let sandboxApproval: string | undefined;
+  let controllerApproval: string | undefined;
   let json = false;
 
   while (index < argv.length) {
@@ -175,6 +178,14 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
       index += 2;
       continue;
     }
+    if (arg === "--controller-approval") {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("--"))
+        return { ok: false, message: "pi-conductor: --controller-approval requires a path" };
+      controllerApproval = value;
+      index += 2;
+      continue;
+    }
     break;
   }
 
@@ -192,6 +203,7 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
       nonInteractive,
       ...(logDir !== undefined && { logDir }),
       ...(sandboxApproval !== undefined && { sandboxApproval }),
+      ...(controllerApproval !== undefined && { controllerApproval }),
       json,
     },
   };
@@ -281,6 +293,21 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
       return 1;
     }
   }
+  let loadCurrentControllerApproval:
+    | (() => ReturnType<typeof loadControllerHostApproval>)
+    | undefined;
+  if (parsed.controllerApproval !== undefined) {
+    const approvalPath = resolve(cwd, parsed.controllerApproval);
+    loadCurrentControllerApproval = () => loadControllerHostApproval(approvalPath);
+    try {
+      await loadCurrentControllerApproval();
+    } catch (error) {
+      out.error(
+        `pi-conductor: invalid controller approval: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 1;
+    }
+  }
 
   const uiContext = parsed.nonInteractive
     ? createNonInteractiveUiContext()
@@ -297,11 +324,17 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
         cwd,
         uiContext,
         ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),
+        ...(loadCurrentControllerApproval === undefined
+          ? {}
+          : { loadControllerHostApproval: loadCurrentControllerApproval }),
       },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest,
         runId: factoryCtx.runId,
+        ...(baseDir === undefined
+          ? {}
+          : { sessionDir: join(baseDir, factoryCtx.runId, "sessions") }),
       },
     });
 

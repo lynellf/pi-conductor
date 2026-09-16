@@ -97,6 +97,7 @@ import { subscribeToRecords } from "../src/host/index.js";
  */
 const CONDUCT_MANIFEST_FLAG = "conduct-manifest";
 const CONDUCT_SANDBOX_APPROVAL_FLAG = "conduct-sandbox-approval";
+const CONDUCT_CONTROLLER_APPROVAL_FLAG = "conduct-controller-approval";
 
 /**
  * Adapt the SDK's `(args, ctx)` handler shape to the
@@ -157,6 +158,10 @@ export default function conductExtension(pi: ExtensionAPI): void {
   });
   pi.registerFlag(CONDUCT_SANDBOX_APPROVAL_FLAG, {
     description: "Use operator-approved Bubblewrap host metadata for sandbox profiles",
+    type: "string",
+  });
+  pi.registerFlag(CONDUCT_CONTROLLER_APPROVAL_FLAG, {
+    description: "Use a protected operator controller authority registry",
     type: "string",
   });
 

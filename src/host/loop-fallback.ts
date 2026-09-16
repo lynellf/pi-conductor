@@ -181,7 +181,8 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
     if (
       inner.kind === "failed" &&
       sessionHostReason === "model_error" &&
-      session.isTrajectory !== true
+      session.isTrajectory !== true &&
+      session.sessionOrigin?.kind !== "controller"
     ) {
       const runCap = opts.getRunCostCap?.() ?? opts.runCostCap ?? null;
       if (runCap !== null && host.runCostSoFar() >= runCap) {

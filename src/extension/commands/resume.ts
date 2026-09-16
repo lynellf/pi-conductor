@@ -28,6 +28,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { loadControllerHostApproval } from "../../host/controller/host-approval.js";
 import type { SandboxHostApproval } from "../../host/execution/sandbox/host-approval.js";
 import { loadSandboxHostApproval } from "../../host/execution/sandbox/host-approval.js";
 import {
@@ -113,6 +114,25 @@ export async function handleResume(
       return;
     }
   }
+  const controllerApprovalFlag = deps.getFlag("conduct-controller-approval");
+  let loadCurrentControllerApproval:
+    | (() => ReturnType<typeof loadControllerHostApproval>)
+    | undefined;
+  if (typeof controllerApprovalFlag === "string" && controllerApprovalFlag.length > 0) {
+    const approvalPath = controllerApprovalFlag.startsWith("/")
+      ? controllerApprovalFlag
+      : join(cwd, controllerApprovalFlag);
+    loadCurrentControllerApproval = () => loadControllerHostApproval(approvalPath);
+    try {
+      await loadCurrentControllerApproval();
+    } catch (error) {
+      notify(
+        `Invalid controller approval: ${error instanceof Error ? error.message : String(error)}`,
+        "error",
+      );
+      return;
+    }
+  }
   const hostFactory = (factoryCtx: HostFactoryContext): Host =>
     createProductionHost({
       extension: {
@@ -122,11 +142,15 @@ export async function handleResume(
         isUiContextCurrent: isContextCurrent,
         ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
         ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),
+        ...(loadCurrentControllerApproval === undefined
+          ? {}
+          : { loadControllerHostApproval: loadCurrentControllerApproval }),
       },
       run: {
         log: factoryCtx.log,
         loadedManifest: factoryCtx.loadedManifest as LoadedManifest,
         runId: factoryCtx.runId,
+        sessionDir: join(baseDir, factoryCtx.runId, "sessions"),
       },
     });
 

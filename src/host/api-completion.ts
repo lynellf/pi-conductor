@@ -36,6 +36,7 @@ export interface RunWithCompletionArgs {
 /** Run the orchestration loop and release its execution lease on completion. */
 export async function runWithCompletion(args: RunWithCompletionArgs): Promise<RunHandle> {
   const { runId, def, log, host, initialCheckpoint, goal, loadedManifest, lease } = args;
+  const controllerMode = loadedManifest.manifest.controller !== undefined;
   // Task 19: shared mutable container for the live `configOverride`.
   // The loop's `getRunCostCap` closure (below) reads from this
   // container; `RunHandle.runConfig` writes to it. Both must see
@@ -67,6 +68,7 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
   const runControl = new RunControl({
     runId,
     abortSession: (session, reason) => host.abortSession(session, reason),
+    guidancePolicy: controllerMode ? "unsupported" : "enabled",
   });
 
   const endGuard = loadedManifest.manifest.end_guard;
@@ -96,8 +98,10 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
     initialCheckpoint,
     host,
     initialGoal: goal,
-    initialHandoffContextRef: latestHandoffContextRef(log.records(runId), runId),
-    ...(initialCheckpoint.current_role === "done"
+    initialHandoffContextRef: controllerMode
+      ? null
+      : latestHandoffContextRef(log.records(runId), runId),
+    ...(initialCheckpoint.current_role === "done" || controllerMode
       ? {}
       : {
           initialHandoffSeed: formatIncomingHandoffSeed(

@@ -2,9 +2,12 @@
 import { join } from "node:path";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
+import type { ControllerConfig } from "../manifest/controller.js";
 import type { RoleConfig, WorkspaceSource } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { type SnapshotPinnedRecord, snapshotPinned } from "../persistence/log.js";
+import type { DelegationAdmissionService } from "./delegation/admission-service.js";
+import type { HostArtifactContextResolver } from "./delegation/context-artifact-contract.js";
 import type { SandboxAdmissionAdapter } from "./delegation/delegate-tool.js";
 import type { PoolChildResult } from "./delegation/pool.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
@@ -41,6 +44,94 @@ export interface DelegateHostContext {
     readonly details: unknown;
     readonly terminate?: boolean;
   }) => DelegateBridgeResult;
+}
+
+/** Activation-bound inputs for native controller delegation admission. */
+export interface ControllerAdmissionOptions {
+  readonly config: ControllerConfig;
+  readonly runStateDir: string;
+  readonly parentRole: Role;
+  readonly parentVisitIndex: number;
+  readonly hostArtifactResolver: HostArtifactContextResolver;
+  readonly getRunCostCap?: () => number | null;
+  readonly onTaskTerminal: (result: PoolChildResult) => void;
+  readonly onFatal: (cause: unknown) => void;
+  readonly getHostRejection: () => HostRejection | false;
+  readonly definitionDigest: string;
+}
+
+/** Build the controller's stable logical native-admission scope. */
+export async function createControllerAdmission(
+  ctx: DelegateHostContext,
+  options: ControllerAdmissionOptions,
+): Promise<{ readonly logicalParentId: string; readonly service: DelegationAdmissionService }> {
+  const runStateDir = options.runStateDir;
+  const sandboxAdmission =
+    ctx.sandboxHostApproval === undefined
+      ? undefined
+      : protectedSandboxAdmission(
+          createSandboxAdmissionAdapter({
+            runId: ctx.runId,
+            runStateDir,
+            primaryCheckout: ctx.cwd,
+            manifestRoot:
+              ctx.loadedManifest.manifestDir ??
+              (() => {
+                throw new Error("controller sandbox execution requires a manifest directory");
+              })(),
+            hostProtection: {
+              primaryCheckout: ctx.cwd,
+              stateRoots: [join(ctx.cwd, ".pi-conductor"), runStateDir],
+              childWorkspaceRoots: [join(runStateDir, "worktrees"), join(runStateDir, "sandbox")],
+            },
+            binaryPath: ctx.sandboxHostApproval.binaryPath,
+            approvedBuilds: ctx.sandboxHostApproval.approvedBuilds,
+            bootstrapApproval: ctx.sandboxHostApproval.bootstrapApproval,
+            probeApproval: ctx.sandboxHostApproval.probeApproval,
+            ...(ctx.sandboxHostApproval.getcapPath === undefined
+              ? {}
+              : { getcapPath: ctx.sandboxHostApproval.getcapPath }),
+          }),
+          runStateDir,
+        );
+  const allowed = new Set(options.config.delegation.allowed_subagents);
+  return ctx.delegation.createControllerAdmissionService(
+    {
+      subagents: (ctx.loadedManifest.manifest.subagents ?? []).filter((profile) =>
+        allowed.has(profile.name),
+      ),
+      remainingChildren: options.config.delegation.max_children_per_session,
+      runId: ctx.runId,
+      parentRole: options.parentRole,
+      parentVisitIndex: options.parentVisitIndex,
+      primaryCheckout: ctx.cwd,
+      runStateDir,
+      persistRecord: ctx.persistRecord,
+      agentDir: ctx.agentDir,
+      systemPromptRoot: delegationPromptRoot(ctx.loadedManifest, ctx.cwd),
+      modelRegistry: ctx.modelRegistry,
+      ...(ctx.displaySink === undefined ? {} : { displaySink: ctx.displaySink }),
+      sessionDir: ctx.sessionDir,
+      records: () => ctx.log.records(ctx.runId),
+      isBudgetExhausted: () => {
+        const cap = options.getRunCostCap?.();
+        return cap !== undefined && cap !== null && ctx.runCostSoFar() >= cap;
+      },
+      onTaskTerminal: options.onTaskTerminal,
+      onFatal: options.onFatal,
+      getHostRejection: options.getHostRejection,
+      delegationPolicy: options.config.delegation,
+      hostArtifactResolver: options.hostArtifactResolver,
+      ...(sandboxAdmission === undefined ? {} : { sandboxAdmission }),
+      ...(ctx.sandboxHostApproval === undefined
+        ? {}
+        : { sandboxHostApproval: ctx.sandboxHostApproval }),
+    },
+    {
+      controllerId: options.config.controller_id,
+      definitionDigest: options.definitionDigest,
+    },
+  );
 }
 
 /** Reuse or persist the run's immutable workspace snapshot pin. */

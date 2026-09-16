@@ -33,6 +33,7 @@
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
 import type { RoleTurnTelemetryOptions } from "../persistence/role-turn.js";
+import type { ControllerHostApproval } from "./controller/host-approval.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -46,6 +47,8 @@ import { ProductionHost } from "./production-host.js";
  * the host layer from the extension's type surface.
  */
 export interface ExtensionContextInputs {
+  /** Live operator authority loader; implementations must preserve revocation checks. */
+  readonly loadControllerHostApproval?: () => Promise<ControllerHostApproval>;
   /** Optional operator-approved Bubblewrap metadata. */
   readonly sandboxHostApproval?: SandboxHostApproval;
   /** Extension's `ModelRegistry` (shared with pi's configured providers). */
@@ -127,6 +130,9 @@ export function createProductionHost(inputs: CreateProductionHostInputs): Produc
     ...(inputs.extension.sandboxHostApproval === undefined
       ? {}
       : { sandboxHostApproval: inputs.extension.sandboxHostApproval }),
+    ...(inputs.extension.loadControllerHostApproval === undefined
+      ? {}
+      : { loadControllerHostApproval: inputs.extension.loadControllerHostApproval }),
     cwd: inputs.extension.cwd,
     ...(inputs.extension.uiContext !== undefined && { uiContext: inputs.extension.uiContext }),
     ...(inputs.extension.isUiContextCurrent !== undefined && {

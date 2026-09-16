@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
+import type { ControllerHostApproval } from "./controller/host-approval.js";
 import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { EndGuardRunner } from "./end-guard-runner.js";
@@ -45,6 +46,9 @@ export class ProductionHostContext {
   protected readonly sessionState: ProductionSessionState;
   protected snapshotPin: Promise<SnapshotPinnedRecord> | null = null;
   protected readonly sandboxHostApproval: SandboxHostApproval | undefined;
+  protected readonly loadControllerHostApproval:
+    | (() => Promise<ControllerHostApproval>)
+    | undefined;
 
   constructor(opts: ProductionHostOptions) {
     // Fail before the orchestration loop admits a role session. The worker
@@ -68,6 +72,7 @@ export class ProductionHostContext {
       opts.sandboxHostApproval === undefined
         ? undefined
         : structuredClone(opts.sandboxHostApproval);
+    this.loadControllerHostApproval = opts.loadControllerHostApproval;
     this.uiContext = opts.uiContext;
     this.isUiContextCurrent = opts.isUiContextCurrent;
     this.displaySink = opts.displaySink;
@@ -92,6 +97,6 @@ export class ProductionHostContext {
     this.endGuardRunner = new EndGuardRunner(this.cwd);
     this.sessionState = new ProductionSessionState(this.sessionStates, this.agentsBySessionId);
     // SessionManager writes JSONL directly and does not create its parent.
-    mkdirSync(this.sessionDir, { recursive: true });
+    mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
   }
 }

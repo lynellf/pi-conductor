@@ -145,6 +145,7 @@ export const controllerActionReceiptSchema = Type.Object(
     ]),
     operation_id: Type.Union([Type.Null(), id]),
     result_refs: Type.Array(id, { maxItems: 64 }),
+    result: Type.Optional(Type.Unknown()),
     diagnostic: Type.Union([Type.Null(), Type.String({ maxLength: 4096 })]),
     ts: Type.Number({ minimum: 0 }),
   },
@@ -303,6 +304,11 @@ export function assertControllerRecord(value: unknown): asserts value is Control
     Buffer.byteLength(record.diagnostic, "utf8") > 4096
   )
     throw new ControllerRecordError("action receipt diagnostic exceeds its byte limit");
+  if (record.type === "controller_action_receipt" && "result" in record) {
+    if (record.kind !== "read" || record.outcome !== "completed")
+      throw new ControllerRecordError("only a completed read may carry a bounded inline result");
+    assertBoundedJson(record.result, MAX_STATE_BYTES, "controller read result");
+  }
   if (record.type === "controller_operation_repaired" && record.operator_note.trim().length === 0)
     throw new ControllerRecordError("operator note must contain non-whitespace characters");
 }

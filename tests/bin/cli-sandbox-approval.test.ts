@@ -36,6 +36,14 @@ function deps(root: string, startRun: CliDeps["startRun"]): CliDeps {
 }
 
 describe("CLI sandbox approval option", () => {
+  it("rejects a missing controller approval flag value", async () => {
+    const { runCli } = await import("../../src/bin/cli-main.js");
+    const startRun = vi.fn();
+    const code = await runCli(["--controller-approval"], deps(process.cwd(), startRun));
+    expect(code).toBe(2);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid approval before startRun", async () => {
     const { runCli } = await import("../../src/bin/cli-main.js");
     const root = await mkdtemp(join(tmpdir(), "pi-conductor-cli-approval-"));
@@ -120,6 +128,83 @@ describe("CLI sandbox approval option", () => {
     expect(createHost).toHaveBeenCalledWith(
       expect.objectContaining({
         extension: expect.objectContaining({ sandboxHostApproval: approval }),
+      }),
+    );
+  });
+
+  it("passes a live controller approval loader through the host factory", async () => {
+    const { runCli } = await import("../../src/bin/cli-main.js");
+    const root = await mkdtemp(join(tmpdir(), "pi-conductor-cli-controller-approval-"));
+    roots.push(root);
+    await writeFile(join(root, "manifest.yaml"), "version: 1\n");
+    const approval = {
+      schema_version: 1,
+      approval_id: "controller-authority",
+      runtimes: [
+        {
+          runtime_id: "runtime",
+          source_root: "/opt/controller-runtime",
+          inventory_sha256: "a".repeat(64),
+          bootstrap_approval: {
+            approvalId: "runtime-files",
+            files: [
+              { path: "bin/bash", sha256: "b".repeat(64) },
+              { path: "opt/controller", sha256: "c".repeat(64) },
+            ],
+          },
+        },
+      ],
+      controllers: [
+        {
+          controller_id: "controller",
+          runtime_id: "runtime",
+          executable: "/opt/controller",
+          argv: [],
+        },
+      ],
+      adapters: [],
+      schemas: [],
+    };
+    const approvalPath = join(root, "controller-approval.json");
+    await writeFile(approvalPath, JSON.stringify(approval), { mode: 0o600 });
+    const startRun: CliDeps["startRun"] = vi.fn(async (_path, options) => {
+      const hostFactoryContext = {
+        runId: "run-1",
+        log: {},
+        loadedManifest: { manifestDir: root },
+      } as never;
+      options.hostFactory(hostFactoryContext);
+      const call = createHost.mock.calls.at(-1) as unknown as
+        | [{ extension: { loadControllerHostApproval: () => Promise<unknown> } }]
+        | undefined;
+      const extension = call?.[0].extension;
+      if (extension === undefined) throw new Error("production host was not created");
+      expect(await extension.loadControllerHostApproval()).toEqual(approval);
+      return {
+        runId: "run-1",
+        completion: async () => ({
+          finalCheckpoint: { current_role: "done" },
+          exitReason: "done",
+        }),
+        runStats: () => ({}),
+        loadedManifest: { warnings: [] },
+        latestResponse: () => null,
+      } as never;
+    });
+
+    await runCli(
+      ["--log-dir", "run-logs", "--controller-approval", approvalPath, "manifest.yaml", "goal"],
+      deps(root, startRun),
+    );
+
+    expect(createHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extension: expect.objectContaining({
+          loadControllerHostApproval: expect.any(Function),
+        }),
+        run: expect.objectContaining({
+          sessionDir: join(root, "run-logs", "run-1", "sessions"),
+        }),
       }),
     );
   });

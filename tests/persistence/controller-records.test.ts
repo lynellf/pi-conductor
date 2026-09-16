@@ -156,6 +156,21 @@ describe("controller durable timeline", () => {
     }
   });
 
+  it("rejects an invalid receipt transition before mutating an in-memory log", () => {
+    const log = new InMemoryRecordLog();
+    try {
+      log.append(definition);
+      log.append(activation);
+      log.append(decision);
+      log.append(receipt("completed"));
+
+      expect(() => log.append(receipt("failed", { ts: 5 }))).toThrow(ControllerRecordError);
+      expect(log.records("run-1")).toHaveLength(4);
+    } finally {
+      log.close();
+    }
+  });
+
   it("reconstructs decision state and requires host evidence for an undispatched intent", () => {
     const timeline = reconstructControllerTimeline([definition, activation, decision]);
     const recovery = materializeControllerRecovery(timeline);
@@ -524,5 +539,19 @@ describe("controller durable timeline", () => {
     expect(() =>
       assertControllerRecord(receipt("failed", { diagnostic: "é".repeat(2049) })),
     ).toThrow("diagnostic exceeds its byte limit");
+  });
+
+  it("bounds inline read results and forbids private result payloads on other receipt kinds", () => {
+    expect(() =>
+      assertControllerRecord(receipt("completed", { result: { value: "private" } })),
+    ).toThrow("only a completed read");
+    expect(() =>
+      assertControllerRecord(receipt("completed", { kind: "read", result: { value: "small" } })),
+    ).not.toThrow();
+    expect(() =>
+      assertControllerRecord(
+        receipt("completed", { kind: "read", result: { value: "x".repeat(65_536) } }),
+      ),
+    ).toThrow("exceeds its byte limit");
   });
 });

@@ -15,6 +15,7 @@ import type {
   CheckpointSnapshot,
   PersistedRecord,
   RecordLog,
+  RoleSessionLifecycleRecord,
 } from "../persistence/log.js";
 import {
   type HandoffTransportSelectedRecord,
@@ -263,12 +264,7 @@ export function reconcileCrash(
   // New records match the conductor invocation identity, not the shared
   // physical JSONL. Legacy records have no logical identity and retain the
   // historical session-file fallback.
-  let sessionStarted:
-    | (SessionLifecycleEvent & {
-        readonly role_session_id?: string;
-        readonly conversation_id?: string | null;
-      })
-    | null = null;
+  let sessionStarted: RoleSessionLifecycleRecord | null = null;
   let sessionStartedIndex = -1;
   // Select the latest matching start so a terminal from an earlier recovery
   // attempt cannot make the current invocation appear settled.
@@ -342,13 +338,7 @@ export function reconcileCrash(
     model: sessionStarted.model,
     model_effort: sessionStarted.model_effort ?? DEFAULT_MODEL_EFFORT,
   });
-  log.append({
-    ...result.record,
-    ...(sessionStarted.role_session_id !== undefined && {
-      role_session_id: sessionStarted.role_session_id,
-      conversation_id: sessionStarted.conversation_id ?? null,
-    }),
-  });
+  log.append(withReconciledSessionOrigin(result.record, sessionStarted));
   // Persist the cleared checkpoint.
   const snapshot: CheckpointSnapshot = {
     type: "checkpoint_snapshot",
@@ -356,6 +346,39 @@ export function reconcileCrash(
   };
   log.append(snapshot);
   return result.checkpoint;
+}
+
+function withReconciledSessionOrigin(
+  record: SessionLifecycleEvent,
+  started: RoleSessionLifecycleRecord,
+): RoleSessionLifecycleRecord {
+  if (started.session_origin === "controller") {
+    if (
+      started.role_session_id === undefined ||
+      started.controller_id === undefined ||
+      started.controller_definition_digest === undefined ||
+      started.controller_activation_id === undefined ||
+      started.controller_owner_epoch === undefined
+    ) {
+      throw new Error("controller session start is missing durable origin identity");
+    }
+    return {
+      ...record,
+      role_session_id: started.role_session_id,
+      session_origin: "controller",
+      controller_id: started.controller_id,
+      controller_definition_digest: started.controller_definition_digest,
+      controller_activation_id: started.controller_activation_id,
+      controller_owner_epoch: started.controller_owner_epoch,
+    };
+  }
+  return started.role_session_id === undefined
+    ? record
+    : {
+        ...record,
+        role_session_id: started.role_session_id,
+        conversation_id: started.conversation_id ?? null,
+      };
 }
 
 /**

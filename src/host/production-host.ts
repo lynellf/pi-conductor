@@ -34,6 +34,7 @@ import type { RoleConfig } from "../manifest/types.js";
 
 import type { PersistedRecord } from "../persistence/log.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
+import { createProductionControllerSession } from "./controller/production-session-factory.js";
 import { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 import type {
@@ -113,9 +114,31 @@ export class ProductionHost extends ProductionHostContext implements Host {
   // ─── Host methods ──────────────────────────────────────────────────
 
   async spawnRole(role: Role, opts: SpawnRoleOptions = {}): Promise<RoleSession> {
-    // Keep the opt-in contract closed until the controller driver is integrated.
-    if (this.loadedManifest.manifest.controller !== undefined)
-      throw new Error("controller host execution is not available in this staged build");
+    if (this.loadedManifest.manifest.controller !== undefined) {
+      if (role !== this.loadedManifest.def.orchestrator)
+        throw new Error("controller mode can only spawn the orchestrator role");
+      const created = await createProductionControllerSession({
+        role,
+        visitIndex: opts.visitIndex ?? this.nextVisitIndex(role),
+        loadedManifest: this.loadedManifest,
+        runId: this.runId,
+        cwd: this.cwd,
+        sessionDir: this.sessionDir,
+        log: this.log,
+        ...(this.sandboxHostApproval === undefined
+          ? {}
+          : { sandboxHostApproval: this.sandboxHostApproval }),
+        ...(this.loadControllerHostApproval === undefined
+          ? {}
+          : { loadControllerHostApproval: this.loadControllerHostApproval }),
+        delegateContext: this.delegateContext(),
+        persist: (record) => this.persistRecord(record),
+        runCostSoFar: () => this.runCostSoFar(),
+        ...(opts.getRunCostCap === undefined ? {} : { getRunCostCap: opts.getRunCostCap }),
+      });
+      this.delegationSessionKeys.set(created.session.sessionId, created.logicalParentId);
+      return created.session;
+    }
     const context: SpawnRoleContext = {
       modelRegistry: this.modelRegistry,
       cwd: this.cwd,

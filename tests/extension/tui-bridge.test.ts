@@ -73,6 +73,43 @@ async function writeApproval(root: string): Promise<string> {
   return path;
 }
 
+async function writeControllerApproval(root: string): Promise<string> {
+  const path = join(root, "controller-approval.json");
+  await writeFile(
+    path,
+    JSON.stringify({
+      schema_version: 1,
+      approval_id: "controller-authority",
+      runtimes: [
+        {
+          runtime_id: "runtime",
+          source_root: "/opt/controller-runtime",
+          inventory_sha256: "a".repeat(64),
+          bootstrap_approval: {
+            approvalId: "runtime-files",
+            files: [
+              { path: "bin/bash", sha256: "b".repeat(64) },
+              { path: "opt/controller", sha256: "c".repeat(64) },
+            ],
+          },
+        },
+      ],
+      controllers: [
+        {
+          controller_id: "controller",
+          runtime_id: "runtime",
+          executable: "/opt/controller",
+          argv: [],
+        },
+      ],
+      adapters: [],
+      schemas: [],
+    }),
+    { mode: 0o600 },
+  );
+  return path;
+}
+
 const MANIFEST = `
 version: 1
 roles:
@@ -264,6 +301,27 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
     expect(
       bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.sandboxHostApproval,
     ).toBeDefined();
+  });
+
+  it("passes a live controller approval loader through /conduct start", async () => {
+    const ctx = makeCtx(cwd);
+    const handle = makeCompletionHandle("run-start-controller");
+    const approvalPath = await writeControllerApproval(cwd);
+    bridgeMocks.createProductionHost.mockReturnValue({} as never);
+    bridgeMocks.startRun.mockImplementation(async (_manifestPath, opts) => {
+      await opts.hostFactory({
+        log: new InMemoryRecordLog(),
+        loadedManifest: makeLoadedManifest(),
+        runId: "run-start-controller",
+      } as never);
+      return handle;
+    });
+    await handleStart("test goal", ctx, {
+      getFlag: (name) => (name === "conduct-controller-approval" ? approvalPath : undefined),
+    });
+    const loader = bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension
+      ?.loadControllerHostApproval as (() => Promise<{ approval_id: string }>) | undefined;
+    expect((await loader?.())?.approval_id).toBe("controller-authority");
   });
 
   it("notifies when resume preserves legacy delegation mode without a snapshot", async () => {

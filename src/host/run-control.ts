@@ -60,19 +60,23 @@ export class RunControl {
   private open = true;
   private latest: RunResponse | null = null;
   private abortReason: string | null = null;
+  private readonly guidancePolicy: "enabled" | "unsupported";
 
   constructor(opts: {
     readonly runId: string;
     readonly abortSession: (session: RoleSession, reason: string) => Promise<void>;
+    readonly guidancePolicy?: "enabled" | "unsupported";
   }) {
     this.runId = opts.runId;
     this.abortSession = opts.abortSession;
+    this.guidancePolicy = opts.guidancePolicy ?? "enabled";
   }
 
   /** Send guidance to the active turn, or queue it at a live role boundary. */
   async steer(text: string): Promise<void> {
     this.assertMessage(text);
     this.assertOpen();
+    this.assertGuidanceSupported();
 
     const active = this.active;
     if (active === null || !this.isAddressable(active)) {
@@ -102,7 +106,12 @@ export class RunControl {
   async followUp(text: string): Promise<void> {
     this.assertMessage(text);
     this.assertOpen();
+    this.assertGuidanceSupported();
     this.enqueue("followUp", text);
+  }
+
+  private assertGuidanceSupported(): void {
+    if (this.guidancePolicy === "unsupported") throw new RunControlError("steering_unavailable");
   }
 
   /** Return the most recent successful completed assistant response, if one exists. */

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli } from "../../src/bin/cli-main.js";
 import { RECONCILE_USAGE, runReconcileCli } from "../../src/bin/cli-reconcile.js";
+import * as actionRepair from "../../src/host/controller/action-reconciliation.js";
 import * as identity from "../../src/host/execution/supervised-process-identity.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import type {
@@ -60,6 +61,32 @@ function records(): { started: ToolExecutionStartedRecord; finished: ToolExecuti
 }
 
 describe("reconcile-tools CLI", () => {
+  it("requires action-effect acknowledgment and routes an explicit controller repair separately", async () => {
+    const repair = vi.spyOn(actionRepair, "reconcileControllerActionEffects").mockResolvedValue([]);
+    const out = output();
+    const args = ["reconcile-tools", "--log-dir", "/private/runs", "run", "--action", "prepare"];
+    expect(await runReconcileCli(args, out)).toBe(1);
+    expect(repair).not.toHaveBeenCalled();
+    expect(
+      await runReconcileCli(
+        [
+          ...args,
+          "--confirm-cleanup",
+          "--note",
+          "Inspected retained staging",
+          "--partial-effects",
+          "inspected_unpublished",
+        ],
+        out,
+      ),
+    ).toBe(0);
+    expect(repair).toHaveBeenCalledWith("run", "prepare", {
+      baseDir: "/private/runs",
+      acknowledgment: true,
+      operatorNote: "Inspected retained staging",
+      partialEffects: "inspected_unpublished",
+    });
+  });
   const directories: string[] = [];
 
   afterEach(async () => {

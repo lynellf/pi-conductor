@@ -1,6 +1,8 @@
 /** In-memory append-only RecordLog implementation — spec §11.1. */
 
 import type { Checkpoint } from "../core/types.js";
+import { isControllerRecord } from "./controller-records.js";
+import { reconstructControllerTimeline } from "./controller-timeline.js";
 import { assertDelegationTaskTimeline } from "./delegation-task.js";
 import { assertEndGuardAppend, type EndGuardRecord } from "./end-guard.js";
 import type { PersistedRecord, RecordLog } from "./log.js";
@@ -29,6 +31,9 @@ export class InMemoryRecordLog implements RecordLog {
     }
     if (isDelegationTaskRecord(snapshot)) {
       assertDelegationTaskTimeline([...this.records(runId), snapshot]);
+    }
+    if (isControllerRecord(snapshot)) {
+      reconstructControllerTimeline([...this.records(runId), snapshot]);
     }
     const list = this.byRun.get(runId);
     this.byRun.set(runId, list === undefined ? [materialized.json] : [...list, materialized.json]);

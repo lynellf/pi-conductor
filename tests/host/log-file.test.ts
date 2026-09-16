@@ -15,7 +15,14 @@
  *    mirroring `ManifestParseError`.
  */
 
-import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +30,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Checkpoint, SessionLifecycleEvent } from "../../src/core/types.js";
 import { type FileMutationRecord, FileRecordLog, RecordLogError } from "../../src/index.js";
+import {
+  type ControllerDefinitionPinnedRecord,
+  controllerDefinitionDigest,
+} from "../../src/persistence/controller-records.js";
 import { WorkspaceGuaranteeError } from "../../src/persistence/log.js";
 
 let baseDir: string | undefined;
@@ -44,6 +55,45 @@ function checkpoint(runId: string): Checkpoint {
     end_request: null,
     active_role_session: null,
     updated_at: 1,
+  };
+}
+
+function controllerDefinition(runId: string): ControllerDefinitionPinnedRecord {
+  const base = {
+    type: "controller_definition_pinned" as const,
+    schema_version: 1 as const,
+    run_id: runId,
+    controller_id: "controller",
+    pinned_definition: {},
+    controller_authority: {
+      registration_id: "planner",
+      approval_id: "approval",
+      runtime_digest: "a".repeat(64),
+      executable_digest: "b".repeat(64),
+      capability_digest: "c".repeat(64),
+    },
+    adapter_authorities: [],
+    limits: { max_decisions: 1, max_actions: 1, max_outstanding_actions: 1 },
+    ts: 1,
+  };
+  return {
+    ...base,
+    definition_digest: controllerDefinitionDigest(base),
+  } as ControllerDefinitionPinnedRecord;
+}
+
+function controllerActivation(runId: string, definitionDigest: string) {
+  return {
+    type: "controller_activation_started" as const,
+    schema_version: 1 as const,
+    run_id: runId,
+    controller_id: "controller",
+    definition_digest: definitionDigest,
+    activation_id: "activation-1",
+    owner_epoch: 1,
+    reason: "start" as const,
+    previous_activation_id: null,
+    ts: 2,
   };
 }
 
@@ -110,6 +160,43 @@ function serializationSandboxClaims(runId: string): readonly SandboxBearingRecor
 }
 
 describe("FileRecordLog", () => {
+  it("writes controller records to a private file", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const runId = "controller-durable";
+    new FileRecordLog({ baseDir }).append(controllerDefinition(runId));
+
+    expect(statSync(join(baseDir, `${runId}.jsonl`)).mode & 0o777).toBe(0o600);
+  });
+
+  it("fails closed rather than appending to a torn controller log", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const runId = "controller-torn";
+    const path = join(baseDir, `${runId}.jsonl`);
+    const definition = controllerDefinition(runId);
+    writeFileSync(path, `${JSON.stringify(definition)}\n{`, "utf8");
+    const log = new FileRecordLog({ baseDir });
+
+    expect(() => log.append({ type: "run_seeded", run_id: runId, goal: "next", ts: 2 })).toThrow(
+      /torn trailing record/,
+    );
+    expect(readFileSync(path, "utf8")).toBe(`${JSON.stringify(definition)}\n{`);
+  });
+
+  it("rejects stale controller ownership before changing a file log", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const runId = "controller-owner";
+    const definition = controllerDefinition(runId);
+    const activation = controllerActivation(runId, definition.definition_digest);
+    const log = new FileRecordLog({ baseDir });
+    log.append(definition);
+    log.append(activation);
+
+    expect(() => log.append({ ...activation, activation_id: "activation-stale" })).toThrow(
+      /owner epoch is not contiguous/,
+    );
+    expect(log.records(runId)).toEqual([definition, activation]);
+  });
+
   it("normalizes an older checkpoint snapshot without end_request", async () => {
     baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
     const log = new FileRecordLog({ baseDir });

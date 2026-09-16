@@ -436,6 +436,11 @@ export interface SubagentFailedRecord {
 export type RoleSessionLifecycleRecord = SessionLifecycleEvent & {
   readonly role_session_id?: string;
   readonly conversation_id?: string | null;
+  readonly session_origin?: "controller";
+  readonly controller_id?: string;
+  readonly controller_definition_digest?: string;
+  readonly controller_activation_id?: string;
+  readonly controller_owner_epoch?: number;
 };
 
 /** Union of every record the host appends to its run_id-keyed log. */

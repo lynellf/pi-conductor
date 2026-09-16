@@ -14,6 +14,17 @@ export function withRoleSessionIdentity<T extends PersistedRecord>(
   record: T,
   session: RoleSession,
 ): T {
+  if (session.sessionOrigin?.kind === "controller") {
+    return {
+      ...record,
+      role_session_id: session.sessionId,
+      session_origin: "controller",
+      controller_id: session.sessionOrigin.controllerId,
+      controller_definition_digest: session.sessionOrigin.definitionDigest,
+      controller_activation_id: session.sessionOrigin.activationId,
+      controller_owner_epoch: session.sessionOrigin.ownerEpoch,
+    } as T;
+  }
   if (session.conversationId === undefined) return record;
   return {
     ...record,
@@ -156,3 +167,14 @@ export function formatIncomingHandoffSeed(
 }
 
 export { formatArtifactsUnavailableSeedSection };
+
+/** Deliver a typed finish rejection only after the caller has durably persisted its source. */
+export async function notifyControllerOfFinishRejection(
+  session: RoleSession,
+  notification: import("./role-session-contract.js").ControllerSessionNotification,
+): Promise<void> {
+  if (session.sessionOrigin?.kind !== "controller") return;
+  if (session.notifyController === undefined)
+    throw new Error("controller role session has no finish-rejection notification hook");
+  await session.notifyController(notification);
+}

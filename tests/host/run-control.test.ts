@@ -142,6 +142,22 @@ describe("RunControl operator guidance", () => {
     ]);
   });
 
+  it("rejects controller steering and follow-up before either can be queued", async () => {
+    const control = new RunControl({
+      runId: "run-1",
+      abortSession: vi.fn(),
+      guidancePolicy: "unsupported",
+    });
+
+    await expect(control.steer("redirect")).rejects.toMatchObject({
+      code: "steering_unavailable",
+    });
+    await expect(control.followUp("later")).rejects.toMatchObject({
+      code: "steering_unavailable",
+    });
+    expect(control.takePendingGuidance()).toEqual([]);
+  });
+
   it("reports steering_unavailable only for an active session without native steering", async () => {
     const active = createSession("worker");
     const control = new RunControl({ runId: "run-1", abortSession: vi.fn() });

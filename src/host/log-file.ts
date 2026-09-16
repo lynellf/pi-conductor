@@ -52,6 +52,8 @@ import { createConnection, createServer, type Server, type Socket } from "node:n
 import { join } from "node:path";
 
 import type { Checkpoint } from "../core/types.js";
+import { isControllerRecord } from "../persistence/controller-records.js";
+import { reconstructControllerTimeline } from "../persistence/controller-timeline.js";
 import { assertDelegationTaskTimeline } from "../persistence/delegation-task.js";
 import {
   assertEndGuardAppend,
@@ -59,36 +61,15 @@ import {
   unfinishedEndGuardAttempts,
 } from "../persistence/end-guard.js";
 import { normalizeCheckpoint, type PersistedRecord, type RecordLog } from "../persistence/log.js";
-import {
-  assertPersistedRecordGuarantees,
-  materializePersistedRecord,
-} from "../persistence/record-materialization.js";
+import { materializePersistedRecord } from "../persistence/record-materialization.js";
+import { appendControllerLogRecord } from "./controller/log-append.js";
+import { parsePersistedRecord, RecordLogError } from "./log-file-parser.js";
+
+export { RecordLogError } from "./log-file-parser.js";
 
 export interface FileRecordLogOptions {
   /** Directory holding the run_id-keyed JSONL files. Created on construction. */
   readonly baseDir: string;
-}
-
-/**
- * Typed failure while decoding a file-backed run log at the filesystem boundary.
- *
- * Mirrors `ManifestParseError` (src/manifest/types.ts): wraps the raw
- * `SyntaxError` (or a schema-drift error) with the `runId` and 1-based
- * `line` so callers can surface a diagnostic instead of a bare stack. Per
- * AGENTS.md ("No silent fallbacks: ambiguity → throw a typed error or
- * surface a warning"), the JSONL reader is the outlier that must NOT leak
- * a raw `SyntaxError` to `resumeRun` / `/conduct:list`.
- */
-export class RecordLogError extends Error {
-  readonly runId: string;
-  readonly line: number;
-
-  constructor(message: string, options: { cause?: unknown; runId: string; line: number }) {
-    super(message, { cause: options.cause });
-    this.name = "RecordLogError";
-    this.runId = options.runId;
-    this.line = options.line;
-  }
 }
 
 /** Typed rejection for a second live execution of the same persisted run. */
@@ -123,6 +104,7 @@ export interface RunExecutionLease {
 
 export class FileRecordLog implements RecordLog {
   private readonly baseDir: string;
+  private readonly controllerRuns = new Map<string, boolean>();
 
   constructor(opts: FileRecordLogOptions) {
     mkdirSync(opts.baseDir, { recursive: true });
@@ -140,6 +122,14 @@ export class FileRecordLog implements RecordLog {
     }
     if (isDelegationTaskRecord(materialized.record)) {
       assertDelegationTaskTimeline([...this.records(runId), materialized.record]);
+    }
+    if (isControllerRecord(materialized.record)) {
+      reconstructControllerTimeline([...this.records(runId), materialized.record]);
+    }
+    const controllerMode = this.isControllerRun(runId, materialized.record.type);
+    if (controllerMode) {
+      appendControllerLogRecord(this.filePath(runId), materialized.json);
+      return;
     }
     appendFileSync(this.filePath(runId), `${materialized.json}\n`, "utf8");
   }
@@ -268,6 +258,20 @@ export class FileRecordLog implements RecordLog {
 
   private filePath(runId: string): string {
     return join(this.baseDir, `${runId}.jsonl`);
+  }
+
+  private isControllerRun(runId: string, recordType: PersistedRecord["type"]): boolean {
+    if (recordType === "controller_definition_pinned") {
+      this.controllerRuns.set(runId, true);
+      return true;
+    }
+    const cached = this.controllerRuns.get(runId);
+    if (cached !== undefined) return cached;
+    const controllerMode = this.records(runId).some(
+      (record) => record.type === "controller_definition_pinned",
+    );
+    this.controllerRuns.set(runId, controllerMode);
+    return controllerMode;
   }
 
   private leaseDigest(runId: string): Buffer {
@@ -416,85 +420,4 @@ function close(server: Server): Promise<void> {
 /** Extract the run_id from a record. CheckpointSnapshot carries it on the wrapped Checkpoint. */
 function runIdOf(record: PersistedRecord): string {
   return record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
-}
-
-/**
- * The full set of `PersistedRecord` `type` discriminants the current core +
- * persistence layer can emit. Used to validate the parsed value's `type` at
- * the filesystem boundary so a schema-drifted record (an older log read by
- * newer code, or vice versa) is caught as a typed `RecordLogError` rather
- * than silently bare-cast. A full TypeBox schema is possible later but is
- * not required to close this boundary (issue #37 Finding 1, smallest fix).
- */
-const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
-  "transition_accepted",
-  "transition_rejected",
-  "session_started",
-  "session_ended",
-  "session_failed",
-  "model_fallback",
-  "model_retry",
-  "checkpoint_snapshot",
-  "run_seeded",
-  "run_context",
-  "handoff_validation_rejected",
-  "progressive_disclosure",
-  "subagent_started",
-  "delegation_validation_rejected",
-  "subagent_completed",
-  "subagent_failed",
-  "file_mutation",
-  "role_turn",
-  "snapshot_pinned",
-  "workspace_provisioned",
-  "artifact_collected",
-  "artifact_rejected",
-  "artifact_delivery",
-  "manifest_snapshot",
-  "handoff_transport_selected",
-  "trajectory_handoff_failed",
-  "trajectory_target_seed_delivered",
-  "tool_execution_started",
-  "tool_execution_finished",
-  "tool_execution_cleanup_confirmed",
-  "tool_execution_sandbox_ready",
-  "end_guard_started",
-  "end_guard_finished",
-  "end_guard_budget_reset",
-  "delegation_submission_accepted",
-  "context_epoch_started",
-  "context_invocation_started",
-  "context_delivery_committed",
-  "context_boundary_committed",
-  "context_compaction_started",
-  "context_compaction",
-  "run_finalization_failed",
-]);
-
-/** Validate the parsed JSONL value's `type` discriminant before trusting it as a record. */
-function parsePersistedRecord(value: unknown, runId: string, line: number): PersistedRecord {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("type" in value) ||
-    typeof (value as { type?: unknown }).type !== "string" ||
-    !PERSISTED_RECORD_TYPES.has((value as { type: string }).type)
-  ) {
-    const type =
-      typeof value === "object" && value !== null && "type" in value
-        ? (value as { type?: unknown }).type
-        : undefined;
-    const cause = new Error(`unknown persisted record type: ${String(type)}`);
-    throw new RecordLogError(
-      `Unknown persisted record type in run log '${runId}' at line ${line}`,
-      {
-        cause,
-        runId,
-        line,
-      },
-    );
-  }
-  const record = value as PersistedRecord;
-  assertPersistedRecordGuarantees(record);
-  return record;
 }

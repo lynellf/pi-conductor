@@ -1,6 +1,7 @@
 /** Public constructor contract for the SDK-backed ProductionHost. */
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
+import type { ControllerHostApproval } from "./controller/host-approval.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -18,6 +19,8 @@ import type { NodeRoleSessionOptions } from "./rpc/protocol.js";
  */
 /** Construction dependencies for a production Host run. */
 export interface ProductionHostOptions {
+  /** Reload current operator controller authority before each protected operation. */
+  readonly loadControllerHostApproval?: () => Promise<ControllerHostApproval>;
   /** Host-operator Bubblewrap approval; never sourced from the manifest/model. */
   readonly sandboxHostApproval?: SandboxHostApproval;
   /** Real `ModelRegistry` from the host's environment (extension

@@ -83,6 +83,11 @@ describe("extension shell — Task 7B.1: registration", () => {
     expect(flag?.default).toBeUndefined();
   });
 
+  it("registers the controller approval path flag", async () => {
+    const ext = await loadExtension("<test>", cwd);
+    expect(ext.flags.get("conduct-controller-approval")).toMatchObject({ type: "string" });
+  });
+
   it("does not start any long-lived work from the factory itself (7B.1 acceptance)", async () => {
     // The factory is the 7B.1 acceptance gate. If
     // the factory started a run, the active-run

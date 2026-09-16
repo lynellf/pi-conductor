@@ -30,6 +30,11 @@
 import { describe, expect, it } from "vitest";
 import type { SessionTerminalReason } from "../../src/host/host.js";
 import { runLoop } from "../../src/host/loop.js";
+import type {
+  ControllerSessionNotification,
+  HostTermination,
+  RoleSessionOrigin,
+} from "../../src/host/role-session-contract.js";
 import { RunControl } from "../../src/host/run-control.js";
 import {
   type Checkpoint,
@@ -96,6 +101,9 @@ class FakeSession {
   beforeSeal: (() => Promise<void> | void) | null = null;
   retainedContextMode: "enabled" | "capture-fails" | "dispose-fails" | null = null;
   retentionEvents: string[] = [];
+  sessionOrigin: RoleSessionOrigin | undefined;
+  hostTermination: HostTermination | null = null;
+  notifications: ControllerSessionNotification[] = [];
 
   constructor(role: Role, sessionId: string, script: ScriptedEmission[]) {
     this.role = role;
@@ -107,6 +115,7 @@ class FakeSession {
   toRoleSession(): RoleSession {
     return {
       role: this.role,
+      ...(this.sessionOrigin === undefined ? {} : { sessionOrigin: this.sessionOrigin }),
       sessionId: this.sessionId,
       sessionFile: this.sessionFile,
       model: null,
@@ -116,6 +125,10 @@ class FakeSession {
         this.captureBuffer.length = 0;
         this.sealed = false;
       },
+      notifyController: async (notification) => {
+        this.notifications.push(notification);
+      },
+      getHostTermination: () => this.hostTermination,
       subscribe: (listener) => {
         this.subscribers.push(listener as (event: unknown) => void);
         return () => {
@@ -855,11 +868,89 @@ describe("runLoop — shared-session prompt errors", () => {
       log.records(initialCheckpoint.run_id).some((record) => record.type === "session_failed"),
     ).toBe(false);
   });
+
+  it("consumes controller run-cost termination before classifying a prompt failure", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const session = new FakeSession("orchestrator", "controller-session", []);
+    session.sessionOrigin = {
+      kind: "controller",
+      controllerId: "planner",
+      definitionDigest: "a".repeat(64),
+      activationId: "activation-1",
+      ownerEpoch: 1,
+    };
+    const base = session.toRoleSession.bind(session);
+    session.toRoleSession = () => ({
+      ...base(),
+      prompt: async () => {
+        session.hostTermination = { kind: "run_cost_cap" };
+        throw new Error("controller wait ended");
+      },
+    });
+    host.enqueue(session);
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("done");
+    const records = log.records(initialCheckpoint.run_id);
+    expect(records.some((record) => record.type === "session_failed")).toBe(false);
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        type: "session_ended",
+        session_origin: "controller",
+        controller_id: "planner",
+        role_session_id: "controller-session",
+      }),
+    );
+    expect(records).toContainEqual(
+      expect.objectContaining({ type: "transition_accepted", end_authority: "run_cost_cap" }),
+    );
+  });
 });
 
 // ─── Reducer rejection: retry in-session, surface legal_targets ────────
 
 describe("runLoop — reducer rejection (§11.3 retry path)", () => {
+  it("notifies a controller only after its rejection record is durable", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const session = new FakeSession("orchestrator", "controller-session", [
+      { kind: "emit_illegal_handoff", target_role: "undeclared-role" },
+      { kind: "emit_end" },
+    ]);
+    session.sessionOrigin = {
+      kind: "controller",
+      controllerId: "planner",
+      definitionDigest: "a".repeat(64),
+      activationId: "activation-1",
+      ownerEpoch: 1,
+    };
+    const base = session.toRoleSession.bind(session);
+    session.toRoleSession = () => ({
+      ...base(),
+      notifyController: async (notification) => {
+        expect(
+          log
+            .records(initialCheckpoint.run_id)
+            .some((record) => JSON.stringify(record) === JSON.stringify(notification.source)),
+        ).toBe(true);
+        session.notifications.push(notification);
+      },
+    });
+    host.enqueue(session);
+
+    await makeRun(initialCheckpoint, host);
+
+    expect(session.notifications).toHaveLength(1);
+    expect(session.notifications[0]).toMatchObject({
+      kind: "machine_rejected",
+      source: { type: "transition_rejected" },
+    });
+  });
+
   it("worker → orchestrator handoff is legal; orchestrator → worker is legal; verify rejectable path", async () => {
     // To trigger a reducer rejection, we need an illegal transition
     // for the current role. For an orchestrator, illegal transitions
@@ -1209,6 +1300,33 @@ describe("runLoop — session disposal (§12.1 step 7)", () => {
 });
 
 describe("runLoop — host hook usage", () => {
+  it("never retries or model-falls back a failed controller session", async () => {
+    const log = new InMemoryRecordLog();
+    const host = new FakeHost("run-1", log);
+    const initialCheckpoint = createInitialCheckpoint(makeDef());
+    const session = new FakeSession("orchestrator", "controller-session", [
+      { kind: "no_emission" },
+    ]);
+    session.sessionOrigin = {
+      kind: "controller",
+      controllerId: "planner",
+      definitionDigest: "a".repeat(64),
+      activationId: "activation-1",
+      ownerEpoch: 1,
+    };
+    host.terminalReasons.set(session.sessionId, "model_error");
+    host.nextModel = "provider:fallback";
+    host.enqueue(session);
+
+    const result = await makeRun(initialCheckpoint, host);
+
+    expect(result.exitReason).toBe("session_failed");
+    expect(host.spawnedSessions).toHaveLength(1);
+    const records = log.records(initialCheckpoint.run_id);
+    expect(records.some((record) => record.type === "model_retry")).toBe(false);
+    expect(records.some((record) => record.type === "model_fallback")).toBe(false);
+  });
+
   it.each([
     "user_aborted",
     "tool_cleanup_unconfirmed",

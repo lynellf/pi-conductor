@@ -69,6 +69,7 @@ import { summarizePayload } from "../seam/payload-summary.js";
 import type { Host, RoleSession, SeedRunMemoryArgs } from "./host.js";
 import { runRoleVisit } from "./loop-fallback.js";
 import { formatRoleUnavailableSeed } from "./loop-format.js";
+import { forceRunCostCapEnd } from "./loop-run-cost-cap.js";
 import type { PendingArtifactRoute, RunLoopOptions, RunLoopResult } from "./loop-types.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 
@@ -139,12 +140,6 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const executionVisitIndexByRole = new Map<Role, number>(
     Object.entries(opts.initialExecutionVisitIndexByRole ?? {}) as [Role, number][],
   );
-  // Sentinel sessionFile for the synthesized `end` records. There is
-  // no live session at the time of synthesis, so the record's
-  // `session_file` field carries a stable marker rather than a real
-  // path. `run_id` is the real runId; the marker is just a hint for
-  // log consumers.
-  const SYNTHESIZED_SESSION_FILE = "<synthesized:end:run-cost-cap>";
   // Sentinel sessionFile for the synthesized handoff to the
   // orchestrator on model-fallback exhaustion (Task 18, §8.2/§9.4).
   // Distinct from the run-cap sentinel so log consumers can tell the
@@ -174,19 +169,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           )}' (expected '${def.orchestrator}'); §11.7 worker-deferral guard invariant violated`,
         );
       }
-      const synthesized: MachineEvent = {
-        type: "end",
-        authority: "run_cost_cap",
-        payload: { reason: "run_cost_cap_exceeded" },
-      };
-      const result = reduce(checkpoint, synthesized, def, {
-        role: def.orchestrator,
-        sessionFile: SYNTHESIZED_SESSION_FILE,
-        ts: Date.now(),
-      });
-      host.persistRecord(result.record);
-      checkpoint = result.checkpoint;
-      host.persistRecord({ type: "checkpoint_snapshot", checkpoint });
+      checkpoint = forceRunCostCapEnd({ checkpoint, def, host });
       return { finalCheckpoint: checkpoint, exitReason: "done" };
     }
 
