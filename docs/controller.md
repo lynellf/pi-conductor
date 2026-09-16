@@ -15,6 +15,11 @@ fixed-argv planner/adapter pair. The example planner prepares an artifact,
 delegates one native worker, validates both the artifact and the worker's
 durable terminal record, reads the validation result, and finishes.
 
+For private native reports and patches, reviewed integration, and authenticated
+delivery, see [child outputs and authorized delivery](issue-116-delivery/operator-guide.md).
+Those features require additional exact operator grants and retain the same
+controller scheduling and host execution boundaries.
+
 ## Configure the manifest
 
 Add one top-level `controller` mapping to a version 1 manifest:

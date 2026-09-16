@@ -157,6 +157,9 @@ approval and a separate protected controller registry. Pass
 `--conduct-controller-approval <path>` flag. See
 [sandboxed repository controllers](docs/controller.md) and the
 [`examples/controller`](examples/controller) runnable example.
+For private native outputs and approved integration/delivery, see the
+[operator guide](docs/issue-116-delivery/operator-guide.md) and
+[delivery example](examples/controller-delivery).
 
 ### Two layers, kept strictly apart
 

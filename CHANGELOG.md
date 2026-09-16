@@ -4,6 +4,10 @@
 
 ### Features
 
+- Publish bounded immutable native child reports and patches with explicit consumer
+  access, and add opt-in operator grants for reviewed Git integration, promotion,
+  and authenticated delivery with durable effect reconciliation (#116).
+
 - Add explicit sandbox snapshot profiles with approved roots, admission file limits,
   compact worker prompts and durable authority checks. Reuse the same profile for
   later batches without enumerating imports; existing narrow profiles stay unchanged (#111).
