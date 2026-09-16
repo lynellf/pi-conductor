@@ -21,6 +21,15 @@ in receives it**. It is not an FSM transition and subagents are not conductor
 roles: the parent remains responsible for reviewing the result and deciding
 whether to integrate a child branch.
 
+The orchestrator's run-memory `next_candidates` lists only top-level FSM
+handoff targets. A coordinator-only manifest has no such worker roles, so an
+empty list is expected even when delegation is configured. FSM visit limits do
+not describe child-task capacity, and an empty list does not mean the goal is
+complete. Use `handoff` to transfer the active FSM role; use an enabled `delegate`
+tool to submit child work under the parent's configured policy. Allowed profiles
+do not guarantee admission: live child and budget limits, approvals, projection,
+Git state, and cleanup checks still apply.
+
 ### Configure a parent and profiles
 
 Add `delegate` and a `delegation` policy to the parent role, then define the

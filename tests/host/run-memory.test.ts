@@ -63,7 +63,7 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
     );
     expect(approvedSeed).toContain("end_request: role: worker");
     expect(approvedSeed).toContain("can_end: true");
-    expect(approvedSeed).toContain("or call end if the goal is complete");
+    expect(approvedSeed).toContain("call end only if the goal is complete");
   });
 
   it("passes a trusted predecessor context reference in both handoff directions", async () => {
@@ -206,13 +206,13 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
     expect(seed).toContain("current_role: orchestrator");
     expect(seed).toContain("run_cost_to_date: $0.0000");
     expect(seed).toContain("run_cost_cap: uncapped");
-    expect(seed).toContain("Available workers (visit-capped AND run-budget-uncapped): worker.");
+    expect(seed).toContain("Top-level FSM handoff candidates: worker.");
     expect(seed).toContain("(no sessions yet)");
     expect(seed).toContain("(no role cost yet)");
     // §8.4 last_message: no prior transition on the first orchestrator turn.
     expect(seed).toContain("last_message:");
     expect(seed).toContain("(no prior worker message \u2014 this is the first orchestrator turn)");
-    expect(seed).toContain("Continue your orchestration");
+    expect(seed).toContain("Continue toward the goal using the permitted routing above");
   });
 
   it("second orchestrator turn reflects the new visit_history entry after a worker visit", async () => {
@@ -275,7 +275,7 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
     expect(secondSeed).toContain("from: worker");
     expect(secondSeed).toContain("text: worker done");
     // Worker is still a candidate (visit 1 of max 3).
-    expect(secondSeed).toContain("Available workers");
+    expect(secondSeed).toContain("Top-level FSM handoff candidates: worker.");
   });
 
   it("single-writer rule: worker sessions do NOT receive the run-memory artifact", async () => {
@@ -370,5 +370,147 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
 
     expect(orchestratorPrompts[0]).toContain("run_cost_cap: $5.0000");
     expect(orchestratorPrompts[0]).toContain("$5.0000 remaining");
+  });
+
+  it("distinguishes top-level handoff candidates from delegation availability", () => {
+    const def = makeDef();
+    const checkpoint = createInitialCheckpoint(def);
+    const seed = formatRunMemorySeed(
+      buildRunMemory(checkpoint, [], def, { goal: "route work", runCostCap: null }),
+    );
+
+    expect(seed).toContain("Top-level FSM handoff candidates: worker.");
+    expect(seed).toContain("This list does not determine delegate availability.");
+    expect(seed).toContain("If delegate is available in your toolset, consult its interface");
+    expect(seed).toContain("Delegate submits child work without changing the active FSM role.");
+  });
+
+  it("explains an empty list when no top-level workers are configured", () => {
+    const def: MachineDefinition = {
+      ...makeDef(),
+      workers: [],
+      max_visits: {},
+    };
+    const seed = formatRunMemorySeed(
+      buildRunMemory(createInitialCheckpoint(def), [], def, {
+        goal: "coordinate",
+        runCostCap: null,
+      }),
+    );
+
+    expect(seed).toContain("No top-level FSM workers are configured.");
+    expect(seed).toContain("An empty handoff list does not mean the goal is complete.");
+    expect(seed).not.toContain("all workers are visit-capped or the run budget is exhausted");
+  });
+
+  it("does not suggest delegation after the run budget is exhausted", () => {
+    const checkpoint = createInitialCheckpoint(makeDef());
+    const records = [
+      {
+        type: "session_ended" as const,
+        run_id: checkpoint.run_id,
+        role: "worker",
+        visit_index: 1,
+        state: "worker",
+        model: null,
+        session_file: "/worker.jsonl",
+        parent_session: null,
+        usage: { input: 0, output: 0, cache_read: 0, cache_write: 0, tokens: 0, cost: 1 },
+        ts: 0,
+      },
+    ];
+    const seed = formatRunMemorySeed(
+      buildRunMemory(checkpoint, records, makeDef(), { goal: "route work", runCostCap: 1 }),
+    );
+
+    expect(seed).toContain("Do not use handoff or delegate to continue it.");
+    expect(seed).not.toContain("If delegate is available in your toolset");
+    expect(seed).toContain("Do not dispatch further work");
+    expect(seed).not.toContain("Continue toward the goal");
+  });
+
+  it("uses a neutral empty-list explanation when legacy memory has no topology", () => {
+    const { configured_workers: _topology, ...legacyMemory } = buildRunMemory(
+      {
+        ...createInitialCheckpoint(makeDef()),
+        visit_count: { worker: 3 },
+      },
+      [],
+      makeDef(),
+      { goal: "route work", runCostCap: null },
+    );
+    const seed = formatRunMemorySeed(legacyMemory);
+
+    expect(seed).toContain("worker topology is unavailable in this legacy memory");
+    expect(seed).toContain("An empty handoff list does not mean the goal is complete.");
+    expect(seed).not.toContain("All top-level FSM workers are visit-capped.");
+  });
+
+  it.each([
+    {
+      name: "all workers are visit-capped",
+      checkpoint: {
+        ...createInitialCheckpoint(makeDef()),
+        visit_count: { worker: 3 },
+      },
+      records: [],
+      options: { goal: "route work", runCostCap: null },
+      expected: "All top-level FSM workers are visit-capped.",
+    },
+    {
+      name: "the run budget is exhausted",
+      checkpoint: createInitialCheckpoint(makeDef()),
+      records: [
+        {
+          type: "session_ended" as const,
+          run_id: "placeholder",
+          role: "worker",
+          visit_index: 1,
+          state: "worker",
+          model: null,
+          session_file: "/worker.jsonl",
+          parent_session: null,
+          usage: {
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            tokens: 0,
+            cost: 1,
+          },
+          ts: 0,
+        },
+      ],
+      options: { goal: "route work", runCostCap: 1 },
+      expected: "The run budget is exhausted; no top-level FSM handoff is available.",
+    },
+    {
+      name: "the run is terminal",
+      checkpoint: {
+        ...createInitialCheckpoint(makeDef()),
+        current_role: "done" as const,
+      },
+      records: [],
+      options: { goal: "route work", runCostCap: null },
+      expected: "The top-level FSM run is terminal.",
+    },
+  ])("explains an empty list when $name", ({ checkpoint, records, options, expected }) => {
+    const matchingRecords = records.map((record) => ({
+      ...record,
+      run_id: checkpoint.run_id,
+    }));
+    const seed = formatRunMemorySeed(
+      buildRunMemory(checkpoint, matchingRecords, makeDef(), options),
+    );
+
+    expect(seed).toContain(expected);
+    if (checkpoint.current_role !== "done") {
+      expect(seed).toContain("An empty handoff list does not mean the goal is complete.");
+    }
+    if (checkpoint.current_role === "done") {
+      expect(seed).toContain("Do not call handoff, delegate, or end.");
+      expect(seed).not.toContain("gated run has no pending authorized end request");
+      expect(seed).not.toContain("Continue toward the goal");
+    }
   });
 });

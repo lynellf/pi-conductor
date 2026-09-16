@@ -288,6 +288,13 @@ per_role_cost: { role: { tokens, cost } },
 next_candidates: [role]   # workers not visit-capped or cost-capped
 ```
 
+`next_candidates` describes top-level FSM handoff targets only, not delegated
+subagent profiles (issue #114). A topology with no top-level workers has an empty
+list without implying visit-cap or budget exhaustion. Model-facing seed text
+must distinguish these mechanisms, point enabled delegation roles to their
+delegate interface and policy, and never infer completion or child admission
+from this list. Delegation remains host-owned and subject to its live limits.
+
 Rules:
 - **Single writer: the orchestrator only.** Workers write their handoff payload; the
   orchestrator reads payloads, updates the artifact, hands off. If workers could write

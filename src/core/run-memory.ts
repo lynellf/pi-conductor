@@ -15,7 +15,7 @@
  *   visit_history: [{ role, visit_index, model, outcome, usage }],
  *   run_cost_to_date, run_cost_cap, remaining_budget,
  *   per_role_cost: { role: { tokens, cost } },
- *   next_candidates: [role]
+ *   configured_workers: [role], next_candidates: [role]
  *
  * `open_concerns` is dropped for v1 (§8.4) — the machine does not
  * inspect payload content (§3), so no core code can populate it; a
@@ -105,6 +105,8 @@ export interface RunMemory {
   readonly run_cost_cap: number | null;
   readonly remaining_budget: number | null;
   readonly per_role_cost: Readonly<Record<string, RoleCostEntry>>;
+  /** Pinned top-level FSM worker topology; absent only in legacy externally built memories. */
+  readonly configured_workers?: readonly string[];
   readonly next_candidates: readonly string[];
   // open_concerns intentionally absent (dropped for v1, §8.4).
 }
@@ -178,6 +180,7 @@ export function buildRunMemory(
     run_cost_cap,
     remaining_budget,
     per_role_cost: Object.freeze(per_role_cost),
+    configured_workers: Object.freeze([...def.workers]),
     next_candidates: Object.freeze([...next_candidates]),
   }) as RunMemory;
 }

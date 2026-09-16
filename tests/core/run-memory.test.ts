@@ -129,6 +129,22 @@ describe("buildRunMemory: §8.4 field presence", () => {
     expect(mem.remaining_budget).toBe(22.0);
     expect(mem.per_role_cost).toBeDefined();
     expect(mem.next_candidates).toBeDefined();
+    expect(mem.configured_workers).toEqual(["implementer", "reviewer"]);
+  });
+
+  it("retains an empty configured worker topology", () => {
+    const coordinatorOnly: MachineDefinition = {
+      ...DEF,
+      workers: [],
+      max_visits: {},
+    };
+    const mem = buildRunMemory(ck("orchestrator"), [], coordinatorOnly, {
+      goal: "coordinate",
+      runCostCap: null,
+    });
+
+    expect(mem.configured_workers).toEqual([]);
+    expect(mem.next_candidates).toEqual([]);
   });
 
   it("open_concerns is absent (dropped for v1, §8.4)", () => {

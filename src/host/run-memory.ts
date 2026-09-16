@@ -22,10 +22,11 @@
  *   - run_cost_to_date, remaining_budget, run_cost_cap — budget
  *   - visit_history — past sessions
  *   - per_role_cost — cost roll-up
- *   - next_candidates — workers still dispatchable
+ *   - configured_workers, next_candidates — top-level FSM handoff topology
  *
- * The orchestrator is told explicitly what to do: dispatch via
- * `handoff(target_role=<worker>)`, and call `end` only when `can_end` is true.
+ * The orchestrator is told explicitly what to do: dispatch top-level work via
+ * `handoff(target_role=<worker>)`, use `delegate` only through its separately
+ * admitted tool interface, and call `end` only when `can_end` is true.
  */
 
 import { recipientHandoffPayload } from "../core/accepted-handoff.js";
@@ -58,16 +59,12 @@ export function formatRunMemorySeed(memory: RunMemory): string {
           .map(([role, c]) => `  - ${role}: $${c.cost.toFixed(4)} (${c.tokens} tokens)`)
           .join("\n");
 
-  const candidatesText =
-    memory.next_candidates.length > 0
-      ? `Available workers (visit-capped AND run-budget-uncapped): ${memory.next_candidates.join(", ")}.`
-      : "No candidates: all workers are visit-capped or the run budget is exhausted.";
+  const candidatesText = formatCandidateGuidance(memory);
 
   const endRequestText =
     memory.end_request === null ? "(none)" : `role: ${memory.end_request.role}`;
-  const terminalLine = memory.can_end
-    ? "Continue your orchestration. Call handoff with target_role, status, objective, summary, and requested_action to dispatch work, or call end if the goal is complete."
-    : "Continue your orchestration. Call handoff with target_role, status, objective, summary, and requested_action to dispatch work. Do not call end: this gated run has no pending authorized end request.";
+  const terminalLine = formatTerminalGuidance(memory);
+  const delegationGuidance = formatDelegationGuidance(memory);
 
   const lastMessageText =
     memory.last_message === null
@@ -124,6 +121,58 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     "next_candidates:",
     candidatesText,
     "",
+    delegationGuidance,
+    "",
     terminalLine,
   ].join("\n");
+}
+
+function formatCandidateGuidance(memory: RunMemory): string {
+  if (memory.current_role === "done") {
+    return "The top-level FSM run is terminal.";
+  }
+
+  if (memory.next_candidates.length > 0) {
+    return `Top-level FSM handoff candidates: ${memory.next_candidates.join(", ")}.`;
+  }
+
+  if (memory.configured_workers?.length === 0) {
+    return "No top-level FSM workers are configured. An empty handoff list does not mean the goal is complete.";
+  }
+
+  if (memory.remaining_budget !== null && memory.remaining_budget <= 0) {
+    return "The run budget is exhausted; no top-level FSM handoff is available. An empty handoff list does not mean the goal is complete.";
+  }
+
+  if (memory.configured_workers === undefined) {
+    return "No top-level FSM handoff candidates are listed; worker topology is unavailable in this legacy memory. An empty handoff list does not mean the goal is complete.";
+  }
+
+  return "All top-level FSM workers are visit-capped. An empty handoff list does not mean the goal is complete.";
+}
+
+function formatDelegationGuidance(memory: RunMemory): string {
+  if (memory.current_role === "done") {
+    return "This run is terminal. Do not call handoff, delegate, or end.";
+  }
+
+  if (memory.remaining_budget !== null && memory.remaining_budget <= 0) {
+    return "The exhausted run budget applies to all further work. Do not use handoff or delegate to continue it.";
+  }
+
+  return "If a top-level target is listed, use handoff to route this FSM run to it. Delegate submits child work without changing the active FSM role. This list does not determine delegate availability. If delegate is available in your toolset, consult its interface; live child and run-budget limits plus admission, projection, and cleanup gates decide whether a request can be accepted.";
+}
+
+function formatTerminalGuidance(memory: RunMemory): string {
+  if (memory.current_role === "done") {
+    return "No further orchestration is possible.";
+  }
+
+  if (memory.remaining_budget !== null && memory.remaining_budget <= 0) {
+    return "The run budget is exhausted. Do not dispatch further work; follow the run-cap completion path.";
+  }
+
+  return memory.can_end
+    ? "Continue toward the goal using the permitted routing above; call end only if the goal is complete."
+    : "Continue toward the goal using the permitted routing above. Do not call end: this gated run has no pending authorized end request.";
 }
