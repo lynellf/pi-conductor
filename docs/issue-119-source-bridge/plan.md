@@ -261,15 +261,22 @@ whose result carries the bridge descriptor):
    `git diff --name-only <B> <S>` and is asserted to be a subset of
    `descriptor.allowedPaths`.
 10. **Pre-child state verification**: after applying the prefix via
-    `git apply --index --3way --binary`, the bridge verifies that
-    `git rev-parse HEAD^{tree}` equals `descriptor.treeId` and that the
-    inventory of `descriptor.allowedPaths` at HEAD matches
-    `descriptor.inventoryDigest` (byte-for-byte, byte count, file count).
-    If the reconstruction does not equal S, the bridge aborts with
-    `bridge-reconstruction-mismatch`; it never accepts a child patch
-    unless the sealed source workspace's S identity has been exactly
-    reproduced. `rejectUnsafeIndex` runs first so the reconstructed state
-    cannot carry symlinks or unauthorized entries.
+    `git apply --index --3way --binary`, `HEAD` still names the canonical
+    base B (the integration commit that parents the new head is produced
+    in step 12), so `git rev-parse HEAD^{tree}` would return B's tree and
+    cannot equal `descriptor.treeId` when there is any prefix. The bridge
+    therefore writes the staged tree with `git write-tree` (the
+    `--index` from `git apply` populated the index, not the working
+    tree's HEAD) and verifies that the resulting staged tree OID equals
+    `descriptor.treeId`. The inventory of `descriptor.allowedPaths` is
+    then computed from that exact staged/index tree (not HEAD) and is
+    asserted to match `descriptor.inventoryDigest` byte-for-byte, byte
+    count, and file count. If the reconstruction does not equal S, the
+    bridge aborts with `bridge-reconstruction-mismatch`; it never
+    accepts a child patch unless the sealed source workspace's S
+    identity has been exactly reproduced. `rejectUnsafeIndex` runs first
+    so the reconstructed state cannot carry symlinks or unauthorized
+    entries.
 11. **Child patch application**: the resolved child patch bytes are applied
     via `git apply --index --3way --binary` against the isolated state at
     the verified S tree. The bridge verifies the resulting tree's
@@ -460,6 +467,12 @@ Lane 1 (provenance-worker) must satisfy:
       query), the resolved child patch bytes/digest/length/paths, the
       effect principal audience, and reconstructs the prefix in isolated
       canonical state before applying the child patch.
+- [ ] Step 10 verifies the staged/index tree (via `git write-tree` after
+      `git apply --index`) equals `descriptor.treeId` and that the
+      inventory of `descriptor.allowedPaths` from the same staged/index
+      tree matches `descriptor.inventoryDigest`; `git rev-parse
+      HEAD^{tree}` is never used for pre-child verification because
+      `HEAD` still names B after `git apply --index`.
 - [ ] The bridge does **not** concatenate prefix + child bytes, does
       **not** synthesise a combined digest, and does **not** rewrite the
       original child patch's `evidence[*].subject_digest`. The original
@@ -565,6 +578,22 @@ src/host/controller/effect-registry-validation.ts          (readonly)
 src/host/controller/child-output-capture.ts                (readonly)
 src/host/controller/child-output-publication.ts            (readonly)
 src/host/controller/production-effects.ts                  (readonly)
+# Delegation worktree + execution-controller (read-only; the surface that
+# tests/host/source-workspace.test.ts uses via createIndependentSourceWorktree
+# and ToolExecutionError. The bridge never reads from these.)
+src/host/delegation/child-result.ts                        (readonly — ChildWorktreeInspection type used by worktree.ts)
+src/host/delegation/ids.ts                                 (readonly — ChildId type used by worktree.ts)
+src/host/delegation/projection.ts                          (readonly — isSafeExactProjectionPath used by worktree.ts)
+src/host/delegation/worktree.ts                            (readonly — createIndependentSourceWorktree used by source-workspace.test.ts)
+src/host/execution/execution-attempt-tracker.ts            (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-controller-support.ts    (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-controller.ts            (readonly — ToolExecutionError used by source-workspace.test.ts)
+src/host/execution/tool-execution-contract.ts              (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-lifecycle-admission.ts   (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-lifecycle.ts             (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-resume.ts                (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-terminal.ts              (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-timing.ts                (readonly — direct local import of tool-execution-controller.ts)
 src/host/index.ts                                          (write — re-export bridge)
 src/persistence/source-workspace.ts                        (write — extend sourceWorkspaceContentSchema with allowed_paths + patches_digest)
 src/persistence/source-workspace-timeline.ts               (readonly)
@@ -575,6 +604,9 @@ src/persistence/controller-timeline.ts                     (readonly)
 src/persistence/child-output-artifact.ts                   (readonly)
 src/persistence/child-output-records.ts                    (readonly)
 src/persistence/child-output-timeline.ts                   (readonly)
+src/persistence/sandbox-command.ts                         (readonly — SandboxExecutionTerminal used by tool-execution-controller.ts)
+src/persistence/sandbox-execution.ts                       (readonly — SandboxExecutionOwner used by tool-execution-controller.ts)
+src/persistence/tool-execution.ts                          (readonly — ToolExecutionRecord used by tool-execution-controller.ts)
 src/persistence/trajectory-records.ts                      (readonly — sha256Canonical)
 tests/host/controller-git-effect.test.ts                   (write — extend with bridge integration)
 tests/host/controller-git-effect-source-bridge.test.ts     (write — new bridge test)
@@ -596,8 +628,25 @@ Quota-worker projection (assigned writes):
 AGENTS.md                                                  (readonly context)
 docs/archive/orchestrator-fsm-spec.md                      (readonly context)
 docs/issue-118-source-workspaces/README.md                 (write — aggregate + diagnostic)
+docs/issue-119-source-bridge/plan.md                       (readonly — bridge contract that quota also references)
 src/manifest/controller-source.ts                          (write — sourceWorkspaceAggregateBytes)
 src/host/controller/production-sources.ts                  (write — capacity predicate + diagnostic)
+# Execution-controller surface (read-only; the surface that
+# tests/host/controller-source-capacity.test.ts and
+# tests/host/controller-production-sources.test.ts use via
+# ToolExecutionScope / ToolExecutionController. Quota never writes here.)
+src/host/execution/execution-attempt-tracker.ts            (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-controller-support.ts    (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-controller.ts            (readonly — ToolExecutionScope / ToolExecutionController used by focused tests)
+src/host/execution/tool-execution-contract.ts              (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-lifecycle-admission.ts   (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-lifecycle.ts             (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-resume.ts                (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-terminal.ts              (readonly — direct local import of tool-execution-controller.ts)
+src/host/execution/tool-execution-timing.ts                (readonly — direct local import of tool-execution-controller.ts)
+src/persistence/sandbox-command.ts                         (readonly — SandboxExecutionTerminal used by tool-execution-controller.ts)
+src/persistence/sandbox-execution.ts                       (readonly — SandboxExecutionOwner used by tool-execution-controller.ts)
+src/persistence/tool-execution.ts                          (readonly — ToolExecutionRecord used by tool-execution-controller.ts)
 tests/manifest/controller-source.test.ts                   (write — aggregate tests)
 tests/host/controller-source-capacity.test.ts              (write — aggregate tests)
 tests/host/controller-production-sources.test.ts           (write — aggregate tests)
@@ -612,4 +661,13 @@ worker additionally shares read-only access to
 `controller-source.ts` (for `sourceWorkspaceRefSchema` /
 `sourceRepositoryRefSchema`) and the integration `provider`
 `controller-timeline.ts` / `controller-records.ts` / `child-output-*` /
-`trajectory-records.ts`. No write overlap.
+`trajectory-records.ts`. Both lanes additionally share read-only access
+to the `delegation` (worktree + child-result + ids + projection),
+`execution` (tool-execution-controller + contract + support + lifecycle +
+lifecycle-admission + terminal + timing + resume + attempt-tracker), and
+`sandbox-` / `tool-execution` persistence modules because the
+provenance-focused `source-workspace.test.ts` and the quota-focused
+`controller-source-capacity.test.ts` and `controller-production-sources.test.ts`
+construct `createIndependentSourceWorktree`, `ToolExecutionError`,
+`ToolExecutionScope`, and `ToolExecutionController` against them. None
+of these are write targets for either lane. No write overlap.
