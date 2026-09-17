@@ -160,6 +160,9 @@ approval and a separate protected controller registry. Pass
 For private native outputs and approved integration/delivery, see the
 [operator guide](docs/issue-116-delivery/operator-guide.md) and
 [delivery example](examples/controller-delivery).
+Opt-in trusted local providers can implement forge publication and CI observation;
+see the [local provider guide](docs/issue-117-local-effects/operator-guide.md) for
+measurement, private credentials, bounded waits, and crash recovery.
 
 ### Two layers, kept strictly apart
 

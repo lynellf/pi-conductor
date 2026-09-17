@@ -23,6 +23,7 @@ import { effectRequestSchemaFor } from "../../src/manifest/controller-effect.js"
 import { controllerActionRequestDigest } from "../../src/persistence/controller-records.js";
 import { InMemoryRecordLog } from "../../src/persistence/in-memory-log.js";
 import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
+import { createLocalProductionGrant } from "./fixtures/local-production-grant.js";
 
 const digest = "a".repeat(64);
 const execute = promisify(execFile);
@@ -172,7 +173,16 @@ describe("production controller effects", () => {
     ).rejects.toBeInstanceOf(ControllerEffectRejectedError);
   });
 
-  it("promotes an approved head once and recovers its existing result without replay", async () => {
+  it.each([
+    { kind: "git_promote", privateEvidence: false, inputAccess: true },
+    { kind: "local_program", privateEvidence: false, inputAccess: true },
+    { kind: "local_program", privateEvidence: true, inputAccess: true },
+    { kind: "local_program", privateEvidence: true, inputAccess: false },
+  ] as const)("runs $kind (private: $privateEvidence; input access: $inputAccess)", async ({
+    kind,
+    privateEvidence,
+    inputAccess,
+  }) => {
     const root = await mkdtemp(join(tmpdir(), "pi-conductor-production-effects-"));
     roots.push(root);
     const repository = join(root, "repository");
@@ -213,7 +223,7 @@ describe("production controller effects", () => {
       output_consumers: [{ kind: "effect" as const, effect_id: "promote" }],
       result_consumers: [{ kind: "controller" as const }],
     };
-    const grant = {
+    const builtinGrant = {
       schema_version: 1 as const,
       id: "promote",
       adapter_id: promote.id,
@@ -236,6 +246,11 @@ describe("production controller effects", () => {
       max_output_bytes: 65536,
       timeout_seconds: 10,
     };
+    const grant =
+      kind === "git_promote"
+        ? builtinGrant
+        : await createLocalProductionGrant(root, builtinGrant, supported);
+    promote.output_schema_id = grant.request_schema_id;
     const inputSchema = { type: "object" };
     const approval = validateControllerHostApproval({
       schema_version: 1,
@@ -273,8 +288,8 @@ describe("production controller effects", () => {
         },
         {
           schema_id: promote.output_schema_id,
-          schema_digest: implementation.request_schema_digest,
-          schema: effectRequestSchemaFor("git_promote"),
+          schema_digest: grant.request_schema_digest,
+          schema: effectRequestSchemaFor(kind),
         },
       ],
       effects: [grant],
@@ -351,7 +366,7 @@ describe("production controller effects", () => {
       operationId: string,
       value: unknown,
       schema: { id: string; digest: string },
-      audience: readonly { kind: "effect"; effect_id: string }[],
+      audience: readonly import("../../src/manifest/controller-output.js").ControllerOutputPrincipal[],
     ) => {
       const bytes = Buffer.from(JSON.stringify(value));
       const staging = await artifacts.createStaging(action.action_id);
@@ -385,7 +400,10 @@ describe("production controller effects", () => {
       "validator-operation",
       { schema_version: 1, subject_head: head, verdict: "approved" },
       { id: validator.output_schema_id, digest: sha256Canonical(inputSchema) },
-      [{ kind: "effect", effect_id: "promote" }],
+      [
+        ...(inputAccess ? [{ kind: "effect" as const, effect_id: "promote" }] : []),
+        ...(privateEvidence ? [] : [{ kind: "controller" as const }]),
+      ],
     );
     log.append({
       type: "controller_action_receipt",
@@ -411,12 +429,14 @@ describe("production controller effects", () => {
     });
     const request = {
       schema_version: 1 as const,
-      kind: "git_promote" as const,
+      kind,
+      ...(kind === "local_program"
+        ? { operation: "observe", payload: {} }
+        : { expected_target_oid: null }),
       repository_id: "repository",
       source_ref: "refs/reviewed/main",
       reviewed_head: head,
       target_ref: "refs/releases/approved",
-      expected_target_oid: null,
       evidence: [
         {
           artifact_ref: validation.ref,
@@ -432,8 +452,8 @@ describe("production controller effects", () => {
       promoteAction,
       "promote-operation",
       request,
-      { id: implementation.request_schema_id, digest: implementation.request_schema_digest },
-      [{ kind: "effect", effect_id: "promote" }],
+      { id: grant.request_schema_id, digest: grant.request_schema_digest },
+      [{ kind: "effect", effect_id: "promote" }, { kind: "controller" }],
     );
     const resolver = createControllerOutputResolver({
       artifactStore: artifacts,
@@ -461,12 +481,39 @@ describe("production controller effects", () => {
       operationId: "promote-operation",
       artifact: requestArtifact,
     });
+    if (!inputAccess) {
+      expect(outcome.outcome).toBe("failed");
+      expect(
+        log
+          .records("run")
+          .filter((record) => record.type === "controller_local_effect_process_admitted"),
+      ).toHaveLength(0);
+      return;
+    }
     expect(outcome).toMatchObject({ outcome: "completed", result_refs: [expect.any(String)] });
-    expect(
-      (
-        await execute("git", ["-C", repository, "rev-parse", "refs/releases/approved"])
-      ).stdout.trim(),
-    ).toBe(head);
+    if (kind === "git_promote") {
+      expect(
+        (
+          await execute("git", ["-C", repository, "rev-parse", "refs/releases/approved"])
+        ).stdout.trim(),
+      ).toBe(head);
+    } else {
+      const resultRef = outcome.result_refs[0];
+      if (resultRef === undefined) throw new Error("missing result");
+      if (privateEvidence) {
+        await expect(resolver.resolveRef(resultRef, { kind: "controller" })).rejects.toThrow();
+      } else {
+        const output = await resolver.resolveRef(resultRef, { kind: "controller" });
+        expect(JSON.parse(output.bytes.toString("utf8"))).toMatchObject({
+          payload: { ci: "pending" },
+        });
+      }
+      expect(
+        log
+          .records("run")
+          .filter((record) => record.type === "controller_local_effect_process_admitted"),
+      ).toHaveLength(1);
+    }
     const action = (
       await import("../../src/persistence/controller-timeline.js")
     ).getControllerAction(
@@ -487,5 +534,5 @@ describe("production controller effects", () => {
     expect(
       log.records("run").filter((record) => record.type === "controller_effect_settled"),
     ).toHaveLength(settled);
-  });
+  }, 30000);
 });

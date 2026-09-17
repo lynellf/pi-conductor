@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { DeliverRefRequest } from "../../src/manifest/controller-effect.js";
+import type {
+  DeliverRefRequest,
+  EffectRequest,
+  LocalProgramRequest,
+} from "../../src/manifest/controller-effect.js";
 import {
   assertControllerEffectRecord,
   type ControllerEffectIntentRecord,
@@ -35,7 +39,10 @@ const request: DeliverRefRequest = {
   ],
 };
 
-function intent(actionId = "action-1", value = request): ControllerEffectIntentRecord {
+function intent(
+  actionId = "action-1",
+  value: EffectRequest = request,
+): ControllerEffectIntentRecord {
   const artifact = {
     ref: `artifact/${actionId}`,
     sha256: sha("4"),
@@ -159,6 +166,70 @@ const context = {
 };
 
 describe("controller effect timeline", () => {
+  it("binds a local prepared postcondition to the durable subject and lane", () => {
+    const localRequest: LocalProgramRequest = {
+      schema_version: 1,
+      kind: "local_program",
+      repository_id: "repo",
+      operation: "publish_reviewed",
+      source_ref: "refs/heads/reviewed",
+      target_ref: "refs/heads/main",
+      reviewed_head: sha("8"),
+      evidence: [
+        {
+          artifact_ref: "artifact/evidence",
+          sha256: sha("3"),
+          producer_id: "validator",
+          schema_id: "validation-v1",
+          subject_head: sha("8"),
+          verdict: "approved",
+        },
+      ],
+      payload: { pr_key: "one" },
+    };
+    const value = intent("local-action", localRequest);
+    const local = {
+      ...value,
+      lane_resource: {
+        kind: "local_program" as const,
+        repository_fingerprint: sha("9"),
+        target_ref: localRequest.target_ref,
+        resource_keys: ["pull-request"],
+      },
+    };
+    const localIntent = {
+      ...local,
+      lane_key: sha256Canonical({
+        domain: "pi-conductor/effect-lane/v1",
+        resource: local.lane_resource,
+      }),
+    };
+    const prep: ControllerEffectPreparedRecord = {
+      type: "controller_effect_prepared",
+      schema_version: 1,
+      ...identity(localIntent),
+      intent_digest: sha256Canonical(localIntent),
+      postcondition: {
+        kind: "local_program",
+        repository_fingerprint: sha("9"),
+        source_ref: localRequest.source_ref,
+        target_ref: localRequest.target_ref,
+        reviewed_head: localRequest.reviewed_head,
+        operation: localRequest.operation,
+        implementation_id: "provider-v1",
+        implementation_digest: sha("a"),
+        request_digest: sha256Canonical(localRequest),
+      },
+    };
+    for (const postcondition of [
+      { ...prep.postcondition, repository_fingerprint: sha("b") },
+      { ...prep.postcondition, request_digest: sha("c") },
+    ])
+      expect(() =>
+        reconstructControllerEffectTimeline([localIntent, { ...prep, postcondition }], context),
+      ).toThrow("prepared local effect postcondition differs from request");
+  });
+
   it("accepts an uncertain operation followed by linked read-only reconciliation", () => {
     const first = intent();
     const prep = prepared(first);

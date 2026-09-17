@@ -1,11 +1,11 @@
 /** Host-owned effect broker: authority, journal, lane, execution, and recovery — issue #116 B4. */
-import type { EffectRequest, EffectResult } from "../../manifest/controller-effect.js";
 import {
   type ControllerEffectIntentRecord,
   type ControllerEffectPreparedRecord,
   type ControllerEffectRecord,
   controllerEffectOperationId,
   controllerLogicalEffectDigest,
+  effectConflictLaneKeys,
   logicalRequestDigest,
 } from "../../persistence/controller-effect-records.js";
 import {
@@ -19,25 +19,17 @@ import {
   EffectBrokerPoisonedError,
   type ExecuteControllerEffectInput,
 } from "./effect-broker-contract.js";
+import { dispatchEffect, reconcileEffect } from "./effect-broker-execution.js";
 import {
   currentEffectAuthority,
-  type EffectObservation,
   effectLane,
   effectRecordIdentity,
   effectTimelineContext,
-  fromGitPostcondition,
-  gitPostcondition,
-  inEffectLane,
-  remotePostcondition,
+  inEffectLanes,
   resolveEffectRequest,
-  resultFromPrepared,
   settleEffect,
 } from "./effect-broker-support.js";
-import {
-  assertEffectRequestInScope,
-  assertEffectResultInScope,
-  type PinnedEffectAuthority,
-} from "./effect-registry.js";
+import { assertEffectRequestInScope } from "./effect-registry.js";
 import {
   assertDeliverySource,
   integrateGitEffect,
@@ -120,7 +112,7 @@ export function createControllerEffectBroker(
       lane_key: lane.key,
       ts: now(),
     };
-    return inEffectLane(lanes, lane.key, async () => {
+    return inEffectLanes(lanes, effectConflictLaneKeys(lane.resource), async () => {
       dependencies.assertOpen();
       const admittedAuthority = await currentEffectAuthority(
         dependencies,
@@ -174,6 +166,7 @@ export function createControllerEffectBroker(
           request,
           operationId,
           persistPrepared,
+          append,
           executionSignal,
         );
         return await settleEffect(append, intent, prepared, result, now(), null);
@@ -207,7 +200,7 @@ export function createControllerEffectBroker(
     );
     if (state === null) throw new Error("effect operation is not journaled");
     if (state.settled !== null && state.settled.outcome !== "uncertain") return state.settled;
-    return inEffectLane(lanes, state.intent.lane_key, async () => {
+    return inEffectLanes(lanes, effectConflictLaneKeys(state.intent.lane_resource), async () => {
       const refreshed = getControllerEffect(
         reconstructControllerEffectTimeline(
           dependencies.records(),
@@ -237,7 +230,8 @@ export function createControllerEffectBroker(
               authority,
               refreshed.intent.request,
               prepared,
-              signal,
+              append,
+              effectDeadlineSignal(authority.grant.timeout_seconds, signal),
             );
       return settleEffect(
         append,
@@ -260,130 +254,4 @@ export function createControllerEffectBroker(
 function effectDeadlineSignal(timeoutSeconds: number, parent?: AbortSignal): AbortSignal {
   const deadline = AbortSignal.timeout(timeoutSeconds * 1000);
   return parent === undefined ? deadline : AbortSignal.any([parent, deadline]);
-}
-
-async function dispatchEffect(
-  dependencies: EffectBrokerDependencies,
-  executors: Required<NonNullable<EffectBrokerDependencies["executors"]>>,
-  authority: PinnedEffectAuthority,
-  request: EffectRequest,
-  operationId: string,
-  persist: (postcondition: ControllerEffectPreparedRecord["postcondition"]) => Promise<void>,
-  signal?: AbortSignal,
-): Promise<EffectObservation> {
-  dependencies.assertOpen();
-  signal?.throwIfAborted();
-  if (request.kind === "git_integrate") {
-    const outcome = await executors.integrate({
-      authority,
-      request,
-      workspaceRoot: dependencies.workspaceRoot,
-      resolvePatch: (claim) => dependencies.resolvePatch(authority.grant.id, claim),
-      publishSelectedSource: (source) =>
-        dependencies.publishIntegratedSource(authority.grant.id, operationId, source),
-      persistPrepared: (value) => persist(gitPostcondition(value)),
-      assertEffectOpen: async () => {
-        await currentEffectAuthority(
-          dependencies,
-          authority.grant.id,
-          authority.grant.adapter_id,
-          authority,
-        );
-        dependencies.assertOpen();
-      },
-      assertOpen: dependencies.assertOpen,
-      ...(signal === undefined ? {} : { signal }),
-    });
-    const result: EffectResult = {
-      schema_version: 1,
-      kind: "git_integrate",
-      repository_id: request.repository_id,
-      accepted_base: request.accepted_base,
-      integrated_head: outcome.integratedHead,
-      integration_ref: request.integration_ref,
-      prior_ref_oid: outcome.priorRefOid,
-      source_artifact_ref: outcome.sourceArtifact.ref,
-      source_artifact_sha256: outcome.sourceArtifact.sha256,
-    };
-    assertEffectResultInScope(authority, request, result);
-    return { kind: "applied", result };
-  }
-  if (request.kind === "git_promote") {
-    const outcome = await executors.promote({
-      authority,
-      request,
-      resolveEvidence: (claim) => dependencies.resolveHeadEvidence(authority.grant.id, claim),
-      persistPrepared: (value) => persist(gitPostcondition(value)),
-      assertEffectOpen: async () => {
-        await currentEffectAuthority(
-          dependencies,
-          authority.grant.id,
-          authority.grant.adapter_id,
-          authority,
-        );
-        dependencies.assertOpen();
-      },
-      assertOpen: dependencies.assertOpen,
-      ...(signal === undefined ? {} : { signal }),
-    });
-    const result: EffectResult = {
-      schema_version: 1,
-      kind: "git_promote",
-      repository_id: request.repository_id,
-      source_ref: request.source_ref,
-      reviewed_head: request.reviewed_head,
-      target_ref: request.target_ref,
-      prior_target_oid: outcome.priorTargetOid,
-      promoted_head: outcome.promotedHead,
-    };
-    assertEffectResultInScope(authority, request, result);
-    return { kind: "applied", result };
-  }
-  await executors.verifyDeliverySource({
-    authority,
-    request,
-    resolveEvidence: (claim) => dependencies.resolveHeadEvidence(authority.grant.id, claim),
-  });
-  const observed = await executors.deliver({
-    authority,
-    request,
-    operationId,
-    credentialFiles: dependencies.credentialFiles,
-    persistPrepared: (value) => persist(remotePostcondition(value)),
-    assertOpen: dependencies.assertOpen,
-    ...(signal === undefined ? {} : { signal }),
-  });
-  return observed.kind === "unknown"
-    ? { kind: "uncertain", diagnosticCode: observed.diagnosticCode }
-    : observed;
-}
-
-async function reconcileEffect(
-  dependencies: EffectBrokerDependencies,
-  executors: Required<NonNullable<EffectBrokerDependencies["executors"]>>,
-  authority: PinnedEffectAuthority,
-  request: EffectRequest,
-  prepared: ControllerEffectPreparedRecord,
-  signal?: AbortSignal,
-): Promise<EffectObservation> {
-  dependencies.assertOpen();
-  signal?.throwIfAborted();
-  if (request.kind !== "deliver_ref") {
-    const observed = await executors.reconcileGit(authority, fromGitPostcondition(prepared));
-    if (observed.kind === "uncertain") return observed;
-    if (observed.kind === "not_applied")
-      return { kind: "not_applied", observedOid: observed.observedHead };
-    return { kind: "applied", result: resultFromPrepared(request, prepared) };
-  }
-  const observed = await executors.reconcileRemote({
-    authority,
-    request,
-    operationId: prepared.operation_id,
-    credentialFiles: dependencies.credentialFiles,
-    assertOpen: dependencies.assertOpen,
-    ...(signal === undefined ? {} : { signal }),
-  });
-  return observed.kind === "unknown"
-    ? { kind: "uncertain", diagnosticCode: observed.diagnosticCode }
-    : observed;
 }

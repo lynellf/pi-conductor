@@ -18,6 +18,7 @@ import type {
 } from "./effect-broker-contract.js";
 import { type PinnedEffectAuthority, verifyEffectAuthority } from "./effect-registry.js";
 import type { GitEffectPrepared } from "./git-effect.js";
+import { localProgramOperation } from "./local-effect-registry.js";
 
 export async function currentEffectAuthority(
   dependencies: EffectBrokerDependencies,
@@ -53,7 +54,11 @@ export function effectRecordIdentity(intent: ControllerEffectIntentRecord, ts: n
 
 export type EffectObservation =
   | { readonly kind: "applied"; readonly result: EffectResult }
-  | { readonly kind: "not_applied"; readonly observedOid: string | null }
+  | {
+      readonly kind: "not_applied";
+      readonly observedOid: string | null;
+      readonly localObservation?: import("../../manifest/local-effect.js").LocalProgramResult;
+    }
   | { readonly kind: "uncertain"; readonly diagnosticCode: string };
 
 export async function settleEffect(
@@ -77,6 +82,9 @@ export async function settleEffect(
     outcome: observation.kind,
     ...(observation.kind === "applied" ? { result: observation.result } : {}),
     ...(observation.kind === "not_applied" ? { observed_oid: observation.observedOid } : {}),
+    ...(observation.kind === "not_applied" && observation.localObservation !== undefined
+      ? { local_observation: observation.localObservation }
+      : {}),
     ...(observation.kind === "uncertain" ? { diagnostic_code: observation.diagnosticCode } : {}),
     recovery,
   };
@@ -130,19 +138,28 @@ export async function resolveEffectRequest(
 
 export function effectLane(authority: PinnedEffectAuthority, request: EffectRequest) {
   const resource =
-    request.kind === "deliver_ref" && authority.grant.kind === "deliver_ref"
+    request.kind === "local_program" && authority.grant.kind === "local_program"
       ? {
-          kind: "remote" as const,
-          exact_origin: authority.grant.remote.exact_origin,
-          exact_path: authority.grant.remote.exact_path,
-          target_ref: request.target_ref,
-        }
-      : {
-          kind: "git" as const,
+          kind: "local_program" as const,
           repository_fingerprint: authority.grant.repository.fingerprint,
-          target_ref:
-            request.kind === "git_integrate" ? request.integration_ref : request.target_ref,
-        };
+          target_ref: request.target_ref,
+          resource_keys: [
+            ...localProgramOperation(authority.grant, request.operation).resource_conflict_keys,
+          ].sort(),
+        }
+      : request.kind === "deliver_ref" && authority.grant.kind === "deliver_ref"
+        ? {
+            kind: "remote" as const,
+            exact_origin: authority.grant.remote.exact_origin,
+            exact_path: authority.grant.remote.exact_path,
+            target_ref: request.target_ref,
+          }
+        : {
+            kind: "git" as const,
+            repository_fingerprint: authority.grant.repository.fingerprint,
+            target_ref:
+              request.kind === "git_integrate" ? request.integration_ref : request.target_ref,
+          };
   return Object.freeze({
     resource,
     key: sha256Canonical({ domain: "pi-conductor/effect-lane/v1", resource }),
@@ -167,6 +184,20 @@ export async function inEffectLane<T>(
     release();
     if (lanes.get(key) === current) lanes.delete(key);
   }
+}
+
+/** Acquire overlapping resources in a stable order, preventing both bypass and deadlock. */
+export async function inEffectLanes<T>(
+  lanes: Map<string, Promise<void>>,
+  keys: readonly string[],
+  operation: () => Promise<T>,
+): Promise<T> {
+  const ordered = [...new Set(keys)].sort();
+  const acquire = (index: number): Promise<T> => {
+    const key = ordered[index];
+    return key === undefined ? operation() : inEffectLane(lanes, key, () => acquire(index + 1));
+  };
+  return acquire(0);
 }
 
 export function gitPostcondition(
@@ -202,7 +233,8 @@ export function remotePostcondition(
 
 export function fromGitPostcondition(prepared: ControllerEffectPreparedRecord): GitEffectPrepared {
   const value = prepared.postcondition;
-  if (value.kind === "deliver_ref") throw new Error("remote postcondition is not a Git effect");
+  if (value.kind !== "git_integrate" && value.kind !== "git_promote")
+    throw new Error("postcondition is not a Git effect");
   return {
     operationId: value.helper_operation_id,
     repositoryFingerprint: value.repository_fingerprint,
@@ -216,7 +248,7 @@ export function fromGitPostcondition(prepared: ControllerEffectPreparedRecord): 
 }
 
 export function resultFromPrepared(
-  request: Exclude<EffectRequest, { readonly kind: "deliver_ref" }>,
+  request: Extract<EffectRequest, { readonly kind: "git_integrate" | "git_promote" }>,
   prepared: ControllerEffectPreparedRecord,
 ): EffectResult {
   const post = prepared.postcondition;

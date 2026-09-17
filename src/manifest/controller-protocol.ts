@@ -6,6 +6,11 @@ import { delegateTaskSchema, endArgsSchema } from "../seam/schema.js";
 const actionId = Type.String({ minLength: 1, maxLength: 128 });
 const ref = Type.String({ minLength: 1, maxLength: 256 });
 const digest = Type.String({ pattern: "^[a-f0-9]{64}$" });
+/** One bounded observation delay, persisted with its originating decision. */
+export const controllerWaitPayloadSchema = Type.Object(
+  { wake_after_ms: Type.Integer({ minimum: 1000, maximum: 600_000 }) },
+  { additionalProperties: false },
+);
 const eventKind = Type.Union([
   Type.Literal("startup"),
   Type.Literal("resume"),
@@ -98,6 +103,16 @@ export const controllerRequestSchema = Type.Object(
       { maxItems: 128 },
     ),
     page_cursor: sourceCursor,
+    wakeup: Type.Optional(
+      Type.Object(
+        {
+          kind: Type.Literal("timer"),
+          decision_id: ref,
+          due_at: Type.Number({ minimum: 0 }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     pending_operations: Type.Array(
       Type.Object(
         {
@@ -152,6 +167,7 @@ export const controllerResponseSchema = Type.Union([
       event_cursor: sourceCursor,
       state: Type.Record(Type.String(), Type.Unknown()),
       decision: Type.Literal("wait"),
+      wake_after_ms: Type.Optional(controllerWaitPayloadSchema.properties.wake_after_ms),
     },
     { additionalProperties: false },
   ),

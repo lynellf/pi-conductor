@@ -2,6 +2,7 @@
 import type { ControllerRequest, ControllerResponse } from "../../manifest/controller-protocol.js";
 import { reconstructControllerTimeline } from "../../persistence/controller-timeline.js";
 import type { EndArgs } from "../../seam/schema.js";
+import { controllerWaitDeadline } from "./controller-wakeup.js";
 import { prepareControllerDecision } from "./decision.js";
 import { getControllerEvents } from "./event-page.js";
 import { TypedControllerProtocolError } from "./protocol-codec.js";
@@ -10,7 +11,7 @@ import type { ControllerRoleSessionOptions } from "./session-contract.js";
 /** Lifetime controls owned by the RoleSession, separate from deterministic decision state. */
 export interface ControllerPumpControls {
   readonly signal: AbortSignal;
-  readonly wait: () => Promise<void>;
+  readonly wait: (timeoutMs?: number) => Promise<void>;
   readonly audit: (value: unknown) => void;
   readonly assertHealthy: () => void;
 }
@@ -29,8 +30,10 @@ export async function runControllerPump(
     const records = options.readRecords();
     const timeline = reconstructControllerTimeline(records);
     const page = getControllerEvents(records, options.activation, timeline.consumedCursor);
-    if (page.events.length === 0 && !forceRetry) {
-      await controls.wait();
+    const deadline = controllerWaitDeadline(timeline.latestDecision);
+    const timerDue = deadline !== null && Date.now() >= deadline;
+    if (page.events.length === 0 && !forceRetry && !timerDue) {
+      await controls.wait(deadline === null ? undefined : Math.max(1, deadline - Date.now()));
       continue;
     }
     if (page.events.length > 0) unchangedAttempts = 0;
@@ -50,6 +53,15 @@ export async function runControllerPump(
       event_cursor: timeline.consumedCursor,
       page_cursor: page.page_cursor,
       events: page.events,
+      ...(timerDue && timeline.latestDecision !== null
+        ? {
+            wakeup: {
+              kind: "timer" as const,
+              decision_id: timeline.latestDecision.decision_id,
+              due_at: deadline,
+            },
+          }
+        : {}),
       state: state as Record<string, unknown>,
       pending_operations: timeline.actions
         .filter(

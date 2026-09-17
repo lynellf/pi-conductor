@@ -2,7 +2,11 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
-import { type ControllerAction, controllerActionSchema } from "../manifest/controller-protocol.js";
+import {
+  type ControllerAction,
+  controllerActionSchema,
+  controllerWaitPayloadSchema,
+} from "../manifest/controller-protocol.js";
 import { sha256Canonical } from "./trajectory-records.js";
 
 const MAX_JSON_BYTES = 1_048_576;
@@ -283,6 +287,12 @@ export function assertControllerRecord(value: unknown): asserts value is Control
     assertBoundedJson(record, MAX_JSON_BYTES, "controller decision");
     assertBoundedJson(record.controller_state, MAX_STATE_BYTES, "controller state");
     assertBoundedJson(record.decision_payload, MAX_JSON_BYTES, "decision payload");
+    if (
+      record.response_kind === "wait" &&
+      record.decision_payload !== null &&
+      !Value.Check(controllerWaitPayloadSchema, record.decision_payload)
+    )
+      throw new ControllerRecordError("controller wait payload is invalid");
     if (record.response_kind === "plan" && record.actions.length === 0)
       throw new ControllerRecordError("plan decision requires at least one action intent");
     if (record.response_kind !== "plan" && record.actions.length > 0)

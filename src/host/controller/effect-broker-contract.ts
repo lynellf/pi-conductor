@@ -48,6 +48,11 @@ export interface EffectBrokerDependencies {
     effectId: string,
     claim: GitPromoteRequest["evidence"][number],
   ) => Promise<VerifiedHeadEvidence>;
+  /** Resolve actual private bytes only for a provider whose evidence metadata was verified. */
+  readonly resolveEvidenceBytes?: (
+    effectId: string,
+    claim: GitPromoteRequest["evidence"][number],
+  ) => Promise<Buffer>;
   readonly publishIntegratedSource: (
     effectId: string,
     operationId: string,

@@ -1,3 +1,4 @@
+// Kept together (~400 LOC): production assembly and its receipt publication share one authority context.
 /** Production assembly for operator-approved controller effects — issue #116. */
 
 import type { ControllerAction } from "../../manifest/controller-protocol.js";
@@ -20,14 +21,15 @@ import {
   resolveEffectPatch,
 } from "./effect-artifacts.js";
 import { createControllerEffectBroker } from "./effect-broker.js";
-import {
-  measureBuiltinEffectImplementations,
-  verifyBuiltinEffectImplementations,
-} from "./effect-implementation-inventory.js";
 import type { ControllerAdapterInvocationResult } from "./executable-host-contract.js";
 import type { VerifiedHeadEvidence } from "./git-effect.js";
 import type { ControllerHostApproval } from "./host-approval.js";
 import type { ResolvedControllerOutput } from "./output-resolver.js";
+import { localEffectResultConsumers } from "./production-effect-audience.js";
+import {
+  measureProductionEffectImplementations,
+  verifyProductionEffectImplementations,
+} from "./production-effect-inventory.js";
 import {
   assertCredentialSources,
   durableEffectIntent,
@@ -97,9 +99,10 @@ export async function createConfiguredProductionEffects(
 
 /** Assemble one activation-scoped broker using only pinned and refreshed operator authority. */
 export async function createProductionEffects(options: ProductionEffectsOptions) {
-  let measured: Awaited<ReturnType<typeof measureBuiltinEffectImplementations>>;
+  const authorities = pinnedEffects(options.definition.record.pinned_definition) ?? [];
+  let measured: Awaited<ReturnType<typeof measureProductionEffectImplementations>>;
   try {
-    measured = await measureBuiltinEffectImplementations();
+    measured = await measureProductionEffectImplementations(authorities);
   } catch {
     throw new ControllerEffectRejectedError();
   }
@@ -191,7 +194,8 @@ export async function createProductionEffects(options: ProductionEffectsOptions)
       if (authority === undefined) throw new Error("effect authority is not pinned");
       return authority;
     },
-    currentSupportedImplementations: () => verifyBuiltinEffectImplementations(measured),
+    currentSupportedImplementations: () =>
+      verifyProductionEffectImplementations(authorities, measured),
     resolvePatch: async (effectId, claim) =>
       resolveEffectPatch({
         claim,
@@ -212,6 +216,13 @@ export async function createProductionEffects(options: ProductionEffectsOptions)
           }),
       }),
     resolveHeadEvidence: resolveEvidence,
+    resolveEvidenceBytes: async (effectId, claim) =>
+      (
+        await options.outputResolver.resolveRef(claim.artifact_ref, {
+          kind: "effect",
+          effect_id: effectId,
+        })
+      ).bytes,
     publishIntegratedSource: async (effectId, operationId, selected) => {
       const action = durableEffectIntent(options.records(), operationId);
       if (action.request.kind !== "git_integrate")
@@ -252,7 +263,7 @@ export async function createProductionEffects(options: ProductionEffectsOptions)
       if (authority === undefined) throw new Error("adapter effect authority is not pinned");
       let requestArtifact: ReturnType<typeof effectRequestArtifact>;
       try {
-        await verifyBuiltinEffectImplementations(measured);
+        await verifyProductionEffectImplementations(authorities, measured);
         requestArtifact = effectRequestArtifact(
           effectContext(options.definition, action.action_id, action.adapter_id, adapter.effect_id),
           invocation,
@@ -382,7 +393,10 @@ async function publishSettlement(
       id: authority.grant.output_schema_id,
       digest: authority.grant.output_schema_digest,
     },
-    consumers: resultConsumers(options.definition, record.adapter_id),
+    consumers:
+      intent.request.kind === "local_program"
+        ? await localEffectResultConsumers(options, intent)
+        : resultConsumers(options.definition, record.adapter_id),
   });
   return Object.freeze({
     operation_id: record.operation_id,

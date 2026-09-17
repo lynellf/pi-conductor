@@ -1,4 +1,5 @@
 /** Linux same-host ownership observations; the environment marker is an identity aid, not a sandbox. */
+// Kept together below 500 LOC so group/session scans share stat parsing and exclusion proofs.
 
 import { readdir, readFile } from "node:fs/promises";
 
@@ -360,6 +361,44 @@ export async function readProcessGroupMembers(
     } catch (error) {
       if (!isGone(error)) throw observationError("read_stat", error, pid);
       // A process can disappear during enumeration.
+    }
+  }
+  return members;
+}
+
+/** Find non-zombie members of one owned session, including descendants that clear the marker. */
+export async function readProcessSessionMembers(
+  sessionId: number,
+  minimumStartTime: string,
+  scope: ProcessObservationScope,
+): Promise<readonly ProcessIdentity[]> {
+  let entries: string[];
+  try {
+    entries = await readdir("/proc");
+  } catch (error) {
+    throw observationError("list_processes", error);
+  }
+  const members: ProcessIdentity[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) continue;
+    const pid = Number(entry);
+    try {
+      const parsed = parseStat(await readFile(`/proc/${entry}/stat`, "utf8"));
+      const identity = {
+        pid,
+        startTime: parsed.startTime,
+        processGroupId: parsed.processGroupId,
+        sessionId: parsed.sessionId,
+      };
+      if (
+        parsed.state !== "Z" &&
+        parsed.sessionId === sessionId &&
+        BigInt(parsed.startTime) >= BigInt(minimumStartTime) &&
+        !(await isProvenPreexisting(identity, scope))
+      )
+        members.push(identity);
+    } catch (error) {
+      if (!isGone(error)) throw observationError("read_stat", error, pid);
     }
   }
   return members;

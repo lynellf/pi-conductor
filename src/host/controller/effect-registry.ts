@@ -7,18 +7,36 @@
  * interpretations at the privileged broker boundary.
  */
 
-import { posix } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   type EffectKind,
   type EffectRequest,
+  type EffectResult,
   effectRequestSchemaDigest,
   effectRequestSchemaFor,
   effectResultSchemaDigest,
   effectResultSchemaFor,
 } from "../../manifest/controller-effect.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
+import {
+  assertBoundedJson,
+  assertUniqueImplementations,
+  implementationMatchesGrant,
+  validateEffectGrantScope,
+  validateRelativePath,
+} from "./effect-registry-validation.js";
+import {
+  assertLocalProgramRequestInScope,
+  assertLocalProgramResultInScope,
+  localProgramGrantSchema,
+  validateLocalProgramGrant,
+} from "./local-effect-registry.js";
+
+export {
+  localProgramImplementationDigest,
+  localProgramRuntimeDigest,
+} from "./local-effect-registry.js";
 
 const id = Type.String({
   minLength: 1,
@@ -98,6 +116,7 @@ export const effectGrantSchema = Type.Union([
   gitIntegrateGrantSchema,
   gitPromoteGrantSchema,
   deliverRefGrantSchema,
+  localProgramGrantSchema,
 ]);
 
 export type EffectGrant = Readonly<Static<typeof effectGrantSchema>>;
@@ -115,7 +134,7 @@ export interface SupportedEffectImplementation {
 
 /** Build the fixed inventory from independently measured protected implementation bytes. */
 export function createBuiltinEffectImplementations(
-  digests: Readonly<Record<EffectKind, string>>,
+  digests: Readonly<Record<Exclude<EffectKind, "local_program">, string>>,
 ): readonly SupportedEffectImplementation[] {
   for (const digest of Object.values(digests))
     if (!/^[a-f0-9]{64}$/.test(digest))
@@ -149,10 +168,8 @@ export function validateEffectGrant(input: unknown): EffectGrant {
   if (!Value.Check(effectGrantSchema, input))
     throw new Error("effect grant does not match schema version 1");
   const grant = structuredClone(input) as EffectGrant;
-  validateRepository(grant);
-  validateUniqueScopes(grant);
-  validateGrantRefs(grant);
-  if (grant.kind === "deliver_ref") validateRemote(grant.remote);
+  validateEffectGrantScope(grant);
+  if (grant.kind === "local_program") validateLocalProgramGrant(grant);
   return freeze(grant);
 }
 
@@ -174,12 +191,9 @@ export function pinEffectAuthority(
   if (
     implementation === undefined ||
     implementation.digest !== grant.implementation_digest ||
-    implementation.request_schema_id !== grant.request_schema_id ||
-    implementation.request_schema_digest !== grant.request_schema_digest ||
-    implementation.output_schema_id !== grant.output_schema_id ||
-    implementation.output_schema_digest !== grant.output_schema_digest ||
     grant.request_schema_digest !== effectRequestSchemaDigest(grant.kind) ||
-    grant.output_schema_digest !== effectResultSchemaDigest(grant.kind)
+    grant.output_schema_digest !== effectResultSchemaDigest(grant.kind) ||
+    !implementationMatchesGrant(implementation, grant)
   )
     throw new Error("effect implementation is not supported by this host");
   return freeze({ grant, authority_digest: effectAuthorityDigest(grant) });
@@ -257,6 +271,10 @@ export function assertEffectRequestInScope(
     );
     return;
   }
+  if (grant.kind === "local_program" && request.kind === "local_program") {
+    assertLocalProgramRequestInScope(grant, request);
+    return;
+  }
   throw new Error("effect request kind does not match pinned authority");
 }
 
@@ -290,15 +308,26 @@ export function assertEffectResultInScope(
       result.promoted_head !== request.reviewed_head
     )
       throw new Error("promotion result does not prove the requested postcondition");
-  } else if (
-    result.remote_id !== request.remote_id ||
-    result.target_ref !== request.target_ref ||
-    result.reviewed_head !== request.reviewed_head ||
-    result.prior_remote_oid !== request.expected_remote_oid ||
-    result.remote_object_oid !== request.reviewed_head ||
-    result.idempotency_key !== request.idempotency_key
-  )
-    throw new Error("delivery result does not prove the requested remote postcondition");
+  } else if (request.kind === "local_program" && authority.grant.kind === "local_program") {
+    assertLocalProgramResultInScope(
+      authority.grant,
+      request,
+      input as Extract<EffectResult, { readonly kind: "local_program" }>,
+    );
+    return;
+  } else if (request.kind === "deliver_ref") {
+    if (
+      result.remote_id !== request.remote_id ||
+      result.target_ref !== request.target_ref ||
+      result.reviewed_head !== request.reviewed_head ||
+      result.prior_remote_oid !== request.expected_remote_oid ||
+      result.remote_object_oid !== request.reviewed_head ||
+      result.idempotency_key !== request.idempotency_key
+    )
+      throw new Error("delivery result does not prove the requested remote postcondition");
+  } else {
+    throw new Error("effect result request kind does not match pinned authority");
+  }
 }
 
 function assertRefAndEvidence(
@@ -336,140 +365,6 @@ function assertRequiredEvidence(
       )
     )
       throw new Error(`effect request omits required ${subject} evidence`);
-}
-
-function validateRepository(grant: EffectGrant): void {
-  const value = grant.repository.canonical_path;
-  if (
-    value === "/" ||
-    !posix.isAbsolute(value) ||
-    posix.normalize(value) !== value ||
-    value.includes("\0")
-  )
-    throw new Error("effect repository path must be absolute and canonical");
-}
-
-function validateRemote(remote: Extract<EffectGrant, { kind: "deliver_ref" }>["remote"]): void {
-  let url: URL;
-  try {
-    url = new URL(remote.exact_origin);
-  } catch {
-    throw new Error("effect remote origin is invalid");
-  }
-  if (
-    (url.protocol !== "https:" && url.protocol !== "http:") ||
-    url.username !== "" ||
-    url.password !== "" ||
-    url.pathname !== "/" ||
-    url.search !== "" ||
-    url.hash !== "" ||
-    url.origin !== remote.exact_origin
-  )
-    throw new Error("effect remote origin must be an exact credential-free HTTP origin");
-  const loopback =
-    url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "localhost";
-  if (url.protocol === "http:" && !loopback)
-    throw new Error("effect remote origin requires HTTPS except for an explicit loopback service");
-  if (
-    !remote.exact_path.startsWith("/") ||
-    remote.exact_path.startsWith("//") ||
-    remote.exact_path.includes("\\") ||
-    remote.exact_path.includes("%") ||
-    remote.exact_path.includes("\0") ||
-    remote.exact_path.includes("?") ||
-    remote.exact_path.includes("#")
-  )
-    throw new Error("effect remote path must be exact and contain no query or fragment");
-  const resolved = new URL(remote.exact_path, `${remote.exact_origin}/`);
-  if (
-    resolved.origin !== remote.exact_origin ||
-    resolved.pathname !== remote.exact_path ||
-    resolved.search !== "" ||
-    resolved.hash !== ""
-  )
-    throw new Error("effect remote path changes under URL normalization");
-}
-
-function validateUniqueScopes(grant: EffectGrant): void {
-  const lists =
-    grant.kind === "git_integrate"
-      ? [grant.allowed_integration_refs]
-      : [grant.allowed_source_refs, grant.allowed_target_refs];
-  for (const list of lists)
-    if (new Set(list).size !== list.length) throw new Error("effect grant contains duplicate refs");
-  if (grant.kind !== "git_integrate") {
-    const keys = grant.required_evidence.map((item) => `${item.producer_id}\0${item.schema_id}`);
-    if (new Set(keys).size !== keys.length)
-      throw new Error("effect grant contains duplicate evidence requirements");
-  } else {
-    if (new Set(grant.allowed_source_paths).size !== grant.allowed_source_paths.length)
-      throw new Error("effect grant contains duplicate source paths");
-    for (const value of grant.allowed_source_paths) validateRelativePath(value);
-    const keys = grant.required_patch_evidence.map(
-      (item) => `${item.producer_id}\0${item.schema_id}`,
-    );
-    if (new Set(keys).size !== keys.length)
-      throw new Error("effect grant contains duplicate patch evidence requirements");
-  }
-}
-
-function validateGrantRefs(grant: EffectGrant): void {
-  const refs =
-    grant.kind === "git_integrate"
-      ? grant.allowed_integration_refs
-      : [...grant.allowed_source_refs, ...grant.allowed_target_refs];
-  for (const value of refs) {
-    const segments = value.split("/");
-    if (
-      value.includes("..") ||
-      value.includes("//") ||
-      value.endsWith("/") ||
-      value.includes("@{") ||
-      segments.some(
-        (segment) => segment.startsWith(".") || segment.endsWith(".") || segment.endsWith(".lock"),
-      )
-    )
-      throw new Error("effect grant contains an unsafe Git ref");
-  }
-}
-
-function validateRelativePath(value: string): void {
-  if (
-    posix.isAbsolute(value) ||
-    posix.normalize(value) !== value ||
-    value.includes("\\") ||
-    value.includes("\0") ||
-    value
-      .split("/")
-      .some(
-        (part) =>
-          part === "" ||
-          part === "." ||
-          part === ".." ||
-          part.toLowerCase() === ".git" ||
-          part.toLowerCase() === ".pi-conductor",
-      )
-  )
-    throw new Error("selected source path is unsafe");
-}
-
-function assertUniqueImplementations(
-  implementations: readonly SupportedEffectImplementation[],
-): void {
-  const identities = implementations.map((entry) => `${entry.kind}\0${entry.id}`);
-  if (new Set(identities).size !== identities.length)
-    throw new Error("duplicate supported effect implementation identity");
-}
-
-function assertBoundedJson(value: unknown, maximum: number, label: string): void {
-  let encoded: string;
-  try {
-    encoded = JSON.stringify(value);
-  } catch {
-    throw new Error(`${label} is not JSON serializable`);
-  }
-  if (encoded === undefined || Buffer.byteLength(encoded, "utf8") > maximum)
-    throw new Error(`${label} exceeds pinned byte authority`);
 }
 
 function freeze<T>(value: T): T {

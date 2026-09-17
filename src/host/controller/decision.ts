@@ -53,7 +53,9 @@ export function prepareControllerDecision(
         ? response.payload
         : response.decision === "escalate"
           ? { reason: response.reason, evidence_refs: response.evidence_refs }
-          : null,
+          : response.decision === "wait" && response.wake_after_ms !== undefined
+            ? { wake_after_ms: response.wake_after_ms }
+            : null,
     actions,
     ts: Date.now(),
   };

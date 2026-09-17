@@ -289,6 +289,18 @@ export { createProductionHost } from "./production-host-factory.js";
 export { measureBuiltinEffectImplementations } from "./controller/effect-implementation-inventory.js";
 export { type EffectGrant, validateEffectGrant } from "./controller/effect-registry.js";
 export { measureGitEffectRepository } from "./controller/git-effect.js";
+export {
+  deriveLocalProgramHostDriverDigest,
+  measureLocalProgramImplementation,
+  measureLocalProgramImplementationMetadata,
+} from "./controller/local-effect-measurement.js";
+export {
+  type LocalProgramEffectGrant,
+  type LocalProgramOperation,
+  localProgramGrantSchema,
+  localProgramImplementationDigest,
+  localProgramRuntimeDigest,
+} from "./controller/local-effect-registry.js";
 export type {
   ToolExecutionCleanupInspection,
   ToolExecutionCleanupOptions,

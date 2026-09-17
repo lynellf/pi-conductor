@@ -17,6 +17,7 @@ import {
   controllerLogicalEffectDigest,
   logicalRequestDigest,
 } from "../../src/persistence/controller-effect-records.js";
+import type { LocalProgramProcessAdmittedRecord } from "../../src/persistence/controller-local-effect-process.js";
 import {
   type ControllerActivationStartedRecord,
   type ControllerDecisionCommittedRecord,
@@ -415,5 +416,49 @@ describe("controller effect history", () => {
     expect(() =>
       assertControllerEffectHistory([...records.slice(0, 3), intent, corrupted, repairedDigest]),
     ).toThrow("prepared remote scope is not approved");
+  });
+
+  it("rejects a stale local process attempt before accepting its recovery binding", () => {
+    const records = history();
+    const intent = effectAt(records, "controller_effect_intent");
+    const stale: LocalProgramProcessAdmittedRecord = {
+      type: "controller_local_effect_process_admitted",
+      schema_version: 1,
+      run_id: intent.run_id,
+      controller_id: intent.controller_id,
+      definition_digest: intent.definition_digest,
+      activation_id: intent.activation_id,
+      owner_epoch: intent.owner_epoch + 1,
+      action_id: intent.action_id,
+      adapter_id: intent.adapter_id,
+      effect_id: intent.effect_id,
+      operation_id: intent.operation_id,
+      invocation_id: sha("9"),
+      command: "inspect",
+      implementation_id: "local-provider-v1",
+      implementation_digest: sha("a"),
+      authority_digest: intent.authority_digest,
+      request_digest: intent.request_digest,
+      subject: {
+        repository_id: "repo",
+        source_ref: "refs/integration/reviewed",
+        target_ref: "refs/heads/main",
+        reviewed_head: sha("5"),
+      },
+      supervision_id: "supervision",
+      admission: {
+        schema_version: 1,
+        boot_id: "00000000-0000-4000-8000-000000000000",
+        pid_namespace: "pid:[1]",
+        time_namespace: "time:[1]",
+        network_namespace: "net:[1]",
+        init_start_time: "1",
+        preexisting_before: "1",
+      },
+      ts: 7,
+    };
+    expect(() => assertControllerEffectHistory([...records.slice(0, 3), intent, stale])).toThrow(
+      "does not belong to current controller owner",
+    );
   });
 });

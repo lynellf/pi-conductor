@@ -11,6 +11,7 @@ const settlingRecords = new Set([
   "controller_child_output_failed",
   // Observed effect postconditions remain durable facts while owned cleanup drains.
   "controller_effect_settled",
+  "controller_local_effect_process_settled",
   "sandbox_output_recorded",
 ]);
 

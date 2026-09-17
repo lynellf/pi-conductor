@@ -91,14 +91,22 @@ export async function runSupervisedProcess(
   const child = options.file
     ? spawn(options.file, options.args ?? [], {
         cwd: options.cwd,
-        env: { ...process.env, ...options.env, PI_CONDUCTOR_EXECUTION_ID: options.executionId },
+        env: {
+          ...(options.inheritEnv === false ? {} : process.env),
+          ...options.env,
+          PI_CONDUCTOR_EXECUTION_ID: options.executionId,
+        },
         shell: false,
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],
       })
     : spawn(options.command ?? "", {
         cwd: options.cwd,
-        env: { ...process.env, ...options.env, PI_CONDUCTOR_EXECUTION_ID: options.executionId },
+        env: {
+          ...(options.inheritEnv === false ? {} : process.env),
+          ...options.env,
+          PI_CONDUCTOR_EXECUTION_ID: options.executionId,
+        },
         shell: true,
         detached: true,
         stdio: ["pipe", "pipe", "pipe"],
@@ -125,7 +133,8 @@ export async function runSupervisedProcess(
     appendOutput(stderr, total, chunk, outputLimitBytes);
   });
   if (child.stdin !== undefined) child.stdin.on("error", () => undefined);
-  if (options.stdin !== undefined) child.stdin?.end(options.stdin);
+  if (options.stdin !== undefined && options.deferStdinUntilSpawn !== true)
+    child.stdin?.end(options.stdin);
   let identity: ProcessIdentity | null;
   try {
     identity =
@@ -360,6 +369,8 @@ export async function runSupervisedProcess(
       cleanupResult.diagnostic,
     );
   }
+  if (options.stdin !== undefined && options.deferStdinUntilSpawn === true)
+    child.stdin?.end(options.stdin);
   return await new Promise<SupervisedProcessResult>((resolve, reject) => {
     let settled = false;
     let cleanupPromise: Promise<SupervisedCleanupResult> | undefined;

@@ -1,5 +1,5 @@
 /** Pure chronology and recovery projection for the controller effect journal — issue #116 B4. */
-import type { EffectRequest } from "../manifest/controller-effect.js";
+import type { EffectRequest, EffectResult } from "../manifest/controller-effect.js";
 import {
   assertControllerEffectRecord,
   type ControllerEffectIntentRecord,
@@ -7,6 +7,8 @@ import {
   type ControllerEffectRecord,
   ControllerEffectRecordError,
   type ControllerEffectSettledRecord,
+  effectConflictLaneKeys,
+  isControllerEffectOperationRecord,
   isControllerEffectRecord,
 } from "./controller-effect-records.js";
 import { sha256Canonical } from "./trajectory-records.js";
@@ -39,19 +41,23 @@ export function reconstructControllerEffectTimeline(
   for (const candidate of records) {
     if (!isControllerEffectRecord(candidate)) continue;
     assertControllerEffectRecord(candidate);
+    if (!isControllerEffectOperationRecord(candidate)) continue;
     if (context !== undefined) assertControllerContext(candidate, context);
     if (candidate.type === "controller_effect_intent") {
       if (effects.has(candidate.operation_id)) throw invalid("duplicate effect operation identity");
       const prior = logical.get(candidate.logical_effect_digest);
       if (prior !== undefined && prior.settled?.outcome !== "not_applied")
         throw invalid("logical effect is already pending, applied, or uncertain");
-      const lane = lanes.get(candidate.lane_key);
-      if (lane !== undefined && (lane.settled === null || lane.settled.outcome === "uncertain"))
-        throw invalid("effect lane has an unresolved operation");
+      for (const laneKey of effectConflictLaneKeys(candidate.lane_resource)) {
+        const lane = lanes.get(laneKey);
+        if (lane !== undefined && (lane.settled === null || lane.settled.outcome === "uncertain"))
+          throw invalid("effect lane has an unresolved operation");
+      }
       const state = { intent: candidate, prepared: null, settled: null };
       effects.set(candidate.operation_id, state);
       logical.set(candidate.logical_effect_digest, state);
-      lanes.set(candidate.lane_key, state);
+      for (const laneKey of effectConflictLaneKeys(candidate.lane_resource))
+        lanes.set(laneKey, state);
       continue;
     }
     const state = effects.get(candidate.operation_id);
@@ -63,7 +69,7 @@ export function reconstructControllerEffectTimeline(
     if (candidate.type === "controller_effect_prepared") {
       if (state.prepared !== null || state.settled !== null)
         throw invalid("duplicate or late effect preparation");
-      assertPostcondition(candidate, state.intent.request);
+      assertPostcondition(candidate, state.intent);
       state.prepared = candidate;
       continue;
     }
@@ -88,6 +94,8 @@ export function reconstructControllerEffectTimeline(
       if (state.prepared === null) throw invalid("applied effect has no preparation");
       assertResult(candidate, state.intent.request, state.prepared);
     }
+    if (candidate.local_observation !== undefined)
+      assertLocalObservation(candidate.local_observation, state.intent.request);
     state.settled = candidate;
   }
   const frozen = Object.freeze([...effects.values()].map(freezeState));
@@ -129,7 +137,7 @@ interface MutableEffect {
 }
 
 function assertIdentity(
-  record: Exclude<ControllerEffectRecord, ControllerEffectIntentRecord>,
+  record: ControllerEffectPreparedRecord | ControllerEffectSettledRecord,
   intent: ControllerEffectIntentRecord,
 ): void {
   for (const key of [
@@ -151,7 +159,11 @@ function assertIdentity(
     throw invalid("non-recovery effect record changed owner");
 }
 
-function assertPostcondition(record: ControllerEffectPreparedRecord, request: EffectRequest): void {
+function assertPostcondition(
+  record: ControllerEffectPreparedRecord,
+  intent: ControllerEffectIntentRecord,
+): void {
+  const request = intent.request;
   const post = record.postcondition;
   if (post.kind !== request.kind) throw invalid("prepared effect kind differs from request");
   if (request.kind === "git_integrate" && post.kind === "git_integrate") {
@@ -180,6 +192,17 @@ function assertPostcondition(record: ControllerEffectPreparedRecord, request: Ef
       post.idempotency_key !== request.idempotency_key
     )
       throw invalid("prepared delivery postcondition differs from request");
+  } else if (request.kind === "local_program" && post.kind === "local_program") {
+    if (
+      intent.lane_resource.kind !== "local_program" ||
+      post.repository_fingerprint !== intent.lane_resource.repository_fingerprint ||
+      post.source_ref !== request.source_ref ||
+      post.target_ref !== request.target_ref ||
+      post.reviewed_head !== request.reviewed_head ||
+      post.operation !== request.operation ||
+      post.request_digest !== sha256Canonical(request)
+    )
+      throw invalid("prepared local effect postcondition differs from request");
   }
 }
 
@@ -226,7 +249,24 @@ function assertResult(
       result.idempotency_key !== request.idempotency_key
     )
       throw invalid("delivery result differs from request");
+  } else if (request.kind === "local_program" && result.kind === "local_program") {
+    assertLocalObservation(result, request);
   }
+}
+
+function assertLocalObservation(
+  observation: Extract<EffectResult, { readonly kind: "local_program" }>,
+  request: EffectRequest,
+): void {
+  if (
+    request.kind !== "local_program" ||
+    observation.repository_id !== request.repository_id ||
+    observation.operation !== request.operation ||
+    observation.source_ref !== request.source_ref ||
+    observation.target_ref !== request.target_ref ||
+    observation.reviewed_head !== request.reviewed_head
+  )
+    throw invalid("local effect observation differs from request");
 }
 
 function freezeState(state: MutableEffect): ControllerEffectState {

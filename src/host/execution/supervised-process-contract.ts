@@ -13,6 +13,10 @@ export interface SupervisedProcessOptions {
   readonly stdin?: string | Uint8Array;
   readonly cwd: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** Preserve the historical ambient-environment merge unless explicitly disabled. */
+  readonly inheritEnv?: boolean;
+  /** Withhold stdin until onSpawn has durably admitted the observed process identity. */
+  readonly deferStdinUntilSpawn?: boolean;
   readonly timeoutMs: number;
   readonly graceMs?: number;
   readonly outputLimitBytes?: number;

@@ -1,7 +1,12 @@
 /** Cross-ledger effect authority checks against preceding controller ownership — issue #116. */
 import { parseControllerConfig } from "../manifest/controller.js";
-import { isControllerEffectRecord } from "./controller-effect-records.js";
+import {
+  type ControllerEffectRecord,
+  isControllerEffectRecord,
+} from "./controller-effect-records.js";
 import { reconstructControllerEffectTimeline } from "./controller-effect-timeline.js";
+import { isLocalProgramProcessRecord } from "./controller-local-effect-process.js";
+import { reconstructLocalProgramProcessTimeline } from "./controller-local-effect-process-timeline.js";
 import type {
   ControllerActionIntent,
   ControllerActivationStartedRecord,
@@ -16,6 +21,7 @@ export function assertControllerEffectHistory(records: readonly PersistedRecord[
   if (!records.some(isControllerEffectRecord)) return;
   reconstructControllerTimeline(records);
   reconstructControllerEffectTimeline(records);
+  reconstructLocalProgramProcessTimeline(records);
   let definition: ControllerDefinitionPinnedRecord | undefined;
   let activation: ControllerActivationStartedRecord | undefined;
   const actions = new Map<string, ControllerActionIntent>();
@@ -27,13 +33,7 @@ export function assertControllerEffectHistory(records: readonly PersistedRecord[
     if (!isControllerEffectRecord(record)) continue;
     if (definition === undefined || activation === undefined)
       throw new Error("effect journal precedes controller ownership");
-    for (const field of [
-      "run_id",
-      "controller_id",
-      "definition_digest",
-      "activation_id",
-      "owner_epoch",
-    ] as const)
+    for (const field of ["run_id", "controller_id", "definition_digest"] as const)
       if (record[field] !== activation[field])
         throw new Error("effect journal does not belong to current controller owner");
     const action = actions.get(record.action_id);
@@ -60,6 +60,33 @@ export function assertControllerEffectHistory(records: readonly PersistedRecord[
     const grant = object(authority.grant);
     if (grant.adapter_id !== record.adapter_id)
       throw new Error("effect journal grant belongs to another adapter");
+    if (
+      record.activation_id !== activation.activation_id ||
+      record.owner_epoch !== activation.owner_epoch
+    )
+      throw new Error("effect journal does not belong to current controller owner");
+    if (isLocalProgramProcessRecord(record)) {
+      const intent = recordForOperation(records, record.operation_id);
+      if (
+        intent?.request.kind !== "local_program" ||
+        record.run_id !== intent.run_id ||
+        record.controller_id !== intent.controller_id ||
+        record.definition_digest !== intent.definition_digest ||
+        record.action_id !== intent.action_id ||
+        record.adapter_id !== intent.adapter_id ||
+        record.effect_id !== intent.effect_id ||
+        record.authority_digest !== intent.authority_digest ||
+        record.implementation_id !== grant.implementation_id ||
+        record.implementation_digest !== grant.implementation_digest ||
+        record.request_digest !== sha256Canonical(intent.request) ||
+        record.subject.repository_id !== intent.request.repository_id ||
+        record.subject.source_ref !== intent.request.source_ref ||
+        record.subject.target_ref !== intent.request.target_ref ||
+        record.subject.reviewed_head !== intent.request.reviewed_head
+      )
+        throw new Error("local effect process record is not bound to its approved request");
+      continue;
+    }
     if (record.type === "controller_effect_intent") {
       const artifact = record.request_artifact;
       if (
@@ -88,8 +115,33 @@ export function assertControllerEffectHistory(records: readonly PersistedRecord[
           throw new Error("prepared remote scope is not approved");
       } else if (post.repository_fingerprint !== object(grant.repository).fingerprint)
         throw new Error("prepared repository identity is not approved");
+      if (post.kind === "local_program") {
+        const request = recordForOperation(records, record.operation_id)?.request;
+        if (
+          request?.kind !== "local_program" ||
+          post.operation !== request.operation ||
+          post.source_ref !== request.source_ref ||
+          post.target_ref !== request.target_ref ||
+          post.reviewed_head !== request.reviewed_head ||
+          post.implementation_id !== grant.implementation_id ||
+          post.implementation_digest !== grant.implementation_digest ||
+          post.request_digest !== sha256Canonical(request)
+        )
+          throw new Error("prepared local effect binding is not approved");
+      }
     }
   }
+}
+function recordForOperation(
+  records: readonly PersistedRecord[],
+  operationId: string,
+): Extract<ControllerEffectRecord, { type: "controller_effect_intent" }> | undefined {
+  return records.find(
+    (record): record is Extract<ControllerEffectRecord, { type: "controller_effect_intent" }> =>
+      isControllerEffectRecord(record) &&
+      record.type === "controller_effect_intent" &&
+      record.operation_id === operationId,
+  );
 }
 function object(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))

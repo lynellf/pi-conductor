@@ -61,10 +61,16 @@ export function assertCredentialSources(
   files: Readonly<Record<string, string>>,
 ): void {
   for (const authority of pinned.values()) {
-    if (authority.grant.kind !== "deliver_ref") continue;
-    const id = authority.grant.remote.credential_source_id;
-    const current = approval.credential_sources?.find((entry) => entry.id === id);
-    if (current === undefined || files[id] !== current.path)
-      throw new Error("effect credential source changed or was revoked");
+    const ids =
+      authority.grant.kind === "deliver_ref"
+        ? [authority.grant.remote.credential_source_id]
+        : authority.grant.kind === "local_program"
+          ? authority.grant.provider.credential_source_ids
+          : [];
+    for (const id of ids) {
+      const current = approval.credential_sources?.find((entry) => entry.id === id);
+      if (current === undefined || files[id] !== current.path)
+        throw new Error("effect credential source changed or was revoked");
+    }
   }
 }

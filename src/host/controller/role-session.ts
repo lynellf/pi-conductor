@@ -55,13 +55,23 @@ export async function createControllerRoleSession(
     wakeWaiter = undefined;
     if (!closed && options.isRunCostCapReached()) stopForRunCostCap();
   };
-  const wait = async (): Promise<void> => {
+  const wait = async (timeoutMs?: number): Promise<void> => {
     if (pendingWake) {
       pendingWake = false;
       return;
     }
     await new Promise<void>((resolve) => {
-      wakeWaiter = resolve;
+      const timer =
+        timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              wakeWaiter = undefined;
+              resolve();
+            }, timeoutMs);
+      wakeWaiter = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        resolve();
+      };
     });
     pendingWake = false;
   };

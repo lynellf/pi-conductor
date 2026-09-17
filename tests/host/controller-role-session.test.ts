@@ -24,7 +24,10 @@ afterEach(async () => {
 });
 
 describe("controller role session", () => {
-  it("runs A/B/C through native maxParallel scheduling", async () => {
+  it.each([
+    undefined,
+    10000,
+  ])("runs A/B/C through native scheduling with wait delay %s", async (wakeAfterMs) => {
     const a = deferred<ReturnType<typeof completed>>();
     const c = deferred<ReturnType<typeof completed>>();
     const starts: string[] = [];
@@ -117,7 +120,10 @@ describe("controller role session", () => {
           sawBTerminal = true;
           return plan(request, [delegate("C")]);
         }
-        if (!starts.includes("C")) return response(request, "wait");
+        if (!starts.includes("C"))
+          return wakeAfterMs === undefined
+            ? response(request, "wait")
+            : { ...response(request, "wait"), decision: "wait", wake_after_ms: wakeAfterMs };
         return response(request, "finish");
       },
     });
@@ -125,6 +131,15 @@ describe("controller role session", () => {
     const prompting = fixture.session.prompt("ignored");
     await until(() => starts.includes("C"));
     expect(starts).toEqual(["A", "B", "C"]);
+    if (wakeAfterMs !== undefined)
+      expect(
+        fixture.records.some(
+          (record) =>
+            record.type === "controller_decision_committed" &&
+            record.response_kind === "wait" &&
+            record.decision_payload !== null,
+        ),
+      ).toBe(true);
     expect(sawBTerminal).toBe(true);
     const bTerminalOrdinal = fixture.records.findIndex(
       (record) => record.type === "subagent_completed" && record.child_id === "child-B",
@@ -139,8 +154,18 @@ describe("controller role session", () => {
         (record) => record.type === "subagent_completed" && record.child_id === "child-A",
       ),
     ).toBe(false);
-    a.resolve(completed(child("A")));
     c.resolve(completed(child("C")));
+    await until(() =>
+      fixture.records.some(
+        (record) => record.type === "subagent_completed" && record.child_id === "child-C",
+      ),
+    );
+    expect(
+      fixture.records.some(
+        (record) => record.type === "subagent_completed" && record.child_id === "child-A",
+      ),
+    ).toBe(false);
+    a.resolve(completed(child("A")));
     await prompting;
     expect(
       fixture.records.filter(

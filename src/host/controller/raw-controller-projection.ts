@@ -7,7 +7,11 @@ export function projectControllerRecord(
 ): unknown | undefined {
   if (record === null || typeof record !== "object" || Array.isArray(record)) return record;
   const value = record as Record<string, unknown>;
-  if (typeof value.type === "string" && value.type.startsWith("controller_effect_"))
+  if (
+    typeof value.type === "string" &&
+    (value.type.startsWith("controller_effect_") ||
+      value.type.startsWith("controller_local_effect_"))
+  )
     return undefined;
   if (
     value.type === "subagent_started" ||

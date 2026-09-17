@@ -4,6 +4,10 @@
 
 ### Features
 
+- Add opt-in measured local effect providers for bounded publication, CI observation
+  and read-only recovery, with private credentials, durable process identity,
+  resource conflict checks and resumable observation wakeups (#117).
+
 - Publish bounded immutable native child reports and patches with explicit consumer
   access, and add opt-in operator grants for reviewed Git integration, promotion,
   and authenticated delivery with durable effect reconciliation (#116).

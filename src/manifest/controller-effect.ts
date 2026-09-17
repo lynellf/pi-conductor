@@ -3,6 +3,12 @@
 import { createHash } from "node:crypto";
 import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
+import {
+  type LocalProgramRequest,
+  type LocalProgramResult,
+  localProgramRequestSchema,
+  localProgramResultSchema,
+} from "./local-effect.js";
 
 const id = Type.String({
   minLength: 1,
@@ -104,6 +110,7 @@ export const effectRequestSchema = Type.Union([
   gitIntegrateRequestSchema,
   gitPromoteRequestSchema,
   deliverRefRequestSchema,
+  localProgramRequestSchema,
 ]);
 
 export const gitIntegrateResultSchema = Type.Object(
@@ -155,6 +162,7 @@ export const effectResultSchema = Type.Union([
   gitIntegrateResultSchema,
   gitPromoteResultSchema,
   deliverRefResultSchema,
+  localProgramResultSchema,
 ]);
 
 export type EffectKind = EffectRequest["kind"];
@@ -163,16 +171,19 @@ export type GitPromoteRequest = Readonly<Static<typeof gitPromoteRequestSchema>>
 export type DeliverRefRequest = Readonly<Static<typeof deliverRefRequestSchema>>;
 export type EffectRequest = Readonly<Static<typeof effectRequestSchema>>;
 export type EffectResult = Readonly<Static<typeof effectResultSchema>>;
+export type { LocalProgramRequest, LocalProgramResult };
 
 const requestSchemas: Readonly<Record<EffectKind, TSchema>> = Object.freeze({
   git_integrate: gitIntegrateRequestSchema,
   git_promote: gitPromoteRequestSchema,
   deliver_ref: deliverRefRequestSchema,
+  local_program: localProgramRequestSchema,
 });
 const resultSchemas: Readonly<Record<EffectKind, TSchema>> = Object.freeze({
   git_integrate: gitIntegrateResultSchema,
   git_promote: gitPromoteResultSchema,
   deliver_ref: deliverRefResultSchema,
+  local_program: localProgramResultSchema,
 });
 
 /** Return the exact built-in request schema for one supported effect. */

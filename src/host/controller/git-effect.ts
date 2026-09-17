@@ -1,3 +1,4 @@
+// Kept together (~400 LOC): Git preparation, execution and reconciliation share exact postconditions.
 /** Closed local Git integration and promotion effects for issue #116 B2. */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -297,13 +298,18 @@ export async function promoteGitEffect(options: {
 /** Verify delivery evidence and the exact canonical source ref without mutating Git state. */
 export async function assertDeliverySource(options: {
   readonly authority: PinnedEffectAuthority;
-  readonly request: import("../../manifest/controller-effect.js").DeliverRefRequest;
+  readonly request:
+    | import("../../manifest/controller-effect.js").DeliverRefRequest
+    | import("../../manifest/local-effect.js").LocalProgramRequest;
   readonly resolveEvidence: (
     claim: import("../../manifest/controller-effect.js").DeliverRefRequest["evidence"][number],
   ) => Promise<VerifiedHeadEvidence>;
 }): Promise<void> {
   assertEffectRequestInScope(options.authority, options.request);
-  if (options.authority.grant.kind !== "deliver_ref")
+  if (
+    options.authority.grant.kind !== "deliver_ref" &&
+    options.authority.grant.kind !== "local_program"
+  )
     throw new Error("delivery source verification requires delivery authority");
   const repository = await assertRepository(options.authority);
   const evidence = await Promise.all(options.request.evidence.map(options.resolveEvidence));
