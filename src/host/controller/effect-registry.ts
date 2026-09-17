@@ -18,6 +18,7 @@ import {
   effectResultSchemaDigest,
   effectResultSchemaFor,
 } from "../../manifest/controller-effect.js";
+import { sourceWorkspacePrincipalKey } from "../../persistence/source-workspace.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import {
   assertBoundedJson,
@@ -234,12 +235,41 @@ export function assertEffectRequestInScope(
   if (grant.kind === "git_integrate" && request.kind === "git_integrate") {
     if (!grant.allowed_integration_refs.includes(request.integration_ref))
       throw new Error("effect request is outside the pinned ref scope");
-    if (request.patches.some((entry) => entry.base_commit !== request.accepted_base))
-      throw new Error("integration patch is not bound to the accepted base");
-    for (const selected of request.selected_source_paths) {
-      validateRelativePath(selected);
-      if (!grant.allowed_source_paths.includes(selected))
-        throw new Error("selected source path is outside pinned authority");
+    const descriptor = request.source_workspace_descriptor;
+    if (descriptor === undefined) {
+      if (request.patches.some((entry) => entry.base_commit !== request.accepted_base))
+        throw new Error("integration patch is not bound to the accepted base");
+      for (const selected of request.selected_source_paths) {
+        validateRelativePath(selected);
+        if (!grant.allowed_source_paths.includes(selected))
+          throw new Error("selected source path is outside pinned authority");
+      }
+    } else {
+      if (descriptor.base_commit !== request.accepted_base)
+        throw new Error("source workspace descriptor is not bound to the accepted base");
+      if (
+        request.patches.length !== 1 ||
+        request.patches[0]?.base_commit !== descriptor.head_commit
+      )
+        throw new Error("source bridge requires one patch bound to the sealed source head");
+      if (request.integration_ref.startsWith("refs/pi-conductor/source-prefix/"))
+        throw new Error("source-bridge integration ref is inside the source-prefix namespace");
+      const effectPrincipal = `effect:${grant.id}`;
+      if (
+        !descriptor.audience.some(
+          (principal) => sourceWorkspacePrincipalKey(principal) === effectPrincipal,
+        )
+      )
+        throw new Error("source workspace descriptor denies this effect authority");
+      if (
+        !descriptor.allowed_paths.some((path) =>
+          grant.allowed_source_paths.some(
+            (root) => path === root || path.startsWith(`${root}/`) || root.startsWith(`${path}/`),
+          ),
+        )
+      )
+        throw new Error("source workspace paths do not intersect pinned authority");
+      for (const selected of request.selected_source_paths) validateRelativePath(selected);
     }
     for (const patch of request.patches) {
       for (const claim of patch.evidence)

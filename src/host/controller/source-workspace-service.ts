@@ -32,6 +32,7 @@ import {
   assertSourceIntentGrant,
   intersectSourceAudience,
   resolveSourceRef,
+  sourceWorkspacePatchesDigest,
   sourceWorkspacePolicyDigest,
   verifyPersistedSourcePatch,
   verifySourcePatch,
@@ -197,10 +198,15 @@ export function createSourceWorkspaceService(store: SourceWorkspaceStore): Sourc
           throw new SourceWorkspaceError("workspace-corrupt");
         const sourcePath = join(working, "source");
         await copySourceTree(repo, sourcePath);
+        const sourceContentBase = await sourceContent(sourcePath, grant);
+        const patchesDigest = sourceWorkspacePatchesDigest(intent.patches);
         const content = {
-          ...(await sourceContent(sourcePath, grant)),
+          ...sourceContentBase,
           head_commit: prefixHead,
           tree_id: finalTree,
+          allowed_paths: [...grant.allowedPaths].sort(),
+          patches_digest: patchesDigest,
+          patches: [...intent.patches],
         };
         const gitPath = join(working, "git");
         await materializeSourceGitView(repo, gitPath, prefixHead, environment, options.signal);
@@ -225,6 +231,15 @@ export function createSourceWorkspaceService(store: SourceWorkspaceStore): Sourc
             inventory_digest: prepared.inventoryDigest,
             file_count: prepared.fileCount,
             byte_length: prepared.byteLength,
+            allowed_paths: [...prepared.allowedPaths].sort(),
+            patches_digest: prepared.patchesDigest,
+            patches: [...prepared.patches].map((entry) => ({
+              ref: entry.ref,
+              sha256: entry.sha256,
+              byte_length: entry.byteLength,
+              accepted_base: entry.acceptedBase,
+              allowed_paths: [...entry.allowedPaths],
+            })),
           },
           ts: Date.now(),
         });

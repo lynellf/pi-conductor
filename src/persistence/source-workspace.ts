@@ -82,6 +82,9 @@ export const sourceWorkspaceContentSchema = Type.Object(
     inventory_digest: digest,
     file_count: safeInteger,
     byte_length: safeInteger,
+    allowed_paths: Type.Array(path, { minItems: 1, maxItems: 1024 }),
+    patches_digest: digest,
+    patches: Type.Array(sourceWorkspacePatchSchema, { minItems: 0, maxItems: 64 }),
   },
   { additionalProperties: false },
 );

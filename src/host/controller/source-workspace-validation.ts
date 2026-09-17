@@ -142,6 +142,31 @@ export function verifyPersistedSourcePatch(
     throw new SourceWorkspaceError("workspace-corrupt", "patch identity changed");
 }
 
+/** Compute the canonical source-patch lineage digest from the sealed intent. */
+export function sourceWorkspacePatchesDigest(
+  patches: ReadonlyArray<SourceWorkspaceIntent["patches"][number]>,
+): string {
+  return sha256Canonical({
+    domain: "pi-conductor/source-workspace-patch-lineage/v1",
+    patches: patches.map((entry) => ({
+      ref: entry.ref,
+      sha256: entry.sha256,
+      byte_length: entry.byte_length,
+      accepted_base: entry.accepted_base,
+      allowed_paths: [...entry.allowed_paths].sort(),
+    })),
+  });
+}
+
+/** Verify a source patch lineage matches its declared digest byte-for-byte. */
+export function verifySourcePatchLineage(
+  patches: ReadonlyArray<SourceWorkspaceIntent["patches"][number]>,
+  expectedDigest: string,
+): void {
+  if (sourceWorkspacePatchesDigest(patches) !== expectedDigest)
+    throw new SourceWorkspaceError("workspace-corrupt", "source patch lineage digest mismatch");
+}
+
 export function assertSourceIntentGrant(
   intent: SourceWorkspaceIntent,
   grant: SourceWorkspaceGrant,

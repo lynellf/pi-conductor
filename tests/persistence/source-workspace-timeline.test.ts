@@ -52,6 +52,9 @@ function records() {
       inventory_digest: "d".repeat(64),
       byte_length: 12,
       file_count: 1,
+      allowed_paths: ["src"],
+      patches_digest: "f".repeat(64),
+      patches: [],
     },
     ts: 3,
   };

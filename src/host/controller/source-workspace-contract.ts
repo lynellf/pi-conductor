@@ -57,6 +57,15 @@ export interface SourceWorkspacePatchClaim {
   readonly acceptedBase: string;
 }
 
+/** Immutable lineage of one source-workspace patch; bridge re-verifies identity only. */
+export interface SourceWorkspacePatchLineage {
+  readonly ref: string;
+  readonly sha256: string;
+  readonly byteLength: number;
+  readonly acceptedBase: string;
+  readonly allowedPaths: readonly string[];
+}
+
 /** Patch bytes loaded from a trusted, audience-scoped controller-output store. */
 export interface ResolvedSourceWorkspacePatch {
   readonly bytes: Buffer;
@@ -82,6 +91,16 @@ export interface PreparedSourceWorkspace {
   /** Digest of the source grant policy that authorized this view. */
   readonly policyDigest: string;
   readonly audience: readonly ControllerOutputPrincipal[];
+  /** Source repository ref the sealed view resolved at prep time. */
+  readonly repositoryRef: string;
+  /** Source repository fingerprint the sealed view resolved at prep time. */
+  readonly repositoryFingerprint: string;
+  /** Source grant's allowed paths pinned at prep time. */
+  readonly allowedPaths: readonly string[];
+  /** Immutable source-patch lineage that produced the sealed synthetic head. */
+  readonly patches: readonly SourceWorkspacePatchLineage[];
+  /** Canonical digest of `patches`; no patch bytes or private source path. */
+  readonly patchesDigest: string;
 }
 
 /** Fenced hooks that make source preparation durable at its start and terminal edges. */

@@ -3,7 +3,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstat, mkdir, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
 import {
   trustedGitConfig,
@@ -37,14 +37,16 @@ export async function initializeIsolatedRepository(
   worktree: string,
   commonGitDir: string,
   base: string,
+  extraAlternateDirs: readonly string[] = [],
 ): Promise<{ readonly cwd: string; readonly environment: NodeJS.ProcessEnv }> {
   await mkdir(join(worktree, "repo"), { mode: 0o700 });
   const cwd = join(worktree, "repo");
   await runRaw(cwd, ["init", "--quiet"]);
+  const alternates = [join(commonGitDir, "objects"), ...extraAlternateDirs];
   const environment = {
     ...trustedGitEnvironment(),
     GIT_NO_REPLACE_OBJECTS: "1",
-    GIT_ALTERNATE_OBJECT_DIRECTORIES: join(commonGitDir, "objects"),
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: alternates.join(delimiter),
     GIT_AUTHOR_NAME: "pi-conductor",
     GIT_AUTHOR_EMAIL: "pi-conductor@invalid",
     GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",

@@ -9,10 +9,15 @@ import {
   assertDeliverySource,
   type GitEffectPrepared,
   integrateGitEffect,
+  integrateGitEffectFromSourceWorkspace,
   measureGitEffectRepository,
   promoteGitEffect,
   reconcileGitEffect,
 } from "../../src/host/controller/git-effect.js";
+import type { PreparedSourceWorkspace } from "../../src/host/controller/source-workspace-contract.js";
+import { createSourceWorkspaceService } from "../../src/host/controller/source-workspace-service.js";
+import { SourceWorkspaceStore } from "../../src/host/controller/source-workspace-store.js";
+import { createIndependentSourceWorktree } from "../../src/host/delegation/worktree.js";
 import {
   effectRequestSchemaDigest,
   effectResultSchemaDigest,
@@ -22,7 +27,12 @@ const execute = promisify(execFile);
 const roots: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  await Promise.all(
+    roots.splice(0).map(async (root) => {
+      await execute("/usr/bin/chmod", ["-R", "u+w", root]).catch(() => undefined);
+      await rm(root, { recursive: true, force: true });
+    }),
+  );
 });
 
 describe("controller Git effects", () => {
@@ -387,6 +397,127 @@ describe("controller Git effects", () => {
       }),
     ).rejects.toThrow("source ref does not identify the reviewed head");
   });
+
+  it("integrates a real child patch over the source prefix through the bridge without rewriting the original base", async () => {
+    const fixture = await repositoryFixture();
+    const source = await service(fixture.privateRoot);
+    const grant = {
+      ...(await grantFor(fixture.repository)),
+      // The fixture includes `other.txt` and `overlap.txt` (used by other tests
+      // in this file); the bridge test wants to add a new file under `src/`,
+      // so the source-workspace allowed paths must cover every tracked path
+      // copied into the synthetic prefix.
+      allowedPaths: ["other.txt", "overlap.txt", "src"],
+      consumers: [
+        { kind: "controller" as const },
+        { kind: "effect" as const, effect_id: "git_integrate-reviewed" },
+      ],
+    };
+    const sourcePatch = await patchFor(
+      fixture.repository,
+      fixture.base,
+      "src/extra.txt",
+      "extra\n",
+    );
+    const sourceIntent = await source.resolveIntent(
+      sourceRequest({
+        patches: [
+          {
+            ref: "child-output/v2/source-patch",
+            sha256: sourcePatch.sha256,
+            byteLength: sourcePatch.bytes.length,
+            acceptedBase: fixture.base,
+          },
+        ],
+      }),
+      grant,
+      async () => ({
+        bytes: sourcePatch.bytes,
+        sha256: sourcePatch.sha256,
+        byteLength: sourcePatch.bytes.length,
+        acceptedBase: fixture.base,
+        allowedPaths: ["src"],
+        audience: [{ kind: "controller" }, { kind: "effect", effect_id: "git_integrate-reviewed" }],
+      }),
+    );
+    const preparedSource = await source.prepare(sourceIntent, grant, {
+      resolvePatch: async () => ({
+        bytes: sourcePatch.bytes,
+        sha256: sourcePatch.sha256,
+        byteLength: sourcePatch.bytes.length,
+        acceptedBase: fixture.base,
+        allowedPaths: ["src"],
+        audience: [{ kind: "controller" }, { kind: "effect", effect_id: "git_integrate-reviewed" }],
+      }),
+      persist: async () => undefined,
+      assertOpen: () => undefined,
+    });
+    const childPath = join(fixture.privateRoot, "child");
+    await createIndependentSourceWorktree(
+      childPath,
+      "child",
+      preparedSource.headCommit,
+      preparedSource.checkoutPath,
+    );
+    const childPatch = await patchFor(
+      childPath,
+      preparedSource.headCommit,
+      "src/child.txt",
+      "child\n",
+    );
+    const measured = await measureGitEffectRepository(fixture.repository);
+    const authority = pinEffectAuthority(
+      integrationGrant(measured.canonical_path, measured.fingerprint, ["src"]),
+      [implementation("git_integrate")],
+    );
+    const descriptor = sourceWorkspaceDescriptor(preparedSource);
+    const prepared: GitEffectPrepared[] = [];
+    const outcome = await integrateGitEffectFromSourceWorkspace({
+      authority,
+      request: bridgeRequest(
+        fixture.base,
+        preparedSource.headCommit,
+        childPatch.sha256,
+        descriptor,
+      ),
+      workspaceRoot: fixture.privateRoot,
+      resolvePatch: async () => ({
+        bytes: childPatch.bytes,
+        sha256: childPatch.sha256,
+        baseCommit: preparedSource.headCommit,
+        allowedPaths: ["src/child.txt"],
+        evidence: [verifiedPatchEvidence(childPatch.sha256)],
+      }),
+      resolveSourceWorkspace: async () => preparedSource,
+      publishSelectedSource: publishSource,
+      persistPrepared: async (value) => {
+        prepared.push(value);
+      },
+      assertOpen: () => undefined,
+    });
+    expect(prepared).toHaveLength(1);
+    expect(
+      await git(fixture.repository, "rev-parse", "refs/pi-conductor/integration/reviewed"),
+    ).toBe(outcome.integratedHead);
+    expect(await readFile(join(fixture.repository, "src/value.txt"), "utf8")).toBe("one\n");
+    // The bridge integrates the sealed prefix into
+    // `refs/pi-conductor/integration/reviewed` only; the canonical repository
+    // working tree stays at `B`, so `src/extra.txt` (introduced by the source
+    // patch) must not exist on disk there.
+    await expect(readFile(join(fixture.repository, "src/extra.txt"), "utf8")).rejects.toThrow();
+    const workingTreePorcelain = (
+      await execute("/usr/bin/git", [
+        "-C",
+        fixture.repository,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+      ])
+    ).stdout;
+    expect(workingTreePorcelain).toBe("");
+    const canonicalHead = await git(fixture.repository, "rev-parse", "HEAD");
+    expect(canonicalHead).toBe(fixture.base);
+  });
 });
 
 async function repositoryFixture() {
@@ -410,8 +541,13 @@ async function repositoryFixture() {
 
 async function patchFor(repository: string, base: string, path: string, contents: string) {
   await writeFile(join(repository, path), contents);
+  // `git add -N` records an intent-to-add so `git diff <base>` includes the new
+  // file in its working-tree-vs-commit comparison; `git reset --hard --quiet`
+  // restores the tree after capturing the diff (handles both modifications and
+  // new files).
+  await git(repository, "add", "--intent-to-add", path);
   const { stdout } = await execute("/usr/bin/git", ["-C", repository, "diff", "--binary", base]);
-  await git(repository, "checkout", "-q", "--", path);
+  await git(repository, "reset", "--hard", "--quiet", base);
   const bytes = Buffer.from(stdout);
   const { createHash } = await import("node:crypto");
   return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -558,5 +694,107 @@ async function publishSource(source: { readonly integratedHead: string }) {
   return {
     ref: `artifact/v2/source/${source.integratedHead}`,
     sha256: "f".repeat(64),
+  };
+}
+
+async function service(root: string) {
+  const store = await SourceWorkspaceStore.open({ root: join(root, "source-workspaces") });
+  return createSourceWorkspaceService(store);
+}
+
+async function grantFor(repository: string) {
+  const measured = await measureGitEffectRepository(repository);
+  return {
+    sourceId: "repository",
+    authorityDigest: "c".repeat(64),
+    canonicalPath: measured.canonical_path,
+    repositoryFingerprint: measured.fingerprint,
+    allowedRefs: ["refs/heads/main"],
+    allowedPaths: ["src"],
+    maxFiles: 100,
+    maxBytes: 1024 * 1024,
+    consumers: [{ kind: "controller" as const }],
+    allowGitView: true,
+  };
+}
+
+function sourceRequest(
+  overrides: Partial<{
+    patches: readonly { ref: string; sha256: string; byteLength: number; acceptedBase: string }[];
+    actionId: string;
+  }> = {},
+) {
+  return {
+    runId: "run-119",
+    controllerId: "controller",
+    definitionDigest: "d".repeat(64),
+    activationId: "activation",
+    ownerEpoch: 1,
+    actionId: "prepare-source",
+    requestDigest: "e".repeat(64),
+    sourceId: "repository",
+    repositoryRef: "refs/heads/main",
+    patches: [],
+    ...overrides,
+  };
+}
+
+function sourceWorkspaceDescriptor(source: PreparedSourceWorkspace) {
+  return {
+    ref: source.ref,
+    repository_ref: source.repositoryRef,
+    repository_fingerprint: source.repositoryFingerprint,
+    base_commit: source.baseCommit,
+    head_commit: source.headCommit,
+    tree_id: source.treeId,
+    inventory_digest: source.inventoryDigest,
+    file_count: source.fileCount,
+    byte_length: source.byteLength,
+    allowed_paths: [...source.allowedPaths],
+    patches_digest: source.patchesDigest,
+    patches: source.patches.map((entry) => ({
+      ref: entry.ref,
+      sha256: entry.sha256,
+      byte_length: entry.byteLength,
+      accepted_base: entry.acceptedBase,
+      allowed_paths: [...entry.allowedPaths],
+    })),
+    audience: [...source.audience].map((entry) => ({ ...entry })),
+  };
+}
+
+function bridgeRequest(
+  base: string,
+  headCommit: string,
+  patchDigest: string,
+  descriptor: ReturnType<typeof sourceWorkspaceDescriptor>,
+) {
+  const verified = verifiedPatchEvidence(patchDigest);
+  return {
+    schema_version: 1 as const,
+    kind: "git_integrate" as const,
+    repository_id: "repo-main",
+    accepted_base: base,
+    integration_ref: "refs/pi-conductor/integration/reviewed",
+    expected_ref_oid: null,
+    patches: [
+      {
+        artifact_ref: "artifact/v2/patch",
+        sha256: patchDigest,
+        base_commit: headCommit,
+        evidence: [
+          {
+            artifact_ref: verified.artifactRef,
+            sha256: verified.sha256,
+            producer_id: verified.producerId,
+            schema_id: verified.schemaId,
+            subject_digest: verified.subjectDigest,
+            verdict: verified.verdict,
+          },
+        ],
+      },
+    ],
+    selected_source_paths: ["src/child.txt"],
+    source_workspace_descriptor: descriptor,
   };
 }

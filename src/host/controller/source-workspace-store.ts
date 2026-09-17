@@ -22,9 +22,14 @@ import {
 } from "../../persistence/source-workspace.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import { canonicalPrivateRoot } from "./git-effect-operations.js";
-import type { PreparedSourceWorkspace, SourceWorkspaceGrant } from "./source-workspace-contract.js";
+import type {
+  PreparedSourceWorkspace,
+  SourceWorkspaceGrant,
+  SourceWorkspacePatchLineage,
+} from "./source-workspace-contract.js";
 import { SourceWorkspaceError } from "./source-workspace-contract.js";
 import { gitText, runSourceGit } from "./source-workspace-git.js";
+import { verifySourcePatchLineage } from "./source-workspace-validation.js";
 
 const refPattern = /^source-workspace\/v1\/([a-f0-9]{64})\/([a-f0-9]{64})$/u;
 
@@ -150,6 +155,17 @@ export class SourceWorkspaceStore {
       )
         throw new SourceWorkspaceError("workspace-corrupt");
       assertSourceWorkspaceRecord(manifest.intent);
+      verifySourcePatchLineage(manifest.content.patches, manifest.content.patches_digest);
+      if (sha256Canonical(manifest.content.patches) !== sha256Canonical(manifest.intent.patches))
+        throw new SourceWorkspaceError(
+          "workspace-corrupt",
+          "source patch lineage differs from intent",
+        );
+      if (
+        grant !== undefined &&
+        !sameStrings(manifest.content.allowed_paths, [...grant.allowedPaths].sort())
+      )
+        throw new SourceWorkspaceError("grant-revoked", "source allowed paths changed");
       if (grant !== undefined && !intentMatchesGrant(manifest.intent, grant))
         throw new SourceWorkspaceError(
           "grant-revoked",
@@ -178,6 +194,11 @@ export class SourceWorkspaceStore {
         byteLength: manifest.content.byte_length,
         policyDigest: manifest.intent.policy_digest,
         audience: Object.freeze([...manifest.intent.audience]),
+        repositoryRef: manifest.intent.requested_ref,
+        repositoryFingerprint: manifest.intent.repository_fingerprint,
+        allowedPaths: Object.freeze([...manifest.content.allowed_paths]),
+        patches: Object.freeze(manifest.content.patches.map(lineageOf)),
+        patchesDigest: manifest.content.patches_digest,
       });
     } catch (cause) {
       if (cause instanceof SourceWorkspaceError) throw cause;
@@ -224,11 +245,9 @@ function intentMatchesGrant(intent: SourceWorkspaceIntent, grant: SourceWorkspac
 export async function sourceContent(
   root: string,
   limits: Pick<SourceWorkspaceGrant, "maxFiles" | "maxBytes">,
-): Promise<SourceWorkspaceContent> {
+): Promise<SourceWorkspaceInventory> {
   const inventory = await inventoryOf(root, limits, false);
   return {
-    head_commit: "0".repeat(40),
-    tree_id: "0".repeat(40),
     inventory_digest: sha256Canonical({
       domain: "pi-conductor/source-workspace-files/v1",
       inventory: inventory.files,
@@ -236,6 +255,13 @@ export async function sourceContent(
     file_count: inventory.files.length,
     byte_length: inventory.bytes,
   };
+}
+
+/** Inventory subset returned before source patches and lineage are bound. */
+export interface SourceWorkspaceInventory {
+  readonly inventory_digest: string;
+  readonly file_count: number;
+  readonly byte_length: number;
 }
 
 async function verifySource(root: string, content: SourceWorkspaceContent): Promise<void> {
@@ -379,4 +405,18 @@ async function readManifest(path: string): Promise<StoredManifest> {
 
 function missing(cause: unknown): boolean {
   return typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT";
+}
+
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function lineageOf(patch: SourceWorkspaceIntent["patches"][number]): SourceWorkspacePatchLineage {
+  return Object.freeze({
+    ref: patch.ref,
+    sha256: patch.sha256,
+    byteLength: patch.byte_length,
+    acceptedBase: patch.accepted_base,
+    allowedPaths: Object.freeze([...patch.allowed_paths]),
+  });
 }

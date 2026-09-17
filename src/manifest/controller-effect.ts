@@ -3,6 +3,12 @@
 import { createHash } from "node:crypto";
 import { type Static, type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
+import { controllerOutputPrincipalSchema } from "./controller-output.js";
+import {
+  sourcePathSchema,
+  sourceRepositoryRefSchema,
+  sourceWorkspaceRefSchema,
+} from "./controller-source.js";
 import {
   type LocalProgramRequest,
   type LocalProgramResult,
@@ -58,8 +64,86 @@ const evidence = Type.Object(
   { additionalProperties: false },
 );
 
+/** Closed descriptor for one source workspace used by the source-bridge path. */
+export const sourceWorkspaceDescriptorSchema = Type.Object(
+  {
+    ref: sourceWorkspaceRefSchema,
+    repository_ref: sourceRepositoryRefSchema,
+    repository_fingerprint: sha256,
+    base_commit: objectId,
+    head_commit: objectId,
+    tree_id: objectId,
+    inventory_digest: sha256,
+    file_count: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    byte_length: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    allowed_paths: Type.Array(sourcePathSchema, { minItems: 1, maxItems: 1024 }),
+    patches_digest: sha256,
+    patches: Type.Array(
+      Type.Object(
+        {
+          ref: Type.String({ minLength: 1, maxLength: 1024 }),
+          sha256,
+          byte_length: Type.Integer({ minimum: 1, maximum: 67_108_864 }),
+          accepted_base: objectId,
+          allowed_paths: Type.Array(sourcePathSchema, { minItems: 1, maxItems: 1024 }),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 64 },
+    ),
+    audience: Type.Array(controllerOutputPrincipalSchema, {
+      minItems: 1,
+      maxItems: 64,
+    }),
+  },
+  { additionalProperties: false },
+);
+
+/** Reference subset of the source descriptor returned on a bridge result. */
+export const sourceWorkspaceDescriptorRefSchema = Type.Object(
+  {
+    ref: sourceWorkspaceRefSchema,
+    head_commit: objectId,
+    tree_id: objectId,
+    inventory_digest: sha256,
+    file_count: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    byte_length: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+    patches_digest: sha256,
+    patches: Type.Array(
+      Type.Object(
+        {
+          ref: Type.String({ minLength: 1, maxLength: 1024 }),
+          sha256,
+          byte_length: Type.Integer({ minimum: 1, maximum: 67_108_864 }),
+          accepted_base: objectId,
+          allowed_paths: Type.Array(sourcePathSchema, { minItems: 1, maxItems: 1024 }),
+        },
+        { additionalProperties: false },
+      ),
+      { maxItems: 64 },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Mechanical ordered three-way patch integration request. */
 export const gitIntegrateRequestSchema = Type.Object(
+  {
+    schema_version: Type.Literal(1),
+    kind: Type.Literal("git_integrate"),
+    repository_id: id,
+    accepted_base: objectId,
+    integration_ref: ref,
+    expected_ref_oid: nullableObjectId,
+    patches: Type.Array(patch, { minItems: 1, maxItems: 64 }),
+    selected_source_paths: Type.Array(relativePath, { minItems: 1, maxItems: 64 }),
+    source_workspace_descriptor: Type.Optional(sourceWorkspaceDescriptorSchema),
+  },
+  { additionalProperties: false },
+);
+
+/** Legacy schema kept for stable `effectRequestSchemaDigest("git_integrate")`. */
+const gitIntegrateRequestLegacySchema = Type.Object(
   {
     schema_version: Type.Literal(1),
     kind: Type.Literal("git_integrate"),
@@ -72,6 +156,9 @@ export const gitIntegrateRequestSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/** Pin the request schema digest to its pre-bridge value. */
+const GIT_INTEGRATE_REQUEST_SCHEMA_DIGEST = sha256Canonical(gitIntegrateRequestLegacySchema);
 
 /** Exact reviewed-head promotion request using a protected ref CAS. */
 export const gitPromoteRequestSchema = Type.Object(
@@ -124,6 +211,7 @@ export const gitIntegrateResultSchema = Type.Object(
     prior_ref_oid: nullableObjectId,
     source_artifact_ref: artifactRef,
     source_artifact_sha256: sha256,
+    source_workspace_descriptor: Type.Optional(sourceWorkspaceDescriptorRefSchema),
   },
   { additionalProperties: false },
 );
@@ -198,6 +286,10 @@ export function effectResultSchemaFor(kind: EffectKind): TSchema {
 
 /** Digest the built-in request schema as part of operator authority. */
 export function effectRequestSchemaDigest(kind: EffectKind): string {
+  // `git_integrate` carries an optional source-workspace descriptor; the
+  // pinned digest stays stable against the pre-bridge legacy schema so
+  // existing operator authorities continue to bind without re-pinning.
+  if (kind === "git_integrate") return GIT_INTEGRATE_REQUEST_SCHEMA_DIGEST;
   return sha256Canonical(effectRequestSchemaFor(kind));
 }
 

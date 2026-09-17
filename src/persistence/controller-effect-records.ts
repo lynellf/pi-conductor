@@ -7,6 +7,7 @@ import {
   effectRequestSchema,
   effectResultSchema,
 } from "../manifest/controller-effect.js";
+import { controllerOutputPrincipalSchema } from "../manifest/controller-output.js";
 import {
   assertLocalProgramProcessRecord,
   isLocalProgramProcessRecord,
@@ -112,6 +113,46 @@ const gitPrepared = Type.Object(
         { additionalProperties: false },
       ),
     ]),
+    source_workspace: Type.Optional(
+      Type.Object(
+        {
+          ref: Type.String({ minLength: 1, maxLength: 256 }),
+          head_commit: oid,
+          tree_id: oid,
+          inventory_digest: digest,
+          file_count: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+          byte_length: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+          repository_ref: Type.String({ minLength: 6, maxLength: 512 }),
+          repository_fingerprint: digest,
+          allowed_paths: Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), {
+            minItems: 1,
+            maxItems: 1024,
+          }),
+          patches_digest: digest,
+          patches: Type.Array(
+            Type.Object(
+              {
+                ref: Type.String({ minLength: 1, maxLength: 1024 }),
+                sha256: digest,
+                byte_length: Type.Integer({ minimum: 1, maximum: 67_108_864 }),
+                accepted_base: oid,
+                allowed_paths: Type.Array(Type.String({ minLength: 1, maxLength: 4096 }), {
+                  minItems: 1,
+                  maxItems: 1024,
+                }),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 64 },
+          ),
+          audience: Type.Array(controllerOutputPrincipalSchema, {
+            minItems: 1,
+            maxItems: 64,
+          }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

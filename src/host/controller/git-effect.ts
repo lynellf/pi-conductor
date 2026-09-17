@@ -1,22 +1,15 @@
 // Kept together (~400 LOC): Git preparation, execution and reconciliation share exact postconditions.
 /** Closed local Git integration and promotion effects for issue #116 B2. */
 
-import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { GitIntegrateRequest, GitPromoteRequest } from "../../manifest/controller-effect.js";
-import { sha256Canonical } from "../../persistence/trajectory-records.js";
-import {
-  assertGitObjectId,
-  canonicalGitDirectory,
-  validateSelectedGitPaths,
-  verifyTrustedGitBinary,
-} from "../execution/sandbox/trusted-git-validation.js";
+import { assertGitObjectId } from "../execution/sandbox/trusted-git-validation.js";
 import { assertEffectRequestInScope, type PinnedEffectAuthority } from "./effect-registry.js";
 import type {
   GitEffectPrepared,
   GitEffectReconciliation,
-  GitEffectRepositoryIdentity,
   GitIntegrationOutcome,
   ResolvedGitPatch,
   SelectedSourceArtifact,
@@ -33,10 +26,11 @@ import {
   readRef,
   rejectCheckedOutRef,
   rejectUnsafeIndex,
-  runCanonical,
   runIsolated,
   updateRefCas,
 } from "./git-effect-operations.js";
+import { assertGitEffectRepository } from "./git-effect-repository.js";
+import { verifyResolvedGitPatch, verifyResolvedHeadEvidence } from "./git-effect-validation.js";
 
 export type {
   GitEffectPrepared,
@@ -48,34 +42,12 @@ export type {
   VerifiedHeadEvidence,
   VerifiedPatchEvidence,
 } from "./git-effect-contract.js";
-
-/** Measure canonical repository and common-Git-directory identity for operator approval. */
-export async function measureGitEffectRepository(
-  repositoryPath: string,
-): Promise<GitEffectRepositoryIdentity> {
-  await verifyTrustedGitBinary();
-  const canonicalPath = await canonicalGitDirectory(repositoryPath);
-  const commonOutput = await runCanonical(canonicalPath, [
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]);
-  const commonGitDir = await realpath(commonOutput.toString().trim());
-  const [repository, common] = await Promise.all([lstat(canonicalPath), lstat(commonGitDir)]);
-  if (!repository.isDirectory() || !common.isDirectory())
-    throw new Error("effect repository identity is not directory-backed");
-  const identity = {
-    canonical_path: canonicalPath,
-    common_git_dir: commonGitDir,
-    repository: stableStat(repository),
-    common_git_directory: stableStat(common),
-  };
-  return Object.freeze({
-    canonical_path: canonicalPath,
-    common_git_dir: commonGitDir,
-    fingerprint: sha256Canonical(identity),
-  });
-}
+export { measureGitEffectRepository } from "./git-effect-repository.js";
+export {
+  integrateGitEffectFromSourceWorkspace,
+  SourceIntegrationError,
+  type SourceIntegrationOptions,
+} from "./git-effect-source-bridge.js";
 
 /** Apply verified patches in isolated Git state and CAS-update one approved integration ref. */
 export async function integrateGitEffect(options: {
@@ -96,13 +68,13 @@ export async function integrateGitEffect(options: {
   assertEffectRequestInScope(options.authority, options.request);
   if (options.authority.grant.kind !== "git_integrate")
     throw new Error("Git integration requires integration authority");
-  const repository = await assertRepository(options.authority);
+  const repository = await assertGitEffectRepository(options.authority);
   await assertCommit(repository.canonical_path, options.request.accepted_base);
   const resolved = await Promise.all(options.request.patches.map(options.resolvePatch));
   for (const [index, patch] of resolved.entries()) {
     const claim = options.request.patches[index];
     if (claim === undefined) throw new Error("resolved patch count changed");
-    verifyPatch(claim, patch);
+    verifyResolvedGitPatch(claim, patch);
   }
   options.signal?.throwIfAborted();
   options.assertOpen();
@@ -192,7 +164,7 @@ export async function integrateGitEffect(options: {
     options.signal?.throwIfAborted();
     options.assertOpen();
     await options.persistPrepared(prepared);
-    await assertRepository(options.authority);
+    await assertGitEffectRepository(options.authority);
     await options.assertEffectOpen?.();
     options.signal?.throwIfAborted();
     options.assertOpen();
@@ -203,7 +175,7 @@ export async function integrateGitEffect(options: {
       integratedHead,
       options.signal,
     );
-    await assertRepository(options.authority);
+    await assertGitEffectRepository(options.authority);
     await rejectCheckedOutRef(repository.canonical_path, options.request.integration_ref);
     await options.assertEffectOpen?.();
     options.signal?.throwIfAborted();
@@ -245,12 +217,12 @@ export async function promoteGitEffect(options: {
   assertEffectRequestInScope(options.authority, options.request);
   if (options.authority.grant.kind !== "git_promote")
     throw new Error("Git promotion requires promotion authority");
-  const repository = await assertRepository(options.authority);
+  const repository = await assertGitEffectRepository(options.authority);
   const evidence = await Promise.all(options.request.evidence.map(options.resolveEvidence));
   for (const [index, verified] of evidence.entries()) {
     const claim = options.request.evidence[index];
     if (claim === undefined) throw new Error("resolved evidence count changed");
-    verifyHeadEvidence(claim, verified);
+    verifyResolvedHeadEvidence(claim, verified);
   }
   const sourceHead = await readRef(repository.canonical_path, options.request.source_ref);
   if (sourceHead !== options.request.reviewed_head)
@@ -273,7 +245,7 @@ export async function promoteGitEffect(options: {
   options.signal?.throwIfAborted();
   options.assertOpen();
   await options.persistPrepared(prepared);
-  await assertRepository(options.authority);
+  await assertGitEffectRepository(options.authority);
   await options.assertEffectOpen?.();
   if ((await readRef(repository.canonical_path, options.request.source_ref)) !== sourceHead)
     throw new Error("promotion source ref changed after prepared intent");
@@ -311,12 +283,12 @@ export async function assertDeliverySource(options: {
     options.authority.grant.kind !== "local_program"
   )
     throw new Error("delivery source verification requires delivery authority");
-  const repository = await assertRepository(options.authority);
+  const repository = await assertGitEffectRepository(options.authority);
   const evidence = await Promise.all(options.request.evidence.map(options.resolveEvidence));
   for (const [index, verified] of evidence.entries()) {
     const claim = options.request.evidence[index];
     if (claim === undefined) throw new Error("resolved evidence count changed");
-    verifyHeadEvidence(claim, verified);
+    verifyResolvedHeadEvidence(claim, verified);
   }
   const sourceHead = await readRef(repository.canonical_path, options.request.source_ref);
   if (sourceHead !== options.request.reviewed_head)
@@ -330,7 +302,7 @@ export async function reconcileGitEffect(
   prepared: GitEffectPrepared,
 ): Promise<GitEffectReconciliation> {
   try {
-    const repository = await assertRepository(authority);
+    const repository = await assertGitEffectRepository(authority);
     if (repository.fingerprint !== prepared.repositoryFingerprint)
       return { kind: "uncertain", diagnosticCode: "repository_unavailable" };
     const observed = await observeRef(repository.canonical_path, prepared.targetRef);
@@ -342,63 +314,4 @@ export async function reconcileGitEffect(
   } catch {
     return { kind: "uncertain", diagnosticCode: "repository_unavailable" };
   }
-}
-
-async function assertRepository(
-  authority: PinnedEffectAuthority,
-): Promise<GitEffectRepositoryIdentity> {
-  const measured = await measureGitEffectRepository(authority.grant.repository.canonical_path);
-  if (measured.fingerprint !== authority.grant.repository.fingerprint)
-    throw new Error("effect repository identity does not match pinned authority");
-  return measured;
-}
-function stableStat(stat: Awaited<ReturnType<typeof lstat>>) {
-  return { dev: stat.dev, ino: stat.ino, uid: stat.uid, gid: stat.gid, mode: stat.mode };
-}
-function verifyPatch(claim: GitIntegrateRequest["patches"][number], patch: ResolvedGitPatch): void {
-  const digest = createHash("sha256").update(patch.bytes).digest("hex");
-  if (
-    digest !== claim.sha256 ||
-    patch.sha256 !== claim.sha256 ||
-    patch.baseCommit !== claim.base_commit
-  )
-    throw new Error("resolved patch does not match its immutable claim");
-  validateSelectedGitPaths(patch.allowedPaths);
-  for (const [index, evidence] of patch.evidence.entries()) {
-    const verified = patch.evidence.find((item) => item.artifactRef === evidence.artifactRef);
-    if (
-      verified === undefined ||
-      verified.subjectDigest !== claim.sha256 ||
-      verified.verdict !== "approved"
-    )
-      throw new Error(`patch evidence ${index} is not verified`);
-  }
-  for (const claimEvidence of claim.evidence) {
-    if (
-      !patch.evidence.some(
-        (item) =>
-          item.artifactRef === claimEvidence.artifact_ref &&
-          item.sha256 === claimEvidence.sha256 &&
-          item.producerId === claimEvidence.producer_id &&
-          item.schemaId === claimEvidence.schema_id &&
-          item.subjectDigest === claimEvidence.subject_digest &&
-          item.verdict === claimEvidence.verdict,
-      )
-    )
-      throw new Error("resolved patch evidence does not match its immutable claim");
-  }
-}
-function verifyHeadEvidence(
-  claim: GitPromoteRequest["evidence"][number],
-  value: VerifiedHeadEvidence,
-): void {
-  if (
-    value.artifactRef !== claim.artifact_ref ||
-    value.sha256 !== claim.sha256 ||
-    value.producerId !== claim.producer_id ||
-    value.schemaId !== claim.schema_id ||
-    value.subjectHead !== claim.subject_head ||
-    value.verdict !== "approved"
-  )
-    throw new Error("resolved head evidence does not match its immutable claim");
 }

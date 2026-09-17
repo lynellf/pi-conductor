@@ -11,6 +11,7 @@ import {
   isControllerEffectOperationRecord,
   isControllerEffectRecord,
 } from "./controller-effect-records.js";
+import { sourceWorkspacePrincipalKey } from "./source-workspace.js";
 import { sha256Canonical } from "./trajectory-records.js";
 
 export interface ControllerEffectState {
@@ -174,6 +175,47 @@ function assertPostcondition(
       post.source_artifact === null
     )
       throw invalid("prepared integration postcondition differs from request");
+    if (
+      (post.source_workspace === undefined) !==
+      (request.source_workspace_descriptor === undefined)
+    )
+      throw invalid("prepared source workspace does not match request bridge mode");
+    if (post.source_workspace !== undefined) {
+      const workspace = post.source_workspace;
+      const descriptor = request.source_workspace_descriptor;
+      if (descriptor === undefined)
+        throw invalid("prepared source workspace lacks a request descriptor");
+      if (
+        workspace.ref !== descriptor.ref ||
+        workspace.head_commit !== descriptor.head_commit ||
+        workspace.tree_id !== descriptor.tree_id ||
+        workspace.inventory_digest !== descriptor.inventory_digest ||
+        workspace.file_count !== descriptor.file_count ||
+        workspace.byte_length !== descriptor.byte_length ||
+        workspace.repository_ref !== descriptor.repository_ref ||
+        workspace.repository_fingerprint !== descriptor.repository_fingerprint ||
+        workspace.patches_digest !== descriptor.patches_digest ||
+        !sameStrings(workspace.allowed_paths, descriptor.allowed_paths) ||
+        workspace.patches.length !== descriptor.patches.length ||
+        !sameStrings(
+          workspace.audience.map(sourceWorkspacePrincipalKey),
+          descriptor.audience.map(sourceWorkspacePrincipalKey),
+        )
+      )
+        throw invalid("prepared source workspace identity does not match descriptor");
+      for (const [index, patch] of workspace.patches.entries()) {
+        const claim = descriptor.patches[index];
+        if (
+          claim === undefined ||
+          patch.ref !== claim.ref ||
+          patch.sha256 !== claim.sha256 ||
+          patch.byte_length !== claim.byte_length ||
+          patch.accepted_base !== claim.accepted_base ||
+          !sameStrings(patch.allowed_paths, claim.allowed_paths)
+        )
+          throw invalid("prepared source workspace patch lineage drift");
+      }
+    }
   } else if (request.kind === "git_promote" && post.kind === "git_promote") {
     if (
       post.source_head !== request.reviewed_head ||
@@ -272,6 +314,10 @@ function assertLocalObservation(
 function freezeState(state: MutableEffect): ControllerEffectState {
   return Object.freeze({ intent: state.intent, prepared: state.prepared, settled: state.settled });
 }
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function invalid(message: string): ControllerEffectRecordError {
   return new ControllerEffectRecordError(message);
 }

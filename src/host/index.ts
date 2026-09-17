@@ -288,7 +288,14 @@ export { createProductionHost } from "./production-host-factory.js";
 /** Operator setup for explicitly granted controller effects (#116). */
 export { measureBuiltinEffectImplementations } from "./controller/effect-implementation-inventory.js";
 export { type EffectGrant, validateEffectGrant } from "./controller/effect-registry.js";
-export { measureGitEffectRepository } from "./controller/git-effect.js";
+export {
+  type GitIntegrationOutcome,
+  integrateGitEffect,
+  integrateGitEffectFromSourceWorkspace,
+  measureGitEffectRepository,
+  SourceIntegrationError,
+  type SourceIntegrationOptions,
+} from "./controller/git-effect.js";
 export {
   deriveLocalProgramHostDriverDigest,
   measureLocalProgramImplementation,
