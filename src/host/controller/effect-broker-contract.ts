@@ -15,6 +15,7 @@ import type {
   SelectedSourceArtifact,
   VerifiedHeadEvidence,
 } from "./git-effect.js";
+import type { PreparedSourceWorkspace } from "./source-workspace-contract.js";
 
 export interface ResolvedEffectRequestArtifact {
   readonly artifact: EffectRequestArtifact;
@@ -53,6 +54,13 @@ export interface EffectBrokerDependencies {
     effectId: string,
     claim: GitPromoteRequest["evidence"][number],
   ) => Promise<Buffer>;
+  /**
+   * Host-owned source-workspace reader used by the bridge path only; absent
+   * means the host has no source-workspace authority and the bridge cannot
+   * dispatch. Legacy `git_integrate` requests (no descriptor) do not require
+   * this dependency.
+   */
+  readonly resolveSourceWorkspace?: (ref: string) => Promise<PreparedSourceWorkspace>;
   readonly publishIntegratedSource: (
     effectId: string,
     operationId: string,
@@ -74,6 +82,7 @@ export interface ExecuteControllerEffectInput {
 }
 export interface EffectBrokerExecutors {
   readonly integrate?: typeof import("./git-effect.js").integrateGitEffect;
+  readonly integrateFromSourceWorkspace?: typeof import("./git-effect.js").integrateGitEffectFromSourceWorkspace;
   readonly promote?: typeof import("./git-effect.js").promoteGitEffect;
   readonly reconcileGit?: typeof import("./git-effect.js").reconcileGitEffect;
   readonly deliver?: typeof import("./remote-effect.js").executeRemoteEffect;

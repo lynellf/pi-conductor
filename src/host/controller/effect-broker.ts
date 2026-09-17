@@ -33,6 +33,7 @@ import { assertEffectRequestInScope } from "./effect-registry.js";
 import {
   assertDeliverySource,
   integrateGitEffect,
+  integrateGitEffectFromSourceWorkspace,
   promoteGitEffect,
   reconcileGitEffect,
 } from "./git-effect.js";
@@ -49,6 +50,8 @@ export function createControllerEffectBroker(
   const now = dependencies.now ?? Date.now;
   const executors = {
     integrate: dependencies.executors?.integrate ?? integrateGitEffect,
+    integrateFromSourceWorkspace:
+      dependencies.executors?.integrateFromSourceWorkspace ?? integrateGitEffectFromSourceWorkspace,
     promote: dependencies.executors?.promote ?? promoteGitEffect,
     reconcileGit: dependencies.executors?.reconcileGit ?? reconcileGitEffect,
     deliver: dependencies.executors?.deliver ?? executeRemoteEffect,

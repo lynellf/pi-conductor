@@ -41,11 +41,52 @@ export async function dispatchEffect(
       ...(signal === undefined ? {} : { signal }),
     });
   if (request.kind === "git_integrate") {
-    const outcome = await executors.integrate({
+    if (request.source_workspace_descriptor === undefined) {
+      const outcome = await executors.integrate({
+        authority,
+        request,
+        workspaceRoot: dependencies.workspaceRoot,
+        resolvePatch: (claim) => dependencies.resolvePatch(authority.grant.id, claim),
+        publishSelectedSource: (source) =>
+          dependencies.publishIntegratedSource(authority.grant.id, operationId, source),
+        persistPrepared: (value) => persist(gitPostcondition(value)),
+        assertEffectOpen: async () => {
+          await currentEffectAuthority(
+            dependencies,
+            authority.grant.id,
+            authority.grant.adapter_id,
+            authority,
+          );
+          dependencies.assertOpen();
+        },
+        assertOpen: dependencies.assertOpen,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      const result: EffectResult = {
+        schema_version: 1,
+        kind: "git_integrate",
+        repository_id: request.repository_id,
+        accepted_base: request.accepted_base,
+        integrated_head: outcome.integratedHead,
+        integration_ref: request.integration_ref,
+        prior_ref_oid: outcome.priorRefOid,
+        source_artifact_ref: outcome.sourceArtifact.ref,
+        source_artifact_sha256: outcome.sourceArtifact.sha256,
+      };
+      assertEffectResultInScope(authority, request, result);
+      return { kind: "applied", result };
+    }
+    if (dependencies.resolveSourceWorkspace === undefined)
+      throw new Error("source bridge requires host resolveSourceWorkspace dependency");
+    const integrateFromSourceWorkspace = executors.integrateFromSourceWorkspace;
+    if (integrateFromSourceWorkspace === undefined)
+      throw new Error("source bridge executor is not configured");
+    const outcome = await integrateFromSourceWorkspace({
       authority,
       request,
       workspaceRoot: dependencies.workspaceRoot,
       resolvePatch: (claim) => dependencies.resolvePatch(authority.grant.id, claim),
+      resolveSourceWorkspace: dependencies.resolveSourceWorkspace,
       publishSelectedSource: (source) =>
         dependencies.publishIntegratedSource(authority.grant.id, operationId, source),
       persistPrepared: (value) => persist(gitPostcondition(value)),
@@ -61,7 +102,7 @@ export async function dispatchEffect(
       assertOpen: dependencies.assertOpen,
       ...(signal === undefined ? {} : { signal }),
     });
-    const result: EffectResult = {
+    const baseResult: EffectResult = {
       schema_version: 1,
       kind: "git_integrate",
       repository_id: request.repository_id,
@@ -72,6 +113,25 @@ export async function dispatchEffect(
       source_artifact_ref: outcome.sourceArtifact.ref,
       source_artifact_sha256: outcome.sourceArtifact.sha256,
     };
+    const result = Object.freeze({
+      ...baseResult,
+      source_workspace_descriptor: {
+        ref: request.source_workspace_descriptor.ref,
+        head_commit: request.source_workspace_descriptor.head_commit,
+        tree_id: request.source_workspace_descriptor.tree_id,
+        inventory_digest: request.source_workspace_descriptor.inventory_digest,
+        file_count: request.source_workspace_descriptor.file_count,
+        byte_length: request.source_workspace_descriptor.byte_length,
+        patches_digest: request.source_workspace_descriptor.patches_digest,
+        patches: request.source_workspace_descriptor.patches.map((entry) => ({
+          ref: entry.ref,
+          sha256: entry.sha256,
+          byte_length: entry.byte_length,
+          accepted_base: entry.accepted_base,
+          allowed_paths: [...entry.allowed_paths],
+        })),
+      },
+    });
     assertEffectResultInScope(authority, request, result);
     return { kind: "applied", result };
   }

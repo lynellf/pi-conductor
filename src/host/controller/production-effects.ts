@@ -79,6 +79,15 @@ export interface ProductionEffectsOptions {
   readonly runStateDir: string;
   readonly assertOpen: () => void;
   readonly credentialFiles: Readonly<Record<string, string>>;
+  /**
+   * Optional host-owned source-workspace reader; absent means the host has no
+   * source authority and bridge dispatch is rejected. Legacy `git_integrate`
+   * requests do not require this. The caller pre-validates against the
+   * pinned effect authority before returning the descriptor.
+   */
+  readonly resolveSourceWorkspace?: (
+    ref: string,
+  ) => Promise<import("./source-workspace-contract.js").PreparedSourceWorkspace>;
 }
 
 /** Skip inventory and broker assembly entirely when the pinned controller has no effects. */
@@ -244,6 +253,9 @@ export async function createProductionEffects(options: ProductionEffectsOptions)
         consumers,
       });
     },
+    ...(options.resolveSourceWorkspace === undefined
+      ? {}
+      : { resolveSourceWorkspace: options.resolveSourceWorkspace }),
     workspaceRoot: options.runStateDir,
     credentialFiles: options.credentialFiles,
     assertOpen: options.assertOpen,

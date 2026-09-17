@@ -256,6 +256,12 @@ export async function createProductionControllerSession(
     runStateDir,
     assertOpen: assertActivationOpen,
     approval,
+    ...(sources === undefined
+      ? {}
+      : {
+          resolveSourceWorkspace: (ref: string) =>
+            sources.openSourceWorkspace(ref, { kind: "controller" }),
+        }),
   });
   let nativeClose: Promise<void> | undefined;
   const closeNativeScope = (reason: string): Promise<void> => {

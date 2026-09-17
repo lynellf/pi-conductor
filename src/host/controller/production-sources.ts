@@ -373,5 +373,14 @@ function sourceDescriptor(source: PreparedSourceWorkspace) {
     inventory_digest: source.inventoryDigest,
     file_count: source.fileCount,
     byte_length: source.byteLength,
+    allowed_paths: [...source.allowedPaths].sort(),
+    patches_digest: source.patchesDigest,
+    patches: [...source.patches].map((entry) => ({
+      ref: entry.ref,
+      sha256: entry.sha256,
+      byte_length: entry.byteLength,
+      accepted_base: entry.acceptedBase,
+      allowed_paths: [...entry.allowedPaths].sort(),
+    })),
   };
 }

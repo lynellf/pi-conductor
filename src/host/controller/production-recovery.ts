@@ -48,6 +48,16 @@ export async function prepareProductionRecovery(options: {
   const latestActivation = [...initial]
     .reverse()
     .find((record) => record.type === "controller_activation_started");
+  const sources =
+    (options.definition.config.source_repositories?.length ?? 0) === 0
+      ? undefined
+      : await createProductionSources({
+          ...options,
+          outputResolver: options.outputs.resolver,
+          assertOpen: () => {
+            throw new Error("recovery cannot prepare sources");
+          },
+        });
   let recoverEffectAction:
     | Awaited<ReturnType<typeof createProductionEffects>>["recoverEffectAction"]
     | undefined;
@@ -74,19 +84,15 @@ export async function prepareProductionRecovery(options: {
       credentialFiles: Object.fromEntries(
         (approval.credential_sources ?? []).map((entry) => [entry.id, entry.path]),
       ),
+      ...(sources === undefined
+        ? {}
+        : {
+            resolveSourceWorkspace: (ref: string) =>
+              sources.openSourceWorkspace(ref, { kind: "controller" }),
+          }),
     });
     recoverEffectAction = effects.recoverEffectAction;
   }
-  const sources =
-    (options.definition.config.source_repositories?.length ?? 0) === 0
-      ? undefined
-      : await createProductionSources({
-          ...options,
-          outputResolver: options.outputs.resolver,
-          assertOpen: () => {
-            throw new Error("recovery cannot prepare sources");
-          },
-        });
   const recoveryArtifacts = {
     ...(sources === undefined ? {} : { recoverSourceAction: sources.recoverSourceAction }),
     recoverAction: options.artifacts.recoverAction.bind(options.artifacts),

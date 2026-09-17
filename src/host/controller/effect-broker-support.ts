@@ -212,6 +212,19 @@ export function gitPostcondition(
     expected_prior: value.expectedPrior,
     applied_head: value.integratedHead,
     source_artifact: value.sourceArtifact,
+    ...(value.sourceWorkspace === undefined
+      ? {}
+      : {
+          source_workspace: {
+            ...value.sourceWorkspace,
+            allowed_paths: [...value.sourceWorkspace.allowed_paths],
+            patches: value.sourceWorkspace.patches.map((patch) => ({
+              ...patch,
+              allowed_paths: [...patch.allowed_paths],
+            })),
+            audience: value.sourceWorkspace.audience.map((principal) => ({ ...principal })),
+          },
+        }),
   };
 }
 
@@ -254,7 +267,7 @@ export function resultFromPrepared(
   const post = prepared.postcondition;
   if (request.kind === "git_integrate" && post.kind === "git_integrate") {
     if (post.source_artifact === null) throw new Error("integration source artifact is missing");
-    return {
+    const base: EffectResult & { kind: "git_integrate" } = {
       schema_version: 1,
       kind: "git_integrate",
       repository_id: request.repository_id,
@@ -265,6 +278,14 @@ export function resultFromPrepared(
       source_artifact_ref: post.source_artifact.ref,
       source_artifact_sha256: post.source_artifact.sha256,
     };
+    if (post.source_workspace !== undefined && request.source_workspace_descriptor !== undefined) {
+      const descriptorRef = sourceWorkspaceDescriptorRefFromPostcondition(
+        post.source_workspace,
+        request.source_workspace_descriptor,
+      );
+      return Object.freeze({ ...base, source_workspace_descriptor: descriptorRef });
+    }
+    return base;
   }
   if (request.kind === "git_promote" && post.kind === "git_promote")
     return {
@@ -278,4 +299,83 @@ export function resultFromPrepared(
       promoted_head: post.applied_head,
     };
   throw new Error("prepared Git postcondition differs from request");
+}
+
+/** Project a postcondition's source_workspace lineage onto the public descriptor reference. */
+function sourceWorkspaceDescriptorRefFromPostcondition(
+  workspace: GitEffectPreparedSourceWorkspacePostcondition,
+  descriptor: GitIntegrateRequestSourceWorkspaceDescriptor,
+): GitIntegrationResultSourceWorkspaceDescriptorRef {
+  const ref = {
+    ref: workspace.ref,
+    head_commit: workspace.head_commit,
+    tree_id: workspace.tree_id,
+    inventory_digest: workspace.inventory_digest,
+    file_count: workspace.file_count,
+    byte_length: workspace.byte_length,
+    patches_digest: workspace.patches_digest,
+    patches: workspace.patches.map((entry) => ({
+      ref: entry.ref,
+      sha256: entry.sha256,
+      byte_length: entry.byte_length,
+      accepted_base: entry.accepted_base,
+      allowed_paths: [...entry.allowed_paths],
+    })),
+  };
+  // The persisted workspace already mirrors the descriptor; the projection is
+  // a structural pin against the request to keep the result traceable.
+  if (ref.ref !== descriptor.ref)
+    throw new Error("prepared source workspace ref does not match request descriptor");
+  return ref;
+}
+
+interface GitEffectPreparedSourceWorkspacePostcondition {
+  readonly ref: string;
+  readonly head_commit: string;
+  readonly tree_id: string;
+  readonly inventory_digest: string;
+  readonly file_count: number;
+  readonly byte_length: number;
+  readonly patches_digest: string;
+  readonly patches: ReadonlyArray<{
+    readonly ref: string;
+    readonly sha256: string;
+    readonly byte_length: number;
+    readonly accepted_base: string;
+    readonly allowed_paths: readonly string[];
+  }>;
+}
+
+interface GitIntegrateRequestSourceWorkspaceDescriptor {
+  readonly ref: string;
+  readonly head_commit: string;
+  readonly tree_id: string;
+  readonly inventory_digest: string;
+  readonly file_count: number;
+  readonly byte_length: number;
+  readonly patches_digest: string;
+  readonly patches: ReadonlyArray<{
+    readonly ref: string;
+    readonly sha256: string;
+    readonly byte_length: number;
+    readonly accepted_base: string;
+    readonly allowed_paths: readonly string[];
+  }>;
+}
+
+interface GitIntegrationResultSourceWorkspaceDescriptorRef {
+  readonly ref: string;
+  readonly head_commit: string;
+  readonly tree_id: string;
+  readonly inventory_digest: string;
+  readonly file_count: number;
+  readonly byte_length: number;
+  readonly patches_digest: string;
+  readonly patches: Array<{
+    ref: string;
+    sha256: string;
+    byte_length: number;
+    accepted_base: string;
+    allowed_paths: string[];
+  }>;
 }
