@@ -39,8 +39,10 @@ export async function runControllerProgram(invocation: ProgramInvocation): Promi
         invocation.options.runStateDir,
         fence,
         staging?.directory,
+        invocation.source,
       );
       await files.verify();
+      await invocation.source?.verify();
       fence();
       assertExactProgram(definition, invocation);
       return {
@@ -50,6 +52,8 @@ export async function runControllerProgram(invocation: ProgramInvocation): Promi
         bootstrapPath: files.bootstrapPath,
         owner,
         writableMounts: invocation.capability === "private_staging" ? files.writableMounts : [],
+        ...(files.readonlyInputs.length === 0 ? {} : { readonlyInputs: files.readonlyInputs }),
+        ...(files.scratchBytes === undefined ? {} : { scratchBytes: files.scratchBytes }),
         environment: {},
         runId: definition.record.run_id,
         outputCaps: { maxBytes: MAX_STDOUT + MAX_STDERR, previewBytes: 0 },
@@ -68,10 +72,13 @@ export async function runControllerProgram(invocation: ProgramInvocation): Promi
               (await invocation.currentDefinition()).config.limits?.planner_deadline_seconds ?? 30,
           }
         : {}),
+      ...(invocation.source === undefined
+        ? {}
+        : { modelTimeoutSeconds: invocation.source.timeoutMs / 1_000 }),
     },
   );
   if (
-    result.normalizedStatus !== 0 ||
+    (invocation.source === undefined && result.normalizedStatus !== 0) ||
     result.output.capture !== "complete" ||
     result.output.stderr.byteCount > MAX_STDERR
   )
@@ -84,6 +91,11 @@ export async function runControllerProgram(invocation: ProgramInvocation): Promi
       result.output.outputRef,
       invocation.origin,
     ),
+    execution: Object.freeze({
+      executionId: result.executionId,
+      normalizedStatus: result.normalizedStatus,
+      capture: result.output.capture,
+    }),
     ...(staging === undefined ? {} : { staging }),
   });
 }

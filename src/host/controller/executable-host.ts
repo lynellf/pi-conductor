@@ -3,23 +3,27 @@ import { createHash, randomUUID } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { type TSchema, Type } from "typebox";
 import { Value } from "typebox/value";
-import type { ControllerAdapterConfig } from "../../manifest/controller.js";
-import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
 import type { ControllerAction, ControllerRequest } from "../../manifest/controller-protocol.js";
-import { combineInputAudiences, intersectOutputAudience } from "../../manifest/output-audience.js";
+import { combineInputAudiences } from "../../manifest/output-audience.js";
 import { controllerActionRequestDigest } from "../../persistence/controller-records.js";
+import { ToolExecutionError } from "../execution/tool-execution-controller.js";
 import {
   type ApprovedControllerDefinition,
   verifyControllerApproval,
 } from "./approved-definition.js";
-import type { ArtifactBinding } from "./artifact-store.js";
+import {
+  adapterBinding,
+  adapterInput,
+  sourceEnvelope,
+  sourceEnvelopeResult,
+  sourceInvocation,
+} from "./executable-host-adapter.js";
 import type {
   CreateExecutableControllerHostOptions,
   ExecutableControllerHost,
 } from "./executable-host-contract.js";
 import { createRuntimePreparation } from "./executable-host-preparation.js";
 import { runControllerProgram } from "./executable-host-program.js";
-import { isResolvedControllerOutput } from "./output-resolver.js";
 import { decodeControllerResponse, encodeControllerRequest } from "./protocol-codec.js";
 import { ControllerRuntimeStore } from "./runtime-store.js";
 
@@ -111,115 +115,87 @@ export function createExecutableControllerHost(
       );
       if (adapter === undefined || authority === undefined)
         throw new Error("controller adapter is not pinned");
-      const adapterInputs = await adapterInput(options, definition, adapter, action);
-      const input = adapterInputs.input;
-      if (
-        !Value.Check(adapterInputSchema, input) ||
-        !checkSchema(schema(definition, adapter.input_schema_id), input)
-      )
-        throw new Error("controller adapter input does not match its approved schema");
-      await ensurePrepared(adapter.runtime_id, adapter.capability, signal);
-      const operationId = randomUUID();
-      const origin = makeOrigin(options, "adapter", action.action_id, requestDigest, operationId);
-      const result = await runControllerProgram({
-        options,
-        runtimeStore,
-        currentDefinition,
-        origin,
-        runtimeId: adapter.runtime_id,
-        executable: adapter.executable,
-        argv: adapter.argv,
-        adapterId: adapter.id,
-        authority,
-        capability: adapter.capability,
-        request: input,
-        needsStaging: true,
-        ...(signal === undefined ? {} : { signal }),
-      });
-      if (result.staging === undefined)
-        throw new Error("controller adapter staging was not created");
-      if (adapter.capability === "private_staging") assertAcknowledgement(result.stdout);
-      else await writeFile(result.staging.outputPath, result.stdout, { flag: "wx", mode: 0o600 });
-      options.assertOpen();
-      const artifact = await options.artifactStore.publish({
-        staging: result.staging,
-        binding: binding(
-          definition,
-          adapter,
-          authority,
-          action.action_id,
-          requestDigest,
+      const source = await sourceInvocation(options, adapter, action);
+      let executionStarted = false;
+      let inputCleanup: "confirmed" | "unconfirmed" | "not-started" = "not-started";
+      try {
+        const adapterInputs = await adapterInput(options, definition, adapter, action);
+        const input = adapterInputs.input;
+        if (
+          !Value.Check(adapterInputSchema, input) ||
+          !checkSchema(schema(definition, adapter.input_schema_id), input)
+        )
+          throw new Error("controller adapter input does not match its approved schema");
+        await ensurePrepared(adapter.runtime_id, adapter.capability, signal);
+        const operationId = randomUUID();
+        const origin = makeOrigin(options, "adapter", action.action_id, requestDigest, operationId);
+        executionStarted = true;
+        const result = await runControllerProgram({
+          options,
+          runtimeStore,
+          currentDefinition,
           origin,
-          adapterInputs.inputAudience,
-        ),
-        assertPublicationOpen: () => {
-          signal?.throwIfAborted();
-          options.assertOpen();
-        },
-        validate: (bytes) => {
-          const value = parseJson(bytes, "controller adapter result");
-          validateJsonDepth(value);
-          if (!checkSchema(schema(definition, adapter.output_schema_id), value))
-            throw new Error("controller adapter result schema mismatch");
-        },
-      });
-      return Object.freeze({ artifact, operationId });
+          runtimeId: adapter.runtime_id,
+          executable: adapter.executable,
+          argv: adapter.argv,
+          adapterId: adapter.id,
+          authority,
+          capability: adapter.capability,
+          request: input,
+          needsStaging: true,
+          ...(source === undefined ? {} : { source }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+        inputCleanup = "confirmed";
+        if (result.staging === undefined)
+          throw new Error("controller adapter staging was not created");
+        await source?.verify();
+        const envelopeBytes = source === undefined ? undefined : sourceEnvelope(source, result);
+        if (adapter.capability === "private_staging") assertAcknowledgement(result.stdout);
+        else
+          await writeFile(result.staging.outputPath, envelopeBytes ?? result.stdout, {
+            flag: "wx",
+            mode: 0o600,
+          });
+        options.assertOpen();
+        const artifact = await options.artifactStore.publish({
+          staging: result.staging,
+          binding: adapterBinding(
+            definition,
+            adapter,
+            authority,
+            action.action_id,
+            requestDigest,
+            origin,
+            combineInputAudiences([adapterInputs.inputAudience, source?.inputAudience ?? null]),
+            envelopeBytes !== undefined,
+          ),
+          assertPublicationOpen: () => {
+            signal?.throwIfAborted();
+            options.assertOpen();
+          },
+          validate: (bytes) => {
+            const value =
+              envelopeBytes === undefined
+                ? parseJson(bytes, "controller adapter result")
+                : sourceEnvelopeResult(parseJson(bytes, "source adapter envelope"));
+            validateJsonDepth(value);
+            if (value === null && result.execution.normalizedStatus !== 0) return;
+            if (!checkSchema(schema(definition, adapter.output_schema_id), value))
+              throw new Error("controller adapter result schema mismatch");
+          },
+        });
+        return Object.freeze({ artifact, operationId });
+      } catch (cause) {
+        if (inputCleanup !== "confirmed") inputCleanup = cleanupCertainty(cause, executionStarted);
+        throw cause;
+      } finally {
+        if (inputCleanup !== "unconfirmed") await source?.dispose();
+      }
     },
   });
 }
 
-async function adapterInput(
-  options: Readonly<CreateExecutableControllerHostOptions>,
-  definition: ApprovedControllerDefinition,
-  adapter: ControllerAdapterConfig,
-  action: Extract<ControllerAction, { readonly kind: "adapter" }>,
-): Promise<{
-  readonly input: {
-    readonly protocol_version: 1;
-    readonly run_id: string;
-    readonly controller_id: string;
-    readonly definition_digest: string;
-    readonly action_id: string;
-    readonly input_refs: readonly { readonly ref: string; readonly value: unknown }[];
-  };
-  readonly inputAudience: readonly ControllerOutputPrincipal[] | null;
-}> {
-  const resolved = await Promise.all(
-    action.input_refs.map(async (ref) => {
-      const value = await options.resolveRef(ref, { kind: "adapter", adapter_id: adapter.id });
-      const audience = isResolvedControllerOutput(value)
-        ? value.audience
-        : await options.getInputAudience?.(ref, { kind: "adapter", adapter_id: adapter.id });
-      return Object.freeze({
-        ref,
-        value: isResolvedControllerOutput(value) ? adapterValue(value) : value,
-        audience: audience ?? null,
-      });
-    }),
-  );
-  return Object.freeze({
-    input: Object.freeze({
-      protocol_version: 1 as const,
-      run_id: definition.record.run_id,
-      controller_id: definition.record.controller_id,
-      definition_digest: definition.record.definition_digest,
-      action_id: action.action_id,
-      input_refs: Object.freeze(resolved.map(({ ref, value }) => Object.freeze({ ref, value }))),
-    }),
-    inputAudience: combineInputAudiences(resolved.map((entry) => entry.audience)),
-  });
-}
-
-function adapterValue(value: import("./output-resolver.js").ResolvedControllerOutput): unknown {
-  if (value.format === "artifact/v1") return parseJson(value.bytes, "controller adapter input");
-  return Object.freeze({
-    encoding: "base64",
-    data: value.bytes.toString("base64"),
-    sha256: value.sha256,
-    byte_length: value.byteLength,
-    media_type: value.mediaType,
-  });
-}
 function makeOrigin(
   options: Readonly<CreateExecutableControllerHostOptions>,
   operationKind: "planner" | "adapter" | "preparation",
@@ -286,60 +262,28 @@ function assertAcknowledgement(bytes: Buffer): void {
   )
     throw new Error("controller staging adapter must acknowledge exactly result.json");
 }
-function binding(
-  definition: ApprovedControllerDefinition,
-  adapter: ControllerAdapterConfig,
-  authority: ApprovedControllerDefinition["record"]["adapter_authorities"][number],
-  actionId: string,
-  requestDigest: string,
-  origin: { readonly operation_id: string },
-  inputAudience: readonly ControllerOutputPrincipal[] | null,
-): ArtifactBinding {
-  const output = definition.approval.schemas.find(
-    (entry) => entry.schema_id === adapter.output_schema_id,
-  );
-  if (output === undefined) throw new Error("controller output schema was revoked");
-  const requestedAudience =
-    adapter.effect_id === undefined
-      ? (adapter.output_consumers ?? legacyAudience(definition))
-      : (adapter.output_consumers ?? []);
-  const audience = intersectOutputAudience(requestedAudience, inputAudience);
-  return Object.freeze({
-    runId: definition.record.run_id,
-    definitionDigest: definition.record.definition_digest,
-    actionId,
-    requestDigest,
-    producer: { kind: "operation" as const, operationId: origin.operation_id, requestDigest },
-    outputSchema: { id: adapter.output_schema_id, digest: output.schema_digest },
-    capabilityDigest: authority.capability_digest,
-    mediaType: "application/json" as const,
-    allowedConsumerProfileIds: Object.freeze([...definition.config.delegation.allowed_subagents]),
-    ...(adapter.output_consumers !== undefined ||
-    inputAudience !== null ||
-    adapter.effect_id !== undefined
-      ? { audience: Object.freeze([...audience]) }
-      : {}),
-  });
-}
-
-function legacyAudience(
-  definition: ApprovedControllerDefinition,
-): readonly ControllerOutputPrincipal[] {
-  return Object.freeze([
-    { kind: "controller" },
-    ...definition.config.delegation.allowed_subagents.map((profile_id) => ({
-      kind: "native" as const,
-      profile_id,
-    })),
-    ...definition.config.adapters.map((adapter) => ({
-      kind: "adapter" as const,
-      adapter_id: adapter.id,
-    })),
-  ]);
-}
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
+
+function cleanupCertainty(
+  cause: unknown,
+  executionStarted: boolean,
+): "confirmed" | "unconfirmed" | "not-started" {
+  if (cause instanceof ToolExecutionError) return cause.cleanup;
+  if (
+    typeof cause === "object" &&
+    cause !== null &&
+    "terminal" in cause &&
+    typeof cause.terminal === "object" &&
+    cause.terminal !== null &&
+    "cleanup" in cause.terminal &&
+    (cause.terminal.cleanup === "confirmed" || cause.terminal.cleanup === "unconfirmed")
+  )
+    return cause.terminal.cleanup;
+  return executionStarted ? "unconfirmed" : "not-started";
+}
+
 function assertActivation(options: Readonly<CreateExecutableControllerHostOptions>): void {
   if (
     options.activationId.length === 0 ||

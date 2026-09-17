@@ -4,9 +4,11 @@ import { controllerActionSchema } from "../../src/manifest/controller-protocol.j
 import {
   controllerFileInputRefSchema,
   controllerSourcePolicySchema,
+  isSafeControllerRepositoryRef,
   isSafeControllerSourcePath,
   sourceRepositoryGrantSchema,
   sourceWorkspaceRefSchema,
+  sourceWorkspaceReservationBytes,
   validateControllerFileInputRef,
   validateSourceRepositoryGrant,
 } from "../../src/manifest/controller-source.js";
@@ -24,17 +26,18 @@ const grant = {
   audience: [{ kind: "controller" }],
   isolated_git_view: true,
   max_source_bytes: 1_048_576,
-  max_source_files: 1000,
+  max_source_files: 100,
   max_patch_bytes: 65_536,
   max_patch_files: 32,
   max_workspaces: 2,
-  max_total_bytes: 2_097_152,
+  max_total_bytes: 128 * 1024 * 1024,
   max_parallel_preparations: 1,
   timeout_ms: 30_000,
 } as const;
 
 describe("controller source contracts", () => {
   it("accepts a bounded repository grant and fixed source workspace identity", () => {
+    expect(sourceWorkspaceReservationBytes(2 * 1024 * 1024, 100)).toBe(66 * 1024 * 1024);
     expect(Value.Check(sourceRepositoryGrantSchema, grant)).toBe(true);
     expect(
       Value.Check(
@@ -71,6 +74,16 @@ describe("controller source contracts", () => {
       "source repository grant repeats an allowed path",
     );
     expect(Value.Check(controllerFileInputRefSchema, { ref: "x", path: "../x" })).toBe(false);
+  });
+
+  it.each([
+    "refs/heads/../secret",
+    "refs//main",
+    "refs/heads/*",
+    "refs/heads\\main",
+  ])("rejects unsafe Git ref %s", (ref) => {
+    expect(isSafeControllerRepositoryRef(ref)).toBe(false);
+    expect(validateSourceRepositoryGrant({ ...grant, allowed_refs: [ref] })).not.toEqual([]);
   });
 
   it("keeps source identities and input paths opaque to the planner", () => {

@@ -341,6 +341,15 @@ async function fixture() {
     usage: result.usage,
     ts: 4,
   };
+  const sourceWorkspace = {
+    ref: `source-workspace/v1/${digest}/${digest}`,
+    source_id: "source",
+    head_commit: base,
+    tree_id: base,
+    inventory_digest: digest,
+    policy_digest: digest,
+    audience: [{ kind: "native" as const, profile_id: "reviewer" }],
+  };
   const nativeStart = {
     type: "subagent_started" as const,
     run_id: "run",
@@ -355,6 +364,7 @@ async function fixture() {
     parent_visit_index: 1,
     session_file: "session",
     ts: 4,
+    source_workspace: sourceWorkspace,
   };
   const parent = controllerLogicalParentId("run", "controller", definitionDigest);
   const args = {
@@ -374,13 +384,18 @@ async function fixture() {
     context_fingerprint: digest,
     prompt_fingerprint: digest,
     projection_fingerprint: { kind: "exact" as const, path_count: 0, sha256: digest },
+    source_workspace: sourceWorkspace,
   };
+  const requestFingerprint = sha256Canonical({
+    input: args,
+    source_workspace_ref: sourceWorkspace.ref,
+  });
   const records: PersistedRecord[] = [
     definition,
     activation,
     {
       type: "delegation_submission_accepted",
-      schema_version: 2,
+      schema_version: 3,
       run_id: "run",
       submission_id: controllerDelegationSubmissionId("run", parent, "action"),
       logical_parent_id: parent,
@@ -394,7 +409,12 @@ async function fixture() {
         activation_id: "activation",
       },
       accepted_args: args,
-      input_fingerprint: sha256Canonical(args),
+      request_fingerprint: requestFingerprint,
+      input_fingerprint: sha256Canonical({
+        request_fingerprint: requestFingerprint,
+        sandbox: [undefined],
+        source_workspaces: [sourceWorkspace],
+      }),
       children: [child],
       ts: 3,
     },

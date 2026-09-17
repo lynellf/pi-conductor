@@ -91,7 +91,7 @@ export function projectControllerMetrics(
         if (action.kind === "delegate") decisionActions.set(action.action_id, at);
     if (
       record.type === "delegation_submission_accepted" &&
-      record.schema_version === 2 &&
+      (record.schema_version === 2 || record.schema_version === 3) &&
       record.origin.kind === "controller_action" &&
       record.origin.controller_id === definition.controller_id &&
       record.origin.definition_digest === definition.definition_digest

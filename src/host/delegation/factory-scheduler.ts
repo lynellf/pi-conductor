@@ -71,7 +71,11 @@ function createNativeDelegateScheduler(
     maxChildren: Math.min(opts.remainingChildren, opts.delegationPolicy.max_children_per_session),
     records: requiredRecords(opts),
     persistRecord: opts.persistRecord,
-    prepareSubmission: async (input: DelegateSubmissionArgs, remainingChildren) => {
+    prepareSubmission: async (
+      input: DelegateSubmissionArgs,
+      remainingChildren,
+      sourceWorkspaceRef,
+    ) => {
       const prepared = await prepareDelegateSubmission({
         args: input,
         policy: opts.delegationPolicy,
@@ -88,6 +92,10 @@ function createNativeDelegateScheduler(
         ...(opts.hostArtifactResolver === undefined
           ? {}
           : { hostArtifactResolver: opts.hostArtifactResolver }),
+        ...(opts.resolveDelegatedSource === undefined
+          ? {}
+          : { resolveDelegatedSource: opts.resolveDelegatedSource }),
+        ...(sourceWorkspaceRef === undefined ? {} : { sourceWorkspaceRef }),
         ...(opts.sandboxAdmission === undefined ? {} : { sandboxAdmission: opts.sandboxAdmission }),
       });
       for (const task of prepared.tasks)
@@ -100,13 +108,17 @@ function createNativeDelegateScheduler(
       };
       signal.addEventListener("abort", abort, { once: true });
       try {
+        const launchTask = await revalidateSourceAtLaunch(opts, task);
         if (task.sandbox !== undefined) {
           if (opts.sandboxAdmission === undefined)
             throw new Error("sandbox admission is unavailable before child creation");
-          await opts.sandboxAdmission.verify({ childId: task.childId, sandbox: task.sandbox });
+          await opts.sandboxAdmission.verify({
+            childId: launchTask.childId,
+            sandbox: task.sandbox,
+          });
         }
         const result = await runPreparedChild({
-          prepared: task,
+          prepared: launchTask,
           runId: opts.runId,
           parentRole: opts.parentRole,
           primaryCheckout: opts.primaryCheckout,
@@ -114,6 +126,7 @@ function createNativeDelegateScheduler(
             materializedPaths.get(task.childId) ?? missingMaterializedPaths(task.childId),
           systemPromptRoot: opts.systemPromptRoot,
           spawnAndRunChild: buildSpawnCallback(opts),
+          signal,
           isAdmissionClosed: () =>
             opts.manager.isClosed() || opts.manager.wasCancelled(task.childId) || signal.aborted,
         });
@@ -151,6 +164,29 @@ function createNativeDelegateScheduler(
         }),
   });
   return scheduler;
+}
+
+async function revalidateSourceAtLaunch(
+  opts: NativeDelegationSchedulerFactoryOptions,
+  task: import("./admission.js").PreparedDelegateChild,
+): Promise<import("./admission.js").PreparedDelegateChild> {
+  const pinned = task.resolvedSourceWorkspace;
+  if (pinned === undefined) return task;
+  if (opts.resolveDelegatedSource === undefined)
+    throw new Error("queued source child has no launch-time resolver");
+  const current = await opts.resolveDelegatedSource(pinned.ref, task.profile.name);
+  if (
+    current.checkoutPath === null ||
+    current.ref !== pinned.ref ||
+    current.sourceId !== pinned.sourceId ||
+    current.headCommit !== pinned.headCommit ||
+    current.treeId !== pinned.treeId ||
+    current.inventoryDigest !== pinned.inventoryDigest ||
+    current.policyDigest !== pinned.policyDigest ||
+    JSON.stringify(current.audience) !== JSON.stringify(pinned.audience)
+  )
+    throw new Error("queued source workspace changed or access was revoked");
+  return { ...task, resolvedSourceWorkspace: current };
 }
 
 function persistTerminal(opts: DelegateChildFactoryOptions, result: PoolChildResult): void {

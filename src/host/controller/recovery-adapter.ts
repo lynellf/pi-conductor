@@ -1,5 +1,7 @@
 /** Immutable adapter-publication resume decisions — issue #115 §6. */
 
+import type { TSchema } from "typebox";
+import { Value } from "typebox/value";
 import { controllerActionRequestDigest } from "../../persistence/controller-records.js";
 import type { ControllerActionState } from "../../persistence/controller-timeline.js";
 import type {
@@ -46,18 +48,42 @@ export async function recoverControllerAdapterAction(
   const adapter = definition.config.adapters.find((item) => item.id === request.adapter_id);
   if (adapter === undefined)
     throw new Error(`adapter action ${action.actionId} has no exact pinned authority`);
+  const sourceAware =
+    request.source_workspace_ref !== undefined || request.file_input_refs !== undefined;
+  if (sourceAware && !verifiedSourceExecution(entry))
+    return Object.freeze({
+      receipts: Object.freeze([]),
+      blocked: Object.freeze([
+        `source adapter action ${action.actionId} lacks complete captured execution evidence; requires action repair`,
+      ]),
+    });
   const inputAudience = await recoveryInputAudience(
     artifacts,
-    request.input_refs,
+    [
+      ...request.input_refs,
+      ...(request.source_workspace_ref === undefined ? [] : [request.source_workspace_ref]),
+      ...(request.file_input_refs ?? []).map((entry) => entry.ref),
+    ],
     { kind: "adapter", adapter_id: adapter.id },
-    adapter.output_consumers !== undefined || definition.config.child_outputs !== undefined,
+    sourceAware ||
+      adapter.output_consumers !== undefined ||
+      definition.config.child_outputs !== undefined,
   );
-  const binding = adapterBinding(definition, action, entry, inputAudience);
+  const binding = adapterBinding(definition, action, entry, inputAudience, sourceAware);
   const origin = controllerOrigin(entry);
   try {
-    const artifact = await artifacts.recoverAction(binding);
+    const recovered =
+      sourceAware && artifacts.recoverActionPayload !== undefined
+        ? await artifacts.recoverActionPayload(binding)
+        : sourceAware
+          ? (() => {
+              throw new Error("source adapter recovery requires immutable envelope bytes");
+            })()
+          : { artifact: await artifacts.recoverAction(binding), bytes: undefined };
+    const artifact = recovered.artifact;
     if (sha256Canonical(artifact.binding) !== sha256Canonical(binding))
       throw new Error("recovered adapter artifact does not retain its exact binding");
+    if (sourceAware) validateSourceEnvelope(recovered.bytes, request, definition, adapter, entry);
     if (adapter.effect_id !== undefined) {
       if (artifacts.recoverEffectAction === undefined)
         return Object.freeze({
@@ -145,6 +171,7 @@ function adapterBinding(
   inputAudience:
     | readonly import("../../manifest/controller-output.js").ControllerOutputPrincipal[]
     | null,
+  sourceAware: boolean,
 ): ArtifactBinding {
   const request = action.intent.request;
   if (request.kind !== "adapter")
@@ -170,12 +197,85 @@ function adapterBinding(
       operationId: origin.operation_id,
       requestDigest: origin.request_sha256,
     },
-    outputSchema: { id: adapter.output_schema_id, digest: output.schema_digest },
+    outputSchema: sourceAware
+      ? {
+          id: "source-adapter-envelope-v1",
+          digest: sha256Canonical({ schema_version: 1, kind: "source-adapter-envelope" }),
+        }
+      : { id: adapter.output_schema_id, digest: output.schema_digest },
     capabilityDigest: authority.capability_digest,
     mediaType: "application/json",
     allowedConsumerProfileIds: Object.freeze([...definition.config.delegation.allowed_subagents]),
     ...(audience === undefined ? {} : { audience }),
   });
+}
+
+function verifiedSourceExecution(entry: ToolExecutionTimelineEntry): boolean {
+  return (
+    entry.finished?.outcome === "completed" &&
+    entry.finished.cleanup === "confirmed" &&
+    entry.finished.sandbox?.category === "command_status" &&
+    entry.finished.sandbox.normalized_status !== null &&
+    entry.finished.sandbox.output?.capture === "complete"
+  );
+}
+
+function validateSourceEnvelope(
+  bytes: Buffer | undefined,
+  request: Extract<ControllerActionState["intent"]["request"], { readonly kind: "adapter" }>,
+  definition: ApprovedControllerDefinition,
+  adapter: import("../../manifest/controller.js").ControllerAdapterConfig,
+  entry: ToolExecutionTimelineEntry,
+): void {
+  if (bytes === undefined || request.source_workspace_ref === undefined)
+    throw new Error("source adapter recovery lacks an immutable envelope");
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new Error("source adapter recovery envelope is not valid JSON");
+  }
+  if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope))
+    throw new Error("source adapter recovery envelope is invalid");
+  const value = envelope as Record<string, unknown>;
+  const source = value.source;
+  const execution = value.execution;
+  if (
+    value.schema_version !== 1 ||
+    source === null ||
+    typeof source !== "object" ||
+    Array.isArray(source) ||
+    execution === null ||
+    typeof execution !== "object" ||
+    Array.isArray(execution)
+  )
+    throw new Error("source adapter recovery envelope is invalid");
+  const sourceValue = source as Record<string, unknown>;
+  const executionValue = execution as Record<string, unknown>;
+  const terminal = entry.finished?.sandbox;
+  if (
+    sourceValue.ref !== request.source_workspace_ref ||
+    typeof sourceValue.base_commit !== "string" ||
+    typeof sourceValue.head_commit !== "string" ||
+    typeof sourceValue.tree_id !== "string" ||
+    typeof sourceValue.inventory_digest !== "string" ||
+    typeof sourceValue.policy_digest !== "string" ||
+    executionValue.execution_id !== entry.started.execution_id ||
+    executionValue.normalized_status !== terminal?.normalized_status ||
+    executionValue.capture !== "complete" ||
+    executionValue.cleanup !== "confirmed"
+  )
+    throw new Error("source adapter recovery envelope does not match durable execution");
+  if (terminal?.normalized_status !== 0) {
+    if (value.result !== null)
+      throw new Error("nonzero source adapter recovery envelope must not claim a result");
+    return;
+  }
+  const output = definition.approval.schemas.find(
+    (item) => item.schema_id === adapter.output_schema_id,
+  );
+  if (output === undefined || !Value.Check(output.schema as TSchema, value.result))
+    throw new Error("source adapter recovery envelope result schema mismatch");
 }
 
 function adapterMissingPublicationOutcome(

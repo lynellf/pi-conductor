@@ -6,6 +6,7 @@ import type {
 } from "../../src/host/controller/action-dispatcher-contract.js";
 import { controllerActionRef } from "../../src/host/controller/controller-refs.js";
 import { ControllerEffectPendingError } from "../../src/host/controller/production-effects.js";
+import { SourceWorkspaceError } from "../../src/host/controller/source-workspace-contract.js";
 import { ToolExecutionError } from "../../src/host/execution/tool-execution-controller.js";
 import type { ControllerAction } from "../../src/manifest/controller-protocol.js";
 import {
@@ -47,6 +48,79 @@ const activation: ControllerActivationStartedRecord = {
 };
 
 describe("controller action dispatcher", () => {
+  it("reports bounded source failure codes through the execution wrapper", async () => {
+    const fixture = dispatcherFixture(
+      [
+        {
+          kind: "prepare_source",
+          action_id: "conflict",
+          source_id: "repo",
+          repository_ref: "refs/heads/main",
+        },
+      ],
+      false,
+      {},
+      {
+        sources: {
+          validate: async () => undefined,
+          resolve: async () => {
+            throw new Error("unused");
+          },
+          prepare: async () => {
+            throw new ToolExecutionError("tool_failed", "tool execution failed", {
+              cause: new SourceWorkspaceError("patch-conflict", "private host path must not leak"),
+            });
+          },
+        },
+      },
+    );
+    fixture.dispatcher.dispatchCommitted("conflict");
+    await fixture.dispatcher.settle();
+    expect(
+      [...fixture.records].reverse().find((record) => record.type === "controller_action_receipt"),
+    ).toMatchObject({ outcome: "failed", diagnostic: "source preparation failed: patch-conflict" });
+  });
+
+  it("prepares source while an unrelated delivery is pending", async () => {
+    let release: ((fields: ReceiptFields) => void) | undefined;
+    const gate = new Promise<ReceiptFields>((resolve) => {
+      release = resolve;
+    });
+    const prepare: ControllerAction = {
+      kind: "prepare_source",
+      action_id: "source-a",
+      source_id: "repo",
+      repository_ref: "refs/heads/main",
+    };
+    const fixture = dispatcherFixture(
+      [adapterAction("deliver"), prepare],
+      false,
+      {},
+      {
+        runAdapterEffect: () => gate,
+        sources: {
+          validate: async () => undefined,
+          resolve: async () => ({
+            descriptor: { head_commit: "a".repeat(40) },
+            audience: [{ kind: "controller" }],
+          }),
+          prepare: async () => ({
+            outcome: "completed",
+            operation_id: "source-op",
+            result_refs: ["source-workspace/v1/a/b"],
+            diagnostic: null,
+          }),
+        },
+      },
+    );
+    fixture.dispatcher.dispatchCommitted("deliver");
+    fixture.dispatcher.dispatchCommitted("source-a");
+    await until(() => fixture.receipts("source-a").includes("completed"));
+    expect(fixture.receipts("deliver")).toEqual(["pending"]);
+    release?.({ outcome: "completed", operation_id: "effect", result_refs: [], diagnostic: null });
+    await fixture.dispatcher.settle();
+  });
+
   it.each([
     [-1, 1],
     [0.5, 1],
@@ -387,7 +461,7 @@ function dispatcherFixture(
       },
       acceptedSubmission: (actionId) =>
         ({
-          schema_version: 2,
+          schema_version: 3,
           origin: { kind: "controller_action", action_id: actionId },
         }) as never,
       status: () => [],

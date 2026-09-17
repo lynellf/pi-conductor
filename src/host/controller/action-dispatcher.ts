@@ -1,4 +1,5 @@
 /** Asynchronous dispatch of already-committed controller actions — issue #115 §§4, 6. */
+// Keep the shared receipt fence and its native/adapter/source queues together; below the 500-line exception ceiling.
 
 import { writeFile } from "node:fs/promises";
 import {
@@ -23,6 +24,7 @@ import { EffectBrokerPoisonedError } from "./effect-broker.js";
 import { getControllerEvents } from "./event-page.js";
 import { ControllerEffectPendingError } from "./production-effects.js";
 import { assertControllerReadResult, controllerReadResultSchemaDigest } from "./read-result.js";
+import { SourceWorkspaceError } from "./source-workspace-contract.js";
 
 const MAX_READ_BYTES = 32 * 1024;
 const MAX_ADAPTERS = 4;
@@ -97,6 +99,21 @@ export function createControllerActionDispatcher(
     if (
       cause instanceof ControllerEffectPendingError ||
       cause instanceof EffectBrokerPoisonedError ||
+      (state.intent.kind === "prepare_source" &&
+        options
+          .readRecords()
+          .some(
+            (record) =>
+              record.type === "source_workspace_intent" &&
+              record.action_id === state.actionId &&
+              !options
+                .readRecords()
+                .some(
+                  (terminal) =>
+                    terminal.type === "source_workspace_failed" &&
+                    terminal.workspace_id === record.workspace_id,
+                ),
+          )) ||
       options
         .readRecords()
         .some(
@@ -181,6 +198,7 @@ export function createControllerActionDispatcher(
         return options.admission.submit(
           { kind: "controller_action", actionId, activationId: identity.activation_id },
           { mode: "nonblocking", tasks: request.tasks },
+          request.source_workspace_ref,
         );
       });
       options.assertOpen();
@@ -220,6 +238,14 @@ export function createControllerActionDispatcher(
     const state = requiredPending(action(actionId), actionId);
     const request = state.intent.request;
     try {
+      if (request.kind === "prepare_source") {
+        if (options.sources === undefined) throw new Error("source workspaces are not configured");
+        receipt(
+          state,
+          await options.sources.prepare(request, state.intent.request_sha256, options.signal),
+        );
+        return;
+      }
       if (request.kind === "cancel") await options.admission.cancel(request.child_ids);
       const published = request.kind === "read" ? await publishRead(state, request) : undefined;
       receipt(state, {
@@ -271,10 +297,12 @@ export function createControllerActionDispatcher(
   ): Promise<{ readonly ref: string; readonly result: unknown }> => {
     const result = await read(request.ref, request.offset, request.limit);
     const inputAudience =
-      options.outputResolver === undefined ||
-      (!request.ref.startsWith("artifact/v1/") && !request.ref.startsWith("child-output/v2/"))
-        ? null
-        : await options.outputResolver.getInputAudience(request.ref, { kind: "controller" });
+      request.ref.startsWith("source-workspace/v1/") && options.sources !== undefined
+        ? (await options.sources.resolve(request.ref, { kind: "controller" })).audience
+        : options.outputResolver === undefined ||
+            (!request.ref.startsWith("artifact/v1/") && !request.ref.startsWith("child-output/v2/"))
+          ? null
+          : await options.outputResolver.getInputAudience(request.ref, { kind: "controller" });
     const document = {
       source_ref: request.ref,
       result:
@@ -318,7 +346,11 @@ export function createControllerActionDispatcher(
   const dispatcher: ControllerActionDispatcher = {
     async validateReferences(actions) {
       for (const candidate of actions) {
-        if (candidate.kind === "adapter") {
+        if (candidate.kind === "prepare_source") {
+          if (options.sources === undefined)
+            throw new Error("source workspaces are not configured");
+          await options.sources.validate(candidate);
+        } else if (candidate.kind === "adapter") {
           for (const ref of candidate.input_refs) {
             await dispatcher.resolveRef(ref, {
               kind: "adapter",
@@ -364,6 +396,10 @@ export function createControllerActionDispatcher(
       getControllerEvents(options.readRecords(), identity, cursor, limit),
     read,
     async resolveRef(ref, principal = { kind: "controller" }) {
+      if (ref.startsWith("source-workspace/v1/")) {
+        if (options.sources === undefined) throw new Error("source workspaces are not configured");
+        return (await options.sources.resolve(ref, principal)).descriptor;
+      }
       if (
         options.outputResolver !== undefined &&
         (ref.startsWith("artifact/v1/") || ref.startsWith("child-output/v2/"))
@@ -390,5 +426,10 @@ function isCompleted(result: PoolChildResult): boolean {
   return result.status === "completed";
 }
 function diagnostic(cause: unknown): string {
+  let nested = cause;
+  for (let depth = 0; nested instanceof Error && depth < 8; depth++) {
+    if (nested instanceof SourceWorkspaceError) return `source preparation failed: ${nested.code}`;
+    nested = nested.cause;
+  }
   return String(cause instanceof Error ? cause.message : cause).slice(0, 4096);
 }

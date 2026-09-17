@@ -9,7 +9,8 @@ export function projectControllerRecord(
   const value = record as Record<string, unknown>;
   if (
     typeof value.type === "string" &&
-    (value.type.startsWith("controller_effect_") ||
+    (value.type.startsWith("source_workspace_") ||
+      value.type.startsWith("controller_effect_") ||
       value.type.startsWith("controller_local_effect_"))
   )
     return undefined;
@@ -28,7 +29,12 @@ export function projectControllerRecord(
 function hasPrivateOutputs(definition: unknown): boolean {
   if (!isObject(definition) || !isObject(definition.config)) return true;
   const config = definition.config;
-  if ("effects" in definition || "child_outputs" in config || !Array.isArray(config.adapters))
+  if (
+    "effects" in definition ||
+    "child_outputs" in config ||
+    "source_repositories" in config ||
+    !Array.isArray(config.adapters)
+  )
     return true;
   return config.adapters.some(
     (adapter: unknown) =>

@@ -83,6 +83,7 @@ export {
   controllerAdapterActionSchema,
   controllerCancelActionSchema,
   controllerDelegateActionSchema,
+  controllerPrepareSourceActionSchema,
   controllerReadActionSchema,
   controllerRequestSchema,
   controllerResponseSchema,
@@ -337,6 +338,16 @@ export { buildRunMemory } from "./core/run-memory.js";
 // for the SDK package name in `src/core` + `src/manifest` + `src/seam` +
 // `src/cost`; `src/host/` is by exclusion the only allowed home.
 
+export {
+  createSourceWorkspaceService,
+  type PreparedSourceWorkspace,
+  type ResolvedSourceWorkspacePatch,
+  type ResolveSourceWorkspaceInput,
+  SourceWorkspaceError,
+  type SourceWorkspaceGrant,
+  SourceWorkspaceStore,
+  sourceWorkspaceReservationBytes,
+} from "./host/controller/source-workspace.js";
 // ─── Run lifecycle entry points (Task 13.5, §11.1, §11.9) ───────────
 export type {
   ActiveSessionStats,
@@ -459,6 +470,15 @@ export type {
   ControllerChildOutputPolicy,
   ControllerOutputPrincipal,
 } from "./manifest/controller-output.js";
+
+export {
+  type ControllerSourcePolicy,
+  controllerSourcePolicySchema,
+  type SourceRepositoryGrant,
+  sourceRepositoryGrantSchema,
+  sourceWorkspaceRefSchema,
+  validateSourceRepositoryGrant,
+} from "./manifest/controller-source.js";
 export {
   type LocalProgramInvocation,
   type LocalProgramOutcome,
@@ -469,3 +489,9 @@ export {
   localProgramRequestSchema,
   localProgramResultSchema,
 } from "./manifest/local-effect.js";
+export {
+  assertSourceWorkspaceRecord,
+  type SourceWorkspaceIntent,
+  type SourceWorkspaceRecord,
+  sourceWorkspaceIntentDigest,
+} from "./persistence/source-workspace.js";

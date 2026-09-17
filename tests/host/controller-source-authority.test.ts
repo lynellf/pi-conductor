@@ -25,11 +25,11 @@ function sourceGrant(fingerprint = "a".repeat(64)) {
     audience: [{ kind: "controller" }],
     isolated_git_view: true,
     max_source_bytes: 1_048_576,
-    max_source_files: 1000,
+    max_source_files: 100,
     max_patch_bytes: 65_536,
     max_patch_files: 32,
     max_workspaces: 2,
-    max_total_bytes: 2_097_152,
+    max_total_bytes: 128 * 1024 * 1024,
     max_parallel_preparations: 1,
     timeout_ms: 30_000,
   };
@@ -132,5 +132,20 @@ describe("source authority pinning", () => {
     expect(() => verifyControllerApproval(approved.record, changed)).toThrow(/changed|revoked/);
     const revoked = { ...current, source_repositories: [] };
     expect(() => verifyControllerApproval(approved.record, revoked)).toThrow(/not approved/);
+  });
+
+  it("rejects traversal and wildcard refs in host source authority", () => {
+    const unsafe = structuredClone(approval()) as {
+      source_repositories: Array<{ allowed_refs: string[]; allowed_paths: string[] }>;
+    };
+    const source = unsafe.source_repositories[0];
+    if (source === undefined) throw new Error("source grant fixture is missing");
+    source.allowed_refs = ["refs/heads/../secret"];
+    expect(() => validateControllerHostApproval(unsafe)).toThrow(/unsafe ref/);
+    source.allowed_refs = ["refs/heads/*"];
+    expect(() => validateControllerHostApproval(unsafe)).toThrow(/schema|unsafe ref/);
+    source.allowed_refs = ["refs/heads/main"];
+    source.allowed_paths = ["src/*"];
+    expect(() => validateControllerHostApproval(unsafe)).toThrow(/schema|unsafe path/);
   });
 });

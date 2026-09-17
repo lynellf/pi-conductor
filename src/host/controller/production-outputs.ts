@@ -101,7 +101,7 @@ export async function createProductionOutputs(options: {
           );
         if (
           accepted?.type !== "delegation_submission_accepted" ||
-          accepted.schema_version !== 2 ||
+          (accepted.schema_version !== 2 && accepted.schema_version !== 3) ||
           accepted.origin.kind !== "controller_action"
         )
           throw new Error("child output producing action unavailable");

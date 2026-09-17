@@ -46,6 +46,42 @@ const input = () => ({
   environment: { PATH: "/bin", LANG: "C" },
 });
 describe("Bubblewrap production mount plan", () => {
+  it("mounts source inputs read-only and bounds every ephemeral filesystem", () => {
+    const args = buildSandboxMountPlan({
+      ...input(),
+      writableRoots: [],
+      readonlyInputs: [{ sourcePath: "/state/inputs", destination: "/inputs" }],
+      scratchBytes: 1048576,
+    });
+    expect(args.join(" ")).toContain("--ro-bind /state/inputs /inputs");
+    for (const path of ["/scratch", "/tmp", "/home/sandbox", "/run", "/dev/shm"])
+      expect(args.join(" ")).toContain(`--size 1048576 --tmpfs ${path}`);
+  });
+
+  it.each([
+    "/workspace",
+    "/inputs/../etc",
+    "/bin",
+    "/inputs/nested",
+  ])("rejects unregistered read-only input destination %s", (destination) => {
+    expect(() =>
+      buildSandboxMountPlan({
+        ...input(),
+        readonlyInputs: [{ sourcePath: "/state/inputs", destination }],
+      }),
+    ).toThrow();
+  });
+
+  it("rejects overlapping input sources and unbounded scratch", () => {
+    expect(() =>
+      buildSandboxMountPlan({
+        ...input(),
+        readonlyInputs: [{ sourcePath: "/state/base/secret", destination: "/inputs" }],
+      }),
+    ).toThrow();
+    expect(() => buildSandboxMountPlan({ ...input(), scratchBytes: 0 })).toThrow();
+  });
+
   it("constructs trusted destinations before sources and seals root before command", () => {
     const args = buildSandboxMountPlan(input());
     expect(args.slice(-2)).toEqual(["--remount-ro", "/"]);

@@ -248,11 +248,12 @@ async function nativeInputAudience(
     );
   if (
     accepted?.type !== "delegation_submission_accepted" ||
-    accepted.schema_version !== 2 ||
+    (accepted.schema_version !== 2 && accepted.schema_version !== 3) ||
     accepted.origin.kind !== "controller_action"
   )
     throw new Error("child output acceptance is missing");
-  const taskId = accepted.children.find((child) => child.child_id === childId)?.task_id;
+  const child = accepted.children.find((entry) => entry.child_id === childId);
+  const taskId = child?.task_id;
   const task = accepted.accepted_args.tasks.find((item) => item.id === taskId);
   if (task === undefined) throw new Error("child output accepted task is missing");
   const audiences = await Promise.all(
@@ -262,5 +263,8 @@ async function nativeInputAudience(
         : [],
     ),
   );
-  return combineInputAudiences(audiences);
+  return combineInputAudiences([
+    ...audiences,
+    ...(child?.source_workspace === undefined ? [] : [child.source_workspace.audience]),
+  ]);
 }

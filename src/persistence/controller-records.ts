@@ -44,6 +44,7 @@ export const controllerActionIntentSchema = Type.Object(
     kind: Type.Union([
       Type.Literal("delegate"),
       Type.Literal("adapter"),
+      Type.Literal("prepare_source"),
       Type.Literal("read"),
       Type.Literal("cancel"),
     ]),

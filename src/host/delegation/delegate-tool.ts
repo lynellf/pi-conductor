@@ -1,12 +1,17 @@
-/** Delegate tool execution — delegation lite §4–§5 / Issue #57 §7. */
-
+/**
+ * Delegate tool execution — delegation lite §4–§5 / Issue #57 §7.
+ * Worktree, admission, and terminal evidence share one child lifecycle; splitting
+ * them would duplicate its source-capability boundary.
+ */
 import { mkdir } from "node:fs/promises";
+import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
 import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
 import type {
   ChildCompletionEvidence,
   ChildProjectionFingerprint,
   DelegateResultStatus,
 } from "../../persistence/child-completion.js";
+import type { DelegationSourceWorkspace } from "../../persistence/delegation-task-schema.js";
 import type { SubagentUsage } from "../../persistence/log.js";
 import type { SubagentSandboxDescriptor } from "../../persistence/subagent-sandbox.js";
 import type { PreparedDelegateChild } from "./admission.js";
@@ -45,11 +50,25 @@ import type {
   PoolFailedResult,
 } from "./pool.js";
 import { runBoundedPool } from "./pool.js";
-import { configureExactSparseWorktree, createWorktree, inspectChildWorktree } from "./worktree.js";
-
+import {
+  configureExactSparseWorktree,
+  createIndependentSourceWorktree,
+  createWorktree,
+  inspectChildWorktree,
+} from "./worktree.js";
+/** Host-resolved source view used only while preparing and running a native child (#118). */
+export interface ResolvedDelegatedSource {
+  readonly ref: string;
+  readonly sourceId: string;
+  readonly checkoutPath: string | null;
+  readonly headCommit: string;
+  readonly treeId: string;
+  readonly inventoryDigest: string;
+  readonly policyDigest: string;
+  readonly audience: readonly ControllerOutputPrincipal[];
+}
 /** Child status exposed by the parent tool. */
 export type { DelegateResultStatus } from "../../persistence/child-completion.js";
-
 /** One ordered delegate result. */
 export interface DelegateTaskResult {
   readonly task_id: string;
@@ -68,12 +87,10 @@ export interface DelegateTaskResult {
   /** Additive Issue #57 terminal evidence; absent only from legacy callers. */
   readonly completion_evidence?: ChildCompletionEvidence;
 }
-
 /** Parent-facing delegate response. */
 export interface DelegateResult {
   readonly results: readonly DelegateTaskResult[];
 }
-
 /** Dependencies for one delegate tool invocation. */
 export interface DelegateToolOptions {
   readonly args: import("../../seam/schema.js").DelegateSubmissionArgs;
@@ -98,8 +115,14 @@ export interface DelegateToolOptions {
   readonly onChildFailed?: (result: PoolFailedResult) => void;
   /** Host-owned prepared-runtime admission; absent keeps execution fail-closed. */
   readonly sandboxAdmission?: SandboxAdmissionAdapter;
+  /** Native-controller-only immutable source resolver; SDK delegate calls cannot supply a ref. */
+  readonly resolveDelegatedSource?: (
+    ref: string,
+    profileId: string,
+  ) => Promise<ResolvedDelegatedSource>;
+  /** Host-only source workspace reference bound to this native submission. */
+  readonly sourceWorkspaceRef?: string;
 }
-
 /** Capture and revalidate one private sandbox admission without exposing metadata to children. */
 export interface SandboxAdmissionAdapter {
   readonly capture: (input: {
@@ -110,6 +133,8 @@ export interface SandboxAdmissionAdapter {
     readonly selectedPaths: readonly string[];
     readonly trackedPaths: readonly string[];
     readonly projectionRoots?: readonly string[];
+    /** Resolver-derived sealed source identity; this path is host-only. */
+    readonly sourceWorkspace?: ResolvedDelegatedSource;
   }) => Promise<{ readonly sandbox: SubagentSandboxDescriptor }>;
   readonly verify: (input: {
     readonly childId: string;
@@ -134,6 +159,12 @@ export interface SpawnChildConfig {
   readonly projectionFingerprint: ChildProjectionFingerprint;
   /** Accepted sandbox identity, when this child has explicit execution authority. */
   readonly sandbox?: SubagentSandboxDescriptor;
+  /** Immutable source identity retained at child start; it has no host path. */
+  readonly sourceWorkspace?: DelegationSourceWorkspace;
+  /** Ephemeral sealed source checkout for host sandbox setup; never persisted or exposed to a model. */
+  readonly sourceCheckoutPath?: string;
+  /** Host-only setup cancellation; never persisted or exposed to a model. */
+  readonly setupSignal?: AbortSignal;
   readonly systemPrompt: string;
 }
 
@@ -232,6 +263,7 @@ interface RunSingleChildOptions {
   readonly systemPromptRoot: string;
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
   readonly isAdmissionClosed?: () => boolean;
+  readonly signal?: AbortSignal;
   readonly prepared: PreparedDelegateChild;
 }
 
@@ -242,9 +274,27 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   }
   if (options.prepared.sandbox === undefined) {
     try {
-      await createWorktree(worktreePath, branch, baseCommit, options.primaryCheckout);
+      if (options.prepared.resolvedSourceWorkspace === undefined) {
+        await createWorktree(worktreePath, branch, baseCommit, options.primaryCheckout);
+      } else {
+        if (options.prepared.resolvedSourceWorkspace.checkoutPath === null)
+          throw new Error("native source has no sealed Git checkout");
+        await createIndependentSourceWorktree(
+          worktreePath,
+          branch,
+          baseCommit,
+          options.prepared.resolvedSourceWorkspace.checkoutPath,
+          options.signal,
+        );
+      }
       if (task.projectionPaths !== undefined) {
-        await configureExactSparseWorktree(worktreePath, branch, baseCommit, task.projectionPaths);
+        await configureExactSparseWorktree(
+          worktreePath,
+          branch,
+          baseCommit,
+          task.projectionPaths,
+          options.prepared.resolvedSourceWorkspace === undefined ? undefined : options.signal,
+        );
       }
     } catch (cause) {
       return preStartFailure(options, "failed", `failed to create worktree: ${message(cause)}`);
@@ -282,6 +332,15 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       projectionFingerprint: childProjectionFingerprint,
       systemPrompt: prompt.systemPrompt,
       ...(options.prepared.sandbox === undefined ? {} : { sandbox: options.prepared.sandbox }),
+      ...(options.prepared.resolvedSourceWorkspace === undefined
+        ? {}
+        : {
+            sourceWorkspace: sourceIdentity(options.prepared.resolvedSourceWorkspace),
+            ...(options.prepared.resolvedSourceWorkspace.checkoutPath === null
+              ? {}
+              : { sourceCheckoutPath: options.prepared.resolvedSourceWorkspace.checkoutPath }),
+            ...(options.signal === undefined ? {} : { setupSignal: options.signal }),
+          }),
     });
   } catch (cause) {
     if (cause instanceof DelegationOwnershipError) throw cause;
@@ -297,7 +356,12 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   const report = terminal.report ?? legacyReportFromCompatibilityTerminal(terminal, task.profile);
   const worktree =
     options.prepared.sandbox === undefined
-      ? await inspectChildWorktree(worktreePath, branch, baseCommit)
+      ? await inspectChildWorktree(
+          worktreePath,
+          branch,
+          baseCommit,
+          options.prepared.resolvedSourceWorkspace === undefined ? undefined : options.signal,
+        )
       : terminal.worktreeInspection;
   if (worktree === undefined)
     throw new DelegationOwnershipError(
@@ -358,6 +422,18 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   };
 }
 
+function sourceIdentity(source: ResolvedDelegatedSource): DelegationSourceWorkspace {
+  return {
+    ref: source.ref,
+    source_id: source.sourceId,
+    head_commit: source.headCommit,
+    tree_id: source.treeId,
+    inventory_digest: source.inventoryDigest,
+    policy_digest: source.policyDigest,
+    audience: source.audience.map((principal) => ({ ...principal })),
+  };
+}
+
 /** Execute one already-prepared child without rereading parent checkout state. */
 export async function runPreparedChild(options: {
   readonly prepared: PreparedDelegateChild;
@@ -368,6 +444,7 @@ export async function runPreparedChild(options: {
   readonly systemPromptRoot: string;
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
   readonly isAdmissionClosed?: () => boolean;
+  readonly signal?: AbortSignal;
 }): Promise<PoolChildResult> {
   const prepared = options.prepared;
   return runSingleChild({
@@ -395,6 +472,7 @@ export async function runPreparedChild(options: {
     ...(options.isAdmissionClosed === undefined
       ? {}
       : { isAdmissionClosed: options.isAdmissionClosed }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     prepared,
   });
 }

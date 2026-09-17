@@ -57,6 +57,23 @@ export interface CreateExecutableControllerHostOptions {
     ref: string,
     principal?: ControllerOutputPrincipal,
   ) => Promise<readonly ControllerOutputPrincipal[] | null>;
+  /** Root-owned live-authority source lookup; executable adapters receive no planner-supplied path. */
+  readonly openSourceWorkspace?: (
+    ref: string,
+    principal: ControllerOutputPrincipal,
+  ) => Promise<{
+    readonly ref: string;
+    readonly sourceId: string;
+    readonly sourcePath: string;
+    readonly checkoutPath: string;
+    readonly baseCommit: string;
+    readonly headCommit: string;
+    readonly treeId: string;
+    readonly inventoryDigest: string;
+    readonly audience: readonly ControllerOutputPrincipal[];
+    readonly allowGitView: boolean;
+    readonly policyDigest: string;
+  }>;
   readonly metrics?: {
     runtimeCaptureStarted(executionId: string): void;
     runtimeCaptureFinished(executionId: string): void;
@@ -92,9 +109,36 @@ export interface ProgramInvocation {
   readonly request: unknown;
   readonly signal?: AbortSignal;
   readonly needsStaging: boolean;
+  /** Already-opened source authority; adapters never receive a host path from planner input. */
+  readonly source?: {
+    readonly workspaceRoot: string;
+    readonly readonlyInputs: readonly {
+      readonly sourcePath: string;
+      readonly destination: "/inputs" | "/source-git";
+    }[];
+    readonly scratchBytes: number;
+    /** Source-policy deadline used for the fixed adapter execution. */
+    readonly timeoutMs: number;
+    /** Re-open the sealed source and verify every mounted private input immediately before spawn. */
+    verify(): Promise<void>;
+    readonly identity?: {
+      readonly ref: string;
+      readonly baseCommit: string;
+      readonly headCommit: string;
+      readonly treeId: string;
+      readonly inventoryDigest: string;
+      readonly policyDigest: string;
+    };
+  };
 }
 export interface ProgramResult {
   readonly stdout: Buffer;
+  /** Mechanical sandbox outcome; source validators publish it, never infer approval from exit status. */
+  readonly execution: {
+    readonly executionId: string;
+    readonly normalizedStatus: number;
+    readonly capture: "complete" | "incomplete";
+  };
   readonly staging?: ArtifactStaging;
 }
 export type AdapterAuthority = {

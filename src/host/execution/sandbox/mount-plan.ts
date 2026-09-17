@@ -9,6 +9,13 @@ export interface SandboxWritableMount {
   readonly kind: "file" | "directory";
 }
 
+/** Host-verified data tree mounted at a fixed, non-executable-authority destination (#118). */
+export interface SandboxReadonlyInput {
+  readonly sourcePath: string;
+  /** Only /inputs and /source-git are admitted; never a controller-supplied host path. */
+  readonly destination: string;
+}
+
 export interface SandboxMountPlanInput {
   /** Independently verified, sealed snapshot; the planner performs no filesystem I/O. */
   readonly runtime: PreparedRuntimeDescriptor;
@@ -19,10 +26,27 @@ export interface SandboxMountPlanInput {
   readonly bootstrapPath: string;
   readonly writableRoots: readonly SandboxWritableMount[];
   readonly environment: Readonly<Record<string, string>>;
+  readonly readonlyInputs?: readonly SandboxReadonlyInput[];
+  /** Per-filesystem byte limit for /scratch and the four ambient temporary filesystems. */
+  readonly scratchBytes?: number;
 }
 
 /** Build setup argv only; the trusted bootstrap command is appended by its separate boundary. */
 export function buildSandboxMountPlan(input: SandboxMountPlanInput): readonly string[] {
+  const readonlyInputs = input.readonlyInputs ?? [];
+  if (
+    new Set(readonlyInputs.map((entry) => entry.destination)).size !== readonlyInputs.length ||
+    readonlyInputs.some((entry) => !["/inputs", "/source-git"].includes(entry.destination))
+  )
+    throw new TypeError("read-only inputs require unique fixed destinations");
+  for (const entry of readonlyInputs) assertAbsolute("input source", entry.sourcePath);
+  if (
+    input.scratchBytes !== undefined &&
+    (!Number.isSafeInteger(input.scratchBytes) ||
+      input.scratchBytes < 4096 ||
+      input.scratchBytes > 1073741824)
+  )
+    throw new TypeError("scratch filesystem size must be between 4096 and 1073741824 bytes");
   for (const [name, value] of Object.entries({
     runtimeRoot: input.runtime.snapshotPath,
     immutableWorkspaceRoot: input.immutableWorkspaceRoot,
@@ -35,6 +59,7 @@ export function buildSandboxMountPlan(input: SandboxMountPlanInput): readonly st
     input.immutableWorkspaceRoot,
     input.privateWritableRoot,
     input.bootstrapPath,
+    ...readonlyInputs.map((entry) => entry.sourcePath),
   ];
   if (
     sources.some((root, index) =>
@@ -76,24 +101,28 @@ export function buildSandboxMountPlan(input: SandboxMountPlanInput): readonly st
     "/bootstrap",
   ];
   for (const directory of runtimeDirectories) args.push("--dir", `/${directory}`);
+  for (const entry of readonlyInputs) args.push("--dir", entry.destination);
   for (const directory of runtimeDirectories)
     args.push("--ro-bind", join(input.runtime.snapshotPath, directory), `/${directory}`);
   args.push("--ro-bind", input.immutableWorkspaceRoot, "/workspace");
   for (const root of roots)
     args.push("--bind", join(input.privateWritableRoot, root.path), `/workspace/${root.path}`);
+  for (const entry of readonlyInputs) args.push("--ro-bind", entry.sourcePath, entry.destination);
+  const tmpfs = (path: string): string[] => [
+    ...(input.scratchBytes === undefined ? [] : ["--size", String(input.scratchBytes)]),
+    "--tmpfs",
+    path,
+  ];
   args.push(
     "--proc",
     "/proc",
     "--dev",
     "/dev",
-    "--tmpfs",
-    "/dev/shm",
-    "--tmpfs",
-    "/tmp",
-    "--tmpfs",
-    "/home/sandbox",
-    "--tmpfs",
-    "/run",
+    ...tmpfs("/dev/shm"),
+    ...tmpfs("/tmp"),
+    ...tmpfs("/home/sandbox"),
+    ...tmpfs("/run"),
+    ...(input.scratchBytes === undefined ? [] : tmpfs("/scratch")),
     "--ro-bind",
     input.bootstrapPath,
     "/bootstrap/bootstrap.sh",

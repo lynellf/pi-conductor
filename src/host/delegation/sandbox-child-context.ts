@@ -11,10 +11,16 @@ import { materializeSandboxProject } from "../execution/sandbox/project-material
 import {
   createTrustedProjectedWorktree,
   inspectTrustedProjectedWorktree,
+  type TrustedProjectedWorktree,
 } from "../execution/sandbox/trusted-git.js";
 import type { ToolExecutionController } from "../execution/tool-execution-controller.js";
 import type { ChildWorktreeInspection } from "./child-result.js";
 import type { SpawnChildConfig } from "./delegate-tool.js";
+import {
+  configureExactSparseWorktree,
+  createIndependentSourceWorktree,
+  inspectChildWorktree,
+} from "./worktree.js";
 
 const MAX_CHANGED_PATHS = 64;
 
@@ -40,7 +46,11 @@ export interface SandboxChildContext {
 export async function createSandboxChildContext(
   supplied: CreateSandboxChildContextOptions,
 ): Promise<SandboxChildContext> {
-  const config = structuredClone(supplied.config);
+  const clonedConfig = structuredClone(supplied.config);
+  const config: SpawnChildConfig =
+    supplied.config.setupSignal === undefined
+      ? clonedConfig
+      : { ...clonedConfig, setupSignal: supplied.config.setupSignal };
   const hostApproval = structuredClone(supplied.hostApproval);
   const runId = supplied.runId;
   const primaryCheckout = supplied.primaryCheckout;
@@ -56,13 +66,21 @@ export async function createSandboxChildContext(
   });
   if (config.worktreePath.length === 0 || config.branch.length === 0)
     throw new Error("sandbox child requires its generated worktree identity");
-  const worktree = await createTrustedProjectedWorktree({
-    hostWorktreePath: primaryCheckout,
-    generatedWorktreePath: config.worktreePath,
-    generatedBranch: config.branch,
-    baseCommit: config.baseCommit,
-    selectedPaths: admission.policy.selectedPaths,
-  });
+  const sourceCheckout = sourceCheckoutForSandbox(config);
+  const worktree =
+    sourceCheckout === undefined
+      ? await createTrustedProjectedWorktree({
+          hostWorktreePath: primaryCheckout,
+          generatedWorktreePath: config.worktreePath,
+          generatedBranch: config.branch,
+          baseCommit: config.baseCommit,
+          selectedPaths: admission.policy.selectedPaths,
+        })
+      : await createIndependentSandboxWorktree(
+          config,
+          sourceCheckout,
+          admission.policy.selectedPaths,
+        );
   const project = await materializeSandboxProject({
     admission,
     runStateDir,
@@ -112,11 +130,11 @@ export async function createSandboxChildContext(
         runStateDir,
         signal: integrationAbort.signal,
         verifyWorktree: async () => {
-          await inspectTrustedProjectedWorktree(worktree);
+          await inspectSandboxWorktree(worktree, config, sourceCheckout);
         },
       });
       integrationApplied = true;
-      const inspected = await inspectTrustedProjectedWorktree(worktree);
+      const inspected = await inspectSandboxWorktree(worktree, config, sourceCheckout);
       const changedPaths = stage.entries.map((entry) => entry.path);
       return Object.freeze({
         state: changedPaths.length === 0 ? "clean" : "changed",
@@ -147,6 +165,73 @@ export async function createSandboxChildContext(
   };
 
   return Object.freeze({ tools, closeToolAdmission, cancel, ingestAndInspect });
+}
+
+async function createIndependentSandboxWorktree(
+  config: SpawnChildConfig,
+  sourceCheckout: string,
+  selectedPaths: readonly string[],
+): Promise<{ readonly workTree: string }> {
+  if (config.setupSignal === undefined) {
+    await createIndependentSourceWorktree(
+      config.worktreePath,
+      config.branch,
+      config.baseCommit,
+      sourceCheckout,
+    );
+  } else {
+    await createIndependentSourceWorktree(
+      config.worktreePath,
+      config.branch,
+      config.baseCommit,
+      sourceCheckout,
+      config.setupSignal,
+    );
+  }
+  if (config.setupSignal === undefined) {
+    await configureExactSparseWorktree(
+      config.worktreePath,
+      config.branch,
+      config.baseCommit,
+      selectedPaths,
+    );
+  } else {
+    await configureExactSparseWorktree(
+      config.worktreePath,
+      config.branch,
+      config.baseCommit,
+      selectedPaths,
+      config.setupSignal,
+    );
+  }
+  return { workTree: config.worktreePath };
+}
+
+async function inspectSandboxWorktree(
+  worktree: TrustedProjectedWorktree | { readonly workTree: string },
+  config: SpawnChildConfig,
+  sourceCheckout: string | undefined,
+) {
+  if (sourceCheckout === undefined)
+    return inspectTrustedProjectedWorktree(worktree as TrustedProjectedWorktree);
+  const inspected = await inspectChildWorktree(
+    worktree.workTree,
+    config.branch,
+    config.baseCommit,
+    config.setupSignal,
+  );
+  if (inspected.state === "invalid")
+    throw new Error("independent sandbox source worktree is invalid");
+  return { headCommit: inspected.headCommit };
+}
+
+function sourceCheckoutForSandbox(config: SpawnChildConfig): string | undefined {
+  if (config.sourceWorkspace === undefined) return undefined;
+  if (config.sourceCheckoutPath === undefined || config.sourceCheckoutPath.length === 0)
+    throw new Error("sandbox source workspace has no sealed checkout");
+  if (config.sourceWorkspace.head_commit !== config.baseCommit)
+    throw new Error("sandbox source workspace does not match the child base");
+  return config.sourceCheckoutPath;
 }
 
 function isIncompleteIntegration(cause: unknown): boolean {

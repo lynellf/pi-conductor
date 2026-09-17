@@ -11,6 +11,10 @@ import { assertDelegationTaskTimeline } from "./delegation-task.js";
 import { assertEndGuardAppend, type EndGuardRecord } from "./end-guard.js";
 import type { PersistedRecord, RecordLog } from "./log.js";
 import { materializePersistedRecord } from "./record-materialization.js";
+import {
+  assertSourceWorkspaceHistory,
+  isSourceWorkspaceRecord,
+} from "./source-workspace-timeline.js";
 
 /** Normalize checkpoint fields added after older snapshots were persisted. */
 export function normalizeCheckpoint(checkpoint: Checkpoint): Checkpoint {
@@ -43,6 +47,8 @@ export class InMemoryRecordLog implements RecordLog {
     if (isControllerRecord(snapshot)) {
       reconstructControllerTimeline([...this.records(runId), snapshot]);
     }
+    if (isSourceWorkspaceRecord(snapshot))
+      assertSourceWorkspaceHistory([...this.records(runId), snapshot]);
     const list = this.byRun.get(runId);
     this.byRun.set(runId, list === undefined ? [materialized.json] : [...list, materialized.json]);
   }

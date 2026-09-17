@@ -32,6 +32,7 @@ import type {
 } from "../../src/persistence/tool-execution.js";
 import { sha256Canonical } from "../../src/persistence/trajectory-records.js";
 
+const sourceRef = `source-workspace/v1/${"a".repeat(64)}/${"b".repeat(64)}`;
 const action: Extract<ControllerAction, { readonly kind: "delegate" }> = {
   kind: "delegate",
   action_id: "delegate-a",
@@ -43,6 +44,7 @@ const action: Extract<ControllerAction, { readonly kind: "delegate" }> = {
       expected_output: "A bounded report.",
     },
   ],
+  source_workspace_ref: sourceRef,
 };
 
 const noArtifacts = {
@@ -86,7 +88,7 @@ describe("controller durable recovery", () => {
 
   it("derives a terminal receipt from accepted native work and its terminal child fact", async () => {
     const fixture = controllerFixture();
-    const records = [...fixture.records, acceptedSubmission(fixture), failedChild(fixture)];
+    const records = [...fixture.records, acceptedSubmission(fixture, true), failedChild(fixture)];
 
     const plan = await planControllerRecovery({
       approvedDefinition: fixture.approvedDefinition,
@@ -106,6 +108,36 @@ describe("controller durable recovery", () => {
     });
   });
 
+  it("rejects a legacy acceptance for a source-backed delegate action", async () => {
+    const fixture = controllerFixture();
+    await expect(
+      planControllerRecovery({
+        approvedDefinition: fixture.approvedDefinition,
+        records: [...fixture.records, acceptedSubmission(fixture, false), failedChild(fixture)],
+        artifacts: noArtifacts,
+      }),
+    ).rejects.toThrow("acceptance changed its source pin");
+  });
+
+  it("rejects a v3 acceptance for a different source pin", async () => {
+    const fixture = controllerFixture();
+    await expect(
+      planControllerRecovery({
+        approvedDefinition: fixture.approvedDefinition,
+        records: [
+          ...fixture.records,
+          acceptedSubmission(
+            fixture,
+            true,
+            `source-workspace/v1/${"c".repeat(64)}/${"d".repeat(64)}`,
+          ),
+          failedChild(fixture),
+        ],
+        artifacts: noArtifacts,
+      }),
+    ).rejects.toThrow("acceptance changed its source pin");
+  });
+
   it("does not re-emit a receipt whose prior terminal notification was lost", async () => {
     const fixture = controllerFixture();
     const terminalReceipt = actionReceipt(fixture, "failed", null);
@@ -113,7 +145,7 @@ describe("controller durable recovery", () => {
       approvedDefinition: fixture.approvedDefinition,
       records: [
         ...fixture.records,
-        acceptedSubmission(fixture),
+        acceptedSubmission(fixture, true),
         failedChild(fixture),
         terminalReceipt,
       ],
@@ -369,7 +401,7 @@ describe("controller durable recovery", () => {
         fixture.definition,
         fixture.activation,
         decision,
-        acceptedSubmission(fixture),
+        acceptedSubmission(fixture, true),
         failedChild(fixture),
         completedDelegate,
       ],
@@ -401,7 +433,7 @@ describe("controller durable recovery", () => {
 
     expect(() =>
       prepareControllerActionRepair(
-        [...fixture.records, acceptedSubmission(fixture), failedChild(fixture)],
+        [...fixture.records, acceptedSubmission(fixture, true), failedChild(fixture)],
         "delegate-a",
         {
           operator: "operator",
@@ -559,17 +591,30 @@ function actionIntent(fixture: ReturnType<typeof controllerFixture>, request: Co
 
 function acceptedSubmission(
   fixture: ReturnType<typeof controllerFixture>,
+  withSource = true,
+  sourceWorkspaceRef = sourceRef,
 ): DelegationSubmissionAcceptedRecord {
-  const acceptedArgs = { tasks: action.tasks };
-  const child = childFact();
+  const acceptedArgs = { mode: "nonblocking" as const, tasks: action.tasks };
+  const sourceWorkspace = {
+    ref: sourceWorkspaceRef,
+    source_id: "source",
+    head_commit: "c".repeat(40),
+    tree_id: "d".repeat(40),
+    inventory_digest: "e".repeat(64),
+    policy_digest: "f".repeat(64),
+    audience: [{ kind: "controller" as const }],
+  };
+  const child = {
+    ...childFact(),
+    ...(withSource ? { source_workspace: sourceWorkspace } : {}),
+  };
   const logicalParentId = controllerLogicalParentId(
     fixture.definition.run_id,
     fixture.definition.controller_id,
     fixture.definition.definition_digest,
   );
-  return {
-    type: "delegation_submission_accepted",
-    schema_version: 2,
+  const common = {
+    type: "delegation_submission_accepted" as const,
     run_id: fixture.definition.run_id,
     submission_id: controllerDelegationSubmissionId(
       fixture.definition.run_id,
@@ -580,16 +625,31 @@ function acceptedSubmission(
     parent_role: "orchestrator",
     parent_visit_index: 0,
     origin: {
-      kind: "controller_action",
+      kind: "controller_action" as const,
       controller_id: fixture.definition.controller_id,
       definition_digest: fixture.definition.definition_digest,
       action_id: action.action_id,
       activation_id: fixture.activation.activation_id,
     },
-    input_fingerprint: sha256Canonical(acceptedArgs),
     accepted_args: acceptedArgs,
     children: [child],
     ts: 4,
+  };
+  if (!withSource)
+    return { ...common, schema_version: 2, input_fingerprint: sha256Canonical(acceptedArgs) };
+  const requestFingerprint = sha256Canonical({
+    input: acceptedArgs,
+    source_workspace_ref: sourceWorkspace.ref,
+  });
+  return {
+    ...common,
+    schema_version: 3,
+    request_fingerprint: requestFingerprint,
+    input_fingerprint: sha256Canonical({
+      request_fingerprint: requestFingerprint,
+      sandbox: [undefined],
+      source_workspaces: [sourceWorkspace],
+    }),
   };
 }
 

@@ -41,7 +41,7 @@ const capture = {
   ],
 };
 
-function history() {
+function history(withSource = false) {
   const terminal = {
     type: "subagent_completed",
     run_id: "run",
@@ -162,6 +162,15 @@ function history() {
     ],
   };
   const parent = controllerLogicalParentId("run", "controller", definitionDigest);
+  const sourceWorkspace = {
+    ref: `source-workspace/v1/${digest}/${digest}`,
+    source_id: "source",
+    head_commit: base,
+    tree_id: base,
+    inventory_digest: digest,
+    policy_digest: digest,
+    audience: [{ kind: "controller" as const }],
+  };
   const child = {
     child_id: "child",
     task_id: "task",
@@ -175,10 +184,10 @@ function history() {
     context_fingerprint: digest,
     prompt_fingerprint: digest,
     projection_fingerprint: { kind: "exact" as const, path_count: 0, sha256: digest },
+    ...(withSource ? { source_workspace: sourceWorkspace } : {}),
   };
-  const accepted = {
+  const acceptedCommon = {
     type: "delegation_submission_accepted" as const,
-    schema_version: 2 as const,
     run_id: "run",
     submission_id: controllerDelegationSubmissionId("run", parent, "delegate"),
     logical_parent_id: parent,
@@ -192,10 +201,29 @@ function history() {
       activation_id: "activation",
     },
     accepted_args: acceptedArgs,
-    input_fingerprint: sha256Canonical(acceptedArgs),
     children: [child],
     ts: 3,
   };
+  const requestFingerprint = sha256Canonical({
+    input: acceptedArgs,
+    source_workspace_ref: sourceWorkspace.ref,
+  });
+  const accepted = withSource
+    ? {
+        ...acceptedCommon,
+        schema_version: 3 as const,
+        request_fingerprint: requestFingerprint,
+        input_fingerprint: sha256Canonical({
+          request_fingerprint: requestFingerprint,
+          sandbox: [undefined],
+          source_workspaces: [sourceWorkspace],
+        }),
+      }
+    : {
+        ...acceptedCommon,
+        schema_version: 2 as const,
+        input_fingerprint: sha256Canonical(acceptedArgs),
+      };
   const nativeStart = {
     type: "subagent_started" as const,
     run_id: "run",
@@ -210,6 +238,7 @@ function history() {
     parent_visit_index: 1,
     session_file: "session",
     ts: 3,
+    ...(withSource ? { source_workspace: sourceWorkspace } : {}),
   };
   started.definition_digest = definitionDigest;
   publication.definition_digest = definitionDigest;
@@ -252,6 +281,11 @@ describe("controller child-output chronology", () => {
     const timeline = reconstructChildOutputTimeline(history());
     expect(timeline.children).toHaveLength(1);
     expect(timeline.children[0]?.status).toBe("published");
+  });
+
+  it("reconstructs output publication from a v3 source-backed child", () => {
+    const timeline = reconstructChildOutputTimeline(history(true));
+    expect(timeline.children[0]).toMatchObject({ child_id: "child", status: "published" });
   });
 
   it("preserves old histories that contain no output records", () => {

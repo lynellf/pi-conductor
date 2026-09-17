@@ -20,12 +20,14 @@ import type { ChildOutputCapture, ChildOutputRecord } from "./child-output-recor
 import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
+import type { DelegationSourceWorkspace } from "./delegation-task-schema.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 
 import type { RoleTurnRecord } from "./role-turn.js";
 import type { RunFinalizationFailedRecord } from "./run-finalization.js";
+import type { SourceWorkspaceRecord } from "./source-workspace.js";
 import type { SubagentSandboxDescriptor } from "./subagent-sandbox.js";
 import type { ToolExecutionRecord } from "./tool-execution.js";
 import type {
@@ -318,6 +320,8 @@ export interface SubagentStartedRecord {
   readonly projection_fingerprint?: ChildProjectionFingerprint;
   /** Issue #106: accepted sandbox identity, repeated at child start. */
   readonly sandbox?: SubagentSandboxDescriptor;
+  /** Immutable delegated source identity, never a host filesystem path (#118). */
+  readonly source_workspace?: DelegationSourceWorkspace;
   /** Issue #60 audit inventory; absent historical records mean not recorded. */
   readonly context_artifacts?: ContextArtifactsAudit;
   /** Resolved profile model retained for recovery and terminal roll-up. */
@@ -455,6 +459,7 @@ export type PersistedRecord =
   | OrchestratorContextRecord
   | RunFinalizationFailedRecord
   | ControllerRecord
+  | SourceWorkspaceRecord
   | ChildOutputRecord
   | ControllerEffectRecord;
 

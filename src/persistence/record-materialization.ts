@@ -16,6 +16,7 @@ import { assertEndGuardRecord } from "./end-guard.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { assertRunFinalizationFailure } from "./run-finalization.js";
+import { assertSourceWorkspaceRecord } from "./source-workspace.js";
 import { assertToolExecutionRecord } from "./tool-execution.js";
 import { type ManifestSnapshotRecord, verifyManifestSnapshot } from "./trajectory-records.js";
 
@@ -57,6 +58,10 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   assertNoSandboxGuarantee(record);
 
   if (!isRecord(record)) return;
+  if (typeof record.type === "string" && record.type.startsWith("source_workspace_")) {
+    assertSourceWorkspaceRecord(record);
+    return;
+  }
 
   if (isControllerEffectRecord(record)) {
     assertControllerEffectRecord(record);

@@ -14,6 +14,7 @@ export interface DelegationAdmissionService {
   submit(
     action: ControllerSchedulerSubmission,
     input: DelegateSubmissionArgs,
+    sourceWorkspaceRef?: string,
   ): Promise<readonly string[]>;
   status(childIds?: readonly string[]): readonly DelegationTaskStatus[];
   wait(childId: string, signal?: AbortSignal): Promise<PoolChildResult>;
@@ -27,8 +28,11 @@ export function createDelegationAdmissionService(
   scheduler: DelegationScheduler,
 ): DelegationAdmissionService {
   return Object.freeze({
-    submit: (action: ControllerSchedulerSubmission, input: DelegateSubmissionArgs) =>
-      scheduler.submitController(action, input),
+    submit: (
+      action: ControllerSchedulerSubmission,
+      input: DelegateSubmissionArgs,
+      sourceWorkspaceRef?: string,
+    ) => scheduler.submitController(action, input, sourceWorkspaceRef),
     status: (childIds: readonly string[] | undefined) => scheduler.status(childIds),
     wait: (childId: string, signal: AbortSignal | undefined) => scheduler.wait(childId, signal),
     cancel: (childIds: readonly string[]) => scheduler.cancel(childIds),

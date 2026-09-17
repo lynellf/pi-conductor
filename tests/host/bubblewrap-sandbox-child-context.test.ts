@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   ingest: vi.fn(),
   fileTools: vi.fn(),
   commandTools: vi.fn(),
+  createIndependentWorktree: vi.fn(),
+  configureIndependentSparse: vi.fn(),
+  inspectIndependentWorktree: vi.fn(),
 }));
 let createSandboxChildContext: typeof import("../../src/host/delegation/sandbox-child-context.js").createSandboxChildContext;
 
@@ -37,6 +40,11 @@ beforeEach(async () => {
   vi.doMock("../../src/host/execution/sandbox/command-tools.js", () => ({
     createSandboxCommandTools: mocks.commandTools,
   }));
+  vi.doMock("../../src/host/delegation/worktree.js", () => ({
+    createIndependentSourceWorktree: mocks.createIndependentWorktree,
+    configureExactSparseWorktree: mocks.configureIndependentSparse,
+    inspectChildWorktree: mocks.inspectIndependentWorktree,
+  }));
 
   ({ createSandboxChildContext } = await import(
     "../../src/host/delegation/sandbox-child-context.js"
@@ -50,6 +58,7 @@ afterEach(() => {
   vi.doUnmock("../../src/host/execution/sandbox/project-ingestion.js");
   vi.doUnmock("../../src/host/execution/sandbox/file-tools.js");
   vi.doUnmock("../../src/host/execution/sandbox/command-tools.js");
+  vi.doUnmock("../../src/host/delegation/worktree.js");
   vi.resetModules();
 });
 
@@ -103,6 +112,46 @@ describe("sandbox child context", () => {
       "bash",
       "read_execution_output",
     ]);
+  });
+
+  it("materializes a source-backed sandbox child in an independent repository (#118)", async () => {
+    arrange();
+    const setupSignal = new AbortController().signal;
+    const sourceConfig = {
+      ...options(),
+      config: {
+        ...options().config,
+        sourceWorkspace: {
+          ref: `source-workspace/v1/${"d".repeat(64)}/${"e".repeat(64)}`,
+          source_id: "approved-source",
+          head_commit: "1".repeat(40),
+          tree_id: "2".repeat(40),
+          inventory_digest: "3".repeat(64),
+          policy_digest: "4".repeat(64),
+          audience: [{ kind: "native", profile_id: "worker" }],
+        },
+        sourceCheckoutPath: "/sealed/source-checkout",
+        setupSignal,
+      } as SpawnChildConfig,
+    };
+
+    await createSandboxChildContext(sourceConfig);
+
+    expect(mocks.createWorktree).not.toHaveBeenCalled();
+    expect(mocks.createIndependentWorktree).toHaveBeenCalledWith(
+      "/state/worktrees/child-1",
+      "conductor/child-1",
+      "1".repeat(40),
+      "/sealed/source-checkout",
+      setupSignal,
+    );
+    expect(mocks.configureIndependentSparse).toHaveBeenCalledWith(
+      "/state/worktrees/child-1",
+      "conductor/child-1",
+      "1".repeat(40),
+      ["src/a.ts", "package.json"],
+      setupSignal,
+    );
   });
 
   it("close aborts running and future tool calls without sealing later ingestion", async () => {
@@ -235,6 +284,15 @@ function arrange(overrides?: {
     overrides?.fileTools ?? namedTools(["read", "write", "edit", "ls", "find", "grep"]),
   );
   mocks.commandTools.mockReturnValue(namedTools(["bash", "read_execution_output"]));
+  mocks.createIndependentWorktree.mockResolvedValue(undefined);
+  mocks.configureIndependentSparse.mockResolvedValue(undefined);
+  mocks.inspectIndependentWorktree.mockResolvedValue({
+    state: "clean",
+    headCommit: worktree.baseCommit,
+    changedPathCount: 0,
+    changedPaths: [],
+    changedPathsTruncated: false,
+  });
 }
 
 function namedTools(names: readonly string[]): ToolDefinition[] {

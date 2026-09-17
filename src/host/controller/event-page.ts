@@ -36,7 +36,7 @@ export function getControllerEvents(
   const children = new Set(
     records.flatMap((record) =>
       record.type === "delegation_submission_accepted" &&
-      record.schema_version === 2 &&
+      (record.schema_version === 2 || record.schema_version === 3) &&
       record.origin.kind === "controller_action" &&
       record.run_id === activation.run_id &&
       record.origin.controller_id === activation.controller_id &&

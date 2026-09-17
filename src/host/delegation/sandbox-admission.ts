@@ -45,7 +45,7 @@ export function createSandboxAdmissionAdapter(
   };
   const adapter: SandboxAdmissionAdapter = {
     capture: async (input) => {
-      assertHostIdentity(input.runId, input.primaryCheckout, host);
+      assertHostIdentity(input.runId, input.primaryCheckout, input.sourceWorkspace, host);
       if (input.profile.execution === undefined) {
         throw new Error("sandbox admission requires explicit profile execution authority");
       }
@@ -90,11 +90,25 @@ export function createSandboxAdmissionAdapter(
 function assertHostIdentity(
   runId: string,
   primaryCheckout: string,
+  sourceWorkspace: import("./delegate-tool.js").ResolvedDelegatedSource | undefined,
   host: Pick<CreateSandboxAdmissionAdapterOptions, "runId" | "primaryCheckout">,
 ): void {
   if (runId !== host.runId) throw new Error("sandbox admission run does not match its host");
-  if (primaryCheckout !== host.primaryCheckout)
+  if (sourceWorkspace === undefined && primaryCheckout !== host.primaryCheckout)
     throw new Error("sandbox admission checkout does not match its host");
+  if (sourceWorkspace !== undefined) {
+    if (sourceWorkspace.checkoutPath === null || primaryCheckout !== sourceWorkspace.checkoutPath)
+      throw new Error("sandbox admission source checkout does not match its resolved workspace");
+    if (
+      sourceWorkspace.ref.length === 0 ||
+      sourceWorkspace.sourceId.length === 0 ||
+      !/^[a-f0-9]{40,64}$/.test(sourceWorkspace.headCommit) ||
+      !/^[a-f0-9]{40,64}$/.test(sourceWorkspace.treeId) ||
+      !/^[a-f0-9]{64}$/.test(sourceWorkspace.inventoryDigest) ||
+      !/^[a-f0-9]{64}$/.test(sourceWorkspace.policyDigest)
+    )
+      throw new Error("sandbox admission source identity is invalid");
+  }
 }
 
 function deepFreeze<T>(value: T): T {

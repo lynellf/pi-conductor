@@ -8,6 +8,7 @@ import type { ControllerHostApproval } from "./host-approval.js";
 import { createProductionEffects } from "./production-effects.js";
 import type { OpenedProductionOutputs } from "./production-outputs.js";
 import { openProductionOutputs } from "./production-outputs.js";
+import { createProductionSources } from "./production-sources.js";
 import { planControllerRecovery } from "./recovery.js";
 
 /** Open both artifact stores and finish reconciliation before successor activation planning. */
@@ -76,16 +77,30 @@ export async function prepareProductionRecovery(options: {
     });
     recoverEffectAction = effects.recoverEffectAction;
   }
+  const sources =
+    (options.definition.config.source_repositories?.length ?? 0) === 0
+      ? undefined
+      : await createProductionSources({
+          ...options,
+          outputResolver: options.outputs.resolver,
+          assertOpen: () => {
+            throw new Error("recovery cannot prepare sources");
+          },
+        });
   const recoveryArtifacts = {
+    ...(sources === undefined ? {} : { recoverSourceAction: sources.recoverSourceAction }),
     recoverAction: options.artifacts.recoverAction.bind(options.artifacts),
+    recoverActionPayload: options.artifacts.recoverActionPayload.bind(options.artifacts),
     rangeReadForController: options.artifacts.rangeReadForController.bind(options.artifacts),
     getInputAudience: async (
       ref: string,
       principal: import("../../manifest/controller-output.js").ControllerOutputPrincipal,
     ) =>
-      ref.startsWith("artifact/v1/") || ref.startsWith("child-output/v2/")
-        ? options.outputs.resolver.getInputAudience(ref, principal)
-        : null,
+      ref.startsWith("source-workspace/v1/") && sources !== undefined
+        ? (await sources.openSourceWorkspace(ref, principal)).audience
+        : ref.startsWith("artifact/v1/") || ref.startsWith("child-output/v2/")
+          ? options.outputs.resolver.getInputAudience(ref, principal)
+          : null,
     ...(recoverEffectAction === undefined ? {} : { recoverEffectAction }),
   };
   const first = await planControllerRecovery({

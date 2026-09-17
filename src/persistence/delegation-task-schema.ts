@@ -1,17 +1,39 @@
 /** Closed schemas for versioned delegated-task acceptance records. */
 
 import { type Static, Type } from "typebox";
+import { controllerOutputPrincipalSchema } from "../manifest/controller-output.js";
 import { delegateSubmissionArgsSchema } from "../seam/schema.js";
 import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
 
 const id = Type.String({ minLength: 1 });
 const sha256 = Type.String({ pattern: "^[a-f0-9]{64}$" });
+const oid = Type.String({ pattern: "^(?:[a-f0-9]{40}|[a-f0-9]{64})$" });
+const sourceWorkspaceRef = Type.String({
+  pattern: "^source-workspace/v1/[a-f0-9]{64}/[a-f0-9]{64}$",
+});
 const nonNegativeInteger = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const projectionFingerprint = Type.Object(
   {
     kind: Type.Union([Type.Literal("exact"), Type.Literal("full_materialized")]),
     path_count: nonNegativeInteger,
     sha256,
+  },
+  { additionalProperties: false },
+);
+/** Immutable source identity shared by acceptance and child-start records. */
+export const delegationSourceWorkspaceSchema = Type.Object(
+  {
+    ref: sourceWorkspaceRef,
+    source_id: id,
+    head_commit: oid,
+    tree_id: oid,
+    inventory_digest: sha256,
+    policy_digest: sha256,
+    audience: Type.Array(controllerOutputPrincipalSchema, {
+      minItems: 1,
+      maxItems: 64,
+      uniqueItems: true,
+    }),
   },
   { additionalProperties: false },
 );
@@ -29,6 +51,7 @@ const child = Type.Object(
     context_fingerprint: sha256,
     prompt_fingerprint: sha256,
     projection_fingerprint: projectionFingerprint,
+    source_workspace: Type.Optional(delegationSourceWorkspaceSchema),
     sandbox: Type.Optional(subagentSandboxDescriptorSchema),
   },
   { additionalProperties: false },
@@ -98,10 +121,32 @@ export const delegationSubmissionAcceptedV2Schema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Native controller acceptance with optional immutable source-workspace identity (#118). */
+export const delegationSubmissionAcceptedV3Schema = Type.Object(
+  {
+    type: Type.Literal("delegation_submission_accepted"),
+    schema_version: Type.Literal(3),
+    run_id: id,
+    submission_id: id,
+    logical_parent_id: id,
+    parent_role: id,
+    parent_visit_index: nonNegativeInteger,
+    tool_call_id: Type.Optional(Type.Never()),
+    origin: controllerActionAdmissionOriginSchema,
+    input_fingerprint: sha256,
+    request_fingerprint: Type.Optional(sha256),
+    accepted_args: delegateSubmissionArgsSchema,
+    children: Type.Array(child, { minItems: 1 }),
+    ts: Type.Number({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 /** All supported accepted-submission record shapes. */
 export const delegationSubmissionAcceptedSchema = Type.Union([
   delegationSubmissionAcceptedV1Schema,
   delegationSubmissionAcceptedV2Schema,
+  delegationSubmissionAcceptedV3Schema,
 ]);
 
 /** Persisted atomic acceptance record. */
@@ -114,3 +159,5 @@ export type ControllerAdmissionOrigin = Readonly<
 >;
 /** Child metadata retained in an accepted submission. */
 export type DelegationAcceptedChild = Readonly<Static<typeof child>>;
+/** Immutable source identity bound to a native child without a host path. */
+export type DelegationSourceWorkspace = Readonly<Static<typeof delegationSourceWorkspaceSchema>>;

@@ -30,6 +30,28 @@ const positiveBytes = Type.Integer({ minimum: 1, maximum: 1_073_741_824 });
 const positiveFiles = Type.Integer({ minimum: 1, maximum: 100_000 });
 const timeoutMilliseconds = Type.Integer({ minimum: 1_000, maximum: 600_000 });
 
+/**
+ * Conservatively reserve retained private storage for one source workspace.
+ * Eight source-sized regions cover the private index/object prefix, one live
+ * textual patch (aggregate patch bytes are capped at source bytes), transient
+ * bundle, source tree, Git view, and a quarantined interrupted preparation.
+ * Each synthetic prefix prunes superseded loose objects, while the per-file
+ * allowance covers bounded tree/index/pack metadata across prefixes.
+ */
+export function sourceWorkspaceReservationBytes(maxBytes: number, maxFiles: number): number {
+  if (
+    !Number.isSafeInteger(maxBytes) ||
+    !Number.isSafeInteger(maxFiles) ||
+    maxBytes < 1 ||
+    maxFiles < 1
+  )
+    throw new RangeError("source workspace limits must be positive safe integers");
+  const bytes = 8 * maxBytes + maxFiles * 512 * 1024;
+  if (!Number.isSafeInteger(bytes) || bytes < 1)
+    throw new RangeError("source workspace reservation exceeds safe integer range");
+  return bytes;
+}
+
 /** Operator-owned repository identity used by source preparation. */
 export const sourceRepositoryIdentitySchema = Type.Object(
   {
@@ -148,6 +170,24 @@ export function isSafeControllerSourcePath(path: string): boolean {
     );
 }
 
+/** Check a fully qualified Git ref before it reaches a repository command. */
+export function isSafeControllerRepositoryRef(ref: string): boolean {
+  if (!ref.startsWith("refs/") || ref.includes("\\") || ref.includes("\u0000")) return false;
+  return ref
+    .slice("refs/".length)
+    .split("/")
+    .every(
+      (segment) =>
+        segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        !segment.includes("?") &&
+        !segment.includes("*") &&
+        !segment.includes("[") &&
+        !segment.includes("]"),
+    );
+}
+
 /** Validate a source grant's path/ref uniqueness and control-path boundary. */
 export function validateSourceRepositoryGrant(value: unknown): readonly string[] {
   if (!Value.Check(sourceRepositoryGrantSchema, value))
@@ -156,10 +196,23 @@ export function validateSourceRepositoryGrant(value: unknown): readonly string[]
   const errors: string[] = [];
   if (new Set(grant.allowed_refs).size !== grant.allowed_refs.length)
     errors.push("source repository grant repeats an allowed ref");
+  for (const ref of grant.allowed_refs)
+    if (!isSafeControllerRepositoryRef(ref))
+      errors.push(`source repository grant has unsafe ref '${ref}'`);
   if (new Set(grant.allowed_paths).size !== grant.allowed_paths.length)
     errors.push("source repository grant repeats an allowed path");
-  if (grant.max_total_bytes < grant.max_source_bytes)
-    errors.push("source repository grant aggregate bytes are below one workspace limit");
+  try {
+    if (
+      grant.max_total_bytes <
+      sourceWorkspaceReservationBytes(grant.max_source_bytes, grant.max_source_files) *
+        grant.max_workspaces
+    )
+      errors.push(
+        "source repository grant aggregate bytes do not cover retained workspace reservations",
+      );
+  } catch {
+    errors.push("source repository grant workspace reservation is unsafe");
+  }
   for (const path of grant.allowed_paths)
     if (!isSafeControllerSourcePath(path))
       errors.push(`source repository grant has unsafe path '${path}'`);

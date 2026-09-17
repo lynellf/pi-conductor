@@ -27,6 +27,11 @@ export interface ControllerRecoveryReceipt {
 /** Immutable publication lookup available to resume planning without publication authority. */
 export interface ControllerRecoveryArtifacts {
   recoverAction(binding: ArtifactBinding): Promise<PublishedArtifact>;
+  /** Read a recovered source-adapter envelope under host recovery authority, never as a consumer. */
+  recoverActionPayload?(binding: ArtifactBinding): Promise<{
+    readonly artifact: PublishedArtifact;
+    readonly bytes: Buffer;
+  }>;
   rangeReadForController(request: ArtifactControllerRangeReadRequest): Promise<ArtifactRangeRead>;
   /** Optional only for pre-#116 legacy recovery doubles. Production supplies the resolver. */
   getInputAudience?(
@@ -38,6 +43,11 @@ export interface ControllerRecoveryArtifacts {
     action: ControllerActionState,
     requestArtifact: PublishedArtifact,
   ): Promise<{
+    readonly receipts: readonly ControllerRecoveryReceipt[];
+    readonly blocked: readonly string[];
+  }>;
+  /** Inspect a sealed source publication only; never resolve a moving ref or repeat preparation. */
+  recoverSourceAction?(action: ControllerActionState): Promise<{
     readonly receipts: readonly ControllerRecoveryReceipt[];
     readonly blocked: readonly string[];
   }>;

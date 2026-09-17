@@ -93,6 +93,8 @@ export function createVerifiedSandboxCommandRunner(
       bootstrapPath: context.bootstrapPath,
       writableRoots: context.writableMounts,
       environment: context.environment,
+      ...(context.readonlyInputs === undefined ? {} : { readonlyInputs: context.readonlyInputs }),
+      ...(context.scratchBytes === undefined ? {} : { scratchBytes: context.scratchBytes }),
     });
     const observation = await collectBubblewrapStaticObservation({
       binaryPath: options.binaryPath,

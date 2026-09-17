@@ -49,6 +49,24 @@ export interface CreateControllerActionDispatcherOptions {
   readonly wake: () => void;
   readonly onFatal: (cause: unknown) => void;
   readonly maxAdapters?: number;
+  /** Host-only source service; requests select pinned identities, never filesystem paths. */
+  readonly sources?: {
+    readonly validate: (
+      action: Extract<ControllerAction, { kind: "prepare_source" }>,
+    ) => Promise<void>;
+    readonly prepare: (
+      action: Extract<ControllerAction, { kind: "prepare_source" }>,
+      requestDigest: string,
+      signal?: AbortSignal,
+    ) => Promise<ReceiptFields>;
+    readonly resolve: (
+      ref: string,
+      principal: ControllerOutputPrincipal,
+    ) => Promise<{
+      readonly descriptor: unknown;
+      readonly audience: readonly ControllerOutputPrincipal[];
+    }>;
+  };
   /** A fixed adapter may hand a validated request to an independently tracked host effect. */
   readonly runAdapterEffect?: (
     action: Extract<ControllerAction, { readonly kind: "adapter" }>,

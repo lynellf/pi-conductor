@@ -1,7 +1,16 @@
 /** Delegation-lite boundaries — spec §4, §5, §7. */
 
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -21,6 +30,7 @@ import {
 } from "../../src/host/delegation/run-tool.js";
 import { validateBatch } from "../../src/host/delegation/validate-batch.js";
 import {
+  createIndependentSourceWorktree,
   createWorktree,
   determineChildStatus,
   inspectChildWorktree,
@@ -293,6 +303,40 @@ describe("worktree verification (§5)", () => {
     await writeFile(join(worktree, "README.md"), "changed\n");
     const changed = await verifyWorktree(worktree, "conductor/run/child");
     expect(determineChildStatus(changed.headCommit, base, changed.isClean)).toBe("completed");
+  });
+
+  it("creates a source child in an independent Git repository without shared object storage (#118)", async () => {
+    repository = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-"));
+    await git(repository, "init");
+    await git(repository, "config", "user.email", "test@example.com");
+    await git(repository, "config", "user.name", "Test User");
+    await writeFile(join(repository, "README.md"), "sealed source\n");
+    await git(repository, "add", "README.md");
+    await git(repository, "commit", "-m", "sealed source");
+    const base = (await git(repository, "rev-parse", "HEAD")).trim();
+    const child = join(repository, "independent-child");
+
+    await createIndependentSourceWorktree(child, "conductor/run/source-child", base, repository);
+
+    expect((await git(child, "rev-parse", "HEAD")).trim()).toBe(base);
+    expect((await git(child, "branch", "--show-current")).trim()).toBe(
+      "conductor/run/source-child",
+    );
+    const [{ stdout: childCommonDir }, { stdout: sourceCommonDir }] = await Promise.all([
+      execFileAsync("git", ["rev-parse", "--git-common-dir"], { cwd: child }),
+      execFileAsync("git", ["rev-parse", "--git-common-dir"], { cwd: repository }),
+    ]);
+    expect(await realpath(join(child, childCommonDir.trim()))).not.toBe(
+      await realpath(join(repository, sourceCommonDir.trim())),
+    );
+    await expect(
+      access(join(child, ".git", "objects", "info", "alternates")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+
+    await writeFile(join(child, "README.md"), "child edit\n");
+    expect(await readFile(join(repository, "README.md"), "utf8")).toBe("sealed source\n");
   });
 
   it("marks a changed child HEAD invalid before reporting dirty paths", async () => {

@@ -195,7 +195,7 @@ function controllerAccepted(
   return records.filter(
     (record): record is DelegationSubmissionAcceptedRecord =>
       record.type === "delegation_submission_accepted" &&
-      record.schema_version === 2 &&
+      (record.schema_version === 2 || record.schema_version === 3) &&
       record.run_id === definition.record.run_id &&
       record.origin.kind === "controller_action" &&
       record.origin.controller_id === definition.record.controller_id &&

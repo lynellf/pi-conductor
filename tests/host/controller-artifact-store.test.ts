@@ -60,6 +60,25 @@ async function store(): Promise<ArtifactStore> {
 }
 
 describe("Issue #115 immutable controller artifact publication", () => {
+  it("rechecks recovery envelope bytes after immutable binding lookup", async () => {
+    const artifacts = await store();
+    const staging = await artifacts.createStaging("publish-result");
+    await writeFile(staging.outputPath, '{"valid":true}');
+    const published = await artifacts.publish({ staging, binding: binding(), validate: validJson });
+    const recover = artifacts.recoverAction.bind(artifacts);
+    artifacts.recoverAction = async (authority) => {
+      const verified = await recover(authority);
+      const payloadPath = join(artifacts.pathForTest(published.ref), "output", "result.json");
+      await chmod(payloadPath, 0o600);
+      await writeFile(payloadPath, '{"valid":false}');
+      await chmod(payloadPath, 0o400);
+      return verified;
+    };
+    await expect(artifacts.recoverActionPayload(binding())).rejects.toMatchObject({
+      code: "artifact-corrupt",
+    });
+  });
+
   it("keeps derived private adapter bytes from the controller and unrelated native profiles", async () => {
     const artifacts = await store();
     const staging = await artifacts.createStaging("publish-result");

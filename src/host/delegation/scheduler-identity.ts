@@ -94,7 +94,9 @@ export function acceptedDelegationRecord(
     parent_role: identity.parentRole,
     parent_visit_index: identity.parentVisitIndex,
     input_fingerprint: fingerprint,
-    ...(tasks.some((task) => task.sandbox !== undefined)
+    ...(tasks.some(
+      (task) => task.sandbox !== undefined || task.resolvedSourceWorkspace !== undefined,
+    )
       ? { request_fingerprint: rawRequestFingerprint }
       : {}),
     children: tasks.map((task) => acceptedChild(task)),
@@ -110,7 +112,9 @@ export function acceptedDelegationRecord(
     action_id: source.actionId,
     activation_id: source.activationId,
   };
-  return { ...common, schema_version: 2, origin, accepted_args: input };
+  return tasks.some((task) => task.resolvedSourceWorkspace !== undefined)
+    ? { ...common, schema_version: 3, origin, accepted_args: input }
+    : { ...common, schema_version: 2, origin, accepted_args: input };
 }
 
 /** Match a persisted acceptance to exactly one legacy or controller scheduler scope. */
@@ -127,7 +131,7 @@ export function matchesSchedulerScope(
   const scope = controllerScope(identity);
   if (scope === null) return submission.schema_version === 1;
   return (
-    submission.schema_version === 2 &&
+    (submission.schema_version === 2 || submission.schema_version === 3) &&
     submission.origin.kind === "controller_action" &&
     submission.origin.controller_id === scope.controllerId &&
     submission.origin.definition_digest === scope.definitionDigest
@@ -152,6 +156,19 @@ function acceptedChild(task: PreparedDelegateChild) {
     context_fingerprint: task.contextFingerprint,
     prompt_fingerprint: task.promptFingerprint,
     projection_fingerprint: task.projectionFingerprint,
+    ...(task.resolvedSourceWorkspace === undefined
+      ? {}
+      : {
+          source_workspace: {
+            ref: task.resolvedSourceWorkspace.ref,
+            source_id: task.resolvedSourceWorkspace.sourceId,
+            head_commit: task.resolvedSourceWorkspace.headCommit,
+            tree_id: task.resolvedSourceWorkspace.treeId,
+            inventory_digest: task.resolvedSourceWorkspace.inventoryDigest,
+            policy_digest: task.resolvedSourceWorkspace.policyDigest,
+            audience: task.resolvedSourceWorkspace.audience.map((principal) => ({ ...principal })),
+          },
+        }),
     ...(task.sandbox === undefined ? {} : { sandbox: task.sandbox }),
   };
 }

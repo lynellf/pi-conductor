@@ -197,7 +197,7 @@ export function createControllerMetricsObserver(input: {
         }
       if (
         record.type === "delegation_submission_accepted" &&
-        record.schema_version === 2 &&
+        (record.schema_version === 2 || record.schema_version === 3) &&
         record.origin.kind === "controller_action" &&
         record.origin.controller_id === input.controllerId &&
         record.origin.definition_digest === input.definitionDigest

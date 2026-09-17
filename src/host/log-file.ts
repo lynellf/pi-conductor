@@ -66,6 +66,10 @@ import {
 } from "../persistence/end-guard.js";
 import { normalizeCheckpoint, type PersistedRecord, type RecordLog } from "../persistence/log.js";
 import { materializePersistedRecord } from "../persistence/record-materialization.js";
+import {
+  assertSourceWorkspaceHistory,
+  isSourceWorkspaceRecord,
+} from "../persistence/source-workspace-timeline.js";
 import { appendControllerLogRecord } from "./controller/log-append.js";
 import { parsePersistedRecord, RecordLogError } from "./log-file-parser.js";
 
@@ -135,6 +139,8 @@ export class FileRecordLog implements RecordLog {
     if (isControllerRecord(materialized.record)) {
       reconstructControllerTimeline([...this.records(runId), materialized.record]);
     }
+    if (isSourceWorkspaceRecord(materialized.record))
+      assertSourceWorkspaceHistory([...this.records(runId), materialized.record]);
     const controllerMode = this.isControllerRun(runId, materialized.record.type);
     if (controllerMode) {
       const firstControllerAppend = !this.controllerDirectorySynced.has(runId);
@@ -255,6 +261,7 @@ export class FileRecordLog implements RecordLog {
     assertDelegationTaskTimeline(records);
     reconstructChildOutputTimeline(records);
     assertControllerEffectHistory(records);
+    assertSourceWorkspaceHistory(records);
     return Object.freeze(records);
   }
 

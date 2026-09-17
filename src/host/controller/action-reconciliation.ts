@@ -60,7 +60,7 @@ export function prepareControllerActionRepair(
     records.some(
       (record) =>
         record.type === "delegation_submission_accepted" &&
-        record.schema_version === 2 &&
+        (record.schema_version === 2 || record.schema_version === 3) &&
         record.origin.kind === "controller_action" &&
         record.origin.action_id === actionId &&
         record.origin.definition_digest === timeline.definition.definition_digest &&

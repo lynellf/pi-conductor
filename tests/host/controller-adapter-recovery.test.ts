@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { approveControllerDefinition } from "../../src/host/controller/approved-definition.js";
 import {
@@ -17,6 +17,7 @@ import {
   appendControllerRecovery,
   planControllerRecovery,
 } from "../../src/host/controller/recovery.js";
+import { recoverControllerAdapterAction } from "../../src/host/controller/recovery-adapter.js";
 import { parseControllerConfig } from "../../src/manifest/controller.js";
 import type { ControllerAction } from "../../src/manifest/controller-protocol.js";
 import {
@@ -24,6 +25,7 @@ import {
   type ControllerDecisionCommittedRecord,
   controllerActionRequestDigest,
 } from "../../src/persistence/controller-records.js";
+import type { ControllerActionState } from "../../src/persistence/controller-timeline.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 import type {
   ControllerToolExecutionFinishedRecord,
@@ -235,6 +237,166 @@ describe("controller adapter publication recovery", () => {
     expect(plan.blocked).toContain("controller executable execution-a has unresolved ownership");
   });
 
+  it("does not replay a source adapter when capture evidence is incomplete", async () => {
+    const fixture = await adapterFixture();
+    const request: Extract<ControllerAction, { readonly kind: "adapter" }> = {
+      kind: "adapter",
+      action_id: "adapter-a",
+      adapter_id: "adapter",
+      input_refs: [],
+      source_workspace_ref: `source-workspace/v1/${"a".repeat(64)}/${"b".repeat(64)}`,
+    };
+    const requestSha256 = controllerActionRequestDigest(
+      fixture.definition.record.definition_digest,
+      request,
+    );
+    const action: ControllerActionState = {
+      actionId: request.action_id,
+      intent: {
+        action_id: request.action_id,
+        kind: request.kind,
+        request_sha256: requestSha256,
+        request,
+      },
+      intentActivationId: fixture.start.origin.activation_id,
+      originalRevision: 1,
+      latestReceipt: null,
+      receipts: [],
+      repair: null,
+    };
+    const started = {
+      ...fixture.start,
+      origin: { ...fixture.start.origin, request_sha256: requestSha256 },
+    };
+    const finished = {
+      ...fixture.finished,
+      origin: started.origin,
+      sandbox: {
+        category: "output_incomplete" as const,
+        normalized_status: 7,
+        signal: "unknown" as const,
+        termination_requested: false,
+        cleanup: "confirmed" as const,
+      },
+    };
+    const recoverActionPayload = vi.fn();
+
+    const recovered = await recoverControllerAdapterAction(
+      {
+        recoverAction: fixture.artifacts.recoverAction.bind(fixture.artifacts),
+        recoverActionPayload,
+        rangeReadForController: fixture.artifacts.rangeReadForController.bind(fixture.artifacts),
+        getInputAudience: async () => [{ kind: "adapter" as const, adapter_id: "adapter" }],
+      },
+      fixture.definition,
+      action,
+      { entries: [{ started, finished }], unfinished: [], unresolved: [], timeout_count: 0 },
+    );
+
+    expect(recovered.blocked).toContain(
+      "source adapter action adapter-a lacks complete captured execution evidence; requires action repair",
+    );
+    expect(recoverActionPayload).not.toHaveBeenCalled();
+  });
+
+  it("recovers a complete source envelope only when it matches the durable execution", async () => {
+    const fixture = await adapterFixture();
+    const request: Extract<ControllerAction, { readonly kind: "adapter" }> = {
+      kind: "adapter",
+      action_id: "adapter-a",
+      adapter_id: "adapter",
+      input_refs: [],
+      source_workspace_ref: `source-workspace/v1/${"a".repeat(64)}/${"b".repeat(64)}`,
+    };
+    const requestSha256 = controllerActionRequestDigest(
+      fixture.definition.record.definition_digest,
+      request,
+    );
+    const action: ControllerActionState = {
+      actionId: request.action_id,
+      intent: {
+        action_id: request.action_id,
+        kind: request.kind,
+        request_sha256: requestSha256,
+        request,
+      },
+      intentActivationId: fixture.start.origin.activation_id,
+      originalRevision: 1,
+      latestReceipt: null,
+      receipts: [],
+      repair: null,
+    };
+    const started = {
+      ...fixture.start,
+      origin: { ...fixture.start.origin, request_sha256: requestSha256 },
+    };
+    const binding = {
+      ...fixture.binding,
+      requestDigest: requestSha256,
+      producer: {
+        kind: "operation" as const,
+        operationId: started.origin.operation_id,
+        requestDigest: requestSha256,
+      },
+      outputSchema: {
+        id: "source-adapter-envelope-v1",
+        digest: sha256Canonical({ schema_version: 1, kind: "source-adapter-envelope" }),
+      },
+      audience: [{ kind: "adapter" as const, adapter_id: "adapter" }],
+    };
+    const envelope = {
+      schema_version: 1,
+      source: {
+        ref: request.source_workspace_ref,
+        base_commit: "base",
+        head_commit: "head",
+        tree_id: "tree",
+        inventory_digest: "inventory",
+        policy_digest: "policy",
+      },
+      execution: {
+        execution_id: started.execution_id,
+        normalized_status: 7,
+        capture: "complete",
+        cleanup: "confirmed",
+      },
+      result: null,
+    };
+    await publish(fixture.artifacts, binding, JSON.stringify(envelope));
+    const finished = {
+      ...fixture.finished,
+      origin: started.origin,
+      sandbox: {
+        category: "command_status" as const,
+        normalized_status: 7,
+        signal: "unknown" as const,
+        termination_requested: false,
+        cleanup: "confirmed" as const,
+        output: {
+          schemaVersion: 1 as const,
+          outputRef: "00000000-0000-4000-8000-000000000000",
+          capture: "complete" as const,
+          stdout: { byteCount: 1, retainedVerified: true as const, sha256: "a".repeat(64) },
+          stderr: { byteCount: 0, retainedVerified: true as const, sha256: "b".repeat(64) },
+        },
+      },
+    };
+
+    const recovered = await recoverControllerAdapterAction(
+      {
+        recoverAction: fixture.artifacts.recoverAction.bind(fixture.artifacts),
+        recoverActionPayload: fixture.artifacts.recoverActionPayload.bind(fixture.artifacts),
+        rangeReadForController: fixture.artifacts.rangeReadForController.bind(fixture.artifacts),
+        getInputAudience: async () => [{ kind: "adapter" as const, adapter_id: "adapter" }],
+      },
+      fixture.definition,
+      action,
+      { entries: [{ started, finished }], unfinished: [], unresolved: [], timeout_count: 0 },
+    );
+
+    expect(recovered.receipts).toMatchObject([{ actionId: "adapter-a", outcome: "completed" }]);
+  });
+
   it("requires action repair when a clean adapter has no immutable publication", async () => {
     const fixture = await adapterFixture();
     const plan = await planControllerRecovery({
@@ -440,8 +602,12 @@ async function adapterFixture() {
   };
 }
 
-async function publish(artifacts: ArtifactStore, binding: ArtifactBinding): Promise<void> {
+async function publish(
+  artifacts: ArtifactStore,
+  binding: ArtifactBinding,
+  payload = '{"packet":"ready"}',
+): Promise<void> {
   const staging = await artifacts.createStaging(binding.actionId);
-  await writeFile(staging.outputPath, '{"packet":"ready"}');
+  await writeFile(staging.outputPath, payload);
   await artifacts.publish({ staging, binding, validate: () => {} });
 }

@@ -1,4 +1,5 @@
 /** Private immutable controller artifact publication and verification — issue #115 §6. */
+// Keep publication, principal reads and host recovery on one private-path owner; below 500 lines.
 
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readdir, rename, writeFile } from "node:fs/promises";
@@ -252,6 +253,24 @@ export class ArtifactStore {
     const manifestHash = entries[0];
     if (manifestHash === undefined) throw new ArtifactStoreError("artifact-missing");
     return this.#readPublished(`artifact/v1/${actionNamespace}/${manifestHash}`, binding);
+  }
+
+  /** Recover host-owned immutable bytes after binding verification; resume never exposes them to a principal. */
+  async recoverActionPayload(binding: ArtifactBinding): Promise<{
+    readonly artifact: PublishedArtifact;
+    readonly bytes: Buffer;
+  }> {
+    const artifact = await this.recoverAction(binding);
+    const payload = await readArtifactPayload(
+      join(this.#pathForRef(artifact.ref), PAYLOAD_FILE),
+      this.#maxArtifactBytes,
+    );
+    if (
+      payload.bytes.byteLength !== artifact.byteLength ||
+      artifactSha256(payload.bytes) !== artifact.sha256
+    )
+      throw new ArtifactStoreError("artifact-corrupt");
+    return Object.freeze({ artifact, bytes: payload.bytes });
   }
 
   /** Resolve a host-issued ref for an authorized native consumer with a hard 32KiB default limit. */

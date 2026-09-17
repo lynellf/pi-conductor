@@ -45,4 +45,26 @@ describe("controller invocation mounts", () => {
     await chmod(files.readonlyWorkspaceRoot, 0o500);
     await expect(files.verify()).rejects.toThrow(/placeholder/);
   });
+
+  it("carries only host-verified source and file mounts with a bounded scratch quota", async () => {
+    const state = await root();
+    const source = join(state, "source");
+    const inputs = join(state, "inputs");
+    await mkdir(source, { mode: 0o700 });
+    await mkdir(inputs, { mode: 0o700 });
+    const files = await prepareControllerInvocationFiles(state, () => {}, undefined, {
+      workspaceRoot: source,
+      readonlyInputs: [
+        { sourcePath: inputs, destination: "/inputs" },
+        { sourcePath: source, destination: "/source-git" },
+      ],
+      scratchBytes: 4096,
+    });
+    expect(files.readonlyWorkspaceRoot).toBe(source);
+    expect(files.readonlyInputs).toEqual([
+      { sourcePath: inputs, destination: "/inputs" },
+      { sourcePath: source, destination: "/source-git" },
+    ]);
+    expect(files.scratchBytes).toBe(4096);
+  });
 });

@@ -193,4 +193,102 @@ describe("prepared delegation admission", () => {
       }),
     ).rejects.toBeInstanceOf(DelegationOwnershipError);
   });
+
+  it("prepares and materializes a native child from the resolved sealed source, never primary checkout (#118)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-primary-"));
+    const source = await mkdtemp(join(tmpdir(), "pi-conductor-delegation-source-"));
+    roots.push(root, source);
+    for (const path of [root, source]) {
+      await execFile("git", ["init", "--quiet"], { cwd: path });
+      await execFile("git", ["config", "user.email", "test@example.invalid"], { cwd: path });
+      await execFile("git", ["config", "user.name", "Test User"], { cwd: path });
+    }
+    await writeFile(join(root, "primary-only.txt"), "must not reach child\n");
+    await execFile("git", ["add", "."], { cwd: root });
+    await execFile("git", ["commit", "--quiet", "-m", "primary"], { cwd: root });
+    await writeFile(join(source, "child.md"), "source prompt\n");
+    await writeFile(join(source, "source-only.txt"), "admitted source\n");
+    await execFile("git", ["add", "."], { cwd: source });
+    await execFile("git", ["commit", "--quiet", "-m", "source"], { cwd: source });
+    const sourceHead = (
+      await execFile("git", ["rev-parse", "HEAD"], { cwd: source })
+    ).stdout.trim();
+    const profile = {
+      name: "implementer",
+      models: [{ model: "stub:model", effort: "medium" }],
+      max_session_cost_usd: 1,
+      system_prompt: "child.md",
+      completion_protocol: "report_result",
+    } satisfies SubagentProfile;
+    const resolvedProfiles: string[] = [];
+    const prepared = await prepareDelegateSubmission({
+      args: {
+        tasks: [
+          {
+            id: "task-source",
+            subagent: "implementer",
+            objective: "inspect source",
+            expected_output: "report",
+          },
+        ],
+      },
+      policy,
+      profiles: [profile],
+      remainingChildren: 2,
+      runStateDir: join(root, "run-state"),
+      runId: "run-source",
+      parentRole: "orchestrator",
+      primaryCheckout: root,
+      systemPromptRoot: source,
+      sourceWorkspaceRef: `source-workspace/v1/${"d".repeat(64)}/${"e".repeat(64)}`,
+      resolveDelegatedSource: async (ref, profileId) => {
+        resolvedProfiles.push(profileId);
+        return {
+          ref,
+          sourceId: "approved-source",
+          checkoutPath: source,
+          headCommit: sourceHead,
+          treeId: "a".repeat(40),
+          inventoryDigest: "b".repeat(64),
+          policyDigest: "c".repeat(64),
+          audience: [{ kind: "native", profile_id: "implementer" }],
+        };
+      },
+      spawnAndRunChild: async () => {
+        throw new Error("unused");
+      },
+    });
+    expect(resolvedProfiles).toEqual(["implementer"]);
+    expect(prepared.baseCommit).toBe(sourceHead);
+    const child = prepared.tasks[0];
+    if (child === undefined) throw new Error("prepared child missing");
+    expect(child.resolvedSourceWorkspace?.headCommit).toBe(sourceHead);
+
+    const result = await runPreparedChild({
+      prepared: child,
+      runId: "run-source",
+      parentRole: "orchestrator",
+      primaryCheckout: root,
+      parentMaterializedPaths: prepared.materializedParentPaths,
+      systemPromptRoot: source,
+      spawnAndRunChild: async (spawned) => {
+        await expect(readFile(join(spawned.worktreePath, "source-only.txt"), "utf8")).resolves.toBe(
+          "admitted source\n",
+        );
+        await expect(access(join(spawned.worktreePath, "primary-only.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        return {
+          started: false,
+          model: "stub:model",
+          sessionFile: null,
+          usage,
+          status: "failed",
+          failureReason: "test",
+          sessionError: null,
+        };
+      },
+    });
+    expect(result.baseCommit).toBe(sourceHead);
+  });
 });

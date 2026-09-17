@@ -59,6 +59,7 @@ export interface DelegationSchedulerOptions {
   readonly prepareSubmission: (
     input: DelegateSubmissionArgs,
     remainingChildren: number,
+    sourceWorkspaceRef?: string,
   ) => Promise<PreparedDelegateSubmission>;
   readonly runTask: (task: PreparedDelegateChild, signal: AbortSignal) => Promise<PoolChildResult>;
   readonly onTerminal: (result: PoolChildResult) => void;
@@ -131,18 +132,22 @@ export class DelegationScheduler {
   submitController(
     action: ControllerSchedulerSubmission,
     input: DelegateSubmissionArgs,
+    sourceWorkspaceRef?: string,
   ): Promise<readonly string[]> {
     if (input.mode !== undefined && input.mode !== "nonblocking")
       return Promise.reject(new Error("controller delegation requires nonblocking mode"));
-    return this.submitSource(action, input);
+    return this.submitSource(action, input, sourceWorkspaceRef);
   }
 
   private submitSource(
     source: SchedulerSubmission,
     input: DelegateSubmissionArgs,
+    sourceWorkspaceRef?: string,
   ): Promise<readonly string[]> {
     const frozenInput = structuredClone(input);
-    const operation = this.admissionTail.then(() => this.submitOne(source, frozenInput));
+    const operation = this.admissionTail.then(() =>
+      this.submitOne(source, frozenInput, sourceWorkspaceRef),
+    );
     this.admissionTail = operation.then(
       () => undefined,
       () => undefined,
@@ -153,9 +158,10 @@ export class DelegationScheduler {
   private async submitOne(
     source: SchedulerSubmission,
     input: DelegateSubmissionArgs,
+    sourceWorkspaceRef?: string,
   ): Promise<readonly string[]> {
     const submissionId = schedulerSubmissionId(this.options.identity, source);
-    const rawRequestFingerprint = requestFingerprint(input);
+    const rawRequestFingerprint = requestFingerprint(input, sourceWorkspaceRef);
     const prior = this.submissions.get(submissionId);
     if (prior !== undefined) {
       const expected = prior.requestFingerprint ?? prior.fingerprint;
@@ -170,10 +176,15 @@ export class DelegationScheduler {
       input,
       this.options.maxChildren -
         spentDelegationSlots(this.options.records(), this.options.identity.logicalParentId),
+      sourceWorkspaceRef,
     );
     const tasks = prepared.tasks;
-    const hasSandbox = tasks.some((task) => task.sandbox !== undefined);
-    const fingerprint = hasSandbox ? acceptedFingerprint(input, tasks) : rawRequestFingerprint;
+    const hasBoundAuthority = tasks.some(
+      (task) => task.sandbox !== undefined || task.resolvedSourceWorkspace !== undefined,
+    );
+    const fingerprint = hasBoundAuthority
+      ? acceptedFingerprint(input, tasks, sourceWorkspaceRef)
+      : rawRequestFingerprint;
     if (this.isClosed() || this.isBudgetExhausted())
       throw new Error("delegation admission is closed");
     this.options.assertAdmissionOpen?.();
@@ -216,7 +227,7 @@ export class DelegationScheduler {
     this.submissions.set(submissionId, {
       submissionId,
       fingerprint,
-      ...(hasSandbox ? { requestFingerprint: rawRequestFingerprint } : {}),
+      ...(hasBoundAuthority ? { requestFingerprint: rawRequestFingerprint } : {}),
       tasks: states,
     });
     this.drain();
@@ -264,7 +275,7 @@ export class DelegationScheduler {
     for (const record of this.options.records()) {
       if (
         record.type === "delegation_submission_accepted" &&
-        record.schema_version === 2 &&
+        (record.schema_version === 2 || record.schema_version === 3) &&
         record.logical_parent_id === this.options.identity.logicalParentId &&
         record.origin.kind === "controller_action" &&
         record.origin.controller_id === scope.controllerId &&

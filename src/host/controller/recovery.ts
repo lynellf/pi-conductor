@@ -21,6 +21,7 @@ import {
   type ToolExecutionRecord,
   type ToolExecutionTimeline,
 } from "../../persistence/tool-execution.js";
+import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import type { ApprovedControllerDefinition } from "./approved-definition.js";
 import { controllerAcceptedSubmissionRef, controllerRecordRef } from "./controller-refs.js";
 import { recoverControllerAdapterAction } from "./recovery-adapter.js";
@@ -77,6 +78,16 @@ export async function planControllerRecovery(input: {
         );
         continue;
       }
+    }
+    if (action.intent.kind === "prepare_source") {
+      const recovered = await input.artifacts.recoverSourceAction?.(action);
+      if (recovered === undefined)
+        blocked.push(`action ${action.actionId} requires source workspace recovery`);
+      else {
+        receipts.push(...recovered.receipts);
+        blocked.push(...recovered.blocked);
+      }
+      continue;
     }
     if (action.intent.kind === "adapter") {
       const recovered = await recoverControllerAdapterAction(
@@ -236,15 +247,20 @@ function executableRecoveryRequirements(
   });
 }
 
+type ControllerDelegationAcceptance = Extract<
+  DelegationSubmissionAcceptedRecord,
+  { readonly schema_version: 2 | 3 }
+>;
+
 function acceptedFor(
   records: readonly PersistedRecord[],
   definition: ApprovedControllerDefinition["record"],
   action: ControllerActionState,
-): DelegationSubmissionAcceptedRecord | undefined {
+): ControllerDelegationAcceptance | undefined {
   const matches = records.filter(
-    (record): record is DelegationSubmissionAcceptedRecord =>
+    (record): record is ControllerDelegationAcceptance =>
       record.type === "delegation_submission_accepted" &&
-      record.schema_version === 2 &&
+      (record.schema_version === 2 || record.schema_version === 3) &&
       record.origin.kind === "controller_action" &&
       record.run_id === definition.run_id &&
       record.origin.controller_id === definition.controller_id &&
@@ -254,7 +270,23 @@ function acceptedFor(
   );
   if (matches.length > 1)
     throw new Error(`controller action ${action.actionId} has multiple native acceptances`);
-  return matches[0];
+  const accepted = matches[0];
+  if (accepted === undefined) return undefined;
+  if (action.intent.request.kind !== "delegate")
+    throw new Error(`controller action ${action.actionId} has a non-delegate native acceptance`);
+  const expectedArgs = { mode: "nonblocking" as const, tasks: action.intent.request.tasks };
+  if (sha256Canonical(accepted.accepted_args) !== sha256Canonical(expectedArgs))
+    throw new Error(`controller action ${action.actionId} acceptance changed its exact request`);
+  const sourceRef = action.intent.request.source_workspace_ref;
+  if (sourceRef === undefined) {
+    if (accepted.schema_version !== 2)
+      throw new Error(`controller action ${action.actionId} has an unexpected source acceptance`);
+  } else if (
+    accepted.schema_version !== 3 ||
+    accepted.children.some((child) => child.source_workspace?.ref !== sourceRef)
+  )
+    throw new Error(`controller action ${action.actionId} acceptance changed its source pin`);
+  return accepted;
 }
 
 function hasControllerEffectStart(

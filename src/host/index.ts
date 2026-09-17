@@ -301,6 +301,16 @@ export {
   localProgramImplementationDigest,
   localProgramRuntimeDigest,
 } from "./controller/local-effect-registry.js";
+export {
+  createSourceWorkspaceService,
+  type PreparedSourceWorkspace,
+  type ResolvedSourceWorkspacePatch,
+  type ResolveSourceWorkspaceInput,
+  SourceWorkspaceError,
+  type SourceWorkspaceGrant,
+  SourceWorkspaceStore,
+  sourceWorkspaceReservationBytes,
+} from "./controller/source-workspace.js";
 export type {
   ToolExecutionCleanupInspection,
   ToolExecutionCleanupOptions,

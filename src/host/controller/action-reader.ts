@@ -38,6 +38,25 @@ export function createControllerActionReader(options: {
     limit = MAX_READ_BYTES,
   ): Promise<ControllerReadResult> => {
     assertControllerReadRange(offset, limit);
+    if (ref.startsWith("source-workspace/v1/")) {
+      if (options.dispatcher.sources === undefined)
+        throw new Error("source workspaces are not configured");
+      const source = await options.dispatcher.sources.resolve(ref, { kind: "controller" });
+      const bytes = Buffer.from(JSON.stringify(source.descriptor), "utf8");
+      if (offset > bytes.length) throw new Error("controller read range is invalid");
+      const page = bytes.subarray(offset, offset + limit);
+      return {
+        kind: "record",
+        value: {
+          encoding: "base64",
+          data: page.toString("base64"),
+          offset,
+          next_offset: offset + page.length,
+          total_bytes: bytes.length,
+          eof: offset + page.length === bytes.length,
+        },
+      };
+    }
     if (ref.startsWith("artifact/v1/")) {
       return {
         kind: "artifact",

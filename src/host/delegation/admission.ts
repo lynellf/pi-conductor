@@ -13,7 +13,11 @@ import { buildChildPrompt } from "./child-prompt.js";
 import { type PreparedTask, prepareTaskContextArtifacts } from "./context-artifact-admission.js";
 import type { ContextArtifactGitAccess } from "./context-artifact-contract.js";
 import { DelegateToolError } from "./delegate-error.js";
-import type { DelegateToolOptions, SpawnChildConfig } from "./delegate-tool.js";
+import type {
+  DelegateToolOptions,
+  ResolvedDelegatedSource,
+  SpawnChildConfig,
+} from "./delegate-tool.js";
 import { projectionFingerprint, taskFingerprint } from "./fingerprints.js";
 import { buildBranchName, buildWorktreePath, type ChildId, generateChildId } from "./ids.js";
 import {
@@ -30,6 +34,8 @@ export interface PreparedDelegateChild extends SpawnChildConfig {
   readonly profileFingerprint: string;
   readonly contextFingerprint: string;
   readonly promptFingerprint: string;
+  /** Ephemeral sealed source checkout; excluded from the spawned child config and durable log. */
+  readonly resolvedSourceWorkspace?: ResolvedDelegatedSource;
 }
 
 /** Immutable batch snapshot safe for queued execution. */
@@ -61,12 +67,29 @@ export async function prepareDelegateSubmission(
       { code: "sandbox-backend-unavailable", message: detail },
     ]);
   }
+  let sourceWorkspace: ResolvedDelegatedSource | undefined;
+  try {
+    sourceWorkspace = await resolveDelegatedSource(options);
+  } catch (cause) {
+    const detail = message(cause);
+    throw new DelegateToolError("batch_validation_failed", detail, [
+      { code: "projection-authority-unavailable", message: detail },
+    ]);
+  }
+  const parentCheckout = sourceWorkspace?.checkoutPath ?? options.primaryCheckout;
+  if (sourceWorkspace !== undefined && sourceWorkspace.checkoutPath === null) {
+    throw new DelegateToolError(
+      "batch_validation_failed",
+      "native source workspace has no sealed Git checkout",
+      [],
+    );
+  }
   let gitCheck: Awaited<ReturnType<typeof checkPrimaryGitStatus>>;
   let parentProjection: DelegateParentProjectionCapture;
   let gitAccess: ContextArtifactGitAccess | undefined;
   try {
     if (usesSandbox) {
-      const primaryCheckout = options.primaryCheckout;
+      const primaryCheckout = parentCheckout;
       const captured = await captureTrustedParentProjection(primaryCheckout);
       gitCheck = { isGit: true, isClean: true, headCommit: captured.baseCommit };
       parentProjection = {
@@ -81,14 +104,21 @@ export async function prepareDelegateSubmission(
           readTrustedParentBlob(primaryCheckout, base, path, maxBytes),
       };
     } else {
-      gitCheck = await checkPrimaryGitStatus(options.primaryCheckout);
-      parentProjection = await captureParentProjection(options.primaryCheckout, gitCheck);
+      gitCheck = await checkPrimaryGitStatus(parentCheckout);
+      parentProjection = await captureParentProjection(parentCheckout, gitCheck);
     }
   } catch (cause) {
     const detail = cause instanceof ParentProjectionCaptureError ? cause.message : message(cause);
     throw new DelegateToolError("batch_validation_failed", detail, [
       { code: "projection-authority-unavailable", message: detail },
     ]);
+  }
+  if (sourceWorkspace !== undefined && parentProjection.baseCommit !== sourceWorkspace.headCommit) {
+    throw new DelegateToolError(
+      "batch_validation_failed",
+      "sealed source checkout no longer matches the resolved source head",
+      [],
+    );
   }
   const validation = validateBatch(
     options.args,
@@ -131,7 +161,7 @@ export async function prepareDelegateSubmission(
   const contextResolution = await prepareTaskContextArtifacts(
     projected,
     options.policy,
-    options.primaryCheckout,
+    parentCheckout,
     baseCommit,
     materializedParentPaths,
     options.contextArtifactTestHook,
@@ -182,7 +212,8 @@ export async function prepareDelegateSubmission(
                 .capture({
                   childId,
                   runId: options.runId,
-                  primaryCheckout: options.primaryCheckout,
+                  primaryCheckout: parentCheckout,
+                  ...(sourceWorkspace === undefined ? {} : { sourceWorkspace }),
                   profile,
                   selectedPaths: paths,
                   trackedPaths:
@@ -226,6 +257,7 @@ export async function prepareDelegateSubmission(
         contextFingerprint,
         promptFingerprint,
         ...(sandboxAdmission === undefined ? {} : { sandbox: sandboxAdmission.sandbox }),
+        ...(sourceWorkspace === undefined ? {} : { resolvedSourceWorkspace: sourceWorkspace }),
       });
     }),
   );
@@ -234,6 +266,44 @@ export async function prepareDelegateSubmission(
     materializedParentPaths: Object.freeze([...materializedParentPaths]),
     tasks: Object.freeze(tasks),
   });
+}
+
+async function resolveDelegatedSource(
+  options: DelegateToolOptions,
+): Promise<ResolvedDelegatedSource | undefined> {
+  const ref = options.sourceWorkspaceRef;
+  if (ref === undefined) return undefined;
+  if (options.resolveDelegatedSource === undefined)
+    throw new Error("native source workspace resolution is unavailable");
+  const profiles = [...new Set(options.args.tasks.map((task) => task.subagent))];
+  const resolved = await Promise.all(
+    profiles.map((profileId) => options.resolveDelegatedSource?.(ref, profileId)),
+  );
+  const first = resolved[0];
+  if (first === undefined || first.checkoutPath === null)
+    throw new Error("native source workspace has no sealed Git checkout");
+  if (first.ref !== ref)
+    throw new Error("native source resolver returned a different workspace ref");
+  for (const candidate of resolved.slice(1)) {
+    if (candidate === undefined || !sameSourceIdentity(first, candidate))
+      throw new Error("native source resolver returned inconsistent profile source identities");
+  }
+  return first;
+}
+
+function sameSourceIdentity(
+  left: ResolvedDelegatedSource,
+  right: ResolvedDelegatedSource,
+): boolean {
+  return (
+    left.ref === right.ref &&
+    left.sourceId === right.sourceId &&
+    left.headCommit === right.headCommit &&
+    left.treeId === right.treeId &&
+    left.inventoryDigest === right.inventoryDigest &&
+    left.policyDigest === right.policyDigest &&
+    JSON.stringify(left.audience) === JSON.stringify(right.audience)
+  );
 }
 
 function fingerprint(value: unknown): string {

@@ -27,6 +27,7 @@ import type { HostArtifactContextResolver } from "./context-artifact-contract.js
 import {
   DelegateToolError,
   executeDelegate,
+  type ResolvedDelegatedSource,
   type SandboxAdmissionAdapter,
 } from "./delegate-tool.js";
 import { appendCompleted, appendFailed, errorMessage } from "./factory-records.js";
@@ -74,6 +75,11 @@ export interface DelegateChildFactoryOptions {
   readonly sandboxHostApproval?: SandboxHostApproval;
   /** Controller-native artifact resolver; absent leaves host-artifact descriptors fail-closed. */
   readonly hostArtifactResolver?: HostArtifactContextResolver;
+  /** Controller-only resolver for an immutable source workspace (#118). */
+  readonly resolveDelegatedSource?: (
+    ref: string,
+    profileId: string,
+  ) => Promise<ResolvedDelegatedSource>;
 }
 
 /** Dependencies for a parent role's SDK-visible delegate tool. */

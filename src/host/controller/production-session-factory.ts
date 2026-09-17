@@ -46,6 +46,7 @@ import {
   productionActivationRecord,
   productionHostProtection,
 } from "./production-session-support.js";
+import { createProductionSources } from "./production-sources.js";
 import { appendControllerRecovery } from "./recovery.js";
 import { createControllerRoleSession } from "./role-session.js";
 import type { ControllerRoleSession } from "./session-contract.js";
@@ -170,6 +171,18 @@ export async function createProductionControllerSession(
     onFatal: (cause) => session?.fail(cause),
     opened: openedOutputs,
   });
+  const sources =
+    (config.source_repositories?.length ?? 0) === 0
+      ? undefined
+      : await createProductionSources({
+          definition,
+          runStateDir,
+          records,
+          persist,
+          loadApproval: loadControllerHostApproval,
+          assertOpen: assertActivationOpen,
+          outputResolver: outputs.resolver,
+        });
   const rejection: ControllerAdmissionOptions["getHostRejection"] = () => {
     try {
       currentNativeScope?.assertOpen();
@@ -187,6 +200,12 @@ export async function createProductionControllerSession(
       parentRole: options.role,
       parentVisitIndex: options.visitIndex,
       hostArtifactResolver: outputs.hostArtifactResolver,
+      ...(sources === undefined
+        ? {}
+        : {
+            resolveDelegatedSource: (ref: string, profileId: string) =>
+              sources.openSourceWorkspace(ref, { kind: "native", profile_id: profileId }),
+          }),
       captureTaskOutputs: outputs.publication.capture,
       ...(options.getRunCostCap === undefined ? {} : { getRunCostCap: options.getRunCostCap }),
       onTaskTerminal: (result) => {
@@ -219,6 +238,7 @@ export async function createProductionControllerSession(
     toolExecutionController: toolExecutions,
     assertOpen: assertActivationOpen,
     artifactStore: artifacts,
+    ...(sources === undefined ? {} : { openSourceWorkspace: sources.openSourceWorkspace }),
     metrics,
     resolveRef: (ref, principal) => {
       if (dispatcher === undefined) throw new Error("controller dispatcher is not initialized");
@@ -303,6 +323,7 @@ export async function createProductionControllerSession(
     executables: executable,
     artifacts,
     outputResolver: outputs.resolver,
+    ...(sources === undefined ? {} : { sources: sources.dispatcher(activation, toolExecutions) }),
     externalPendingCount: outputs.publication.pendingCount,
     externalSettle: outputs.publication.settle,
     assertOpen: assertActivationOpen,

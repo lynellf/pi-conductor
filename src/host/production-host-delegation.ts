@@ -8,7 +8,10 @@ import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { type SnapshotPinnedRecord, snapshotPinned } from "../persistence/log.js";
 import type { DelegationAdmissionService } from "./delegation/admission-service.js";
 import type { HostArtifactContextResolver } from "./delegation/context-artifact-contract.js";
-import type { SandboxAdmissionAdapter } from "./delegation/delegate-tool.js";
+import type {
+  ResolvedDelegatedSource,
+  SandboxAdmissionAdapter,
+} from "./delegation/delegate-tool.js";
 import type { PoolChildResult } from "./delegation/pool.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import { createSandboxAdmissionAdapter } from "./delegation/sandbox-admission.js";
@@ -59,6 +62,11 @@ export interface ControllerAdmissionOptions {
   readonly onFatal: (cause: unknown) => void;
   readonly getHostRejection: () => HostRejection | false;
   readonly definitionDigest: string;
+  /** Host-only resolver revalidates a controller-approved immutable source per profile (#118). */
+  readonly resolveDelegatedSource?: (
+    ref: string,
+    profileId: string,
+  ) => Promise<ResolvedDelegatedSource>;
 }
 
 /** Build the controller's stable logical native-admission scope. */
@@ -126,6 +134,9 @@ export async function createControllerAdmission(
       getHostRejection: options.getHostRejection,
       delegationPolicy: options.config.delegation,
       hostArtifactResolver: options.hostArtifactResolver,
+      ...(options.resolveDelegatedSource === undefined
+        ? {}
+        : { resolveDelegatedSource: options.resolveDelegatedSource }),
       ...(sandboxAdmission === undefined ? {} : { sandboxAdmission }),
       ...(ctx.sandboxHostApproval === undefined
         ? {}

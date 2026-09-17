@@ -4,7 +4,7 @@ import type { AnySandboxExecutionOwner } from "../../../persistence/sandbox-exec
 import type { SandboxOutputFinalRecord } from "../../../persistence/sandbox-output.js";
 import type { ToolExecutionScope } from "../tool-execution-contract.js";
 import type { SandboxToolExecutionAdapter } from "../tool-execution-lifecycle.js";
-import type { SandboxWritableMount } from "./mount-plan.js";
+import type { SandboxReadonlyInput, SandboxWritableMount } from "./mount-plan.js";
 import type { SandboxOutputPreviews } from "./output-spool.js";
 import type { HostApprovedBubblewrapBuild } from "./prerequisites.js";
 import type { PreparedRuntimeDescriptor } from "./runtime-types.js";
@@ -26,6 +26,8 @@ export interface VerifiedSandboxCommandContext {
   readonly bootstrapPath: string;
   readonly owner: AnySandboxExecutionOwner;
   readonly writableMounts: readonly SandboxWritableMount[];
+  readonly readonlyInputs?: readonly SandboxReadonlyInput[];
+  readonly scratchBytes?: number;
   readonly environment: Readonly<Record<string, string>>;
   readonly runId: string;
   readonly outputCaps: Readonly<{ maxBytes: number; previewBytes?: number }>;

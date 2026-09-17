@@ -17,6 +17,13 @@ export interface ControllerInvocationFiles {
   readonly privateWritableRoot: string;
   readonly bootstrapPath: string;
   readonly writableMounts: readonly SandboxWritableMount[];
+  /** Host-verified immutable mounts for source-aware fixed adapters. */
+  readonly readonlyInputs: readonly {
+    readonly sourcePath: string;
+    readonly destination: "/inputs" | "/source-git";
+  }[];
+  /** Bounded ephemeral filesystem quota requested by a source-aware adapter. */
+  readonly scratchBytes?: number;
   verify(): Promise<void>;
 }
 
@@ -25,6 +32,14 @@ export async function prepareControllerInvocationFiles(
   runStateDir: string,
   assertOpen: () => void,
   stagingRoot?: string,
+  source?: {
+    readonly workspaceRoot: string;
+    readonly readonlyInputs: readonly {
+      readonly sourcePath: string;
+      readonly destination: "/inputs" | "/source-git";
+    }[];
+    readonly scratchBytes: number;
+  },
 ): Promise<ControllerInvocationFiles> {
   assertOpen();
   const state = await canonicalTrustedSnapshotParent(runStateDir);
@@ -101,11 +116,14 @@ export async function prepareControllerInvocationFiles(
     assertOpen();
   };
   return Object.freeze({
-    readonlyWorkspaceRoot: base,
+    // A source service has already opened this immutable checkout under its live authority.
+    readonlyWorkspaceRoot: source?.workspaceRoot ?? base,
     privateWritableRoot: writable,
     bootstrapPath: bootstrap,
     writableMounts:
       stagingRoot === undefined ? [] : [{ path: "output", kind: "directory" as const }],
+    readonlyInputs: source?.readonlyInputs ?? [],
+    ...(source === undefined ? {} : { scratchBytes: source.scratchBytes }),
     verify,
   });
 }

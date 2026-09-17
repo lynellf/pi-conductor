@@ -72,7 +72,7 @@ export function reconstructChildOutputTimeline(
     const entry = accepted.get(record.child_id);
     if (
       entry === undefined ||
-      entry.submission.schema_version !== 2 ||
+      (entry.submission.schema_version !== 2 && entry.submission.schema_version !== 3) ||
       entry.submission.origin.kind !== "controller_action" ||
       entry.submission.run_id !== record.run_id ||
       entry.submission.origin.controller_id !== record.controller_id ||

@@ -195,6 +195,78 @@ describe("delegation submission acceptance ledger", () => {
     }
   });
 
+  it("pins an immutable native source identity and audience in controller acceptance (#118)", () => {
+    const logicalParentId = controllerLogicalParentId(
+      "run-1",
+      "repository-controller",
+      "a".repeat(64),
+    );
+    const acceptedArgs = {
+      tasks: [
+        {
+          id: "controller-task",
+          subagent: "worker",
+          objective: "inspect sealed source",
+          expected_output: "report",
+        },
+      ],
+    };
+    const sourceWorkspace = {
+      ref: `source-workspace/v1/${"e".repeat(64)}/${"f".repeat(64)}`,
+      source_id: "approved-source",
+      head_commit: "a".repeat(40),
+      tree_id: "b".repeat(40),
+      inventory_digest: "c".repeat(64),
+      policy_digest: "d".repeat(64),
+      audience: [{ kind: "native" as const, profile_id: "worker" }],
+    };
+    const requestFingerprint = sha256Canonical({
+      input: acceptedArgs,
+      source_workspace_ref: sourceWorkspace.ref,
+    });
+    const controllerAccepted = {
+      type: "delegation_submission_accepted" as const,
+      schema_version: 3 as const,
+      run_id: "run-1",
+      submission_id: controllerDelegationSubmissionId("run-1", logicalParentId, "action-source"),
+      logical_parent_id: logicalParentId,
+      parent_role: "orchestrator",
+      parent_visit_index: 1,
+      origin: {
+        kind: "controller_action" as const,
+        controller_id: "repository-controller",
+        definition_digest: "a".repeat(64),
+        action_id: "action-source",
+        activation_id: "activation-2",
+      },
+      request_fingerprint: requestFingerprint,
+      input_fingerprint: sha256Canonical({
+        request_fingerprint: requestFingerprint,
+        sandbox: [undefined],
+        source_workspaces: [sourceWorkspace],
+      }),
+      accepted_args: acceptedArgs,
+      children: [{ ...child, source_workspace: sourceWorkspace }],
+      ts: 1,
+    };
+
+    expect(() => assertDelegationSubmissionAccepted(controllerAccepted)).not.toThrow();
+    expect(() =>
+      assertDelegationSubmissionAccepted({ ...controllerAccepted, schema_version: 2 as const }),
+    ).toThrow("source identity requires a v3 acceptance");
+    expect(() =>
+      assertDelegationSubmissionAccepted({
+        ...controllerAccepted,
+        children: [
+          {
+            ...child,
+            source_workspace: { ...sourceWorkspace, inventory_digest: "e".repeat(64) },
+          },
+        ],
+      }),
+    ).toThrow("source acceptance fingerprint");
+  });
+
   it("validates one atomic batch and derives pending, result, and spent state", () => {
     assertDelegationSubmissionAccepted(accepted);
     const records = [accepted, terminal] satisfies readonly PersistedRecord[];

@@ -441,6 +441,7 @@ function persistStarted(
     task_fingerprint: config.taskFingerprint,
     projection_fingerprint: config.projectionFingerprint,
     ...(config.sandbox === undefined ? {} : { sandbox: config.sandbox }),
+    ...(config.sourceWorkspace === undefined ? {} : { source_workspace: config.sourceWorkspace }),
     context_artifacts: contextArtifactsAudit(config.contextArtifacts),
     model: child.model,
     session_file: sessionFile,

@@ -20,6 +20,7 @@ import { sha256Canonical } from "./trajectory-records.js";
 export type {
   ControllerAdmissionOrigin,
   DelegationAcceptedChild,
+  DelegationSourceWorkspace,
   DelegationSubmissionAcceptedRecord,
 } from "./delegation-task-schema.js";
 export {
@@ -28,6 +29,7 @@ export {
   delegationSubmissionAcceptedSchema,
   delegationSubmissionAcceptedV1Schema,
   delegationSubmissionAcceptedV2Schema,
+  delegationSubmissionAcceptedV3Schema,
   sdkToolCallAdmissionOriginSchema,
 } from "./delegation-task-schema.js";
 
@@ -51,11 +53,25 @@ export function assertDelegationSubmissionAccepted(
   if (new Set(record.children.map((entry) => entry.child_id)).size !== record.children.length)
     throw new DelegationTaskRecordError("accepted child IDs must be unique");
   const hasSandbox = record.children.some((entry) => entry.sandbox !== undefined);
-  if (hasSandbox !== (record.request_fingerprint !== undefined))
+  const hasSource = record.children.some((entry) => entry.source_workspace !== undefined);
+  if (hasSource !== (record.schema_version === 3))
+    throw new DelegationTaskRecordError("source identity requires a v3 acceptance");
+  if ((hasSandbox || hasSource) !== (record.request_fingerprint !== undefined))
     throw new DelegationTaskRecordError(
-      "sandbox acceptance requires request_fingerprint and no-sandbox acceptance forbids it",
+      "bound child acceptance requires request_fingerprint and no-sandbox acceptance forbids it",
     );
-  if (
+  if (hasSource) {
+    const request = record.request_fingerprint as string;
+    if (
+      record.input_fingerprint !==
+      sha256Canonical({
+        request_fingerprint: request,
+        sandbox: record.children.map((entry) => entry.sandbox),
+        source_workspaces: record.children.map((entry) => entry.source_workspace ?? null),
+      })
+    )
+      throw new DelegationTaskRecordError("source acceptance fingerprint does not bind authority");
+  } else if (
     hasSandbox &&
     record.input_fingerprint !==
       sandboxBoundFingerprint(
@@ -67,6 +83,37 @@ export function assertDelegationSubmissionAccepted(
   if (record.schema_version === 2 && record.origin.kind === "controller_action") {
     const acceptedArgsFingerprint = sha256Canonical(record.accepted_args);
     if (acceptedArgsFingerprint !== (record.request_fingerprint ?? record.input_fingerprint))
+      throw new DelegationTaskRecordError(
+        "controller accepted arguments do not match the durable request fingerprint",
+      );
+    if (
+      record.logical_parent_id !==
+      controllerLogicalParentId(
+        record.run_id,
+        record.origin.controller_id,
+        record.origin.definition_digest,
+      )
+    )
+      throw new DelegationTaskRecordError("controller logical parent identity mismatch");
+  }
+  if (record.schema_version === 3) {
+    if (record.children.some((entry) => entry.source_workspace === undefined))
+      throw new DelegationTaskRecordError("source acceptance has a child without source identity");
+    const refs = new Set(
+      record.children.flatMap((entry) =>
+        entry.source_workspace === undefined ? [] : [entry.source_workspace.ref],
+      ),
+    );
+    if (refs.size !== 1)
+      throw new DelegationTaskRecordError("source acceptance has inconsistent refs");
+    const ref = [...refs][0];
+    if (ref === undefined)
+      throw new DelegationTaskRecordError("source acceptance has no source ref");
+    const acceptedArgsFingerprint = sha256Canonical({
+      input: record.accepted_args,
+      source_workspace_ref: ref,
+    });
+    if (acceptedArgsFingerprint !== record.request_fingerprint)
       throw new DelegationTaskRecordError(
         "controller accepted arguments do not match the durable request fingerprint",
       );
@@ -119,7 +166,8 @@ export function controllerDelegationSubmissionId(
 export function acceptedDelegationArgs(
   record: DelegationSubmissionAcceptedRecord,
 ): DelegateSubmissionArgs | null {
-  return record.schema_version === 2 && record.origin.kind === "controller_action"
+  return (record.schema_version === 2 || record.schema_version === 3) &&
+    record.origin.kind === "controller_action"
     ? record.accepted_args
     : null;
 }
@@ -162,6 +210,14 @@ function sameSandbox(
     accepted.runtime_digest === started.runtime_digest &&
     accepted.materialization_id === started.materialization_id
   );
+}
+
+function sameSourceWorkspace(
+  accepted: DelegationAcceptedChild["source_workspace"],
+  started: SubagentStartedRecord["source_workspace"],
+): boolean {
+  if (accepted === undefined || started === undefined) return accepted === started;
+  return sha256Canonical(accepted) === sha256Canonical(started);
 }
 
 function validateQueuedTerminal(record: SubagentCompletedRecord | SubagentFailedRecord): void {
@@ -224,6 +280,7 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
         submission === undefined ||
         !matchesChild(entry, record) ||
         !sameSandbox(entry.sandbox, record.sandbox) ||
+        !sameSourceWorkspace(entry.source_workspace, record.source_workspace) ||
         record.run_id !== submission.run_id ||
         !nonEmpty(record.session_file) ||
         !Number.isFinite(record.ts) ||
