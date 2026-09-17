@@ -9,6 +9,10 @@ import {
   controllerChildOutputPolicySchema,
   validateControllerChildOutputPolicies,
 } from "../../manifest/controller-output.js";
+import {
+  sourceRepositoryGrantSchema,
+  validateSourceRepositoryGrant,
+} from "../../manifest/controller-source.js";
 import { sha256Canonical } from "../../persistence/trajectory-records.js";
 import { withSandboxDirectory } from "../execution/sandbox/anchored-file-access.js";
 import { canonicalTrustedSnapshotParent } from "../execution/sandbox/runtime-capture.js";
@@ -68,6 +72,7 @@ export const controllerHostApprovalSchema = Type.Object(
     ),
     effects: Type.Optional(Type.Array(effectGrantSchema, { maxItems: 64 })),
     child_outputs: Type.Optional(Type.Array(controllerChildOutputPolicySchema, { maxItems: 64 })),
+    source_repositories: Type.Optional(Type.Array(sourceRepositoryGrantSchema, { maxItems: 64 })),
   },
   { additionalProperties: false },
 );
@@ -97,6 +102,15 @@ export function validateControllerHostApproval(input: unknown): ControllerHostAp
     "credential source",
   );
   for (const source of value.credential_sources ?? []) absolute(source.path);
+  unique(
+    (value.source_repositories ?? []).map((grant) => grant.id),
+    "source repository grant",
+  );
+  for (const grant of value.source_repositories ?? []) {
+    const errors = validateSourceRepositoryGrant(grant);
+    if (errors.length > 0) throw new Error(errors.join("; "));
+    absolute(grant.repository.canonical_path);
+  }
   unique(
     (value.effects ?? []).map((entry) => entry.id),
     "effect",

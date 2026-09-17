@@ -2,6 +2,12 @@
 
 import { type Static, Type } from "typebox";
 import { delegateTaskSchema, endArgsSchema } from "../seam/schema.js";
+import {
+  controllerFileInputRefSchema,
+  sourcePatchRefSchema,
+  sourceRepositoryRefSchema,
+  sourceWorkspaceRefSchema,
+} from "./controller-source.js";
 
 const actionId = Type.String({ minLength: 1, maxLength: 128 });
 const ref = Type.String({ minLength: 1, maxLength: 256 });
@@ -38,6 +44,7 @@ export const controllerDelegateActionSchema = Type.Object(
     kind: Type.Literal("delegate"),
     action_id: actionId,
     tasks: Type.Array(delegateTaskSchema, { minItems: 1, maxItems: 64 }),
+    source_workspace_ref: Type.Optional(sourceWorkspaceRefSchema),
   },
   { additionalProperties: false },
 );
@@ -49,6 +56,20 @@ export const controllerAdapterActionSchema = Type.Object(
     action_id: actionId,
     adapter_id: actionId,
     input_refs: Type.Array(ref, { maxItems: 64 }),
+    source_workspace_ref: Type.Optional(sourceWorkspaceRefSchema),
+    file_input_refs: Type.Optional(Type.Array(controllerFileInputRefSchema, { maxItems: 64 })),
+  },
+  { additionalProperties: false },
+);
+
+/** Source preparation action; preparation never grants semantic approval. */
+export const controllerPrepareSourceActionSchema = Type.Object(
+  {
+    kind: Type.Literal("prepare_source"),
+    action_id: actionId,
+    source_id: actionId,
+    repository_ref: sourceRepositoryRefSchema,
+    patch_refs: Type.Optional(Type.Array(sourcePatchRefSchema, { maxItems: 64 })),
   },
   { additionalProperties: false },
 );
@@ -79,6 +100,7 @@ export const controllerCancelActionSchema = Type.Object(
 export const controllerActionSchema = Type.Union([
   controllerDelegateActionSchema,
   controllerAdapterActionSchema,
+  controllerPrepareSourceActionSchema,
   controllerReadActionSchema,
   controllerCancelActionSchema,
 ]);

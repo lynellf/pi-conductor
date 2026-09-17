@@ -7,6 +7,10 @@ import {
   controllerOutputPrincipalSchema,
   validateControllerChildOutputPolicies,
 } from "./controller-output.js";
+import {
+  controllerSourcePolicySchema,
+  validateControllerSourcePolicy,
+} from "./controller-source.js";
 import { outputPrincipalKey } from "./output-audience.js";
 import { ManifestParseError } from "./types.js";
 
@@ -46,6 +50,7 @@ export const controllerAdapterSchema = Type.Object(
     output_consumers: Type.Optional(Type.Array(controllerOutputPrincipalSchema, { maxItems: 64 })),
     source_consumers: Type.Optional(Type.Array(controllerOutputPrincipalSchema, { maxItems: 64 })),
     result_consumers: Type.Optional(Type.Array(controllerOutputPrincipalSchema, { maxItems: 64 })),
+    source_policy: Type.Optional(controllerSourcePolicySchema),
   },
   { additionalProperties: false },
 );
@@ -71,6 +76,7 @@ export const controllerConfigSchema = Type.Object(
     executable,
     argv,
     adapters: Type.Array(controllerAdapterSchema, { maxItems: 64 }),
+    source_repositories: Type.Optional(Type.Array(id, { maxItems: 64, uniqueItems: true })),
     child_outputs: Type.Optional(Type.Array(controllerChildOutputPolicySchema, { maxItems: 64 })),
     delegation: Type.Object(
       {
@@ -104,6 +110,7 @@ export function parseControllerConfig(raw: unknown): ControllerConfig {
     "executable",
     "argv",
     "adapters",
+    "source_repositories",
     "child_outputs",
     "delegation",
     "limits",
@@ -116,6 +123,21 @@ export function parseControllerConfig(raw: unknown): ControllerConfig {
   if (candidate.child_outputs !== undefined) {
     const errors = validateControllerChildOutputPolicies(candidate.child_outputs);
     if (errors.length > 0) throw new ManifestParseError(errors.join("; "));
+  }
+  const selectedSourceIds = new Set(candidate.source_repositories ?? []);
+  for (const adapter of candidate.adapters) {
+    if (adapter.source_policy === undefined) continue;
+    if (adapter.capability !== "read_only" || adapter.effect_id !== undefined)
+      throw new ManifestParseError(
+        "source-enabled adapters require read_only capability without an effect",
+      );
+    const errors = validateControllerSourcePolicy(adapter.source_policy);
+    if (errors.length > 0) throw new ManifestParseError(errors.join("; "));
+    for (const sourceId of adapter.source_policy.source_ids)
+      if (!selectedSourceIds.has(sourceId))
+        throw new ManifestParseError(
+          `adapter source policy references unselected source repository '${sourceId}'`,
+        );
   }
   const profiles = new Set(candidate.delegation.allowed_subagents);
   const adapters = new Set(candidate.adapters.map((adapter) => adapter.id));

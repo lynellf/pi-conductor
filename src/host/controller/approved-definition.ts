@@ -29,6 +29,12 @@ export function approveControllerDefinition(
 ): ApprovedControllerDefinition {
   const approval = validateControllerHostApproval(suppliedApproval);
   const config = parseControllerConfig(request);
+  const sourceGrants = (approval.source_repositories ?? [])
+    .filter((grant) => (config.source_repositories ?? []).includes(grant.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  for (const sourceId of config.source_repositories ?? [])
+    if (!approval.source_repositories?.some((grant) => grant.id === sourceId))
+      throw new Error(`source repository grant '${sourceId}' is not approved`);
   for (const policy of config.child_outputs ?? []) {
     const registered = approval.child_outputs?.find(
       (entry) => entry.profile_id === policy.profile_id,
@@ -88,6 +94,7 @@ export function approveControllerDefinition(
     .map((grant) => ({ grant, authority_digest: effectAuthorityDigest(grant) }));
   const pinnedDefinition = {
     ...(effects.length === 0 ? {} : { effects }),
+    ...(sourceGrants.length === 0 ? {} : { source_repositories: sourceGrants }),
     config,
     approval_id: approval.approval_id,
     runtimes: approval.runtimes
