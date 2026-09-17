@@ -433,12 +433,12 @@ the diagnostic prefixes the same line with
   at validate time with
   `source repository grant aggregate reservation is unsafe`.
 - The boundary case at exactly the operator-pinned aggregate succeeds.
-- The 3.515625 GiB example
-  (`max_source_bytes: 3_515_625 * 1024 * 1024 / 16 ≈ 230_686_720`,
-  `max_source_files: 1024`, `max_workspaces: 16`,
-  `max_total_bytes: 3_515_625 * 1024 * 1024`) resolves to a
-  `Number.isSafeInteger` aggregate and is accepted; the exact byte math
-  is asserted in tests.
+- The 3.515625 GiB example (`max_source_bytes: 64 MiB`,
+  `max_source_files: 776`, `max_workspaces: 4`,
+  `max_total_bytes: 3,600 MiB`) resolves to exactly 900 MiB per workspace
+  and 3,600 MiB (`3.515625 GiB`) in aggregate. It is schema-valid,
+  `Number.isSafeInteger`, and accepted; the exact byte math is asserted
+  in tests.
 
 Diagnostics produced by `production-sources.ts` mention both required and
 approved bytes. Tests cover the 3.515625 GiB acceptance, a 1 MiB boundary,
@@ -449,16 +449,16 @@ approved` diagnostic string.
 
 Lane 1 (provenance-worker) must satisfy:
 
-- [ ] `PreparedSourceWorkspace` is extended with `repositoryRef`,
+- [x] `PreparedSourceWorkspace` is extended with `repositoryRef`,
       `repositoryFingerprint`, `allowedPaths`, `patches`, and
       `patchesDigest`. The sealed manifest captures them; `read` returns
       them; `intentMatchesGrant` re-verifies them on every open.
-- [ ] `gitIntegrateRequestSchema` gains optional
+- [x] `gitIntegrateRequestSchema` gains optional
       `source_workspace_descriptor`. `assertEffectRequestInScope`
       accepts the source-bridge mode without weakening the legacy mode.
       The schema digest for the request is unchanged
       (the descriptor is an optional sibling).
-- [ ] `integrateGitEffectFromSourceWorkspace` lives in
+- [x] `integrateGitEffectFromSourceWorkspace` lives in
       `src/host/controller/git-effect.ts` (or a co-located contract module
       reachable through `git-effect.ts` exports). It performs its own
       isolated canonical integration without rewriting trusted fields and
@@ -467,39 +467,39 @@ Lane 1 (provenance-worker) must satisfy:
       query), the resolved child patch bytes/digest/length/paths, the
       effect principal audience, and reconstructs the prefix in isolated
       canonical state before applying the child patch.
-- [ ] Step 10 verifies the staged/index tree (via `git write-tree` after
+- [x] Step 10 verifies the staged/index tree (via `git write-tree` after
       `git apply --index`) equals `descriptor.treeId` and that the
       inventory of `descriptor.allowedPaths` from the same staged/index
       tree matches `descriptor.inventoryDigest`; `git rev-parse
       HEAD^{tree}` is never used for pre-child verification because
       `HEAD` still names B after `git apply --index`.
-- [ ] The bridge does **not** concatenate prefix + child bytes, does
+- [x] The bridge does **not** concatenate prefix + child bytes, does
       **not** synthesise a combined digest, and does **not** rewrite the
       original child patch's `evidence[*].subject_digest`. The original
       patch's `sha256`, `byte_length`, `base_commit`, `evidence`, and
       `allowedPaths` are preserved byte-for-byte.
-- [ ] The bridge does **not** expose `repository_canonical_path` on the
+- [x] The bridge does **not** expose `repository_canonical_path` on the
       public descriptor; only `repositoryRef` and
       `repositoryFingerprint` are bound, and host-owned resolution uses
       `authority.grant.repository.canonical_path` for canonical
       operations.
-- [ ] `ControllerEffectPreparedRecord["postcondition"]` and
+- [x] `ControllerEffectPreparedRecord["postcondition"]` and
       `gitIntegrateResultSchema` carry the optional source-workspace
       descriptor reference when the bridge was used. The timeline's
       `assertPostcondition` accepts the extended postcondition.
-- [ ] `reconcileGitEffect` stays read-only; uncertainty codes are
+- [x] `reconcileGitEffect` stays read-only; uncertainty codes are
       unchanged.
-- [ ] A focused test covers forged mappings (changed base, head, paths,
+- [x] A focused test covers forged mappings (changed base, head, paths,
       audience, effect principal identity, evidence lineage,
       integration-ref namespace, descriptor re-validation, bounded-view
       S tampering, reconstruction mismatch).
-- [ ] A public no-model end-to-end test exercises B→S→child
+- [x] A public no-model end-to-end test exercises B→S→child
       patch→approval→canonical B integration twice in succession with real
       patch bytes, real evidence, and verifies the original repository
       was never mutated between batches (parent-owned; provenance-worker
       writes the test scaffold and the parent wires the no-model
       execution).
-- [ ] Documentation in `docs/issue-119-source-bridge/README.md` explains
+- [x] Documentation in `docs/issue-119-source-bridge/README.md` explains
       the bridge contract, the B↔S identity split (sealed parentless S in
       bounded view), the byte/digest handling rule (no concatenation, no
       digest rewriting), the recovery contract, the
@@ -508,21 +508,21 @@ Lane 1 (provenance-worker) must satisfy:
 
 Lane 2 (quota-worker) must satisfy:
 
-- [ ] `sourceWorkspaceAggregateBytes(grant)` is exported from
+- [x] `sourceWorkspaceAggregateBytes(grant)` is exported from
       `src/manifest/controller-source.ts`.
-- [ ] `validateSourceRepositoryGrant` rejects grants whose aggregate
+- [x] `validateSourceRepositoryGrant` rejects grants whose aggregate
       reservation is not a safe integer with
       `source repository grant aggregate reservation is unsafe`.
-- [ ] `production-sources.ts` capacity check uses the conservative
+- [x] `production-sources.ts` capacity check uses the conservative
       per-workspace reservation × retained-uncertain/in-flight count and
       emits
       `source workspace storage reservation exceeds approved limits: required <N> bytes, approved <M> bytes`
       when the predicate fails.
-- [ ] Focused tests cover the 3.515625 GiB acceptance, the exact-byte
+- [x] Focused tests cover the 3.515625 GiB acceptance, the exact-byte
       boundary, an unsafe integer rejection at
       `Number.MAX_SAFE_INTEGER + 1` (or any input that produces an unsafe
       product), and the exact diagnostic message format.
-- [ ] Documentation in `docs/issue-118-source-workspaces/README.md` is
+- [x] Documentation in `docs/issue-118-source-workspaces/README.md` is
       updated to mention the safe-integer aggregate and the diagnostic
       rule.
 
@@ -544,6 +544,77 @@ Lane 2 (quota-worker) must satisfy:
   `tests/host/bubblewrap-source-workers.real.ts` if the approved
   Bubblewrap runtime is available; otherwise record that the gate was
   skipped.
+
+## Integration mapping (recorded after both lanes return)
+
+- **Bridge lane (provenance-worker) writes** are integrated with parent review fixes:
+  `src/host/controller/source-workspace-contract.ts`,
+  `src/host/controller/source-workspace-store.ts`,
+  `src/host/controller/source-workspace-service.ts`,
+  `src/host/controller/source-workspace-validation.ts`,
+  `src/manifest/controller-effect.ts` (extended `gitIntegrateRequestSchema`
+  and `gitIntegrateResultSchema` plus a frozen legacy schema that pins the
+  request digest to its pre-bridge value),
+  `src/host/controller/effect-registry.ts` (extended
+  `assertEffectRequestInScope`),
+  `src/host/controller/git-effect.ts` and the focused
+  `git-effect-{repository,validation,source-bridge-contract,source-bridge}.ts`
+  modules (new `integrateGitEffectFromSourceWorkspace` peer; uses
+  `git write-tree` after `git apply --index` for staged-tree verification,
+  never `HEAD^{tree}`),
+  `src/persistence/source-workspace.ts` (extended `SourceWorkspaceContent`
+  schema with `allowed_paths`, `patches_digest`, `patches`),
+  `src/persistence/controller-effect-records.ts` (extended `gitPrepared`
+  postcondition with optional `source_workspace`),
+  `src/persistence/controller-effect-timeline.ts` (extended
+  `assertPostcondition` to verify the B↔S lineage when present),
+  `src/host/index.ts` (re-export of the bridge),
+  `tests/host/controller-git-effect.test.ts` (extended with bridge
+  integration), NEW `tests/host/controller-git-effect-source-bridge.test.ts`
+  (15 cases), NEW `docs/issue-119-source-bridge/README.md`. Parent review
+  additionally tightened descriptor collection, inventory, path, and broker
+  dispatch validation.
+- **Quota lane (quota-worker) writes** are integrated with parent review fixes:
+  `src/manifest/controller-source.ts` (new exported
+  `sourceWorkspaceAggregateBytes(grant)`; extended `validateSourceRepositoryGrant`
+  with the exact `source repository grant aggregate reservation is unsafe`
+  message), `src/host/controller/production-sources.ts` (capacity
+  predicate now uses `(reserved + 1) * perWorkspace` against
+  `grant.max_total_bytes` with the exact `required <N> bytes, approved <M> bytes`
+  diagnostic, prefixed with the unsafe-aggregate line when
+  `perWorkspace * grant.max_workspaces` overflows), focused aggregate
+  tests in `tests/manifest/controller-source.test.ts`,
+  `tests/host/controller-source-capacity.test.ts`,
+  `tests/host/controller-production-sources.test.ts`,
+  `docs/issue-118-source-workspaces/README.md`. No cross-file conflicts.
+- **Parent-only wiring**:
+  - `src/host/controller/effect-broker-contract.ts` adds
+    `EffectBrokerExecutors.integrateFromSourceWorkspace?` and an optional
+    `EffectBrokerDependencies.resolveSourceWorkspace?`.
+  - `src/host/controller/effect-broker.ts` wires
+    `integrateGitEffectFromSourceWorkspace` as the default
+    `integrateFromSourceWorkspace` executor.
+  - `src/host/controller/effect-broker-support.ts` carries the optional
+    `sourceWorkspace` through `gitPostcondition` and projects the request
+    descriptor onto the public `source_workspace_descriptor` reference
+    inside `resultFromPrepared` (when present).
+  - `src/host/controller/effect-broker-execution.ts` routes `git_integrate`
+    requests with `source_workspace_descriptor` present through
+    `executors.integrateFromSourceWorkspace` and falls back to the legacy
+    `integrateGitEffect` for descriptor-less requests. Legacy assertions
+    remain unchanged.
+  - `src/host/controller/git-effect-contract.ts` extends
+    `GitEffectPrepared` with an optional `sourceWorkspace` lineage
+    reference so the broker carries the bridge postcondition without a
+    second parameter.
+  - `src/host/controller/production-effects.ts` accepts an optional
+    `resolveSourceWorkspace(ref)` closure in `ProductionEffectsOptions`
+    and forwards it to the broker dependencies.
+  - `src/host/controller/production-session-factory.ts` and
+    `src/host/controller/production-recovery.ts` wire the closure
+    `(ref) => sources.openSourceWorkspace(ref, { kind: "controller" })`
+    whenever `createProductionSources` produced a service; the bridge's
+    descriptor-audience check retains effect-specific authorization.
 
 ## Disjoint projection (confirmed)
 

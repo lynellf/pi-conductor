@@ -16,6 +16,32 @@
   compact worker prompts and durable authority checks. Reuse the same profile for
   later batches without enumerating imports; existing narrow profiles stay unchanged (#111).
 
+- Close the public-contract bridge between a sealed source workspace and the
+  canonical integration repository: extend `PreparedSourceWorkspace` with
+  `repositoryRef`, `repositoryFingerprint`, `allowedPaths`, immutable
+  `patches`, and `patchesDigest`; expose an optional `source_workspace_descriptor`
+  on `gitIntegrateRequestSchema` and `gitIntegrateResultSchema`; add the peer
+  `integrateGitEffectFromSourceWorkspace` that re-validates the sealed B↔S
+  identity in the bounded view, reconstructs the canonical B→S prefix in
+  isolated state via `git write-tree` after `git apply --index` (never via
+  `HEAD^{tree}`), applies the verified child patch byte-for-byte against the
+  reconstructed prefix, and CAS-updates the integration ref; route `git_integrate`
+  requests with the descriptor through the new executor via
+  `EffectBrokerExecutors.integrateFromSourceWorkspace`; preserve the existing
+  `effectRequestSchemaDigest("git_integrate")` against the pre-bridge legacy
+  schema so operator authorities continue to bind without re-pinning (#119).
+
+- Make the source-workspace storage aggregate an independent safe-integer
+  bound and expand `max_total_bytes` from the per-workspace 1 GiB ceiling to
+  `Number.MAX_SAFE_INTEGER`: export `sourceWorkspaceAggregateBytes(grant)` from
+  `src/manifest/controller-source.ts`; reject grants whose aggregate
+  reservation is not a safe integer with
+  `source repository grant aggregate reservation is unsafe`; emit the exact
+  `source workspace storage reservation exceeds approved limits: required <N> bytes, approved <M> bytes`
+  diagnostic from the production dispatcher, prefixed with
+  `source repository grant aggregate reservation is unsafe: ` when the
+  aggregate itself overflows (#119).
+
 ### Bug fixes
 
 - Clear intermediate parent model errors only on SDK-confirmed retry; retain usage

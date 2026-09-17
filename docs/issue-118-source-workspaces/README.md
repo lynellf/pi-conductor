@@ -54,6 +54,38 @@ max_workspaces: 4
 max_total_bytes: 335544320
 ```
 
+The aggregate reservation across every retained workspace is bounded
+independently as
+`sourceWorkspaceReservationBytes(max_source_bytes, max_source_files) * max_workspaces`.
+Unlike per-workspace `max_source_bytes`, `max_total_bytes` may range up to
+`Number.MAX_SAFE_INTEGER`; the aggregate itself must remain a safe integer so
+admission math never silently overflows. For example, 64 MiB, 776 files, and
+four workspaces reserve exactly 900 MiB per workspace and 3,600 MiB
+(3.515625 GiB) in aggregate. The aggregate helper
+(`sourceWorkspaceAggregateBytes`) is exported by the source-grant manifest;
+any grant whose aggregate exceeds
+`Number.MAX_SAFE_INTEGER` is rejected at validate time with the exact
+diagnostic `source repository grant aggregate reservation is unsafe`, and
+grants whose aggregate would otherwise be safe but exceeds `max_total_bytes`
+are rejected with
+`source repository grant aggregate bytes do not cover retained workspace
+reservations`.
+
+The capacity predicate in `production-sources.ts` retains the conservative
+per-workspace reservation multiplied by the retained-uncertain and in-flight
+intent count. When admission fails, the diagnostic emitted is exactly
+
+```
+source workspace storage reservation exceeds approved limits: required <N> bytes, approved <M> bytes
+```
+
+where `<N>` is `(reserved + 1) * sourceWorkspaceReservationBytes(...)` and
+`<M>` is `grant.max_total_bytes`. When the aggregate itself is not a safe
+integer, that line is prefixed with
+`source repository grant aggregate reservation is unsafe: ` so the operator
+can immediately distinguish an unsafe-by-type grant from a runtime budget
+exhaustion.
+
 Every durably pinned preparation, including failed and uncertain attempts,
 continues to count against that run's reservation. Deleting retained files does
 not reset this count. A fresh action therefore cannot bypass the run's budget.
