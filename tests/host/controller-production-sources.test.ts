@@ -122,8 +122,140 @@ describe("production source workspaces", () => {
       f.sources.openSourceWorkspace(ref, { kind: "native", profile_id: "worker" }),
     ).rejects.toThrow();
     await expect(f.prepare("first")).rejects.toThrow();
-    await expect(f.prepare("second")).rejects.toThrow(/storage/);
+    const perWorkspace = 8 * 2_097_152 + 100 * 512 * 1024;
+    const required = 2 * perWorkspace;
+    const approved = 70_000_000;
+    await expect(f.prepare("second")).rejects.toThrow(
+      `source workspace storage reservation exceeds approved limits: required ${required} bytes, approved ${approved} bytes`,
+    );
     expect(f.records.filter((record) => record.type === "source_workspace_intent")).toHaveLength(1);
+  });
+
+  it("accepts the 3.515625 GiB aggregate reservation through the production dispatcher", async () => {
+    const root = await mkdtemp(join(tmpdir(), "conduct-production-source-aggregate-"));
+    roots.push(root);
+    const repository = join(root, "repo");
+    await mkdir(repository, { mode: 0o700 });
+    const git = async (...args: string[]) =>
+      (
+        await execute("/usr/bin/git", ["-C", repository, ...args], {
+          env: { PATH: "/usr/bin:/bin", HOME: "/nonexistent", GIT_CONFIG_NOSYSTEM: "1" },
+        })
+      ).stdout;
+    await git("init", "-q", "-b", "delivered");
+    await git("config", "user.name", "Source Test");
+    await git("config", "user.email", "test@example.invalid");
+    await mkdir(join(repository, "src"));
+    await writeFile(join(repository, "src/value.txt"), "A\n");
+    await git("add", ".");
+    await git("commit", "-qm", "A");
+    const measured = await measureGitEffectRepository(repository);
+    const maxWorkspaces = 4;
+    const config = {
+      protocol_version: 1 as const,
+      controller_id: "planner",
+      runtime_id: "runtime",
+      executable: "/bin/bash",
+      argv: [],
+      adapters: [],
+      source_repositories: ["source"],
+      delegation: { allowed_subagents: ["worker"], max_children_per_session: 2, max_parallel: 1 },
+    };
+    const approval = validateControllerHostApproval({
+      schema_version: 1,
+      approval_id: "source-aggregate",
+      controllers: [
+        { controller_id: "planner", runtime_id: "runtime", executable: "/bin/bash", argv: [] },
+      ],
+      runtimes: [
+        {
+          runtime_id: "runtime",
+          source_root: "/operator/runtime",
+          inventory_sha256: "a".repeat(64),
+          bootstrap_approval: {
+            approvalId: "runtime",
+            files: [{ path: "bin/bash", sha256: "b".repeat(64) }],
+          },
+        },
+      ],
+      adapters: [],
+      schemas: [],
+      source_repositories: [
+        {
+          schema_version: 1,
+          id: "source",
+          repository: { id: "repo", canonical_path: repository, fingerprint: measured.fingerprint },
+          allowed_refs: ["refs/heads/delivered"],
+          allowed_paths: ["src"],
+          audience: [{ kind: "controller" }],
+          isolated_git_view: true,
+          max_source_bytes: 64 * 1024 * 1024,
+          max_source_files: 776,
+          max_patch_bytes: 1024,
+          max_patch_files: 4,
+          max_workspaces: maxWorkspaces,
+          max_total_bytes: 3_600 * 1024 * 1024,
+          max_parallel_preparations: 4,
+          timeout_ms: 30_000,
+        },
+      ],
+    });
+    const definition = approveControllerDefinition("source-run-aggregate", config, approval, 1);
+    const activation: ControllerActivationStartedRecord = {
+      type: "controller_activation_started",
+      schema_version: 1,
+      run_id: definition.record.run_id,
+      controller_id: "planner",
+      definition_digest: definition.record.definition_digest,
+      activation_id: "source-aggregate-activation",
+      owner_epoch: 1,
+      previous_activation_id: null,
+      reason: "start",
+      ts: 2,
+    };
+    const records: PersistedRecord[] = [definition.record, activation];
+    const executions = new ToolExecutionController({
+      runId: "source-run-aggregate",
+      logicalSessionId: "source-aggregate-test",
+      roleSessionId: "source-aggregate-test",
+      policy: resolveToolExecutionPolicy(undefined),
+      persist: (record) => {
+        records.push(record);
+      },
+    });
+    const sources = await createProductionSources({
+      definition,
+      runStateDir: root,
+      records: () => records,
+      persist: (record) => {
+        records.push(record);
+      },
+      loadApproval: async () => approval,
+      assertOpen: () => undefined,
+      outputResolver: {
+        resolveRef: async () => {
+          throw new Error("no patch requested");
+        },
+        getInputAudience: async () => null,
+      },
+    });
+    const dispatcher = sources.dispatcher(activation, executions);
+    const outcome = await dispatcher.prepare(
+      {
+        kind: "prepare_source" as const,
+        action_id: "aggregate",
+        source_id: "source",
+        repository_ref: "refs/heads/delivered",
+      },
+      controllerActionRequestDigest(definition.record.definition_digest, {
+        kind: "prepare_source",
+        action_id: "aggregate",
+        source_id: "source",
+        repository_ref: "refs/heads/delivered",
+      }),
+    );
+    expect(outcome.outcome).toBe("completed");
+    expect(outcome.result_refs[0]).toMatch(/^source-workspace\/v1\//);
   });
 });
 

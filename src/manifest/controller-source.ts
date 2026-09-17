@@ -27,6 +27,7 @@ export const sourcePathSchema = Type.String({
   pattern: safeSourcePathPattern,
 });
 const positiveBytes = Type.Integer({ minimum: 1, maximum: 1_073_741_824 });
+const aggregateBytes = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
 const positiveFiles = Type.Integer({ minimum: 1, maximum: 100_000 });
 const timeoutMilliseconds = Type.Integer({ minimum: 1_000, maximum: 600_000 });
 
@@ -50,6 +51,25 @@ export function sourceWorkspaceReservationBytes(maxBytes: number, maxFiles: numb
   if (!Number.isSafeInteger(bytes) || bytes < 1)
     throw new RangeError("source workspace reservation exceeds safe integer range");
   return bytes;
+}
+
+/**
+ * Conservative aggregate safe-integer reservation across every retained workspace
+ * a grant is allowed to pin. The aggregate is computed as
+ * `sourceWorkspaceReservationBytes(...) * max_workspaces` and is bounded
+ * independently of `max_total_bytes` (which is the operator-pinned cap the
+ * predicate enforces at admission time). Fail closed when the aggregate is not a
+ * safe integer so admission math never silently overflows.
+ */
+export function sourceWorkspaceAggregateBytes(grant: SourceRepositoryGrant): number {
+  const perWorkspace = sourceWorkspaceReservationBytes(
+    grant.max_source_bytes,
+    grant.max_source_files,
+  );
+  const total = perWorkspace * grant.max_workspaces;
+  if (!Number.isSafeInteger(total))
+    throw new RangeError("source repository grant aggregate reservation is unsafe");
+  return total;
 }
 
 /** Operator-owned repository identity used by source preparation. */
@@ -77,7 +97,7 @@ export const sourceRepositoryGrantSchema = Type.Object(
     max_patch_bytes: positiveBytes,
     max_patch_files: Type.Integer({ minimum: 1, maximum: 256 }),
     max_workspaces: Type.Integer({ minimum: 1, maximum: 64 }),
-    max_total_bytes: positiveBytes,
+    max_total_bytes: aggregateBytes,
     max_parallel_preparations: Type.Integer({ minimum: 1, maximum: 16 }),
     timeout_ms: timeoutMilliseconds,
   },
@@ -190,6 +210,24 @@ export function isSafeControllerRepositoryRef(ref: string): boolean {
 
 /** Validate a source grant's path/ref uniqueness and control-path boundary. */
 export function validateSourceRepositoryGrant(value: unknown): readonly string[] {
+  if (typeof value === "object" && value !== null) {
+    const candidate = value as Partial<SourceRepositoryGrant>;
+    if (
+      Number.isSafeInteger(candidate.max_source_bytes) &&
+      Number.isSafeInteger(candidate.max_source_files) &&
+      Number.isSafeInteger(candidate.max_workspaces)
+    )
+      try {
+        sourceWorkspaceAggregateBytes(candidate as SourceRepositoryGrant);
+      } catch (cause) {
+        if (!(cause instanceof RangeError)) throw cause;
+        return Object.freeze([
+          cause.message === "source repository grant aggregate reservation is unsafe"
+            ? cause.message
+            : "source repository grant workspace reservation is unsafe",
+        ]);
+      }
+  }
   if (!Value.Check(sourceRepositoryGrantSchema, value))
     return Object.freeze(["source repository grant does not match schema version 1"]);
   const grant = value as SourceRepositoryGrant;
@@ -202,16 +240,18 @@ export function validateSourceRepositoryGrant(value: unknown): readonly string[]
   if (new Set(grant.allowed_paths).size !== grant.allowed_paths.length)
     errors.push("source repository grant repeats an allowed path");
   try {
-    if (
-      grant.max_total_bytes <
-      sourceWorkspaceReservationBytes(grant.max_source_bytes, grant.max_source_files) *
-        grant.max_workspaces
-    )
+    const aggregate = sourceWorkspaceAggregateBytes(grant);
+    if (grant.max_total_bytes < aggregate)
       errors.push(
         "source repository grant aggregate bytes do not cover retained workspace reservations",
       );
-  } catch {
-    errors.push("source repository grant workspace reservation is unsafe");
+  } catch (cause) {
+    if (
+      cause instanceof RangeError &&
+      cause.message === "source repository grant aggregate reservation is unsafe"
+    )
+      errors.push("source repository grant aggregate reservation is unsafe");
+    else throw cause;
   }
   for (const path of grant.allowed_paths)
     if (!isSafeControllerSourcePath(path))

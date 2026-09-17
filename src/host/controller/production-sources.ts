@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
 import type { ControllerAction } from "../../manifest/controller-protocol.js";
 import type { SourceRepositoryGrant } from "../../manifest/controller-source.js";
+import { sourceWorkspaceReservationBytes as manifestReservationBytes } from "../../manifest/controller-source.js";
 import { reconstructChildOutputTimeline } from "../../persistence/child-output-timeline.js";
 import type {
   ControllerActionState,
@@ -31,7 +32,6 @@ import {
   type PreparedSourceWorkspace,
   type SourceWorkspaceGrant,
   SourceWorkspaceStore,
-  sourceWorkspaceReservationBytes,
 } from "./source-workspace.js";
 
 type PrepareAction = Extract<ControllerAction, { kind: "prepare_source" }>;
@@ -251,12 +251,21 @@ export async function createProductionSources(options: ProductionSourceOptions) 
               .filter((entry) => entry.source_id === grant.id)
               .map((entry) => entry.action_id),
           ]).size;
-          if (
-            reserved >= grant.max_workspaces ||
-            (reserved + 1) * sourceWorkspaceReservationBytes(serviceGrant(grant)) >
-              grant.max_total_bytes
-          )
-            throw new Error("source workspace storage reservation exceeds approved limits");
+          const perWorkspace = manifestReservationBytes(
+            grant.max_source_bytes,
+            grant.max_source_files,
+          );
+          const required = (reserved + 1) * perWorkspace;
+          const approved = grant.max_total_bytes;
+          const aggregateSafe = Number.isSafeInteger(perWorkspace * grant.max_workspaces);
+          if (reserved >= grant.max_workspaces || required > approved) {
+            const prefix = aggregateSafe
+              ? ""
+              : "source repository grant aggregate reservation is unsafe: ";
+            throw new Error(
+              `${prefix}source workspace storage reservation exceeds approved limits: required ${required} bytes, approved ${approved} bytes`,
+            );
+          }
           if (
             pending.has(action.action_id) ||
             intentRecords().some((entry) => entry.action_id === action.action_id)

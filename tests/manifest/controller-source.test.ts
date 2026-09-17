@@ -6,7 +6,9 @@ import {
   controllerSourcePolicySchema,
   isSafeControllerRepositoryRef,
   isSafeControllerSourcePath,
+  type SourceRepositoryGrant,
   sourceRepositoryGrantSchema,
+  sourceWorkspaceAggregateBytes,
   sourceWorkspaceRefSchema,
   sourceWorkspaceReservationBytes,
   validateControllerFileInputRef,
@@ -115,5 +117,110 @@ describe("controller source contracts", () => {
         file_input_refs: [{ ref: "artifact/v1/a", path: "../escape" }],
       }),
     ).toBe(false);
+  });
+});
+
+describe("source workspace aggregate reservation", () => {
+  const repository = {
+    id: "repo",
+    canonical_path: "/srv/repos/repo",
+    fingerprint: "a".repeat(64),
+  };
+  const baseExtras = {
+    schema_version: 1 as const,
+    id: "repo-source",
+    repository,
+    allowed_refs: ["refs/heads/main"],
+    allowed_paths: ["src"],
+    audience: [{ kind: "controller" }],
+    isolated_git_view: true,
+    max_patch_bytes: 65_536,
+    max_patch_files: 32,
+    max_parallel_preparations: 1,
+    timeout_ms: 30_000,
+  };
+
+  it("accepts the 3.515625 GiB aggregate reservation example", () => {
+    const example = {
+      ...baseExtras,
+      max_source_bytes: 64 * 1024 * 1024,
+      max_source_files: 776,
+      max_workspaces: 4,
+      max_total_bytes: 3_600 * 1024 * 1024,
+    } as SourceRepositoryGrant;
+    const perWorkspace = sourceWorkspaceReservationBytes(
+      example.max_source_bytes,
+      example.max_source_files,
+    );
+    const aggregate = sourceWorkspaceAggregateBytes(example);
+    expect(perWorkspace).toBe(900 * 1024 * 1024);
+    expect(aggregate).toBe(3_600 * 1024 * 1024);
+    expect(Number.isSafeInteger(aggregate)).toBe(true);
+    expect(validateSourceRepositoryGrant(example)).toEqual([]);
+  });
+
+  it("accepts the 1 MiB boundary where max_total_bytes equals the aggregate reservation", () => {
+    const minimal = {
+      ...grant,
+      max_source_bytes: 1_048_576,
+      max_source_files: 1,
+      max_workspaces: 1,
+      max_total_bytes: sourceWorkspaceReservationBytes(1_048_576, 1) * 1,
+    } as unknown as SourceRepositoryGrant;
+    const aggregate = sourceWorkspaceAggregateBytes(minimal);
+    expect(aggregate).toBe(minimal.max_total_bytes);
+    expect(Number.isSafeInteger(aggregate)).toBe(true);
+    expect(validateSourceRepositoryGrant(minimal)).toEqual([]);
+  });
+
+  it("rejects an aggregate reservation that exceeds Number.MAX_SAFE_INTEGER", () => {
+    // Schema bounds cannot produce an unsafe aggregate; bypass the schema to
+    // verify the aggregate guard fires for any input whose product overflows.
+    const unsafe = {
+      ...baseExtras,
+      max_source_bytes: 1_048_576,
+      max_source_files: 1,
+      max_workspaces: 1_010_640_541,
+      max_total_bytes: Number.MAX_SAFE_INTEGER,
+    } as unknown as SourceRepositoryGrant;
+    expect(() => sourceWorkspaceAggregateBytes(unsafe)).toThrow(
+      "source repository grant aggregate reservation is unsafe",
+    );
+    expect(validateSourceRepositoryGrant(unsafe)).toEqual([
+      "source repository grant aggregate reservation is unsafe",
+    ]);
+  });
+
+  it("emits the exact diagnostic string for an unsafe aggregate", () => {
+    const unsafe = {
+      ...baseExtras,
+      max_source_bytes: 1_048_576,
+      max_source_files: 1,
+      max_workspaces: 1_010_640_541,
+      max_total_bytes: Number.MAX_SAFE_INTEGER,
+    } as unknown as SourceRepositoryGrant;
+    let captured: unknown;
+    try {
+      sourceWorkspaceAggregateBytes(unsafe);
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(RangeError);
+    expect((captured as RangeError).message).toBe(
+      "source repository grant aggregate reservation is unsafe",
+    );
+  });
+
+  it("rejects grants where max_total_bytes is below the safe aggregate", () => {
+    const underfunded = {
+      ...grant,
+      max_total_bytes:
+        sourceWorkspaceReservationBytes(grant.max_source_bytes, grant.max_source_files) *
+          grant.max_workspaces -
+        1,
+    };
+    expect(validateSourceRepositoryGrant(underfunded)).toContain(
+      "source repository grant aggregate bytes do not cover retained workspace reservations",
+    );
   });
 });
