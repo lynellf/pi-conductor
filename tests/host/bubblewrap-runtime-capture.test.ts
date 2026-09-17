@@ -255,7 +255,7 @@ describe("prepared runtime capture", () => {
     ).resolves.toMatchObject({ inventoryDigest: descriptor.inventoryDigest });
   });
 
-  it.each(["deleted", "extra", "writable"])("rejects a %s snapshot entry", async (change) => {
+  it.each(["deleted", "extra"])("rejects a %s snapshot entry", async (change) => {
     const value = await fixture();
     const descriptor = await capturePreparedRuntime({
       sourcePath: value.source,
@@ -265,19 +265,37 @@ describe("prepared runtime capture", () => {
     });
     const lib = join(descriptor.snapshotPath, "lib");
     const libc = join(lib, "libc.so.6");
-    await chmod(descriptor.snapshotPath, 0o700);
     await chmod(lib, 0o700);
     if (change === "deleted") await rm(libc);
-    if (change === "extra") await writeFile(join(lib, "extra.so"), "extra\n");
-    if (change === "writable") await chmod(libc, 0o600);
+    if (change === "extra") {
+      const extra = join(lib, "extra.so");
+      await writeFile(extra, "extra\n");
+      await chmod(extra, 0o400);
+    }
     await chmod(lib, 0o500);
-    await chmod(descriptor.snapshotPath, 0o500);
     await expect(
       verifyPreparedRuntimeSnapshot(descriptor, {
         snapshotParent: value.snapshots,
         bootstrapApproval: value.approval,
       }),
     ).rejects.toMatchObject({ code: "runtime-mutated" });
+  });
+
+  it("rejects a writable snapshot entry as unsafe", async () => {
+    const value = await fixture();
+    const descriptor = await capturePreparedRuntime({
+      sourcePath: value.source,
+      snapshotParent: value.snapshots,
+      hostProtection: hostProtection(value),
+      bootstrapApproval: value.approval,
+    });
+    await chmod(join(descriptor.snapshotPath, "lib/libc.so.6"), 0o600);
+    await expect(
+      verifyPreparedRuntimeSnapshot(descriptor, {
+        snapshotParent: value.snapshots,
+        bootstrapApproval: value.approval,
+      }),
+    ).rejects.toMatchObject({ code: "runtime-unsafe-entry" });
   });
 
   it("rejects malformed persisted data before accessing its snapshot path", async () => {
