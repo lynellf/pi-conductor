@@ -6,13 +6,8 @@
  */
 
 import { describe, expect, it } from "vitest";
-
-import {
-  acceptedChildCompletedSchema,
-} from "../../src/persistence/delegation-lifecycle-schema.js";
-import type {
-  ChildContinuitySibling,
-} from "../../src/persistence/continuity.js";
+import type { ChildContinuitySibling } from "../../src/persistence/continuity.js";
+import { acceptedChildCompletedSchema } from "../../src/persistence/delegation-lifecycle-schema.js";
 import type { SubagentCompletedRecord } from "../../src/persistence/log.js";
 
 describe("SubagentCompletedRecord continuity sibling (Phase 1 contract repair)", () => {
