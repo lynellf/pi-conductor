@@ -53,12 +53,19 @@ function makeTransitionAccepted(recordId: string, runId: string, ts: number, con
   };
 }
 
-function makeSubagentCompleted(recordId: string, runId: string, ts: number, continuity: unknown) {
+function makeSubagentCompleted(
+  recordId: string,
+  runId: string,
+  ts: number,
+  continuity: unknown,
+  childId = `child-${recordId}`,
+  taskId = `task-${recordId}`,
+) {
   const childRecord = {
     type: "subagent_completed" as const,
     run_id: runId,
-    child_id: `child-${recordId}`,
-    task_id: `task-${recordId}`,
+    child_id: childId,
+    task_id: taskId,
     subagent: "coder",
     model: "test",
     status: "completed" as const,
@@ -82,12 +89,18 @@ function makeSubagentCompleted(recordId: string, runId: string, ts: number, cont
   };
 }
 
-function makeSubagentStarted(recordId: string, runId: string, ts: number) {
+function makeSubagentStarted(
+  recordId: string,
+  runId: string,
+  ts: number,
+  childId = `child-${recordId}`,
+  taskId = `task-${recordId}`,
+) {
   return {
     type: "subagent_started" as const,
     run_id: runId,
-    child_id: `child-${recordId}`,
-    task_id: `task-${recordId}`,
+    child_id: childId,
+    task_id: taskId,
     subagent: "coder",
     parent_role: "orchestrator",
     parent_visit_index: 2,
@@ -134,6 +147,53 @@ function makePacket(
     })),
     okf_candidate_ids: [],
   };
+}
+
+function makeChildExecution(childId: string, executionId: string, ts: number): PersistedRecord[] {
+  const common = {
+    schema_version: 1 as const,
+    run_id: "run-1",
+    execution_id: executionId,
+    supervision_id: `supervision-${executionId}`,
+    logical_session_id: `logical-${executionId}`,
+    role_session_id: childId,
+    tool_call_id: `call-${executionId}`,
+    tool_name: "bash",
+  };
+  return [
+    {
+      type: "tool_execution_started" as const,
+      ...common,
+      timeout_ms: 10,
+      recovery_count: 0,
+      sandbox: {
+        child_id: childId,
+        descriptor: {
+          backend: "bubblewrap" as const,
+          execution_policy_digest: "a".repeat(64),
+          runtime_digest: "b".repeat(64),
+          materialization_id: "materialization",
+        },
+      },
+      ts,
+    },
+    {
+      type: "tool_execution_finished" as const,
+      ...common,
+      elapsed_ms: 1,
+      recovery_count: 0,
+      outcome: "interrupted" as const,
+      cleanup: "confirmed" as const,
+      sandbox: {
+        category: "interrupted" as const,
+        normalized_status: null,
+        signal: "unknown" as const,
+        termination_requested: false,
+        cleanup: "confirmed" as const,
+      },
+      ts: ts + 1,
+    },
+  ];
 }
 
 function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] {
@@ -452,6 +512,77 @@ describe("continuity-materialization-order", () => {
       );
     });
 
+    it("binds child execution evidence to the recorded retry attempt", () => {
+      const packet = makePacket("retry", [{ id: "f-retry" }]);
+      packet.findings = [
+        {
+          id: "f-retry",
+          kind: "fact",
+          confidence: "verified",
+          statement: "current retry execution",
+          evidence: [{ kind: "tool_execution", execution_id: "exec-new" }],
+          supersedes: [],
+        },
+      ];
+      const completed = makeSubagentCompleted(
+        "second",
+        "run-1",
+        20,
+        packet,
+        "child-retry",
+        "task-retry",
+      ) as import("../../src/persistence/log.js").SubagentCompletedRecord;
+      if (completed.continuity === undefined) throw new Error("test child continuity missing");
+      completed.continuity.evidence_resolutions = [
+        { ref_key: "findings:f-retry:0", kind: "tool_execution", status: "verified" },
+      ];
+      const records = withLifecycles([
+        makeSubagentStarted("first", "run-1", 1, "child-retry", "task-retry"),
+        ...makeChildExecution("child-retry", "exec-old", 2),
+        makeSubagentCompleted("first", "run-1", 4, null, "child-retry", "task-retry"),
+        makeSubagentStarted("second", "run-1", 5, "child-retry", "task-retry"),
+        ...makeChildExecution("child-retry", "exec-new", 6),
+        completed,
+      ]);
+
+      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      expect(ledger.envelopes[0]?.child?.attempt).toBe(2);
+      expect(ledger.findings[0]?.item.id).toBe("f-retry");
+
+      const stalePacket = {
+        ...packet,
+        findings: packet.findings.map((finding) => ({
+          ...finding,
+          evidence: [{ kind: "tool_execution" as const, execution_id: "exec-old" }],
+        })),
+      };
+      const staleCompleted = makeSubagentCompleted(
+        "second",
+        "run-1",
+        20,
+        stalePacket,
+        "child-retry",
+        "task-retry",
+      ) as import("../../src/persistence/log.js").SubagentCompletedRecord;
+      if (staleCompleted.continuity === undefined) throw new Error("test stale continuity missing");
+      staleCompleted.continuity.evidence_resolutions = [
+        { ref_key: "findings:f-retry:0", kind: "tool_execution", status: "verified" },
+      ];
+      expect(() =>
+        materializeContinuity(
+          withLifecycles([
+            makeSubagentStarted("first", "run-1", 1, "child-retry", "task-retry"),
+            ...makeChildExecution("child-retry", "exec-old", 2),
+            makeSubagentCompleted("first", "run-1", 4, null, "child-retry", "task-retry"),
+            makeSubagentStarted("second", "run-1", 5, "child-retry", "task-retry"),
+            ...makeChildExecution("child-retry", "exec-new", 6),
+            staleCompleted,
+          ]),
+          { run_id: "run-1" },
+        ),
+      ).toThrow(ContinuityMaterializationException);
+    });
+
     it("folds evaluation supersession from older item to newer item", () => {
       const first = makePacket("first");
       first.evaluations = [{ id: "e-1", label: "old", execution_id: "exec-1", supersedes: [] }];
@@ -520,6 +651,73 @@ describe("continuity-materialization-order", () => {
       expect(markdown).toContain("Exit summary:");
       expect(markdown).toContain("Cleanup disposition:");
       expect(markdown).toContain("Command digest: (not recorded)");
+    });
+  });
+
+  describe("policy-required records", () => {
+    it("rejects a pinned required handoff whose packet is missing", () => {
+      const records = [makeTransitionAccepted("required-handoff", "run-1", 1000, null)];
+
+      expect(() =>
+        materializeContinuity(withLifecycles(records), {
+          run_id: "run-1",
+          continuity: {
+            schema_version: 1,
+            require_handoff: true,
+            require_delegated_result: false,
+            seed_max_utf8_bytes: 32_768,
+          },
+        }),
+      ).toThrow("required handoff continuity packet is missing");
+    });
+
+    it("rejects a packet that is not durably paired with handoff evidence", () => {
+      const record = makeTransitionAccepted(
+        "required-handoff-metadata",
+        "run-1",
+        1000,
+        makePacket("present packet"),
+      );
+      if (record.accepted_handoff === undefined) throw new Error("test handoff missing");
+      const malformed = {
+        ...record,
+        accepted_handoff: {
+          ...record.accepted_handoff,
+          continuity_evidence: undefined,
+          continuity_packet_utf8_bytes: undefined,
+        },
+      } as unknown as PersistedRecord;
+
+      expect(() =>
+        materializeContinuity(withLifecycles([malformed]), {
+          run_id: "run-1",
+          continuity: {
+            schema_version: 1,
+            require_handoff: true,
+            require_delegated_result: false,
+            seed_max_utf8_bytes: 32_768,
+          },
+        }),
+      ).toThrow("required handoff continuity packet is missing");
+    });
+
+    it("rejects a pinned required delegated result whose packet is missing", () => {
+      const records = [
+        makeSubagentStarted("required-child", "run-1", 1000),
+        makeSubagentCompleted("required-child", "run-1", 2000, null),
+      ];
+
+      expect(() =>
+        materializeContinuity(withLifecycles(records), {
+          run_id: "run-1",
+          continuity: {
+            schema_version: 1,
+            require_handoff: false,
+            require_delegated_result: true,
+            seed_max_utf8_bytes: 32_768,
+          },
+        }),
+      ).toThrow("required delegated-result continuity packet is missing");
     });
   });
 

@@ -264,9 +264,21 @@ roles:
       loadedManifest,
       steps: [
         {
-          kind: "emit_handoff",
-          target_role: "implementer",
-          reason: "begin work",
+          kind: "emit_tool_calls",
+          calls: [
+            {
+              name: "handoff",
+              arguments: {
+                target_role: "implementer",
+                status: "ready",
+                objective: "Continue the run as implementer.",
+                summary: "begin work",
+                requested_action: "Complete the next implementer step and report the result.",
+                reason: "begin work",
+                continuity: packet,
+              },
+            },
+          ],
         },
         { kind: "emit_end", reason: "done" },
       ],

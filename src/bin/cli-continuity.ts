@@ -26,7 +26,7 @@
  */
 
 import { existsSync } from "node:fs";
-
+import { latestManifestSnapshot } from "../host/api-resume-state.js";
 import { FileRecordLog } from "../host/log-file.js";
 import type { ContinuityLedger } from "../persistence/continuity.js";
 import {
@@ -101,7 +101,15 @@ export async function runContinuityReport(
   // Materialize the ledger
   let ledger: ContinuityLedger;
   try {
-    ledger = materializeContinuity(records, { run_id: runId });
+    // The manifest snapshot is the durable policy source for resumed/reporting
+    // paths; never fall back to the current ambient manifest or omit required
+    // continuity checks.
+    const manifestSnapshot = latestManifestSnapshot(records, runId);
+    const continuity = manifestSnapshot?.normalized_manifest.continuity;
+    ledger = materializeContinuity(records, {
+      run_id: runId,
+      ...(continuity === undefined ? {} : { continuity }),
+    });
   } catch (error) {
     if (error instanceof ContinuityMaterializationException) {
       return {

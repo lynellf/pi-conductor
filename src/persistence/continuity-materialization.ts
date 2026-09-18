@@ -22,6 +22,11 @@ import {
   type ContinuityItemIndex,
   ContinuityItemIndexError,
 } from "./continuity-item-index.js";
+import { executionOutcomes } from "./continuity-materialization-executions.js";
+import {
+  assertRequiredPacket,
+  continuityRequirements,
+} from "./continuity-materialization-policy.js";
 import {
   ContinuityLifecycleIndex,
   continuityEnvelope,
@@ -35,19 +40,15 @@ import {
   expectedReplayEvidenceStatus,
 } from "./continuity-replay-evidence.js";
 import type { PersistedRecord } from "./log.js";
-import {
-  isToolExecutionRecord,
-  reconstructToolExecutionTimeline,
-  type ToolExecutionRecord,
-  type ToolExecutionTimeline,
-} from "./tool-execution.js";
 
 export type ContinuityMaterializationCode =
   | "continuity_malformed_record"
   | "continuity_unsupported_version"
   | "continuity_packet_not_object"
   | "continuity_packet_wrong_schema_version"
-  | "continuity_packet_too_large";
+  | "continuity_packet_too_large"
+  | "continuity_required_handoff"
+  | "continuity_required_delegated_result";
 
 /** Error carrying the immutable record identity that failed replay. */
 export class ContinuityMaterializationException extends Error {
@@ -71,9 +72,11 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
   const fail: MaterializationFail = (identity, message) => {
     throw new ContinuityMaterializationException(identity, codeFor(message), message);
   };
+  const requirements = continuityRequirements(policy);
   for (const record of records) {
     if (recordRunId(record) !== policy.run_id) continue;
     lifecycle.observe(record, fail);
+    assertRequiredPacket(record, requirements, lifecycle, fail);
     const envelope = envelopeFromRecord(record, lifecycle, fail);
     if (envelope === null) continue;
     envelopes.push(envelope);
@@ -243,55 +246,6 @@ function resolveItems(envelopes: readonly ContinuityEnvelopeV1[], fail: Material
   });
 }
 
-function executionOutcomes(
-  records: readonly PersistedRecord[],
-  runId: string,
-  fail: MaterializationFail,
-): ReadonlyMap<string, DurableContinuityExecution> {
-  const toolRecords = records.filter(
-    (record): record is ToolExecutionRecord =>
-      recordRunId(record) === runId && isToolExecutionRecord(record),
-  );
-  let timeline: ToolExecutionTimeline;
-  try {
-    timeline = reconstructToolExecutionTimeline(toolRecords);
-  } catch {
-    return fail("tool-execution", "execution timeline is not durably reconciled");
-  }
-  return new Map(
-    timeline.entries
-      .filter((entry) => entry.finished !== undefined)
-      .map((entry) => {
-        const finished = entry.finished as NonNullable<typeof entry.finished>;
-        return [
-          entry.started.execution_id,
-          {
-            id: "",
-            label: "",
-            execution_id: entry.started.execution_id,
-            status:
-              finished.outcome === "completed"
-                ? "passed"
-                : finished.outcome === "failed"
-                  ? "failed"
-                  : "incomplete",
-            exit_summary: finished.outcome,
-            cleanup_disposition: finished.cleanup,
-            // Commands are deliberately not retained in v1 execution records;
-            // emit the explicit nullable field rather than inventing a digest.
-            command_digest: null,
-            ...(entry.started.schema_version === 1 && entry.started.sandbox !== undefined
-              ? { child_id: entry.started.sandbox.child_id }
-              : {}),
-            superseded_by: [],
-            envelope_source: "handoff" as const,
-            record_id: recordId(finished),
-          },
-        ];
-      }),
-  );
-}
-
 function resolveEvaluations(
   envelopes: readonly ContinuityEnvelopeV1[],
   executions: ReadonlyMap<string, DurableContinuityExecution>,
@@ -382,6 +336,8 @@ function evidenceEntries(
   );
 }
 function codeFor(message: string): ContinuityMaterializationCode {
+  if (message.includes("required handoff")) return "continuity_required_handoff";
+  if (message.includes("required delegated-result")) return "continuity_required_delegated_result";
   if (message.includes("unsupported")) return "continuity_unsupported_version";
   if (message.includes("not an object")) return "continuity_packet_not_object";
   if (message.includes("byte count")) return "continuity_packet_too_large";

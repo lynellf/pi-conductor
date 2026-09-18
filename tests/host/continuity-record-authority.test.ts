@@ -136,6 +136,43 @@ describe("record-backed child continuity authority", () => {
     ).resolves.toMatchObject({ status: "missing" });
   });
 
+  it("binds execution evidence to the currently active retry attempt", async () => {
+    const records = [
+      childStart("child-a", "task-a"),
+      ...execution("child-a", "exec-old"),
+      {
+        type: "subagent_failed" as const,
+        run_id: "run-1",
+        child_id: "child-a",
+        task_id: "task-a",
+        subagent: "worker",
+        model: "test",
+        status: "failed" as const,
+        failure_reason: "retryable failure",
+        branch: "child",
+        worktree_path: "/tmp/child",
+        base_commit: "a".repeat(40),
+        head_commit: null,
+        session_file: null,
+        usage: null,
+        ts: 4,
+      },
+      childStart("child-a", "task-a"),
+      ...execution("child-a", "exec-new"),
+    ] as PersistedRecord[];
+    const authority = recordBackedContinuityAuthority(records, {
+      run_id: "run-1",
+      child: { child_id: "child-a", task_id: "task-a" },
+    });
+
+    await expect(
+      resolveSingleEvidence(authority, { kind: "tool_execution", execution_id: "exec-old" }),
+    ).resolves.toMatchObject({ status: "missing" });
+    await expect(
+      resolveSingleEvidence(authority, { kind: "tool_execution", execution_id: "exec-new" }),
+    ).resolves.toMatchObject({ status: "verified" });
+  });
+
   it("denies sibling, cross-run, and orphan child authority", async () => {
     const records = [
       childStart("child-a", "task-a"),

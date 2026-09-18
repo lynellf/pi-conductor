@@ -344,7 +344,10 @@ function recordBackedChildValidation(
     (record): record is import("../persistence/log.js").SubagentStartedRecord =>
       record.type === "subagent_started" && record.run_id === runId && record.child_id === childId,
   );
-  const taskId = starts.length === 1 ? starts[0]?.task_id : undefined;
+  const taskIds = new Set(starts.map((start) => start.task_id));
+  // Retries reuse the exact task identity after a durable terminal. A child
+  // ID reused for another task remains unbound and is denied by the authority.
+  const taskId = taskIds.size === 1 ? starts[0]?.task_id : undefined;
   const authority = recordBackedContinuityAuthority(records, {
     run_id: runId,
     child: { child_id: childId, task_id: taskId ?? "unbound-child" },

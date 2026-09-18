@@ -18,6 +18,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runContinuityCli, runContinuityReport } from "../../src/bin/cli-continuity.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
+import { toMachineDefinition } from "../../src/manifest/definition.js";
+import { parseManifest } from "../../src/manifest/parse.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
 import {
   renderLedgerJson,
@@ -25,6 +27,7 @@ import {
   renderOkfCandidates,
 } from "../../src/persistence/continuity-render.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
+import { createManifestSnapshot } from "../../src/persistence/trajectory-records.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -495,6 +498,51 @@ describe("cli-continuity", () => {
 
       expect(() => renderLedgerMarkdown(ledger)).not.toThrow();
     });
+  });
+
+  it("replays the pinned continuity policy from the manifest snapshot", async () => {
+    const logDir = await mkdtemp(join(tmpdir(), "continuity-policy-"));
+    try {
+      const manifest = parseManifest(`
+version: 1
+continuity:
+  schema_version: 1
+  require_handoff: true
+  require_delegated_result: false
+  seed_max_utf8_bytes: 32768
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [{ model: stub:orchestrator, effort: medium }]
+  - name: implementer
+    max_visits: 1
+    models: [{ model: stub:implementer, effort: medium }]
+`);
+      const log = new FileRecordLog({ baseDir: logDir });
+      log.append(
+        createManifestSnapshot({
+          runId: "policy-run",
+          manifest,
+          definition: toMachineDefinition(manifest),
+          ts: 1,
+        }),
+      );
+      for (const record of withLifecycles([
+        makeTransitionAccepted("required", "policy-run", 1000, null),
+      ]))
+        log.append({ ...record, run_id: "policy-run" } as PersistedRecord);
+      log.close();
+
+      const result = await runContinuityReport({
+        logDir,
+        runId: "policy-run",
+        format: "json",
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.errorMessage).toContain("required handoff continuity packet is missing");
+    } finally {
+      await rm(logDir, { recursive: true, force: true });
+    }
   });
 
   it("reads a legacy public FileRecordLog stream as zero continuity envelopes", async () => {
