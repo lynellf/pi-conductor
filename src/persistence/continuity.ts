@@ -259,6 +259,26 @@ function tryNormalizeAndMeasure(
   }
 }
 
+/**
+ * Spec §5: derive the policy-required signal that transport lanes read
+ * from `PacketValidationContext.policy`. Returns `null` when the
+ * manifest omits the optional `continuity` block (legacy behavior).
+ */
+export function continuityPolicyContext(
+  policy: {
+    readonly require_handoff: boolean;
+    readonly require_delegated_result: boolean;
+    readonly seed_max_utf8_bytes: number;
+  } | null,
+): PacketValidationContext["policy"] {
+  if (policy === null) return null;
+  return Object.freeze({
+    require_handoff: policy.require_handoff,
+    require_delegated_result: policy.require_delegated_result,
+    seed_max_utf8_bytes: policy.seed_max_utf8_bytes,
+  });
+}
+
 /** Stable JSON serialization for byte measurement. Object keys sorted. */
 export function stableJsonStringify(value: unknown): string {
   return stringifyStable(value, new WeakSet<object>());
@@ -312,6 +332,21 @@ export interface PacketValidationContext {
   readonly verifiedExecutionIds: ReadonlySet<string>;
   /** Whether the resolved evidence for this packet is verified-or-declared. */
   readonly evidenceVerifiedByKey: ReadonlyMap<string, ContinuityEvidenceResolution>;
+  /**
+   * Spec §5 / §8 / §9: the pinned `ContinuityPolicy` derived from the
+   * current manifest. When `require_handoff` is true, every accepted
+   * FSM handoff must carry a valid packet; when `require_delegated_result`
+   * is true, every successful delegated `report_result` must carry a
+   * valid packet. The host transport lanes read these flags to decide
+   * whether a missing packet is a missing-required violation
+   * (protocol-failure path) or simply absent on an optional policy.
+   * `null` means no policy was pinned (legacy manifest behavior).
+   */
+  readonly policy: {
+    readonly require_handoff: boolean;
+    readonly require_delegated_result: boolean;
+    readonly seed_max_utf8_bytes: number;
+  } | null;
 }
 
 /**

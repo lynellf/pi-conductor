@@ -18,6 +18,7 @@ const baseContext: PacketValidationContext = {
   knownItemIds: new Set(),
   verifiedExecutionIds: new Set(),
   evidenceVerifiedByKey: new Map(),
+  policy: null,
 };
 
 function minimalPacket(extra: Record<string, unknown> = {}): Record<string, unknown> {
@@ -159,5 +160,47 @@ describe("validateContinuityPacket (Phase 1 contract repair)", () => {
     });
     const result = validateContinuityPacket(packet, baseContext);
     expect(result.kind).toBe("ok");
+  });
+});
+
+describe("PacketValidationContext.policy (Phase 1 contract repair)", () => {
+  it("null policy signals no ContinuityPolicy was pinned (legacy behavior)", () => {
+    const ctx: PacketValidationContext = {
+      knownItemIds: new Set(),
+      verifiedExecutionIds: new Set(),
+      evidenceVerifiedByKey: new Map(),
+      policy: null,
+    };
+    const packet = minimalPacket();
+    expect(validateContinuityPacket(packet, ctx).kind).toBe("ok");
+  });
+
+  it("policy is propagated through the context so transport lanes can read it", () => {
+    const ctx: PacketValidationContext = {
+      knownItemIds: new Set(),
+      verifiedExecutionIds: new Set(),
+      evidenceVerifiedByKey: new Map(),
+      policy: {
+        require_handoff: true,
+        require_delegated_result: true,
+        seed_max_utf8_bytes: 32768,
+      },
+    };
+    expect(ctx.policy?.require_handoff).toBe(true);
+    expect(ctx.policy?.require_delegated_result).toBe(true);
+    expect(ctx.policy?.seed_max_utf8_bytes).toBe(32768);
+  });
+
+  it("continuityPolicyContext helper produces a frozen alias for the pinned policy", async () => {
+    const { continuityPolicyContext } = await import("../../src/persistence/continuity.js");
+    const policy = {
+      require_handoff: true,
+      require_delegated_result: false,
+      seed_max_utf8_bytes: 16384,
+    };
+    const ctx = continuityPolicyContext(policy);
+    expect(ctx).toEqual(policy);
+    expect(Object.isFrozen(ctx)).toBe(true);
+    expect(continuityPolicyContext(null)).toBeNull();
   });
 });

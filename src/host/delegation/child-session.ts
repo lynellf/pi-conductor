@@ -311,9 +311,11 @@ async function initializeSdkChild(
   // seam. The host wiring intentionally passes it through today so the
   // lane has the producer already in place.
   const reportCapture = (
-    createReportCapture as unknown as (
-      options?: { continuityValidation?: () => import("../../persistence/continuity.js").PacketValidationContext | null },
-    ) => ReportCapture
+    createReportCapture as unknown as (options?: {
+      continuityValidation?: () =>
+        | import("../../persistence/continuity.js").PacketValidationContext
+        | null;
+    }) => ReportCapture
   )(
     continuityValidation === undefined
       ? undefined

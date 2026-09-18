@@ -40,6 +40,7 @@ function emptyContext(): PacketValidationContext {
     knownItemIds: new Set<string>(),
     verifiedExecutionIds: new Set<string>(),
     evidenceVerifiedByKey: new Map<string, ContinuityEvidenceResolution>(),
+    policy: null,
   };
 }
 
@@ -213,6 +214,7 @@ describe("validatePacketSemantics", () => {
       knownItemIds: new Set(["earlier"]),
       verifiedExecutionIds: new Set<string>(),
       evidenceVerifiedByKey: new Map<string, ContinuityEvidenceResolution>(),
+      policy: null,
     };
     const errors = validatePacketSemantics(
       packet({
@@ -263,6 +265,7 @@ describe("validatePacketSemantics", () => {
           { ref_key: "findings:f-1:0", kind: "external", status: "declared" },
         ],
       ]),
+      policy: null,
     };
     const errors = validatePacketSemantics(
       packet({
@@ -300,6 +303,7 @@ describe("validatePacketSemantics", () => {
           { ref_key: "findings:f-1:0", kind: "external", status: "verified" },
         ],
       ]),
+      policy: null,
     };
     const errors = validatePacketSemantics(
       packet({
