@@ -387,6 +387,26 @@ describe("continuity-materialization-order", () => {
     });
   });
 
+  it("replays one handoff and one child result after a restart", () => {
+    const handoffPacket = makePacket("handoff", [{ id: "h-1", statement: "handoff finding" }]);
+    const childPacket = makePacket("child", [{ id: "c-1", statement: "child finding" }]);
+    const records = [
+      makeTransitionAccepted("handoff", "run-1", 1000, handoffPacket),
+      makeSubagentStarted("child-e2e", "run-1", 1500),
+      makeSubagentCompleted("child-e2e", "run-1", 2000, childPacket),
+    ];
+
+    const restarted = materializeContinuity(JSON.parse(JSON.stringify(records)), {
+      run_id: "run-1",
+    });
+
+    expect(restarted.envelopes.map((envelope) => envelope.source)).toEqual([
+      "handoff",
+      "delegated_result",
+    ]);
+    expect(restarted.findings.map((finding) => finding.item.id)).toEqual(["h-1", "c-1"]);
+  });
+
   describe("delegated result envelopes", () => {
     it("extracts continuity from subagent_completed records", () => {
       const packet = makePacket("child result", [{ id: "cf-1", statement: "child finding" }]);

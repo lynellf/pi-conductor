@@ -68,14 +68,14 @@ They do not commit, integrate, or edit `.okf/`.
 
 Owned behavior:
 
-- [ ] Extend handoff seam validation with optional/required continuity.
-- [ ] Resolve run-local handoff evidence and persist packet/resolutions through
+- [x] Extend handoff seam validation with optional/required continuity.
+- [x] Resolve run-local handoff evidence and persist packet/resolutions through
       the accepted-handoff record.
-- [ ] Reject malformed required packets before reducer invocation.
-- [ ] Materialize and inject the bounded continuity seed into fresh FSM role run
+- [x] Reject malformed required packets before reducer invocation.
+- [x] Materialize and inject the bounded continuity seed into fresh FSM role run
       memory without duplicating raw packet content.
-- [ ] Preserve legacy accepted handoff behavior.
-- [ ] Add focused handoff, restart, and run-memory tests.
+- [x] Preserve legacy accepted handoff behavior.
+- [x] Add focused handoff, restart, and run-memory tests.
 
 Must not edit delegated-child, CLI, manifest-contract, or OKF files.
 
@@ -83,16 +83,16 @@ Must not edit delegated-child, CLI, manifest-contract, or OKF files.
 
 Owned behavior:
 
-- [ ] Extend `report_result` and child result mapping with optional continuity.
-- [ ] Enforce required delegated continuity for successful results.
-- [ ] Bind child provenance from host-owned task/observation state.
-- [ ] Resolve evidence only within child authority.
-- [ ] Persist packet/resolutions in existing durable child terminal/completion
+- [x] Extend `report_result` and child result mapping with optional continuity.
+- [x] Enforce required delegated continuity for successful results.
+- [x] Bind child provenance from host-owned task/observation state.
+- [x] Resolve evidence only within child authority.
+- [x] Persist packet/resolutions in existing durable child terminal/completion
       records and reconstruct them after restart.
-- [ ] Route invalid required packets to the existing bounded protocol-failure
+- [x] Route invalid required packets to the existing bounded protocol-failure
       path.
-- [ ] Preserve optional and legacy/minimal behavior.
-- [ ] Add focused observation, mapping, persistence, and restart tests.
+- [x] Preserve optional and legacy/minimal behavior.
+- [x] Add focused observation, mapping, persistence, and restart tests.
 
 Must not edit FSM handoff, CLI, manifest-contract, or OKF files.
 
@@ -100,12 +100,12 @@ Must not edit FSM handoff, CLI, manifest-contract, or OKF files.
 
 Owned behavior:
 
-- [ ] Implement the pure chronological ledger fold and explicit supersession.
-- [ ] Implement deterministic bounded seed selection and omission counts.
-- [ ] Implement JSON, escaped Markdown, and verified OKF-candidate renderers.
-- [ ] Add `conduct continuity-report` using the production log reader.
-- [ ] Fail closed on malformed/unsupported historical records.
-- [ ] Add focused materializer and CLI tests, including byte-identical replay.
+- [x] Implement the pure chronological ledger fold and explicit supersession.
+- [x] Implement deterministic bounded seed selection and omission counts.
+- [x] Implement JSON, escaped Markdown, and verified OKF-candidate renderers.
+- [x] Add `conduct continuity-report` using the production log reader.
+- [x] Fail closed on malformed/unsupported historical records.
+- [x] Add focused materializer and CLI tests, including byte-identical replay.
 
 Must not edit handoff transport, delegated-child integration,
 manifest-contract, or `.okf/` files.
@@ -127,18 +127,18 @@ Child self-report is not sufficient proof.
 
 ## Phase 3 — parent integration and cross-lane wiring
 
-- [ ] Validate all three child results and continuity packets.
-- [ ] Inspect child workspace diffs before applying any patch.
-- [ ] Apply lanes in order: C pure materializer, A handoff, B child completion.
-- [ ] Resolve interface mismatches centrally; do not ask concurrent children to
+- [x] Validate all three child results and continuity packets.
+- [x] Inspect child workspace diffs before applying any patch.
+- [x] Apply lanes in order: C pure materializer, A handoff, B child completion.
+- [x] Resolve interface mismatches centrally; do not ask concurrent children to
       rewrite shared contracts after the batch.
-- [ ] Add cross-lane evidence resolvers and production dependency wiring.
-- [ ] Ensure run-memory and child prompts explain continuity semantics and
+- [x] Add cross-lane evidence resolvers and production dependency wiring.
+- [x] Ensure run-memory and child prompts explain continuity semantics and
       prohibit hidden reasoning/secrets.
-- [ ] Update public barrels/JSDoc and user-facing documentation.
-- [ ] Add an end-to-end restart test covering one handoff plus one child result.
-- [ ] Add a public compatibility test for a legacy record stream.
-- [ ] Commit the integrated implementation before review.
+- [x] Update public barrels/JSDoc and user-facing documentation.
+- [x] Add an end-to-end restart test covering one handoff plus one child result.
+- [x] Add a public compatibility test for a legacy record stream.
+- [x] Commit the integrated implementation before review.
 
 ## Phase 4 — independent review
 

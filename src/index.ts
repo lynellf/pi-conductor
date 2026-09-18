@@ -174,6 +174,18 @@ export {
   stableJsonStringify,
   validatePacketSemantics,
 } from "./persistence/continuity.js";
+/** Materialize and render durable continuity without mutating run records (spec §11, §14). */
+export {
+  ContinuityMaterializationException,
+  materializeContinuity,
+  renderContinuitySeed,
+} from "./persistence/continuity-materialization.js";
+/** Render deterministic operator continuity views (spec §14). */
+export {
+  renderLedgerJson,
+  renderLedgerMarkdown,
+  renderOkfCandidates,
+} from "./persistence/continuity-render.js";
 // Seam TypeBox schemas for the v1 packet (spec §6). Single source of truth.
 export type {
   ContinuityEvaluation,
