@@ -14,10 +14,11 @@
  *   - each item has 0–8 evidence references
  *   - each supersedes collection: ≤ 8 item IDs
  *   - okf_candidate_ids: ≤ 16 unique IDs
- *   - all IDs: 1–96 chars matching `[A-Za-z][A-Za-z0-9._:-]*` (must start with a letter)
- *   - repository evidence paths: relative paths only — no leading `/`,
- *     no `..` segments, no backslashes, no `.git` segments, no empty
- *     components (spec §7)
+ *   - all IDs: 1–96 chars matching `[A-Za-z0-9][A-Za-z0-9._:-]*` (spec §6.1,
+ *     digits are allowed as the leading character)
+ *   - repository evidence paths: normalized relative paths only — no
+ *     leading `/`, no `..` or `.git` segments, no backslashes, no NUL
+ *     bytes, no empty components, no trailing `/` (spec §7)
  *
  * Byte-budget enforcement (32 KiB) is performed by `normalizeAndMeasurePacket`
  * in `src/persistence/continuity.ts` because TypeBox does not measure
@@ -25,23 +26,75 @@
  * constraint live here.
  */
 
-import { type Static, Type } from "typebox";
+import { Refine, type Static, Type } from "typebox";
 
-// IDs must start with a letter so a leading digit cannot be smuggled in
-// (the schema rejects `0bad` etc.). 96-char ceiling is enforced via
-// maxLength and the pattern.
-const idPattern = "^[A-Za-z][A-Za-z0-9._:-]{0,95}$";
+// IDs: 1–96 chars matching `[A-Za-z0-9][A-Za-z0-9._:-]*` per spec §6.1.
+// The pattern allows leading digits (`0bad`, `2024-q4-summary`) and
+// subsequent characters include `.`, `_`, `:`, `-`. A 96-char ceiling is
+// enforced via `maxLength` plus the pattern's `{0,95}` tail.
+const idPattern = "^[A-Za-z0-9][A-Za-z0-9._:-]{0,95}$";
 const idSchema = Type.String({ minLength: 1, maxLength: 96, pattern: idPattern });
 
-// Repository paths: relative, no traversal, no `.git` segments, no empty
-// components, no backslashes, no leading dot. The first character of each
-// segment is alphanumeric; later chars may include `.` and `_` and `-`.
-const pathPattern = "^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$";
-const repositoryPathSchema = Type.String({
-  minLength: 1,
-  maxLength: 1024,
-  pattern: pathPattern,
-});
+// Repository evidence paths: normalized relative paths only (spec §7).
+// A normalized relative path is a forward-slash separated sequence of
+// segments where each segment is non-empty, consists of `[A-Za-z0-9._-]`,
+// begins with alphanumeric (or with a single dot followed by alphanumeric
+// for hidden directories like `.config`/`.github`), and the path rejects
+// `..`, `.`, `.git`, leading `/`, trailing `/`, `\\`, and NUL bytes. The
+// structural rules that do not fit a single TypeBox string pattern are
+// expressed via `Refine` so the seam schema remains the single source of
+// truth. `isSafeRepositoryPath` is the exported predicate that backs it.
+const REPO_PATH_MAX_LENGTH = 1024;
+
+export function isSafeRepositoryPath(path: string): boolean {
+  if (path.length === 0 || path.length > REPO_PATH_MAX_LENGTH) return false;
+  if (path.includes("\\") || path.includes("\0")) return false;
+  if (path.startsWith("/") || path.endsWith("/")) return false;
+  const segments = path.split("/");
+  for (const segment of segments) {
+    if (!isValidNormalizedSegment(segment)) return false;
+  }
+  return true;
+}
+
+function isValidNormalizedSegment(segment: string): boolean {
+  if (segment.length === 0) return false;
+  // Reject traversal and the special `.git` segment explicitly before the
+  // character/prefix checks — keeps the per-segment rule in one place.
+  if (segment === "." || segment === ".." || segment === ".git") return false;
+  for (let i = 0; i < segment.length; i++) {
+    const code = segment.charCodeAt(i);
+    const isAlnum =
+      (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    if (!isAlnum && code !== 46 && code !== 95 && code !== 45) return false;
+  }
+  // First char: alphanumeric, or a single dot followed by alphanumeric
+  // (hidden directory). Multi-dot prefixes like `..foo` are rejected here
+  // because they fail the second-character alphanumeric requirement.
+  const firstCode = segment.charCodeAt(0);
+  const firstIsDot = firstCode === 46;
+  if (!firstIsDot) {
+    const isAlnumFirst =
+      (firstCode >= 48 && firstCode <= 57) ||
+      (firstCode >= 65 && firstCode <= 90) ||
+      (firstCode >= 97 && firstCode <= 122);
+    return isAlnumFirst;
+  }
+  if (segment.length < 2) return false;
+  const secondCode = segment.charCodeAt(1);
+  const isAlnumSecond =
+    (secondCode >= 48 && secondCode <= 57) ||
+    (secondCode >= 65 && secondCode <= 90) ||
+    (secondCode >= 97 && secondCode <= 122);
+  return isAlnumSecond;
+}
+
+const repositoryPathSchema = Refine(
+  Type.String({ minLength: 1, maxLength: REPO_PATH_MAX_LENGTH }),
+  isSafeRepositoryPath,
+  (path) =>
+    `repository path '${path}' is not a safe normalized relative path (must reject .git, .., leading /, trailing /, and backslash/NUL syntax)`,
+);
 
 const MAX_COLLECTION_ITEMS = 32;
 const MAX_ITEM_TEXT_LENGTH = 2_048;
@@ -76,7 +129,9 @@ const contextArtifactEvidence = Type.Object(
   { additionalProperties: false },
 );
 
-const repositoryEvidence = Type.Object(
+// Internal pre-refine repository evidence object so the line-range
+// refinement can layer over the same structural shape.
+const repositoryEvidenceBase = Type.Object(
   {
     kind: Type.Literal("repository"),
     path: repositoryPathSchema,
@@ -86,6 +141,33 @@ const repositoryEvidence = Type.Object(
     line_end: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
+);
+
+/**
+ * Spec §7 rule 4: line ranges are positive (already enforced by the
+ * `minimum: 1` integer refinements above), ordered (start ≤ end), and
+ * both endpoints must be supplied together. Layer a `Refine` over the
+ * object schema so the structural shape and the cross-property check
+ * remain inside one TypeBox source.
+ */
+export function isWellOrderedLineRange(evidence: {
+  readonly line_start?: number;
+  readonly line_end?: number;
+}): boolean {
+  const hasStart = evidence.line_start !== undefined;
+  const hasEnd = evidence.line_end !== undefined;
+  if (hasStart !== hasEnd) return false;
+  if (hasStart && hasEnd && (evidence.line_start as number) > (evidence.line_end as number)) {
+    return false;
+  }
+  return true;
+}
+
+const repositoryEvidence = Refine(
+  repositoryEvidenceBase,
+  isWellOrderedLineRange,
+  () =>
+    "repository evidence line range must supply both endpoints together and satisfy start <= end",
 );
 
 const externalEvidence = Type.Object(
@@ -211,5 +293,5 @@ export const CONTINUITY_CONSTRAINTS = Object.freeze({
   MAX_SUPERSEDES_PER_ITEM,
   MAX_OKF_CANDIDATES,
   ID_PATTERN: idPattern,
-  PATH_PATTERN: pathPattern,
+  REPO_PATH_MAX_LENGTH,
 });
