@@ -504,6 +504,56 @@ describe("escapeMarkdownText", () => {
   it("does not escape normal alphanumeric text", () => {
     expect(escapeMarkdownText("plain text 123")).toBe("plain text 123");
   });
+
+  it("neutralizes CR/LF so multiline input cannot escape a Markdown scalar", () => {
+    // LF alone, CR alone, and CRLF all collapse to literal escape sequences so a
+    // single cell value never injects a row terminator or a list bullet.
+    expect(escapeMarkdownText("safe\n- spoofed finding")).toBe("safe\\n- spoofed finding");
+    expect(escapeMarkdownText("safe\r- spoofed finding")).toBe("safe\\r- spoofed finding");
+    expect(escapeMarkdownText("safe\r\n- spoofed finding")).toBe("safe\\r\\n- spoofed finding");
+    expect(escapeMarkdownText("safe\n| evil | cell")).toBe("safe\\n\\| evil \\| cell");
+  });
+});
+
+describe("renderLedgerMarkdown adversarial multiline safety", () => {
+  // Spec §14: every scalar that lands inside a table cell or list item must
+  // be neutralized so a packet cannot inject Markdown structure. The summary,
+  // OKF statement, and evaluation label are the three surfaces that an
+  // adversarial packet can most easily abuse because they are rendered
+  // directly (not via `escapeBlock`). The test asserts the escape is
+  // literal (the two-character sequence `\\n` or `\\r`), not a real newline.
+  it("renders an LF-bearing summary as a single visible cell", () => {
+    const summary = "ok\n- spoofed finding with evidence";
+    const escaped = escapeMarkdownText(summary);
+    expect(escaped.includes("\n")).toBe(false);
+    expect(escaped.includes("\r")).toBe(false);
+    expect(escaped).toBe("ok\\n- spoofed finding with evidence");
+  });
+
+  it("renders an OKF candidate statement with CR/LF as a single cell", () => {
+    const statement = "verified\n| false | row |";
+    const escaped = escapeMarkdownText(statement);
+    expect(escaped.includes("\n")).toBe(false);
+    expect(escaped.includes("\r")).toBe(false);
+    expect(escaped).toBe("verified\\n\\| false \\| row \\|");
+  });
+
+  it("renders an evaluation label with newlines as a single inline literal", () => {
+    const label = "build/test\n# hijacked heading";
+    const escaped = escapeMarkdownText(label);
+    expect(escaped.includes("\n")).toBe(false);
+    // The hash is escaped to `\\#` so it cannot open a Markdown heading;
+    // the rendered cell stays a single literal line.
+    expect(escaped).toBe("build/test\\n\\# hijacked heading");
+  });
+
+  it("neutralizes standalone CR and CRLF pairs", () => {
+    // The escape's literal output for an input CR is the four-character
+    // sequence `a` + `\` + `r` + `b` — NOT a real carriage return.
+    expect(escapeMarkdownText("a\rb")).toBe("a\\rb");
+    expect(escapeMarkdownText("a\r\nb")).toBe("a\\r\\nb");
+    expect(escapeMarkdownText("a\rb\nc")).toBe("a\\rb\\nc");
+  });
 });
 
 describe("evidenceRefKey", () => {

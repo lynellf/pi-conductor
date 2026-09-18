@@ -221,6 +221,23 @@ export interface Host {
   seedRunMemory(args: SeedRunMemoryArgs): RunMemory;
 
   /**
+   * Build the bounded continuity seed section for a fresh FSM role visit
+   * (spec §11). The host owns the append-only record log and the loaded
+   * manifest; folding, ledger production, and seed rendering are pure
+   * over those inputs. Returns `null` when no continuity policy is
+   * configured or no envelopes exist (the loop simply omits the seed
+   * section and the legacy fresh-role seed format is preserved).
+   *
+   * The seed section carries the exact omission counts the renderer
+   * produced so the receiving role sees a stable byte budget and an
+   * honest "this many items/packets were truncated" line.
+   */
+  materializeFreshContinuitySeed?(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+  }): import("./loop-format.js").ContinuitySeedSection | null;
+
+  /**
    * Signal the session to stop its current operation (Task 18 / §11.7
    * cost-cap breach). The Host calls `session.abort()` on the SDK
    * session; the loop records `session_failed` separately based on

@@ -94,6 +94,44 @@ export function seedRunMemory(
   });
 }
 
+/**
+ * Build the bounded continuity seed section for a fresh FSM role visit.
+ * The host owns the append-only record log and the manifest snapshot;
+ * this is the canonical seam for the loop's fresh-worker seed wiring
+ * (spec §11). Returns `null` when no continuity policy is configured —
+ * the loop must then omit the seed section and keep the legacy
+ * fresh-role seed format exactly as before.
+ */
+export function materializeFreshContinuitySeed(
+  host: StateHostContext,
+  args: { readonly role: Role; readonly visitIndex: number },
+): import("./loop-format.js").ContinuitySeedSection | null {
+  const policy = host.loadedManifest.manifest.continuity;
+  if (policy === undefined) return null;
+  const records = host.log.records(host.runId);
+  const ledger = materializeContinuity(records, {
+    run_id: host.runId,
+    schema_version: policy.schema_version,
+    require_handoff: policy.require_handoff,
+    require_delegated_result: policy.require_delegated_result,
+    seed_max_utf8_bytes: policy.seed_max_utf8_bytes,
+  });
+  // The role/visitIndex pair is informational here: the renderer is
+  // bound to the ledger, not to the receiver, and identical ledgers
+  // produce byte-identical seeds across replays (spec §11). The
+  // arguments stay on the signature so future caching or audience
+  // scoping can layer on without changing the call site.
+  void args;
+  const seed = renderContinuitySeed(ledger, policy.seed_max_utf8_bytes);
+  return {
+    rendered: seed.rendered,
+    omitted_items: seed.omitted.items,
+    omitted_packets: seed.omitted.packets,
+    used_bytes: seed.budget.used_bytes,
+    max_bytes: seed.budget.max_bytes,
+  };
+}
+
 /** Compute the next visit index for a role from persisted records. */
 export function nextVisitIndex(host: StateHostContext, role: Role): number {
   // Count terminals (session_ended + session_failed) for the

@@ -210,7 +210,28 @@ export async function persistAcceptedTransition(
       ? (payload.suggests_next as Role)
       : null;
   ctx.handoffContextRef = acceptedContextRef;
-  ctx.nextSeed = formatHandoffSeed(payload, nextRole, suggestsNext, acceptedContextRef);
+  // Spec §11: when the manifest pins a continuity policy, the host must
+  // inject the deterministic bounded seed the materializer/renderer
+  // produced over the append-only log into the fresh worker seed.
+  // Without this wire, fresh FSM roles (and therefore post-restart
+  // roles) lose their bounded continuity view entirely — the legacy
+  // seed is preserved only when the host declines to materialize
+  // (legacy / no-policy manifests). See `materializeFreshContinuitySeed`
+  // on `Host` for the host-owned canonical seam.
+  const continuitySeedSection =
+    typeof host.materializeFreshContinuitySeed === "function"
+      ? host.materializeFreshContinuitySeed({
+          role: nextRole,
+          visitIndex: ctx.visitIndexByRole.get(nextRole) ?? 1,
+        })
+      : null;
+  ctx.nextSeed = formatHandoffSeed(
+    payload,
+    nextRole,
+    suggestsNext,
+    acceptedContextRef,
+    continuitySeedSection,
+  );
   ctx.pendingArtifactRoute = acceptedArtifactRoute;
   try {
     const trajectoryTargetSeed =

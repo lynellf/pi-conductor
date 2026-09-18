@@ -67,6 +67,7 @@ import { type SpawnRoleContext, spawnRole as spawnRoleInModule } from "./product
 import {
   captureUsage as captureUsageInModule,
   getNextModel as getNextModelInModule,
+  materializeFreshContinuitySeed as materializeFreshContinuitySeedInModule,
   nextVisitIndex as nextVisitIndexInModule,
   persistRecord as persistRecordInModule,
   runCostSoFar as runCostSoFarInModule,
@@ -341,6 +342,13 @@ export class ProductionHost extends ProductionHostContext implements Host {
     readonly runCostCap: number | null;
   }): RunMemory {
     return seedRunMemoryInModule(this.stateContext(), args);
+  }
+
+  materializeFreshContinuitySeed(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+  }): import("./loop-format.js").ContinuitySeedSection | null {
+    return materializeFreshContinuitySeedInModule(this.stateContext(), args);
   }
 
   nextVisitIndex(role: Role): number {

@@ -154,6 +154,13 @@ export interface ContinuityMaterializationPolicy {
     readonly require_delegated_result: boolean;
     readonly seed_max_utf8_bytes: number;
   };
+  /** Flattened legacy fields preserved for backward compatibility with
+   *  pre-v1 callers that spread a v1 manifest policy at the top level.
+   *  New code passes `continuity` (the policy itself). */
+  readonly schema_version?: 1;
+  readonly require_handoff?: boolean;
+  readonly require_delegated_result?: boolean;
+  readonly seed_max_utf8_bytes?: number;
   /** Optional caller-supplied current time; null uses record timestamps. */
   readonly now?: () => Date;
 }
@@ -167,14 +174,35 @@ export type RenderContinuitySeed = (ledger: ContinuityLedger, maxBytes: number) 
 
 // ─── Stable textual seed builders (used by the renderer) ──────────────
 
-/** Escape a continuity text value for safe Markdown rendering (spec §14). */
+/**
+ * Escape a continuity text value for safe Markdown rendering (spec §14).
+ *
+ * CR/LF must be neutralized here as well as the visible control characters.
+ * Table-cell and list-item renderers feed `escapeMarkdownText` directly; a
+ * payload whose summary contains `\n` would otherwise break out of the row
+ * and inject the next line as a Markdown list item or table row, letting
+ * untrusted text rewrite downstream rendering (e.g. `- spoofed finding`).
+ * `escapeBlock` is responsible for the paragraph case (it splits on `\n`
+ * first and joins with `\n`); the byte sequences below stay literal escapes
+ * (`\\n`, `\\r`) so the cell remains a single visible line.
+ */
 export function escapeMarkdownText(text: string): string {
-  // Conservative escape: keep newlines for readability but escape the
-  // Markdown control characters that can flip a paragraph into a
-  // heading, list, link, code span, or HTML block. Parentheses are
-  // escaped because the inline-link syntax `[text](url)` would
-  // otherwise render as a clickable link in downstream consumers.
-  return text.replace(/([\\`*_[\](){}<>!#|])/g, "\\$1");
+  // Conservative escape: neutralize the Markdown control characters that
+  // can flip a paragraph into a heading, list, link, code span, or HTML
+  // block, and CR/LF so multi-line input cannot break scalar contexts.
+  // Parentheses are escaped because the inline-link syntax `[text](url)`
+  // would otherwise render as a clickable link in downstream consumers.
+  //
+  // Single-pass via callback: each matched character is mapped to its
+  // two-character literal escape sequence in one `replace` call. Chaining
+  // a CR/LF pass with the visible-character pass would re-escape the
+  // inserted backslashes (e.g. `\n` would become `\\n` because the
+  // next pass escapes the literal `\`); a single pass avoids that.
+  return text.replace(/[\\`*_[\](){}<>!#|\r\n]/g, (ch) => {
+    if (ch === "\r") return "\\r";
+    if (ch === "\n") return "\\n";
+    return `\\${ch}`;
+  });
 }
 
 /** Stable evidence key namespace used by both lanes. */

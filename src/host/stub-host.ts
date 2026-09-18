@@ -62,6 +62,8 @@ import type {
   RunMemory,
   UsageRecord,
 } from "../index.js";
+import { materializeContinuity } from "../persistence/continuity-materialization.js";
+import { renderContinuitySeed } from "../persistence/continuity-seed.js";
 import { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
@@ -483,6 +485,35 @@ export class StubHost implements Host {
       goal: args.goal,
       runCostCap: args.runCostCap,
     });
+  }
+
+  materializeFreshContinuitySeed(args: {
+    readonly role: import("../core/types.js").Role;
+    readonly visitIndex: number;
+  }): import("./loop-format.js").ContinuitySeedSection | null {
+    // Stub host: materialize the seed from the same log the loop reads
+    // so legacy stub-host tests can observe the wired seed. Returns
+    // `null` when no continuity policy is pinned (the legacy
+    // stub-host behavior for manifests without `continuity`).
+    const policy = this.loadedManifestValue?.manifest.continuity;
+    if (policy === undefined) return null;
+    const records = this.log.records(this.runId);
+    const ledger = materializeContinuity(records, {
+      run_id: this.runId,
+      schema_version: policy.schema_version,
+      require_handoff: policy.require_handoff,
+      require_delegated_result: policy.require_delegated_result,
+      seed_max_utf8_bytes: policy.seed_max_utf8_bytes,
+    });
+    void args;
+    const seed = renderContinuitySeed(ledger, policy.seed_max_utf8_bytes);
+    return {
+      rendered: seed.rendered,
+      omitted_items: seed.omitted.items,
+      omitted_packets: seed.omitted.packets,
+      used_bytes: seed.budget.used_bytes,
+      max_bytes: seed.budget.max_bytes,
+    };
   }
 
   runCostSoFar(): number {

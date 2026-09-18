@@ -1,6 +1,8 @@
 /** Own run-handle completion wiring and lease release (spec §11.1). */
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import { continuityItemIndexFromRecords } from "../persistence/continuity.js";
+import { materializeContinuity } from "../persistence/continuity-materialization.js";
+import { renderContinuitySeed } from "../persistence/continuity-seed.js";
 import { type EndGuardRecord, endGuardRequestId } from "../persistence/end-guard.js";
 import type { ArtifactDeliveryRecord, RecordLog } from "../persistence/log.js";
 import { latestHandoffContextRef } from "./api-resume-state.js";
@@ -8,7 +10,7 @@ import { recordBackedContinuityAuthority } from "./continuity-record-authority.j
 import type { Host } from "./host.js";
 import type { RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
-import { formatIncomingHandoffSeed } from "./loop-format.js";
+import { type ContinuitySeedSection, formatIncomingHandoffSeed } from "./loop-format.js";
 import type { LoadedManifest } from "./manifest.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
@@ -110,6 +112,11 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
             log.records(runId),
             runId,
             initialCheckpoint.current_role,
+            buildRestartContinuitySeed({
+              policy: loadedManifest.manifest.continuity,
+              records: log.records(runId),
+              runId,
+            }),
           ),
         }),
     initialArtifactDelivery: args.initialArtifactDelivery ?? null,
@@ -182,4 +189,36 @@ function continuityItemIds(
   runId: string,
 ): ReadonlySet<string> {
   return continuityItemIndexFromRecords(records, runId).ids;
+}
+
+/**
+ * Build the bounded continuity seed section for the restart path
+ * (spec §11). The host owns the run-id-keyed log here (unlike the
+ * live handoff path), so this helper folds the records directly
+ * through the same materializer/renderer the host uses internally.
+ * Returns `null` when no continuity policy is pinned — the
+ * `formatIncomingHandoffSeed` then omits the section entirely and the
+ * legacy fresh-role seed format is preserved.
+ */
+function buildRestartContinuitySeed(args: {
+  readonly policy: import("../manifest/types.js").ContinuityPolicy | undefined;
+  readonly records: readonly import("../persistence/log.js").PersistedRecord[];
+  readonly runId: string;
+}): ContinuitySeedSection | null {
+  if (args.policy === undefined) return null;
+  const ledger = materializeContinuity(args.records, {
+    run_id: args.runId,
+    schema_version: args.policy.schema_version,
+    require_handoff: args.policy.require_handoff,
+    require_delegated_result: args.policy.require_delegated_result,
+    seed_max_utf8_bytes: args.policy.seed_max_utf8_bytes,
+  });
+  const seed = renderContinuitySeed(ledger, args.policy.seed_max_utf8_bytes);
+  return {
+    rendered: seed.rendered,
+    omitted_items: seed.omitted.items,
+    omitted_packets: seed.omitted.packets,
+    used_bytes: seed.budget.used_bytes,
+    max_bytes: seed.budget.max_bytes,
+  };
 }
