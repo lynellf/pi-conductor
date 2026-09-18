@@ -16,6 +16,7 @@ import {
   ContinuityMaterializationException,
   materializeContinuity,
 } from "../../src/persistence/continuity-materialization.js";
+import type { PersistedRecord } from "../../src/persistence/log.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ function makeTransitionAccepted(recordId: string, runId: string, ts: number, con
         recipient_role: "implementer" as const,
         payload: { summary: "test", continuity },
         utf8_bytes: 12,
-        continuity_evidence: [],
+        continuity_evidence: [] as import("../../src/core/types.js").ContinuityEvidenceResolution[],
         continuity_packet_utf8_bytes: JSON.stringify(continuity).length,
       }
     : null;
@@ -103,13 +104,13 @@ function makePacket(
   findings: Array<{ id: string; kind?: string; supersedes?: string[]; statement?: string }> = [],
   questions: Array<{ id: string; blocking?: boolean; supersedes?: string[] }> = [],
   nextSteps: Array<{ id: string; owner?: string; action?: string; supersedes?: string[] }> = [],
-) {
+): import("../../src/seam/continuity.js").ContinuityPacketV1 {
   return {
     schema_version: 1,
     summary,
     findings: findings.map((f) => ({
       id: f.id,
-      kind: f.kind ?? "fact",
+      kind: (f.kind ?? "fact") as "fact" | "decision" | "negative_result" | "risk",
       confidence: "observed" as const,
       statement: f.statement ?? "test finding",
       evidence: [],
@@ -126,12 +127,39 @@ function makePacket(
     next_steps: nextSteps.map((ns) => ({
       id: ns.id,
       action: ns.action ?? "test action",
-      owner: ns.owner ?? "recipient",
+      owner: (ns.owner ?? "recipient") as "parent" | "recipient" | "reviewer" | "operator",
       evidence: [],
       supersedes: ns.supersedes ?? [],
     })),
     okf_candidate_ids: [],
   };
+}
+
+function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] {
+  const seen = new Set<string>();
+  const out: PersistedRecord[] = [];
+  for (const record of records) {
+    if (
+      record.type === "transition_accepted" &&
+      typeof record.session_file === "string" &&
+      !seen.has(record.session_file)
+    ) {
+      seen.add(record.session_file);
+      out.push({
+        type: "session_started",
+        run_id: record.run_id,
+        role: record.role,
+        visit_index: 1,
+        state: record.role,
+        model: "test",
+        session_file: record.session_file,
+        parent_session: null,
+        ts: record.ts - 1,
+      });
+    }
+    out.push(record);
+  }
+  return out;
 }
 
 // ─── Test suite ────────────────────────────────────────────────────────
@@ -152,8 +180,8 @@ describe("continuity-materialization-order", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger1 = materializeContinuity(records1, { run_id: "run-1" });
-      const ledger2 = materializeContinuity(records2, { run_id: "run-1" });
+      const ledger1 = materializeContinuity(withLifecycles(records1), { run_id: "run-1" });
+      const ledger2 = materializeContinuity(withLifecycles(records2), { run_id: "run-1" });
 
       expect(stableJsonStringify(ledger1)).toBe(stableJsonStringify(ledger2));
     });
@@ -169,7 +197,7 @@ describe("continuity-materialization-order", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       expect(ledger.envelopes.map((envelope) => envelope.packet.summary)).toEqual([
         "first",
@@ -183,7 +211,7 @@ describe("continuity-materialization-order", () => {
     it("items without supersedes are active", () => {
       const packet = makePacket("test", [{ id: "f-1" }, { id: "f-2" }]);
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const active = ledger.findings.filter((f) => f.superseded_by.length === 0);
       expect(active).toHaveLength(2);
@@ -202,7 +230,7 @@ describe("continuity-materialization-order", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       // f-1 is superseded by f-2
       const f1 = ledger.findings.find((f) => f.item.id === "f-1");
@@ -227,7 +255,7 @@ describe("continuity-materialization-order", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       // Both items present
       const allFindingIds = ledger.findings.map((f) => f.item.id);
@@ -241,7 +269,7 @@ describe("continuity-materialization-order", () => {
       const packet = makePacket("test", [{ id: "f-1", supersedes: ["f-1"] }]);
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
 
-      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow(
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow(
         ContinuityMaterializationException,
       );
     });
@@ -250,7 +278,7 @@ describe("continuity-materialization-order", () => {
       const packet = makePacket("test", [{ id: "f-2", supersedes: ["f-nonexistent"] }]);
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
 
-      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow(
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow(
         ContinuityMaterializationException,
       );
     });
@@ -264,7 +292,7 @@ describe("continuity-materialization-order", () => {
       ]);
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
 
-      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow(
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow(
         ContinuityMaterializationException,
       );
     });
@@ -274,7 +302,7 @@ describe("continuity-materialization-order", () => {
       const records = [makeTransitionAccepted("rec-synthetic-42", "run-1", 1000, packet)];
 
       try {
-        materializeContinuity(records, { run_id: "run-1" });
+        materializeContinuity(withLifecycles(records), { run_id: "run-1" });
         expect.fail("should have thrown");
       } catch (error) {
         expect(error).toBeInstanceOf(ContinuityMaterializationException);
@@ -286,19 +314,111 @@ describe("continuity-materialization-order", () => {
     });
   });
 
+  describe("replay authority", () => {
+    it("rejects a continuity handoff without its preceding role lifecycle", () => {
+      const records = [
+        makeTransitionAccepted("orphan", "run-1", 1000, makePacket("orphan", [{ id: "f-1" }])),
+      ];
+      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow(
+        ContinuityMaterializationException,
+      );
+    });
+
+    it("rejects extra or wrong-kind evidence resolutions rather than verifying a finding", () => {
+      const packet = {
+        ...makePacket("evidence", [{ id: "f-1" }]),
+        findings: [
+          {
+            id: "f-1",
+            kind: "fact",
+            confidence: "verified" as const,
+            statement: "must bind evidence",
+            evidence: [{ kind: "external" as const, url: "https://example.com", title: "source" }],
+            supersedes: [],
+          },
+        ],
+      };
+      const record = makeTransitionAccepted("evidence", "run-1", 1000, packet);
+      const handoff = record.accepted_handoff;
+      expect(handoff).toBeDefined();
+      if (handoff === undefined) throw new Error("test handoff missing");
+      handoff.continuity_evidence = [
+        { ref_key: "findings:f-1:0", kind: "repository", status: "verified" },
+        { ref_key: "extra", kind: "external", status: "declared" },
+      ] as const;
+      expect(() => materializeContinuity(withLifecycles([record]), { run_id: "run-1" })).toThrow(
+        ContinuityMaterializationException,
+      );
+    });
+
+    it("folds evaluation supersession from older item to newer item", () => {
+      const first = makePacket("first");
+      first.evaluations = [{ id: "e-1", label: "old", execution_id: "exec-1", supersedes: [] }];
+      const second = makePacket("second");
+      second.evaluations = [
+        { id: "e-2", label: "new", execution_id: "exec-1", supersedes: ["e-1"] },
+      ];
+      const start = {
+        type: "tool_execution_started" as const,
+        schema_version: 1 as const,
+        run_id: "run-1",
+        execution_id: "exec-1",
+        supervision_id: "supervision-1",
+        logical_session_id: "logical-1",
+        role_session_id: "role-1",
+        tool_call_id: "call-1",
+        tool_name: "bash",
+        timeout_ms: 100,
+        recovery_count: 0,
+        ts: 1,
+      };
+      const finished = {
+        type: "tool_execution_finished" as const,
+        schema_version: 1 as const,
+        run_id: "run-1",
+        execution_id: "exec-1",
+        supervision_id: "supervision-1",
+        logical_session_id: "logical-1",
+        role_session_id: "role-1",
+        tool_call_id: "call-1",
+        tool_name: "bash",
+        elapsed_ms: 1,
+        recovery_count: 0,
+        outcome: "completed" as const,
+        cleanup: "confirmed" as const,
+        ts: 2,
+      };
+      const ledger = materializeContinuity(
+        withLifecycles([
+          start,
+          finished,
+          makeTransitionAccepted("one", "run-1", 1000, first),
+          makeTransitionAccepted("two", "run-1", 2000, second),
+        ]),
+        { run_id: "run-1" },
+      );
+      expect(
+        ledger.evaluations.find((evaluation) => evaluation.id === "e-1")?.superseded_by,
+      ).toEqual(["e-2"]);
+      expect(
+        ledger.evaluations.find((evaluation) => evaluation.id === "e-2")?.superseded_by,
+      ).toEqual([]);
+    });
+  });
+
   describe("malformed records", () => {
     it("rejects record with unsupported schema version", () => {
       const packet = { ...makePacket("test"), schema_version: 99 };
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
 
-      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow(
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow(
         ContinuityMaterializationException,
       );
     });
 
     it("rejects record with non-object packet", () => {
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, "not-an-object")];
-      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow(
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow(
         ContinuityMaterializationException,
       );
     });
@@ -308,7 +428,7 @@ describe("continuity-materialization-order", () => {
         makeTransitionAccepted("rec-1", "run-1", 1000, null), // no continuity
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       expect(ledger.envelopes).toHaveLength(0);
     });
   });
@@ -321,9 +441,9 @@ describe("continuity-materialization-order", () => {
       ]);
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
 
-      const ledger1 = materializeContinuity(records, { run_id: "run-1" });
-      const ledger2 = materializeContinuity(records, { run_id: "run-1" });
-      const ledger3 = materializeContinuity(records, { run_id: "run-1" });
+      const ledger1 = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
+      const ledger2 = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
+      const ledger3 = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json1 = stableJsonStringify(ledger1);
       const json2 = stableJsonStringify(ledger2);
@@ -344,8 +464,8 @@ describe("continuity-materialization-order", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger1 = materializeContinuity(records, { run_id: "run-1" });
-      const ledger2 = materializeContinuity(records, { run_id: "run-1" });
+      const ledger1 = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
+      const ledger2 = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       expect(ledger1.envelopes.map((e) => e.packet.summary)).toEqual(
         ledger2.envelopes.map((e) => e.packet.summary),
@@ -357,7 +477,7 @@ describe("continuity-materialization-order", () => {
     it("no continuity records produces valid empty ledger", () => {
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, null)];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       expect(ledger.envelopes).toHaveLength(0);
       expect(ledger.findings).toHaveLength(0);
@@ -384,7 +504,7 @@ describe("continuity-materialization-order", () => {
         },
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       expect(ledger.envelopes).toHaveLength(0);
     });
   });
@@ -398,7 +518,7 @@ describe("continuity-materialization-order", () => {
       makeSubagentCompleted("child-e2e", "run-1", 2000, childPacket),
     ];
 
-    const restarted = materializeContinuity(JSON.parse(JSON.stringify(records)), {
+    const restarted = materializeContinuity(withLifecycles(JSON.parse(JSON.stringify(records))), {
       run_id: "run-1",
     });
 
@@ -417,7 +537,7 @@ describe("continuity-materialization-order", () => {
         makeSubagentCompleted("child-1", "run-1", 2000, packet),
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       expect(ledger.envelopes).toHaveLength(1);
       const envelope = ledger.envelopes[0];

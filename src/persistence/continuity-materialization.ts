@@ -5,11 +5,11 @@ import type {
   ContinuityFinding,
   ContinuityNextStep,
   ContinuityQuestion,
+  EvidenceRef,
 } from "../seam/continuity.js";
 import { continuityPacketV1Schema } from "../seam/continuity.js";
 import type {
   ContinuityActiveOrSupersededItem,
-  ContinuityChildProvenance,
   ContinuityEnvelopeV1,
   ContinuityLedger,
   ContinuityLedgerCounts,
@@ -17,12 +17,25 @@ import type {
   ContinuityResolvedEvaluation,
   MaterializeContinuity,
 } from "./continuity.js";
-import { CONTINUITY_MAX_PACKET_BYTES, normalizeAndMeasurePacket } from "./continuity.js";
+import {
+  buildContinuityItemIndex,
+  type ContinuityItemIndex,
+  ContinuityItemIndexError,
+} from "./continuity-item-index.js";
+import {
+  ContinuityLifecycleIndex,
+  continuityEnvelope,
+  type MaterializationFail,
+  recordId,
+  recordRunId,
+  timestamp,
+} from "./continuity-materialization-provenance.js";
 import type { PersistedRecord } from "./log.js";
 import {
   isToolExecutionRecord,
   reconstructToolExecutionTimeline,
   type ToolExecutionRecord,
+  type ToolExecutionTimeline,
 } from "./tool-execution.js";
 
 export type ContinuityMaterializationCode =
@@ -44,37 +57,28 @@ export class ContinuityMaterializationException extends Error {
   }
 }
 
-type Parent = { readonly role: string; readonly visit: number; readonly attempt: number };
 type Item = ContinuityFinding | ContinuityQuestion | ContinuityNextStep;
 
-/** Fold records in their append order. Reordering a log is never recovery. */
+/** Fold records in append order; malformed authority or resolution metadata never replays. */
 export const materializeContinuity: MaterializeContinuity = (records, policy) => {
-  const parents = new Map<string, Parent>();
-  const executions = executionOutcomes(records, policy.run_id);
+  const lifecycle = new ContinuityLifecycleIndex();
   const envelopes: ContinuityEnvelopeV1[] = [];
   let bytes = 0;
+  const fail: MaterializationFail = (identity, message) => {
+    throw new ContinuityMaterializationException(identity, codeFor(message), message);
+  };
   for (const record of records) {
     if (recordRunId(record) !== policy.run_id) continue;
-    if (record.type === "subagent_started") {
-      parents.set(record.child_id, {
-        role:
-          record.parent_role ??
-          fail(id(record), "continuity_malformed_record", "child start lacks parent role"),
-        visit:
-          record.parent_visit_index ??
-          fail(id(record), "continuity_malformed_record", "child start lacks parent visit"),
-        attempt: 1,
-      });
-    }
-    const envelope = envelopeFromRecord(record, parents);
+    lifecycle.observe(record, fail);
+    const envelope = envelopeFromRecord(record, lifecycle, fail);
     if (envelope === null) continue;
-    validateEnvelope(envelope);
     envelopes.push(envelope);
     bytes += envelope.packet_utf8_bytes;
   }
-  const items = resolveItems(envelopes);
-  const evaluations = resolveEvaluations(envelopes, executions);
-  const evidence = Object.freeze(envelopes.flatMap((envelope) => envelope.evidence_resolutions));
+  const executions = executionOutcomes(records, policy.run_id, fail);
+  for (const envelope of envelopes) validateEnvelope(envelope, executions, fail);
+  const items = resolveItems(envelopes, fail);
+  const evaluations = resolveEvaluations(envelopes, executions, items.index, fail);
   const candidates = candidatesFrom(items.findings, envelopes);
   const active = <T>(entries: readonly ContinuityActiveOrSupersededItem<T>[]) =>
     entries.filter((entry) => entry.superseded_by.length === 0).length;
@@ -98,7 +102,9 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
     evaluations,
     open_questions: items.questions,
     next_steps: items.nextSteps,
-    evidence_resolutions: evidence,
+    evidence_resolutions: Object.freeze(
+      envelopes.flatMap((envelope) => envelope.evidence_resolutions),
+    ),
     okf_candidates: candidates,
     counts,
   }) as ContinuityLedger;
@@ -106,276 +112,219 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
 
 function envelopeFromRecord(
   record: PersistedRecord,
-  parents: ReadonlyMap<string, Parent>,
+  lifecycle: ContinuityLifecycleIndex,
+  fail: MaterializationFail,
 ): ContinuityEnvelopeV1 | null {
   if (record.type === "transition_accepted") {
     const handoff = record.accepted_handoff;
     if (handoff === undefined || handoff === null) return null;
-    const hasMetadata =
-      handoff.continuity_evidence !== undefined ||
-      handoff.continuity_packet_utf8_bytes !== undefined;
-    if (!hasMetadata) return null;
+    if (
+      handoff.continuity_evidence === undefined &&
+      handoff.continuity_packet_utf8_bytes === undefined
+    )
+      return null;
     if (
       handoff.continuity_evidence === undefined ||
       handoff.continuity_packet_utf8_bytes === undefined
     )
-      return fail(
-        id(record),
-        "continuity_malformed_record",
-        "handoff continuity metadata is partial",
-      );
-    const packet = objectField(handoff.payload, "continuity", id(record));
-    return envelope(
+      return fail(recordId(record), "handoff continuity metadata is partial");
+    const payload = handoff.payload;
+    if (!isObject(payload) || !("continuity" in payload))
+      return fail(recordId(record), "missing continuity");
+    const source = lifecycle.handoff(record, fail);
+    return continuityEnvelope(
       record,
       "handoff",
-      record.role,
-      visit(record.session_file),
-      packet,
+      source.role,
+      source.visit,
+      payload.continuity,
       handoff.continuity_packet_utf8_bytes,
       handoff.continuity_evidence,
+      fail,
     );
   }
   if (record.type !== "subagent_completed" || record.continuity === undefined) return null;
-  const parent = parents.get(record.child_id);
-  if (parent === undefined)
-    return fail(
-      id(record),
-      "continuity_malformed_record",
-      "child completion has no preceding start",
-    );
-  return envelope(
+  const source = lifecycle.child(record, fail);
+  return continuityEnvelope(
     record,
     "delegated_result",
-    parent.role,
-    parent.visit,
+    source.role,
+    source.visit,
     record.continuity.packet,
     record.continuity.packet_utf8_bytes,
     record.continuity.evidence_resolutions,
-    {
-      child_id: record.child_id,
-      subagent: record.subagent,
-      task_id: record.task_id,
-      attempt: parent.attempt,
-    },
+    fail,
+    source.child,
   );
 }
 
-function envelope(
-  record: PersistedRecord,
-  source: ContinuityEnvelopeV1["source"],
-  role: string,
-  visitIndex: number,
-  packet: unknown,
-  declaredBytes: number,
-  evidence: readonly ContinuityEvidenceResolution[],
-  child?: ContinuityChildProvenance,
-): ContinuityEnvelopeV1 {
-  const recordId = id(record);
-  if (!isObject(packet))
-    return fail(recordId, "continuity_packet_not_object", "continuity packet is not an object");
-  const measured = normalizeAndMeasurePacket(packet);
-  if (
-    !Number.isSafeInteger(declaredBytes) ||
-    declaredBytes <= 0 ||
-    declaredBytes !== measured.bytes ||
-    measured.bytes > CONTINUITY_MAX_PACKET_BYTES
-  )
-    return fail(
-      recordId,
-      "continuity_packet_too_large",
-      "continuity packet byte count is not exact",
-    );
-  return Object.freeze({
-    schema_version: 1,
-    source,
-    record_id: recordId,
-    run_id: recordRunId(record),
-    role,
-    visit: visitIndex,
-    ...(child === undefined ? {} : { child }),
-    accepted_at: new Date(timestamp(record)).toISOString(),
-    packet_utf8_bytes: measured.bytes,
-    packet: packet as ContinuityEnvelopeV1["packet"],
-    evidence_resolutions: Object.freeze(evidence.map((value) => Object.freeze({ ...value }))),
-  });
-}
-
-function validateEnvelope(envelope: ContinuityEnvelopeV1): void {
+function validateEnvelope(
+  envelope: ContinuityEnvelopeV1,
+  executions: ReadonlyMap<string, ContinuityResolvedEvaluation>,
+  fail: MaterializationFail,
+): void {
   if (envelope.packet.schema_version !== 1)
-    fail(
-      envelope.record_id,
-      "continuity_unsupported_version",
-      "unsupported continuity packet version",
-    );
+    fail(envelope.record_id, "unsupported continuity packet version");
   if (!Value.Check(continuityPacketV1Schema, envelope.packet))
-    fail(
-      envelope.record_id,
-      "continuity_malformed_record",
-      "continuity packet fails TypeBox schema",
-    );
-  const expected = evidenceKeys(envelope.packet);
-  const actual = new Map(
-    envelope.evidence_resolutions.map((resolution) => [resolution.ref_key, resolution]),
-  );
-  if (
-    actual.size !== envelope.evidence_resolutions.length ||
-    expected.some((key) => !actual.has(key))
-  )
-    fail(
-      envelope.record_id,
-      "continuity_malformed_record",
-      "continuity evidence resolution keys are incomplete",
-    );
+    fail(envelope.record_id, "continuity packet fails TypeBox schema");
+  const expected = evidenceEntries(envelope.packet);
+  const actual = envelope.evidence_resolutions;
+  if (actual.length !== expected.length)
+    fail(envelope.record_id, "continuity evidence resolution count is not exact");
+  for (let index = 0; index < expected.length; index += 1) {
+    const wanted = expected[index];
+    const resolved = actual[index];
+    if (
+      wanted === undefined ||
+      resolved === undefined ||
+      wanted.key !== resolved.ref_key ||
+      wanted.ref.kind !== resolved.kind
+    )
+      fail(envelope.record_id, "continuity evidence resolution does not bind its exact reference");
+    if (wanted.ref.kind === "tool_execution") {
+      const durable = executions.get(wanted.ref.execution_id);
+      const expectedStatus =
+        durable !== undefined && durable.cleanup_disposition === "confirmed"
+          ? "verified"
+          : "missing";
+      if (resolved.status !== expectedStatus)
+        fail(envelope.record_id, "tool execution resolution does not match durable reconciliation");
+    }
+  }
   for (const finding of envelope.packet.findings) {
     if (
       finding.confidence === "verified" &&
       (!finding.evidence.length ||
         finding.evidence.some(
-          (_ref, index) => actual.get(`findings:${finding.id}:${index}`)?.status !== "verified",
+          (_ref, index) =>
+            actual.find((r) => r.ref_key === `findings:${finding.id}:${index}`)?.status !==
+            "verified",
         ))
     )
-      fail(
-        envelope.record_id,
-        "continuity_malformed_record",
-        "verified finding lacks verified durable evidence",
-      );
+      fail(envelope.record_id, "verified finding lacks verified durable evidence");
   }
 }
 
-function resolveItems(envelopes: readonly ContinuityEnvelopeV1[]) {
-  const seen = new Map<string, { superseded_by: string[] }>();
-  const findings: [ContinuityFinding, ContinuityEnvelopeV1][] = [];
-  const questions: [ContinuityQuestion, ContinuityEnvelopeV1][] = [];
-  const nextSteps: [ContinuityNextStep, ContinuityEnvelopeV1][] = [];
+function resolveItems(envelopes: readonly ContinuityEnvelopeV1[], fail: MaterializationFail) {
+  let index: ContinuityItemIndex;
+  try {
+    index = buildContinuityItemIndex(
+      envelopes.map((envelope) => ({ record_id: envelope.record_id, packet: envelope.packet })),
+    );
+  } catch (cause) {
+    if (cause instanceof ContinuityItemIndexError) fail(cause.record_id, cause.message);
+    throw cause;
+  }
+  const groups = {
+    findings: [] as [ContinuityFinding, ContinuityEnvelopeV1][],
+    questions: [] as [ContinuityQuestion, ContinuityEnvelopeV1][],
+    nextSteps: [] as [ContinuityNextStep, ContinuityEnvelopeV1][],
+  };
   for (const envelope of envelopes) {
-    const groups: readonly [readonly Item[], (item: Item) => void][] = [
-      [envelope.packet.findings, (item) => findings.push([item as ContinuityFinding, envelope])],
-      [
-        envelope.packet.open_questions,
-        (item) => questions.push([item as ContinuityQuestion, envelope]),
-      ],
-      [
-        envelope.packet.next_steps,
-        (item) => nextSteps.push([item as ContinuityNextStep, envelope]),
-      ],
-    ];
-    for (const [group, add] of groups)
-      for (const item of group) {
-        if (seen.has(item.id))
-          fail(
-            envelope.record_id,
-            "continuity_malformed_record",
-            `duplicate global item id '${item.id}'`,
-          );
-        for (const target of item.supersedes) {
-          if (target === item.id || !seen.has(target))
-            fail(
-              envelope.record_id,
-              "continuity_malformed_record",
-              `supersedes target '${target}' is not an earlier item`,
-            );
-          seen.get(target)?.superseded_by.push(item.id);
-        }
-        seen.set(item.id, { superseded_by: [] });
-        add(item);
-      }
+    for (const item of envelope.packet.findings) groups.findings.push([item, envelope]);
+    for (const item of envelope.packet.open_questions) groups.questions.push([item, envelope]);
+    for (const item of envelope.packet.next_steps) groups.nextSteps.push([item, envelope]);
   }
   const project = <T extends Item>(entries: readonly [T, ContinuityEnvelopeV1][]) =>
     Object.freeze(
       entries.map(([item, envelope]) =>
         Object.freeze({
           item,
-          superseded_by: Object.freeze([...(seen.get(item.id)?.superseded_by ?? [])]),
+          superseded_by: index.superseded_by.get(item.id) ?? Object.freeze([]),
           envelope_source: envelope.source,
           record_id: envelope.record_id,
         }),
       ),
     );
   return Object.freeze({
-    findings: project(findings),
-    questions: project(questions),
-    nextSteps: project(nextSteps),
+    index,
+    findings: project(groups.findings),
+    questions: project(groups.questions),
+    nextSteps: project(groups.nextSteps),
   });
 }
 
 function executionOutcomes(
   records: readonly PersistedRecord[],
   runId: string,
+  fail: MaterializationFail,
 ): ReadonlyMap<string, ContinuityResolvedEvaluation> {
   const toolRecords = records.filter(
     (record): record is ToolExecutionRecord =>
       recordRunId(record) === runId && isToolExecutionRecord(record),
   );
-  const out = new Map<string, ContinuityResolvedEvaluation>();
+  let timeline: ToolExecutionTimeline;
   try {
-    reconstructToolExecutionTimeline(toolRecords);
+    timeline = reconstructToolExecutionTimeline(toolRecords);
   } catch {
-    return out;
+    return fail("tool-execution", "execution timeline is not durably reconciled");
   }
-  for (const record of toolRecords)
-    if (record.type === "tool_execution_finished")
-      out.set(record.execution_id, {
-        id: "",
-        label: "",
-        execution_id: record.execution_id,
-        status:
-          record.outcome === "completed"
-            ? "passed"
-            : record.outcome === "failed"
-              ? "failed"
-              : "incomplete",
-        exit_summary: record.outcome,
-        cleanup_disposition: record.cleanup,
-        command_digest: null,
-        superseded_by: [],
-        envelope_source: "handoff",
-        record_id: id(record),
-      });
-  return out;
+  return new Map(
+    timeline.entries
+      .filter((entry) => entry.finished !== undefined)
+      .map((entry) => {
+        const finished = entry.finished as NonNullable<typeof entry.finished>;
+        return [
+          entry.started.execution_id,
+          {
+            id: "",
+            label: "",
+            execution_id: entry.started.execution_id,
+            status:
+              finished.outcome === "completed"
+                ? "passed"
+                : finished.outcome === "failed"
+                  ? "failed"
+                  : "incomplete",
+            exit_summary: finished.outcome,
+            cleanup_disposition: finished.cleanup,
+            command_digest: null,
+            superseded_by: [],
+            envelope_source: "handoff" as const,
+            record_id: recordId(finished),
+          },
+        ];
+      }),
+  );
 }
+
 function resolveEvaluations(
   envelopes: readonly ContinuityEnvelopeV1[],
   executions: ReadonlyMap<string, ContinuityResolvedEvaluation>,
+  index: ReturnType<typeof buildContinuityItemIndex>,
+  fail: MaterializationFail,
 ): readonly ContinuityResolvedEvaluation[] {
-  const ids = new Set<string>();
-  const items: ContinuityResolvedEvaluation[] = [];
+  const out: ContinuityResolvedEvaluation[] = [];
   for (const envelope of envelopes)
     for (const evaluation of envelope.packet.evaluations) {
-      if (ids.has(evaluation.id) || evaluation.supersedes.some((target) => !ids.has(target)))
-        fail(
-          envelope.record_id,
-          "continuity_malformed_record",
-          "evaluation identity or supersession is invalid",
-        );
       const outcome = executions.get(evaluation.execution_id);
       if (outcome === undefined)
         fail(
           envelope.record_id,
-          "continuity_malformed_record",
           `evaluation execution '${evaluation.execution_id}' is not durable`,
         );
-      ids.add(evaluation.id);
-      items.push(
+      out.push(
         Object.freeze({
           ...outcome,
           id: evaluation.id,
           label: evaluation.label,
-          superseded_by: Object.freeze([...evaluation.supersedes]),
+          superseded_by: index.superseded_by.get(evaluation.id) ?? Object.freeze([]),
           envelope_source: envelope.source,
           record_id: envelope.record_id,
         }),
       );
     }
-  return Object.freeze(items);
+  return Object.freeze(out);
 }
+
 function candidatesFrom(
   findings: readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[],
   envelopes: readonly ContinuityEnvelopeV1[],
 ): readonly ContinuityOkfCandidate[] {
-  const packetCandidates = new Map(
+  const candidates = new Map(
     envelopes.map((envelope) => [envelope.record_id, new Set(envelope.packet.okf_candidate_ids)]),
   );
-  const evidence = new Map(
+  const resolutions = new Map(
     envelopes.flatMap((envelope) =>
       envelope.evidence_resolutions.map(
         (resolution) => [`${envelope.record_id}:${resolution.ref_key}`, resolution] as const,
@@ -385,15 +334,16 @@ function candidatesFrom(
   return Object.freeze(
     findings.flatMap((finding) => {
       if (
-        !packetCandidates.get(finding.record_id)?.has(finding.item.id) ||
+        !candidates.get(finding.record_id)?.has(finding.item.id) ||
         finding.item.confidence !== "verified" ||
         finding.superseded_by.length
       )
         return [];
-      const refs = finding.item.evidence.map((_ref, index) =>
-        evidence.get(`${finding.record_id}:findings:${finding.item.id}:${index}`),
-      );
-      if (refs.some((ref) => ref?.status !== "verified")) return [];
+      const evidence = finding.item.evidence.map((ref, index) => ({
+        ref,
+        resolution: resolutions.get(`${finding.record_id}:findings:${finding.item.id}:${index}`),
+      }));
+      if (evidence.some(({ resolution }) => resolution?.status !== "verified")) return [];
       return [
         {
           finding_id: finding.item.id,
@@ -401,14 +351,9 @@ function candidatesFrom(
           envelope_source: finding.envelope_source,
           record_id: finding.record_id,
           evidence: Object.freeze(
-            refs.map((ref) => ({
-              kind: ref?.kind ?? "repository",
-              ref_key: ref?.ref_key ?? "",
-              status: ref?.status ?? "missing",
-              ...(ref?.resolved_path === undefined ? {} : { resolved_path: ref.resolved_path }),
-              ...(ref?.resolved_commit === undefined
-                ? {}
-                : { resolved_commit: ref.resolved_commit }),
+            evidence.map(({ ref, resolution }) => ({
+              ref,
+              ...(resolution as ContinuityEvidenceResolution),
             })),
           ),
         },
@@ -416,41 +361,30 @@ function candidatesFrom(
     }),
   );
 }
-function evidenceKeys(packet: ContinuityEnvelopeV1["packet"]): string[] {
-  return [packet.findings, packet.open_questions, packet.next_steps].flatMap((items, group) =>
+
+function evidenceEntries(
+  packet: ContinuityEnvelopeV1["packet"],
+): readonly { readonly key: string; readonly ref: EvidenceRef }[] {
+  return (
+    [
+      ["findings", packet.findings],
+      ["open_questions", packet.open_questions],
+      ["next_steps", packet.next_steps],
+    ] as const
+  ).flatMap(([collection, items]) =>
     items.flatMap((item) =>
-      item.evidence.map(
-        (_ref, index) =>
-          `${["findings", "open_questions", "next_steps"][group]}:${item.id}:${index}`,
-      ),
+      item.evidence.map((ref, index) => ({ key: `${collection}:${item.id}:${index}`, ref })),
     ),
   );
 }
-function id(record: PersistedRecord): string {
-  return "session_file" in record
-    ? `${record.type}:${record.session_file}`
-    : `${record.type}:${timestamp(record)}`;
-}
-function timestamp(record: PersistedRecord): number {
-  return record.type === "checkpoint_snapshot" ? record.checkpoint.updated_at : record.ts;
-}
-function recordRunId(record: PersistedRecord): string {
-  return record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
-}
-function objectField(value: unknown, key: string, recordId: string): unknown {
-  if (!isObject(value) || !(key in value))
-    return fail(recordId, "continuity_malformed_record", `missing ${key}`);
-  return value[key];
+function codeFor(message: string): ContinuityMaterializationCode {
+  if (message.includes("unsupported")) return "continuity_unsupported_version";
+  if (message.includes("not an object")) return "continuity_packet_not_object";
+  if (message.includes("byte count")) return "continuity_packet_too_large";
+  return "continuity_malformed_record";
 }
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function visit(sessionFile: string): number {
-  const match = /(\d+)/.exec(sessionFile);
-  return match === null ? 1 : Number(match[1]) || 1;
-}
-function fail(recordId: string, code: ContinuityMaterializationCode, message: string): never {
-  throw new ContinuityMaterializationException(recordId, code, message);
 }
 
 export { renderContinuitySeed } from "./continuity-seed.js";

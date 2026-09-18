@@ -9,7 +9,7 @@ import type {
   ContinuityLedger,
   ContinuityResolvedEvaluation,
 } from "./continuity.js";
-import { escapeMarkdownText } from "./continuity.js";
+import { escapeMarkdownText, stableJsonStringify } from "./continuity.js";
 
 function escapeBlock(text: string): string {
   return text
@@ -111,14 +111,14 @@ export function renderLedgerMarkdown(ledger: ContinuityLedger): string {
   if (ledger.envelopes.length > 0) {
     lines.push("## Provenance Log");
     lines.push("");
-    lines.push(`| # | Source | Role | Record | Timestamp | Bytes |`);
-    lines.push(`|---|---|---|---|---|---|`);
+    lines.push(`| # | Source | Role | Record | Timestamp | Bytes | Summary |`);
+    lines.push(`|---|---|---|---|---|---|---|`);
     ledger.envelopes.forEach((env, i) => {
       const sourceBadge = env.source === "handoff" ? "handoff" : "delegated";
       const childInfo =
         env.child !== undefined ? ` → ${escapeMarkdownText(env.child.subagent)}` : "";
       lines.push(
-        `| ${i + 1} | ${sourceBadge}${childInfo} | ${escapeMarkdownText(env.role)} | ${escapeMarkdownText(env.record_id)} | ${escapeMarkdownText(env.accepted_at)} | ${env.packet_utf8_bytes} |`,
+        `| ${i + 1} | ${sourceBadge}${childInfo} | ${escapeMarkdownText(env.role)} | ${escapeMarkdownText(env.record_id)} | ${escapeMarkdownText(env.accepted_at)} | ${env.packet_utf8_bytes} | ${escapeMarkdownText(env.packet.summary)} |`,
       );
     });
     lines.push("");
@@ -165,6 +165,8 @@ function renderFindingMarkdown(
   lines.push(`- **Confidence:** ${escapeMarkdownText(f.item.confidence)}`);
   lines.push(`- **Statement:** ${escapeBlock(f.item.statement)}`);
   lines.push(`- **Evidence:** ${f.item.evidence.length} reference(s)${supersessionNote}`);
+  for (const evidence of f.item.evidence)
+    lines.push(`  - \`${escapeMarkdownText(stableJsonStringify(evidence))}\``);
   lines.push(`- **Source:** ${f.envelope_source} | **Record:** ${escapeMarkdownText(f.record_id)}`);
   lines.push("");
 }
@@ -184,6 +186,8 @@ function renderQuestionMarkdown(
   lines.push("");
   lines.push(`- **Question:** ${escapeBlock(q.item.question)}`);
   lines.push(`- **Evidence:** ${q.item.evidence.length} reference(s)${supersessionNote}`);
+  for (const evidence of q.item.evidence)
+    lines.push(`  - \`${escapeMarkdownText(stableJsonStringify(evidence))}\``);
   lines.push(`- **Source:** ${q.envelope_source} | **Record:** ${escapeMarkdownText(q.record_id)}`);
   lines.push("");
 }
@@ -203,6 +207,8 @@ function renderNextStepMarkdown(
   lines.push(`- **Action:** ${escapeBlock(ns.item.action)}`);
   lines.push(`- **Owner:** ${escapeMarkdownText(ns.item.owner)}`);
   lines.push(`- **Evidence:** ${ns.item.evidence.length} reference(s)${supersessionNote}`);
+  for (const evidence of ns.item.evidence)
+    lines.push(`  - \`${escapeMarkdownText(stableJsonStringify(evidence))}\``);
   lines.push(
     `- **Source:** ${ns.envelope_source} | **Record:** ${escapeMarkdownText(ns.record_id)}`,
   );

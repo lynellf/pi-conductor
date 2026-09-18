@@ -16,6 +16,7 @@ import {
   materializeContinuity,
   renderContinuitySeed,
 } from "../../src/persistence/continuity-materialization.js";
+import type { PersistedRecord } from "../../src/persistence/log.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -93,6 +94,26 @@ function makePacket(opts: {
   };
 }
 
+function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] {
+  const out: PersistedRecord[] = [];
+  for (const record of records) {
+    if (record.type === "transition_accepted")
+      out.push({
+        type: "session_started",
+        run_id: record.run_id,
+        role: record.role,
+        visit_index: 1,
+        state: record.role,
+        model: "test",
+        session_file: record.session_file,
+        parent_session: null,
+        ts: record.ts - 1,
+      });
+    out.push(record);
+  }
+  return out;
+}
+
 // ─── Test suite ────────────────────────────────────────────────────────
 
 describe("continuity-materialization-truncation", () => {
@@ -103,7 +124,7 @@ describe("continuity-materialization-truncation", () => {
         findings: [{ id: "f-1", statement: "a".repeat(1000) }],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       // Use a generous cap
       const seed = renderContinuitySeed(ledger, 32 * 1024);
@@ -120,7 +141,7 @@ describe("continuity-materialization-truncation", () => {
       }));
       const packet = makePacket({ summary: "test", findings });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       // With a generous cap, all items should be included
       const seed = renderContinuitySeed(ledger, 32 * 1024);
@@ -142,7 +163,7 @@ describe("continuity-materialization-truncation", () => {
       }));
       const packet = makePacket({ summary: "test", findings });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       // Cap above the fixed metadata overhead but small enough to force
       // omission of one or more items (spec §11: must fail explicitly
@@ -162,7 +183,7 @@ describe("continuity-materialization-truncation", () => {
       const records = packets.map((p, i) =>
         makeTransitionAccepted(`rec-${i}`, "run-1", (i + 1) * 1000, p),
       );
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const seed = renderContinuitySeed(ledger, 32 * 1024);
       expect(seed.omitted.packets).toBeGreaterThanOrEqual(0);
@@ -179,7 +200,7 @@ describe("continuity-materialization-truncation", () => {
         ],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const seed = renderContinuitySeed(ledger, 32 * 1024);
       const blockingQuestions = seed.sections.blocking_questions as Array<{ id: string }>;
@@ -200,7 +221,7 @@ describe("continuity-materialization-truncation", () => {
         findings: [{ id: "f-1", kind: "fact", statement: "some finding" }],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const seed = renderContinuitySeed(ledger, 32 * 1024);
       const recipientSteps = seed.sections.recipient_next_steps as Array<{ id: string }>;
@@ -220,7 +241,7 @@ describe("continuity-materialization-truncation", () => {
         ],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const seed = renderContinuitySeed(ledger, 32 * 1024);
 
@@ -252,7 +273,7 @@ describe("continuity-materialization-truncation", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       const seed = renderContinuitySeed(ledger, 32 * 1024);
 
       const otherFindings = seed.sections.other_active_findings as Array<{ id: string }>;
@@ -266,7 +287,7 @@ describe("continuity-materialization-truncation", () => {
     it("fails explicitly when fixed metadata exceeds the cap", () => {
       const packet = makePacket({ summary: "tiny packet" });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       // Very small cap (less than even the seed wrapper structure)
       const tinyCap = 10;
@@ -286,7 +307,7 @@ describe("continuity-materialization-truncation", () => {
         nextSteps: [{ id: "ns-1", owner: "recipient", action: "do the thing" }],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const seed1 = renderContinuitySeed(ledger, 32 * 1024);
       const seed2 = renderContinuitySeed(ledger, 32 * 1024);
@@ -299,7 +320,7 @@ describe("continuity-materialization-truncation", () => {
     it("seed sections JSON is byte-identical across replays", () => {
       const packet = makePacket({ summary: "repeatable", findings: [{ id: "f-r" }] });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const seed1 = renderContinuitySeed(ledger, 32 * 1024);
       const seed2 = renderContinuitySeed(ledger, 32 * 1024);
@@ -315,7 +336,7 @@ describe("continuity-materialization-truncation", () => {
         evaluations: [{ id: "e-1", label: "test evaluation" }],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow();
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow();
     });
   });
 
@@ -329,7 +350,7 @@ describe("continuity-materialization-truncation", () => {
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
 
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       const seed = renderContinuitySeed(ledger, 32 * 1024);
 
       const summaries = seed.sections.packet_summaries as Array<{ summary: string }>;

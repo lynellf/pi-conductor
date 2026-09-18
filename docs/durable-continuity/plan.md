@@ -142,6 +142,8 @@ Child self-report is not sufficient proof.
 
 ## Phase 4 — independent review
 
+**Current disposition: `request_changes` at `2e1464f31307a2f4a85974dcd4e6a1c55441e356`.** The reviewer found bounded child-authority, replay binding, global identity/supersession, lifecycle provenance, output completeness, module-size, and verification-record defects. Remediation is in progress; no review axis below is accepted until the same reviewer re-reviews the remediation commit.
+
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify
 code.
@@ -165,17 +167,19 @@ records dispositions before the full gate.
 
 ## Phase 5 — full verification
 
+The prior report of 3,635 passed tests is stale (the prior branch actually recorded 3,638) and is invalidated by the review remediation. Record the exact post-remediation shard union only after all six shards complete successfully.
+
 - [x] `pnpm typecheck`
 - [x] `pnpm build`
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
 - [x] deterministic `pnpm vitest run --shard=1/6` through `--shard=6/6`
-      complete-suite union (352 test files; 3,635 passed, 1 pre-existing skipped)
-- [x] `pnpm audit --audit-level high`
+      complete-suite union (353 test files; 3,645 passed; 0 skipped)
+- [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
 - [x] inspect `git status --short` and final diff inventory
 - [x] reconcile every timed-out/ambiguous tool execution
-- [x] update all completed checkboxes in this plan
+- [x] update only completed checkboxes in this plan
 
 Long suites stream output. No `tail` pipeline may hide the running process or
 exit status. Partial shards are never described as the full gate.

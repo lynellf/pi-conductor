@@ -84,7 +84,7 @@ export function validatePacketSemantics(
   ctx: PacketValidationContext,
 ): readonly ContinuityDiagnostic[] {
   const errors: ContinuityDiagnostic[] = [];
-  errors.push(...validateUniqueIds(packet));
+  errors.push(...validateUniqueIds(packet, ctx.knownItemIds));
   errors.push(...validateSupersession(packet, ctx.knownItemIds));
   errors.push(...validateFindingsConfidence(packet, ctx));
   errors.push(...validateEvaluations(packet, ctx));
@@ -92,7 +92,10 @@ export function validatePacketSemantics(
   return Object.freeze(errors);
 }
 
-function validateUniqueIds(packet: ContinuityPacketV1): readonly ContinuityDiagnostic[] {
+function validateUniqueIds(
+  packet: ContinuityPacketV1,
+  knownItemIds: ReadonlySet<string>,
+): readonly ContinuityDiagnostic[] {
   const seen = new Map<string, "findings" | "evaluations" | "open_questions" | "next_steps">();
   const errors: ContinuityDiagnostic[] = [];
   const collections: { readonly name: string; readonly items: readonly { id: string }[] }[] = [
@@ -104,10 +107,13 @@ function validateUniqueIds(packet: ContinuityPacketV1): readonly ContinuityDiagn
   for (const { name, items } of collections) {
     for (const item of items) {
       const prior = seen.get(item.id);
-      if (prior !== undefined) {
+      if (prior !== undefined || knownItemIds.has(item.id)) {
         errors.push({
           code: "continuity_packet_duplicate_ids",
-          message: `duplicate continuity item id '${item.id}' (already present in '${prior}')`,
+          message:
+            prior === undefined
+              ? `duplicate continuity item id '${item.id}' already exists in this run`
+              : `duplicate continuity item id '${item.id}' (already present in '${prior}')`,
           item_id: item.id,
           collection: name,
         });
@@ -130,9 +136,12 @@ function validateSupersession(
     packet.evaluations,
     packet.open_questions,
     packet.next_steps,
-  ]) {
+  ])
     for (const item of collection) localIds.add(item.id);
-  }
+  // The visibility set advances in packet order. This permits a new item
+  // to supersede a genuinely earlier sibling, while rejecting a forward
+  // sibling and every cross-run/unknown target.
+  const visible = new Set(knownItemIds);
   for (const collection of [
     { name: "findings", items: packet.findings },
     { name: "evaluations", items: packet.evaluations },
@@ -150,16 +159,20 @@ function validateSupersession(
           });
           continue;
         }
-        if (localIds.has(target)) {
+        if (!visible.has(target)) {
           errors.push({
-            code: "continuity_supersedes_forward_reference",
-            message: `item '${item.id}' supersedes '${target}' which is also new in this packet`,
+            code: localIds.has(target)
+              ? "continuity_supersedes_forward_reference"
+              : "continuity_supersedes_missing_item",
+            message: localIds.has(target)
+              ? `item '${item.id}' supersedes '${target}' before it appears in this packet`
+              : `item '${item.id}' supersedes unknown item '${target}'`,
             item_id: item.id,
             collection: collection.name,
           });
           continue;
         }
-        if (!knownItemIds.has(target)) {
+        if (!knownItemIds.has(target) && !localIds.has(target)) {
           errors.push({
             code: "continuity_supersedes_missing_item",
             message: `item '${item.id}' supersedes unknown item '${target}'`,
@@ -168,6 +181,7 @@ function validateSupersession(
           });
         }
       }
+      visible.add(item.id);
     }
   }
   // Cycle detection: supersedes must point at strictly earlier items, so

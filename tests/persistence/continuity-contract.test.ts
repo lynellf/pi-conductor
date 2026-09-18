@@ -171,6 +171,52 @@ describe("validatePacketSemantics", () => {
     expect(fwd?.item_id).toBe("f-2");
   });
 
+  it("permits superseding a genuinely earlier item in the same packet", () => {
+    const errors = validatePacketSemantics(
+      packet({
+        findings: [
+          {
+            id: "older",
+            kind: "fact",
+            confidence: "observed",
+            statement: "old",
+            evidence: [],
+            supersedes: [],
+          },
+          {
+            id: "newer",
+            kind: "fact",
+            confidence: "observed",
+            statement: "new",
+            evidence: [],
+            supersedes: ["older"],
+          },
+        ],
+      }),
+      emptyContext(),
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it("rejects an item ID already accepted in this run", () => {
+    const errors = validatePacketSemantics(
+      packet({
+        findings: [
+          {
+            id: "existing",
+            kind: "fact",
+            confidence: "observed",
+            statement: "duplicate",
+            evidence: [],
+            supersedes: [],
+          },
+        ],
+      }),
+      { ...emptyContext(), knownItemIds: new Set(["existing"]) },
+    );
+    expect(errors.find((error) => error.code === "continuity_packet_duplicate_ids")).toBeDefined();
+  });
+
   it("rejects self-reference in supersedes", () => {
     const errors = validatePacketSemantics(
       packet({

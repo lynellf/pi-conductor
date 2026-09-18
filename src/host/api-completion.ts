@@ -1,5 +1,6 @@
 /** Own run-handle completion wiring and lease release (spec §11.1). */
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
+import { continuityItemIndexFromRecords } from "../persistence/continuity.js";
 import { type EndGuardRecord, endGuardRequestId } from "../persistence/end-guard.js";
 import type { ArtifactDeliveryRecord, RecordLog } from "../persistence/log.js";
 import { latestHandoffContextRef } from "./api-resume-state.js";
@@ -141,7 +142,7 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
               role: role as import("../core/types.js").Role,
               visit_index: visit,
             }),
-          knownContinuityItemIds: () => continuityItemIds(log.records(runId)),
+          knownContinuityItemIds: () => continuityItemIds(log.records(runId), runId),
         }),
     runControl,
     ...(endGuard === undefined
@@ -178,26 +179,7 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
 /** Read only host-persisted packet identities; malformed historical data is never trusted. */
 function continuityItemIds(
   records: readonly import("../persistence/log.js").PersistedRecord[],
+  runId: string,
 ): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const record of records) {
-    const raw =
-      record.type === "transition_accepted"
-        ? record.accepted_handoff?.payload
-        : record.type === "subagent_completed"
-          ? record.continuity?.packet
-          : undefined;
-    const packet =
-      typeof raw === "object" && raw !== null && "continuity" in raw ? raw.continuity : raw;
-    if (typeof packet !== "object" || packet === null) continue;
-    const packetRecord = packet as Record<string, unknown>;
-    for (const name of ["findings", "evaluations", "open_questions", "next_steps"] as const) {
-      const collection = packetRecord[name];
-      if (!Array.isArray(collection)) continue;
-      for (const item of collection)
-        if (typeof item === "object" && item !== null && typeof item.id === "string")
-          ids.add(item.id);
-    }
-  }
-  return ids;
+  return continuityItemIndexFromRecords(records, runId).ids;
 }

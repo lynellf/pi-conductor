@@ -6,6 +6,7 @@ import type {
   ContinuityNextStep,
   ContinuityPacketV1,
   ContinuityQuestion,
+  EvidenceRef,
 } from "../seam/continuity.js";
 import type { continuitySiblingSchema } from "./delegation-lifecycle-schema.js";
 import type { PersistedRecord } from "./log.js";
@@ -97,13 +98,10 @@ export interface ContinuityResolvedEvaluation {
 export interface ContinuityOkfCandidate {
   readonly finding_id: string;
   readonly statement: string;
-  readonly evidence: readonly {
-    readonly kind: ContinuityEvidenceResolution["kind"];
-    readonly ref_key: string;
-    readonly status: ContinuityEvidenceResolution["status"];
-    readonly resolved_path?: string;
-    readonly resolved_commit?: string;
-  }[];
+  /** Exact model-authored reference paired with its host-authored resolution. */
+  readonly evidence: readonly (ContinuityEvidenceResolution & {
+    readonly ref: EvidenceRef;
+  })[];
   readonly envelope_source: ContinuityEnvelopeSource;
   readonly record_id: string;
 }

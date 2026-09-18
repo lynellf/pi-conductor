@@ -23,6 +23,7 @@ import {
   renderLedgerMarkdown,
   renderOkfCandidates,
 } from "../../src/persistence/continuity-render.js";
+import type { PersistedRecord } from "../../src/persistence/log.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -118,6 +119,57 @@ function makePacket(opts: {
     })),
     okf_candidate_ids: opts.okfCandidateIds ?? [],
   };
+}
+
+function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] {
+  const out: PersistedRecord[] = [];
+  const hasVerifiedTool = records.some(
+    (record) =>
+      record.type === "transition_accepted" &&
+      typeof record.accepted_handoff?.payload === "object" &&
+      record.accepted_handoff?.payload !== null &&
+      JSON.stringify(record.accepted_handoff.payload).includes("exec-verified"),
+  );
+  if (hasVerifiedTool) {
+    const common = {
+      schema_version: 1 as const,
+      run_id: "run-1",
+      execution_id: "exec-verified",
+      supervision_id: "verified-supervision",
+      logical_session_id: "verified-logical",
+      role_session_id: "verified-role",
+      tool_call_id: "verified-call",
+      tool_name: "bash",
+    };
+    out.push(
+      { type: "tool_execution_started", ...common, timeout_ms: 10, recovery_count: 0, ts: 1 },
+      {
+        type: "tool_execution_finished",
+        ...common,
+        elapsed_ms: 1,
+        recovery_count: 0,
+        outcome: "completed",
+        cleanup: "confirmed",
+        ts: 2,
+      },
+    );
+  }
+  for (const record of records) {
+    if (record.type === "transition_accepted")
+      out.push({
+        type: "session_started",
+        run_id: record.run_id,
+        role: record.role,
+        visit_index: 1,
+        state: record.role,
+        model: "test",
+        session_file: record.session_file,
+        parent_session: null,
+        ts: record.ts - 1,
+      });
+    out.push(record);
+  }
+  return out;
 }
 
 // ─── Test suite ────────────────────────────────────────────────────────
@@ -226,7 +278,7 @@ describe("cli-continuity", () => {
         ],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       const markdown = renderLedgerMarkdown(ledger);
 
       // The dangerous text should be escaped (backslashes before control chars)
@@ -250,7 +302,7 @@ describe("cli-continuity", () => {
         ],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       const markdown = renderLedgerMarkdown(ledger);
 
       // The URL should appear as escaped text, not as a Markdown link
@@ -270,7 +322,7 @@ describe("cli-continuity", () => {
         ],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       const markdown = renderLedgerMarkdown(ledger);
 
       expect(markdown).toContain("q-markdown");
@@ -288,7 +340,7 @@ describe("cli-continuity", () => {
         ],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       const markdown = renderLedgerMarkdown(ledger);
 
       expect(markdown).toContain("ns-md");
@@ -309,12 +361,16 @@ describe("cli-continuity", () => {
         okfCandidateIds: ["f-verified"],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json = renderOkfCandidates(ledger);
       const parsed = JSON.parse(json);
       expect(parsed.candidates).toHaveLength(1);
       expect(parsed.candidates[0].finding_id).toBe("f-verified");
+      expect(parsed.candidates[0].evidence[0].ref).toEqual({
+        kind: "tool_execution",
+        execution_id: "exec-verified",
+      });
     });
 
     it("non-verified findings do not appear as OKF candidates", () => {
@@ -330,7 +386,7 @@ describe("cli-continuity", () => {
         okfCandidateIds: ["f-observed"],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json = renderOkfCandidates(ledger);
       const parsed = JSON.parse(json);
@@ -352,7 +408,7 @@ describe("cli-continuity", () => {
         makeTransitionAccepted("rec-1", "run-1", 1000, packet1),
         makeTransitionAccepted("rec-2", "run-1", 2000, packet2),
       ];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json = renderOkfCandidates(ledger);
       const parsed = JSON.parse(json);
@@ -367,7 +423,7 @@ describe("cli-continuity", () => {
     it("empty okf_candidate_ids produces empty candidates array", () => {
       const packet = makePacket({ summary: "test" });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json = renderOkfCandidates(ledger);
       const parsed = JSON.parse(json);
@@ -384,7 +440,7 @@ describe("cli-continuity", () => {
         findings: [{ id: "f-stable", statement: "stable finding" }],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json1 = renderLedgerJson(ledger);
       const json2 = renderLedgerJson(ledger);
@@ -397,7 +453,7 @@ describe("cli-continuity", () => {
     it("JSON output is valid JSON", () => {
       const packet = makePacket({ summary: "valid json test" });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json = renderLedgerJson(ledger);
       expect(() => JSON.parse(json)).not.toThrow();
@@ -406,7 +462,7 @@ describe("cli-continuity", () => {
     it("JSON output has deterministic key order (stableJsonStringify)", () => {
       const packet = makePacket({ summary: "key order test" });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
 
       const json = renderLedgerJson(ledger);
       // stableJsonStringify sorts keys; verify by re-parsing
@@ -420,7 +476,7 @@ describe("cli-continuity", () => {
   describe("empty ledger output", () => {
     it("empty ledger JSON has correct structure", () => {
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, null)];
-      const ledger = materializeContinuity(records, { run_id: "run-empty" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-empty" });
 
       const json = renderLedgerJson(ledger);
       const parsed = JSON.parse(json);
@@ -434,7 +490,7 @@ describe("cli-continuity", () => {
 
     it("empty ledger Markdown renders without errors", () => {
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, null)];
-      const ledger = materializeContinuity(records, { run_id: "run-empty" });
+      const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-empty" });
 
       expect(() => renderLedgerMarkdown(ledger)).not.toThrow();
     });

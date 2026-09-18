@@ -29,6 +29,9 @@ export interface ContinuityLedgerJsonView {
   readonly generated_at: string;
   readonly envelope_count: number;
   readonly byte_count: number;
+  /** Complete durable envelopes retain summaries, raw references, and resolutions. */
+  readonly envelopes: ContinuityLedger["envelopes"];
+  readonly evidence_resolutions: ContinuityLedger["evidence_resolutions"];
   readonly findings: readonly {
     readonly id: string;
     readonly kind: string;
@@ -72,11 +75,7 @@ export interface ContinuityLedgerJsonView {
   readonly okf_candidates: readonly {
     readonly finding_id: string;
     readonly statement: string;
-    readonly evidence: readonly {
-      readonly ref_key: string;
-      readonly status: string;
-      readonly resolved_path?: string;
-    }[];
+    readonly evidence: ContinuityOkfCandidate["evidence"];
     readonly envelope_source: string;
     readonly record_id: string;
   }[];
@@ -112,6 +111,8 @@ export function renderLedgerJson(ledger: ContinuityLedger): string {
     generated_at: ledger.generated_at,
     envelope_count: ledger.counts.envelope_count,
     byte_count: ledger.counts.byte_count,
+    envelopes: ledger.envelopes,
+    evidence_resolutions: ledger.evidence_resolutions,
     findings: ledger.findings.map((f) => ({
       id: f.item.id,
       kind: f.item.kind,
@@ -155,10 +156,7 @@ export function renderLedgerJson(ledger: ContinuityLedger): string {
     okf_candidates: ledger.okf_candidates.map((c) => ({
       finding_id: c.finding_id,
       statement: c.statement,
-      evidence: c.evidence.map((e) => {
-        const base = { ref_key: e.ref_key, status: e.status };
-        return e.resolved_path !== undefined ? { ...base, resolved_path: e.resolved_path } : base;
-      }),
+      evidence: c.evidence,
       envelope_source: c.envelope_source,
       record_id: c.record_id,
     })),

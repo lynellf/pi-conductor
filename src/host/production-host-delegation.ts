@@ -5,6 +5,7 @@ import type { Role } from "../core/types.js";
 import type { ControllerConfig } from "../manifest/controller.js";
 import type { RoleConfig, WorkspaceSource } from "../manifest/types.js";
 import {
+  continuityItemIndexFromRecords,
   continuityPolicyContext,
   type PacketValidationContext,
 } from "../persistence/continuity.js";
@@ -339,31 +340,23 @@ function recordBackedChildValidation(
   childId: string,
   policy: PacketValidationContext["policy"],
 ): PacketValidationContext {
+  const starts = records.filter(
+    (record): record is import("../persistence/log.js").SubagentStartedRecord =>
+      record.type === "subagent_started" && record.run_id === runId && record.child_id === childId,
+  );
+  const taskId = starts.length === 1 ? starts[0]?.task_id : undefined;
   const authority = recordBackedContinuityAuthority(records, {
     run_id: runId,
-    child: { child_id: childId, task_id: "record-bound" },
+    child: { child_id: childId, task_id: taskId ?? "unbound-child" },
   });
   const verifiedExecutionIds = new Set<string>();
-  const knownItemIds = new Set<string>();
-  for (const record of records) {
-    const recordRunId =
-      record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
-    if (recordRunId !== runId) continue;
+  for (const record of records)
     if (
       record.type === "tool_execution_finished" &&
       authority.toolExecutions.belongsToRun(record.execution_id, runId)
     )
       verifiedExecutionIds.add(record.execution_id);
-    const packet = record.type === "subagent_completed" ? record.continuity?.packet : undefined;
-    if (packet === undefined) continue;
-    for (const collection of [
-      packet.findings,
-      packet.evaluations,
-      packet.open_questions,
-      packet.next_steps,
-    ])
-      for (const item of collection) knownItemIds.add(item.id);
-  }
+  const knownItemIds = continuityItemIndexFromRecords(records, runId).ids;
   return {
     knownItemIds,
     verifiedExecutionIds,
