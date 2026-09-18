@@ -225,8 +225,12 @@ function renderEvaluationMarkdown(lines: string[], e: ContinuityResolvedEvaluati
   lines.push(
     `  - Status: \`${e.status}\` | Execution: \`${escapeMarkdownText(e.execution_id)}\`${supersessionNote}`,
   );
-  if (e.command_digest !== null) {
-    lines.push(`  - Command digest: \`${escapeMarkdownText(e.command_digest)}\``);
-  }
+  lines.push(`  - Exit summary: ${escapeBlock(e.exit_summary)}`);
+  lines.push(`  - Cleanup disposition: \`${escapeMarkdownText(e.cleanup_disposition)}\``);
+  // `null` is meaningful host output: v1 records intentionally retain no
+  // command text, so no digest can be derived without inventing provenance.
+  lines.push(
+    `  - Command digest: ${e.command_digest === null ? "(not recorded)" : escapeBlock(e.command_digest)}`,
+  );
   lines.push("");
 }

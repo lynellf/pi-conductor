@@ -5,10 +5,8 @@ import type { HandoffContextRef, UsageRecord } from "../core/types.js";
 import { sha256Canonical } from "../persistence/trajectory-records.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import { validateEmission } from "../seam/validate-emission.js";
-import {
-  persistHandoffValidationFailures,
-  prepareAcceptedHandoffAtLoopBoundary,
-} from "./accepted-handoff-validation.js";
+import { persistHandoffValidationFailures } from "./accepted-handoff-rejection.js";
+import { prepareAcceptedHandoffAtLoopBoundary } from "./accepted-handoff-validation.js";
 import { formatControllerFailure } from "./controller/failure-diagnostic.js";
 import { runEndGuardAttempt } from "./end-guard-loop.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";

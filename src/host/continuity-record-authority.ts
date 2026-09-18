@@ -17,7 +17,10 @@ export function recordBackedContinuityAuthority(
     child === undefined
       ? undefined
       : uniqueChildStart(records, audience, child.child_id, child.task_id);
-  const executions = reconciledExecutionIds(records, audience, child?.child_id);
+  // A child audience grants nothing until exactly one durable start binds that
+  // child ID to its requested task. In particular, a sibling start, a second
+  // start, or reuse of a child ID for another task is ambiguous authority.
+  const executions = reconciledExecutionIds(records, audience, child?.child_id, start);
   const artifacts = new Map<string, string>();
   for (const artifact of start?.context_artifacts?.artifacts ?? [])
     artifacts.set(artifact.id, artifact.sha256);
@@ -49,22 +52,27 @@ function uniqueChildStart(
   childId: string,
   taskId: string,
 ): SubagentStartedRecord | undefined {
-  const starts = records.filter(
+  const startsForChild = records.filter(
     (record): record is SubagentStartedRecord =>
       record.type === "subagent_started" &&
       record.run_id === audience.run_id &&
-      record.child_id === childId &&
-      record.task_id === taskId,
+      record.child_id === childId,
   );
-  // A duplicated durable child identity is ambiguous authority, not a grant.
-  return starts.length === 1 ? starts[0] : undefined;
+  // A duplicated durable child identity or a child reused for another task is
+  // ambiguous authority, not a grant. The task is part of the grant, not a
+  // caller-selected label that can be substituted after the fact.
+  if (startsForChild.length !== 1) return undefined;
+  const start = startsForChild[0];
+  return start?.task_id === taskId ? start : undefined;
 }
 
 function reconciledExecutionIds(
   records: readonly PersistedRecord[],
   audience: ContinuityAudience,
   childId: string | undefined,
+  childStart: SubagentStartedRecord | undefined,
 ): ReadonlySet<string> {
+  if (childId !== undefined && childStart === undefined) return new Set();
   const timelineRecords = records.filter(
     (record): record is ToolExecutionRecord =>
       recordRunId(record) === audience.run_id && isToolExecutionRecord(record),
@@ -80,7 +88,9 @@ function reconciledExecutionIds(
             entry.finished.outcome !== "cleanup_unconfirmed" &&
             (childId === undefined
               ? true
-              : entry.started.schema_version === 1 && entry.started.sandbox?.child_id === childId),
+              : entry.started.schema_version === 1 &&
+                entry.started.sandbox?.child_id === childId &&
+                childStart?.child_id === childId),
         )
         .map((entry) => entry.started.execution_id),
     );

@@ -100,6 +100,42 @@ describe("record-backed child continuity authority", () => {
     ).resolves.toMatchObject({ status: "verified" });
   });
 
+  it("denies orphan tool execution authority before any child lifecycle grant", async () => {
+    const authority = recordBackedContinuityAuthority(
+      execution("child-a", "exec-a") as PersistedRecord[],
+      { run_id: "run-1", child: { child_id: "child-a", task_id: "task-a" } },
+    );
+    await expect(
+      resolveSingleEvidence(authority, { kind: "tool_execution", execution_id: "exec-a" }),
+    ).resolves.toMatchObject({ status: "missing" });
+  });
+
+  it("denies duplicated or wrong-task child starts as ambiguous authority", async () => {
+    const duplicate = [
+      childStart("child-a", "task-a"),
+      childStart("child-a", "task-a"),
+      ...execution("child-a", "exec-a"),
+    ] as PersistedRecord[];
+    const wrongTask = recordBackedContinuityAuthority(duplicate, {
+      run_id: "run-1",
+      child: { child_id: "child-a", task_id: "task-other" },
+    });
+    const duplicateAuthority = recordBackedContinuityAuthority(duplicate, {
+      run_id: "run-1",
+      child: { child_id: "child-a", task_id: "task-a" },
+    });
+    await expect(
+      resolveSingleEvidence(duplicateAuthority, { kind: "tool_execution", execution_id: "exec-a" }),
+    ).resolves.toMatchObject({ status: "missing" });
+    await expect(
+      resolveSingleEvidence(wrongTask, {
+        kind: "context_artifact",
+        artifact_id: "artifact-child-a",
+        sha256: "c".repeat(64),
+      }),
+    ).resolves.toMatchObject({ status: "missing" });
+  });
+
   it("denies sibling, cross-run, and orphan child authority", async () => {
     const records = [
       childStart("child-a", "task-a"),

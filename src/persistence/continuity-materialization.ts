@@ -30,6 +30,10 @@ import {
   recordRunId,
   timestamp,
 } from "./continuity-materialization-provenance.js";
+import {
+  type DurableContinuityExecution,
+  expectedReplayEvidenceStatus,
+} from "./continuity-replay-evidence.js";
 import type { PersistedRecord } from "./log.js";
 import {
   isToolExecutionRecord,
@@ -76,7 +80,7 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
     bytes += envelope.packet_utf8_bytes;
   }
   const executions = executionOutcomes(records, policy.run_id, fail);
-  for (const envelope of envelopes) validateEnvelope(envelope, executions, fail);
+  for (const envelope of envelopes) validateEnvelope(envelope, executions, records, fail);
   const items = resolveItems(envelopes, fail);
   const evaluations = resolveEvaluations(envelopes, executions, items.index, fail);
   const candidates = candidatesFrom(items.findings, envelopes);
@@ -160,7 +164,8 @@ function envelopeFromRecord(
 
 function validateEnvelope(
   envelope: ContinuityEnvelopeV1,
-  executions: ReadonlyMap<string, ContinuityResolvedEvaluation>,
+  executions: ReadonlyMap<string, DurableContinuityExecution>,
+  records: readonly PersistedRecord[],
   fail: MaterializationFail,
 ): void {
   if (envelope.packet.schema_version !== 1)
@@ -181,15 +186,9 @@ function validateEnvelope(
       wanted.ref.kind !== resolved.kind
     )
       fail(envelope.record_id, "continuity evidence resolution does not bind its exact reference");
-    if (wanted.ref.kind === "tool_execution") {
-      const durable = executions.get(wanted.ref.execution_id);
-      const expectedStatus =
-        durable !== undefined && durable.cleanup_disposition === "confirmed"
-          ? "verified"
-          : "missing";
-      if (resolved.status !== expectedStatus)
-        fail(envelope.record_id, "tool execution resolution does not match durable reconciliation");
-    }
+    const expectedStatus = expectedReplayEvidenceStatus(wanted.ref, envelope, executions, records);
+    if (expectedStatus !== undefined && resolved.status !== expectedStatus)
+      fail(envelope.record_id, "continuity evidence resolution does not match durable audience");
   }
   for (const finding of envelope.packet.findings) {
     if (
@@ -248,7 +247,7 @@ function executionOutcomes(
   records: readonly PersistedRecord[],
   runId: string,
   fail: MaterializationFail,
-): ReadonlyMap<string, ContinuityResolvedEvaluation> {
+): ReadonlyMap<string, DurableContinuityExecution> {
   const toolRecords = records.filter(
     (record): record is ToolExecutionRecord =>
       recordRunId(record) === runId && isToolExecutionRecord(record),
@@ -278,7 +277,12 @@ function executionOutcomes(
                   : "incomplete",
             exit_summary: finished.outcome,
             cleanup_disposition: finished.cleanup,
+            // Commands are deliberately not retained in v1 execution records;
+            // emit the explicit nullable field rather than inventing a digest.
             command_digest: null,
+            ...(entry.started.schema_version === 1 && entry.started.sandbox !== undefined
+              ? { child_id: entry.started.sandbox.child_id }
+              : {}),
             superseded_by: [],
             envelope_source: "handoff" as const,
             record_id: recordId(finished),
@@ -290,7 +294,7 @@ function executionOutcomes(
 
 function resolveEvaluations(
   envelopes: readonly ContinuityEnvelopeV1[],
-  executions: ReadonlyMap<string, ContinuityResolvedEvaluation>,
+  executions: ReadonlyMap<string, DurableContinuityExecution>,
   index: ReturnType<typeof buildContinuityItemIndex>,
   fail: MaterializationFail,
 ): readonly ContinuityResolvedEvaluation[] {

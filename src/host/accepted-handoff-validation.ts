@@ -42,7 +42,6 @@ import {
   toEnvelopeResolutions,
 } from "./continuity-evidence.js";
 import type { Host } from "./host.js";
-import { isTransportHandoffValidationFailure } from "./seam.js";
 
 /** Outcome of preparing the durable recipient snapshot for a captured handoff. */
 export type AcceptedHandoffPreparation =
@@ -294,39 +293,6 @@ export async function prepareAcceptedHandoffAtLoopBoundary(args: {
   args.reopen();
   args.setCorrection(preparation.correction);
   return null;
-}
-
-/** Persist all correctable handoff rejections observed during one role turn. */
-export function persistHandoffValidationFailures(args: {
-  readonly failures: readonly {
-    readonly missingFields: readonly string[];
-    readonly invalidFields: readonly string[];
-  }[];
-  readonly host: Host;
-  readonly runId: string;
-  readonly role: Role;
-  readonly sessionId: string;
-  readonly sessionFile: string;
-}): void {
-  for (const failure of args.failures) {
-    const transport = isTransportHandoffValidationFailure(failure)
-      ? {
-          transport_error: failure.transportError,
-          actual_utf8_bytes: failure.actualUtf8Bytes,
-        }
-      : {};
-    args.host.persistRecord({
-      type: "handoff_validation_rejected",
-      run_id: args.runId,
-      role: args.role,
-      session_id: args.sessionId,
-      session_file: args.sessionFile,
-      missing_fields: failure.missingFields,
-      invalid_fields: failure.invalidFields,
-      ...transport,
-      ts: Date.now(),
-    });
-  }
 }
 
 function formatContinuityRepairDiagnostic(diagnostics: readonly ContinuityDiagnostic[]): string {

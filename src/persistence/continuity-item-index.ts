@@ -73,7 +73,7 @@ export function continuityItemIndexFromRecords(
   for (let ordinal = 0; ordinal < records.length; ordinal += 1) {
     const record = records[ordinal];
     if (record === undefined || recordRunId(record) !== runId) continue;
-    const packet = packetFromRecord(record);
+    const packet = packetFromRecord(record, recordIdentity(record, ordinal));
     if (packet === undefined) continue;
     if (!isPacket(packet)) {
       throw new ContinuityItemIndexError(
@@ -90,10 +90,22 @@ function orderedItems(packet: ContinuityPacketV1) {
   return [packet.findings, packet.evaluations, packet.open_questions, packet.next_steps].flat();
 }
 
-function packetFromRecord(record: PersistedRecord): unknown {
+function packetFromRecord(record: PersistedRecord, identity: string): unknown {
   if (record.type === "transition_accepted") {
-    const payload = record.accepted_handoff?.payload;
-    return isObject(payload) ? payload.continuity : undefined;
+    const handoff = record.accepted_handoff;
+    if (handoff === undefined) return undefined;
+    const hasEvidence = handoff.continuity_evidence !== undefined;
+    const hasBytes = handoff.continuity_packet_utf8_bytes !== undefined;
+    // Generic legacy payloads are not continuity envelopes. Only an accepted
+    // handoff with both host-authored siblings participates in identity
+    // validation; partial metadata is corrupt durable history.
+    if (!hasEvidence && !hasBytes) return undefined;
+    if (!hasEvidence || !hasBytes)
+      throw new ContinuityItemIndexError(identity, "handoff continuity metadata is partial");
+    const payload = handoff.payload;
+    if (!isObject(payload) || !("continuity" in payload))
+      throw new ContinuityItemIndexError(identity, "handoff continuity metadata lacks packet");
+    return payload.continuity;
   }
   return record.type === "subagent_completed" ? record.continuity?.packet : undefined;
 }

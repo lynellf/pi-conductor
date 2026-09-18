@@ -81,20 +81,26 @@ Must not edit delegated-child, CLI, manifest-contract, or OKF files.
 
 ### Lane B — delegated-child completion
 
-Owned behavior:
+**Disposition:** DC-CHILD was dispatched as required but all four attempts
+(`5244a451`, `6c995dc5`, `55d4cdbf`, `0b34662a`; `openai-codex:gpt-5.6-terra`)
+returned no accepted write. The authorized parent takeover supplies the
+production behavior and coverage below; do not describe this as a completed
+child implementation.
+
+Parent-takeover behavior:
 
 - [x] Extend `report_result` and child result mapping with optional continuity.
 - [x] Enforce required delegated continuity for successful results.
 - [x] Bind child provenance from host-owned task/observation state.
-- [x] Resolve evidence only within child authority.
+- [x] Resolve evidence only within the uniquely granted child/task authority.
 - [x] Persist packet/resolutions in existing durable child terminal/completion
-      records and reconstruct them after restart.
+      records and reconstruct them through a reopened production log.
 - [x] Route invalid required packets to the existing bounded protocol-failure
       path.
 - [x] Preserve optional and legacy/minimal behavior.
-- [x] Add focused observation, mapping, persistence, and restart tests.
+- [x] Add focused observation, mapping, persistence, authority, and restart tests.
 
-Must not edit FSM handoff, CLI, manifest-contract, or OKF files.
+The takeover does not edit FSM handoff, CLI, manifest-contract, or OKF files.
 
 ### Lane C — ledger materializer, renderer, and read-only CLI
 
@@ -142,7 +148,7 @@ Child self-report is not sufficient proof.
 
 ## Phase 4 — independent review
 
-**Current disposition: `request_changes` at `2e1464f31307a2f4a85974dcd4e6a1c55441e356`.** The reviewer found bounded child-authority, replay binding, global identity/supersession, lifecycle provenance, output completeness, module-size, and verification-record defects. Remediation is in progress; no review axis below is accepted until the same reviewer re-reviews the remediation commit.
+**Current disposition: `request_changes` at `b71151c1df14cf764c3af85205e286005b5637b7`.** The reviewer found bounded child/task authority, replay audience binding, host-metadata-only legacy indexing, complete evaluation output, production-log restart/public-reader proof, and module-size defects. Remediation is in progress; no review axis below is accepted until the same reviewer re-reviews the remediation commit.
 
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify
@@ -174,16 +180,10 @@ The prior report of 3,635 passed tests is stale (the prior branch actually recor
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [x] independently observed deterministic shard runs (the former chained
-      shards 2–6 command timed out and is **not** recorded as passed):
-      `pnpm vitest run --shard=1/6` (59 files; 639 passed),
-      `--shard=2/6` (59; 766), `--shard=3/6` (59; 478),
-      `--shard=4/6` (59; 563), `--shard=5/6` (59; 555), and
-      `--shard=6/6` (58; 644); complete-suite union: 353 test files,
-      3,645 passed, 0 skipped
+- [ ] independently observed deterministic shard runs: `pnpm vitest run --shard=1/6` (59 files; 640 passed), `--shard=2/6` (59; 766), `--shard=4/6` (59; 565), `--shard=5/6` (59; 544), and `--shard=6/6` (59; 661) passed after final remediation. Shard 3 is unresolved: repeated standard runs ended after `packed-delegation-cleanup` with Vitest's unhandled `Timeout calling onTaskUpdate` error, so no complete-suite union is claimed. The earlier 59-file/478-pass shard-3 result predates the final pure-module split and is not counted.
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
 - [x] inspect `git status --short` and final diff inventory
-- [x] reconcile every timed-out/ambiguous tool execution
+- [x] reconcile every timed-out/ambiguous tool execution (the failed chained focused command was rerun as separate successful commands)
 - [x] update only completed checkboxes in this plan
 
 Long suites stream output. No `tail` pipeline may hide the running process or

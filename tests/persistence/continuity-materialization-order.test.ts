@@ -16,6 +16,7 @@ import {
   ContinuityMaterializationException,
   materializeContinuity,
 } from "../../src/persistence/continuity-materialization.js";
+import { renderLedgerJson, renderLedgerMarkdown } from "../../src/persistence/continuity-render.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
@@ -351,6 +352,106 @@ describe("continuity-materialization-order", () => {
       );
     });
 
+    it("rejects an external reference promoted to verified during replay", () => {
+      const packet = {
+        ...makePacket("external", [{ id: "f-1" }]),
+        findings: [
+          {
+            id: "f-1",
+            kind: "fact" as const,
+            confidence: "verified" as const,
+            statement: "external cannot be verified by v1",
+            evidence: [{ kind: "external" as const, url: "https://example.com", title: "source" }],
+            supersedes: [],
+          },
+        ],
+      };
+      const record = makeTransitionAccepted("external", "run-1", 1000, packet);
+      if (record.accepted_handoff === undefined) throw new Error("test handoff missing");
+      record.accepted_handoff.continuity_evidence = [
+        { ref_key: "findings:f-1:0", kind: "external", status: "verified" },
+      ] as const;
+      expect(() => materializeContinuity(withLifecycles([record]), { run_id: "run-1" })).toThrow(
+        ContinuityMaterializationException,
+      );
+    });
+
+    it("rejects a child packet that promotes a sibling execution", () => {
+      const packet = {
+        ...makePacket("child authority", [{ id: "f-child" }]),
+        findings: [
+          {
+            id: "f-child",
+            kind: "fact" as const,
+            confidence: "verified" as const,
+            statement: "sibling execution must not verify this child",
+            evidence: [{ kind: "tool_execution" as const, execution_id: "exec-sibling" }],
+            supersedes: [],
+          },
+        ],
+      };
+      const completed = makeSubagentCompleted(
+        "a",
+        "run-1",
+        10,
+        packet,
+      ) as import("../../src/persistence/log.js").SubagentCompletedRecord;
+      if (completed.continuity === undefined) throw new Error("test child continuity missing");
+      completed.continuity.evidence_resolutions = [
+        { ref_key: "findings:f-child:0", kind: "tool_execution", status: "verified" },
+      ] as const;
+      const common = {
+        schema_version: 1 as const,
+        run_id: "run-1",
+        execution_id: "exec-sibling",
+        supervision_id: "supervision-sibling",
+        logical_session_id: "logical-sibling",
+        role_session_id: "role-sibling",
+        tool_call_id: "call-sibling",
+        tool_name: "bash",
+      };
+      const records = [
+        makeSubagentStarted("a", "run-1", 1),
+        makeSubagentStarted("b", "run-1", 2),
+        {
+          type: "tool_execution_started" as const,
+          ...common,
+          timeout_ms: 10,
+          recovery_count: 0,
+          sandbox: {
+            child_id: "child-b",
+            descriptor: {
+              backend: "bubblewrap" as const,
+              execution_policy_digest: "a".repeat(64),
+              runtime_digest: "b".repeat(64),
+              materialization_id: "m",
+            },
+          },
+          ts: 3,
+        },
+        {
+          type: "tool_execution_finished" as const,
+          ...common,
+          elapsed_ms: 1,
+          recovery_count: 0,
+          outcome: "completed" as const,
+          cleanup: "confirmed" as const,
+          sandbox: {
+            category: "command_status" as const,
+            normalized_status: 0,
+            signal: "unknown" as const,
+            termination_requested: false,
+            cleanup: "confirmed" as const,
+          },
+          ts: 4,
+        },
+        completed,
+      ];
+      expect(() => materializeContinuity(withLifecycles(records), { run_id: "run-1" })).toThrow(
+        ContinuityMaterializationException,
+      );
+    });
+
     it("folds evaluation supersession from older item to newer item", () => {
       const first = makePacket("first");
       first.evaluations = [{ id: "e-1", label: "old", execution_id: "exec-1", supersedes: [] }];
@@ -403,6 +504,22 @@ describe("continuity-materialization-order", () => {
       expect(
         ledger.evaluations.find((evaluation) => evaluation.id === "e-2")?.superseded_by,
       ).toEqual([]);
+      const json = JSON.parse(renderLedgerJson(ledger)) as {
+        evaluations: Array<{
+          exit_summary: string;
+          cleanup_disposition: string;
+          command_digest: string | null;
+        }>;
+      };
+      expect(json.evaluations[0]).toMatchObject({
+        exit_summary: "completed",
+        cleanup_disposition: "confirmed",
+        command_digest: null,
+      });
+      const markdown = renderLedgerMarkdown(ledger);
+      expect(markdown).toContain("Exit summary:");
+      expect(markdown).toContain("Cleanup disposition:");
+      expect(markdown).toContain("Command digest: (not recorded)");
     });
   });
 

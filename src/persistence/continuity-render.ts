@@ -48,6 +48,9 @@ export interface ContinuityLedgerJsonView {
     readonly label: string;
     readonly execution_id: string;
     readonly status: string;
+    readonly exit_summary: string;
+    readonly cleanup_disposition: string;
+    readonly command_digest: string | null;
     readonly superseded_by: readonly string[];
     readonly source: string;
     readonly record_id: string;
@@ -129,6 +132,9 @@ export function renderLedgerJson(ledger: ContinuityLedger): string {
       label: e.label,
       execution_id: e.execution_id,
       status: e.status,
+      exit_summary: e.exit_summary,
+      cleanup_disposition: e.cleanup_disposition,
+      command_digest: e.command_digest,
       superseded_by: e.superseded_by,
       source: e.envelope_source,
       record_id: e.record_id,

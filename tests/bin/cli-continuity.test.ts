@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runContinuityCli, runContinuityReport } from "../../src/bin/cli-continuity.js";
+import { FileRecordLog } from "../../src/host/log-file.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
 import {
   renderLedgerJson,
@@ -494,6 +495,37 @@ describe("cli-continuity", () => {
 
       expect(() => renderLedgerMarkdown(ledger)).not.toThrow();
     });
+  });
+
+  it("reads a legacy public FileRecordLog stream as zero continuity envelopes", async () => {
+    const logDir = await mkdtemp(join(tmpdir(), "continuity-legacy-"));
+    try {
+      const log = new FileRecordLog({ baseDir: logDir });
+      log.append({
+        type: "transition_accepted",
+        run_id: "legacy-run",
+        from: "orchestrator",
+        to: "implementer",
+        event: "handoff",
+        target_role: "implementer",
+        request_end: false,
+        end_authority: null,
+        end_requested_by: null,
+        role: "orchestrator",
+        suggests_next: null,
+        payload_summary: { field_names: ["summary"] },
+        guard: null,
+        effect: [],
+        session_file: "legacy.jsonl",
+        ts: 1,
+      });
+      log.close();
+      const result = await runContinuityReport({ logDir, runId: "legacy-run", format: "json" });
+      expect(result.exitCode).toBe(0);
+      expect(result.output).toContain('"envelope_count":0');
+    } finally {
+      await rm(logDir, { recursive: true, force: true });
+    }
   });
 
   describe("read-only guarantee", () => {

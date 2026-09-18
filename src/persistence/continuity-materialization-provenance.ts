@@ -6,13 +6,18 @@ import type { PersistedRecord, SubagentStartedRecord } from "./log.js";
 
 export type MaterializationFail = (recordId: string, message: string) => never;
 type RoleLifecycle = { readonly role: Role; readonly visit: number };
-type ChildLifecycle = { readonly start: SubagentStartedRecord; readonly attempt: number };
+type ChildLifecycle = {
+  readonly start: SubagentStartedRecord;
+  readonly attempt: number;
+  readonly terminal_record_id?: string;
+};
 
 /** Stateful append-order lifecycle lookup used exclusively to derive envelope provenance. */
 export class ContinuityLifecycleIndex {
   private readonly roles = new Map<string, RoleLifecycle>();
   private readonly children = new Map<string, ChildLifecycle>();
   private readonly attempts = new Map<string, number>();
+  private readonly taskByChild = new Map<string, string>();
 
   observe(record: PersistedRecord, fail: MaterializationFail): void {
     if (record.type === "session_started") {
@@ -21,16 +26,34 @@ export class ContinuityLifecycleIndex {
       this.roles.set(record.session_file, { role: record.role, visit: record.visit_index });
       return;
     }
-    if (record.type !== "subagent_started") return;
-    const key = childKey(record.child_id, record.task_id);
-    if (record.parent_role === undefined || record.parent_visit_index === undefined)
-      fail(recordId(record), "child start lacks parent lifecycle provenance");
-    // A child/task may be retried after its preceding terminal record. The
-    // append-only start sequence, not a filename or a constant, is the only
-    // authoritative attempt counter.
-    const attempt = (this.attempts.get(key) ?? 0) + 1;
-    this.attempts.set(key, attempt);
-    this.children.set(key, { start: record, attempt });
+    if (record.type === "subagent_started") {
+      const key = childKey(record.child_id, record.task_id);
+      if (record.parent_role === undefined || record.parent_visit_index === undefined)
+        fail(recordId(record), "child start lacks parent lifecycle provenance");
+      const boundTask = this.taskByChild.get(record.child_id);
+      if (boundTask !== undefined && boundTask !== record.task_id)
+        fail(recordId(record), "child start reuses child identity for another task");
+      const prior = this.children.get(key);
+      if (prior !== undefined && prior.terminal_record_id === undefined)
+        fail(recordId(record), "duplicate active child start lifecycle");
+      // A retry follows a durable terminal of this exact child/task pair.
+      const attempt = (this.attempts.get(key) ?? 0) + 1;
+      this.attempts.set(key, attempt);
+      this.taskByChild.set(record.child_id, record.task_id);
+      this.children.set(key, { start: record, attempt });
+      return;
+    }
+    if (record.type !== "subagent_completed" && record.type !== "subagent_failed") return;
+    const lifecycle = this.children.get(childKey(record.child_id, record.task_id));
+    // Legacy/non-continuity terminal records may predate durable starts. They
+    // remain readable, but cannot establish authority for a later packet.
+    if (lifecycle === undefined) return;
+    if (lifecycle.terminal_record_id !== undefined)
+      fail(recordId(record), "duplicate child terminal lifecycle");
+    this.children.set(childKey(record.child_id, record.task_id), {
+      ...lifecycle,
+      terminal_record_id: recordId(record),
+    });
   }
 
   handoff(record: PersistedRecord, fail: MaterializationFail): RoleLifecycle {
@@ -50,6 +73,7 @@ export class ContinuityLifecycleIndex {
     const lifecycle = this.children.get(childKey(record.child_id, record.task_id));
     if (
       lifecycle === undefined ||
+      lifecycle.terminal_record_id !== recordId(record) ||
       lifecycle.start.subagent !== record.subagent ||
       lifecycle.start.run_id !== record.run_id
     )
