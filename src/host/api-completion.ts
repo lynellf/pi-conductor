@@ -3,6 +3,7 @@ import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import { type EndGuardRecord, endGuardRequestId } from "../persistence/end-guard.js";
 import type { ArtifactDeliveryRecord, RecordLog } from "../persistence/log.js";
 import { latestHandoffContextRef } from "./api-resume-state.js";
+import { recordBackedContinuityAuthority } from "./continuity-record-authority.js";
 import type { Host } from "./host.js";
 import type { RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
@@ -124,6 +125,24 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,
     }),
     getRunCostCap,
+    ...(loadedManifest.manifest.continuity === undefined
+      ? {}
+      : {
+          continuityPolicy: { require_handoff: loadedManifest.manifest.continuity.require_handoff },
+          continuityAuthority: ({
+            role,
+            visit,
+          }: {
+            readonly role: string;
+            readonly visit: number;
+          }) =>
+            recordBackedContinuityAuthority(log.records(runId), {
+              run_id: runId,
+              role: role as import("../core/types.js").Role,
+              visit_index: visit,
+            }),
+          knownContinuityItemIds: () => continuityItemIds(log.records(runId)),
+        }),
     runControl,
     ...(endGuard === undefined
       ? {}
@@ -154,4 +173,31 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       exitReason: r.exitReason,
     })),
   });
+}
+
+/** Read only host-persisted packet identities; malformed historical data is never trusted. */
+function continuityItemIds(
+  records: readonly import("../persistence/log.js").PersistedRecord[],
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const record of records) {
+    const raw =
+      record.type === "transition_accepted"
+        ? record.accepted_handoff?.payload
+        : record.type === "subagent_completed"
+          ? record.continuity?.packet
+          : undefined;
+    const packet =
+      typeof raw === "object" && raw !== null && "continuity" in raw ? raw.continuity : raw;
+    if (typeof packet !== "object" || packet === null) continue;
+    const packetRecord = packet as Record<string, unknown>;
+    for (const name of ["findings", "evaluations", "open_questions", "next_steps"] as const) {
+      const collection = packetRecord[name];
+      if (!Array.isArray(collection)) continue;
+      for (const item of collection)
+        if (typeof item === "object" && item !== null && typeof item.id === "string")
+          ids.add(item.id);
+    }
+  }
+  return ids;
 }

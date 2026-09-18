@@ -361,22 +361,20 @@ function collectEvidenceRefs(
   packet: ContinuityPacketV1,
 ): readonly { readonly key: string; readonly ref: EvidenceRef }[] {
   const refs: { readonly key: string; readonly ref: EvidenceRef }[] = [];
-  packet.findings.forEach((finding, index) => {
-    for (const ref of finding.evidence) {
-      refs.push({ key: evidenceRefKey("findings", finding.id, index), ref });
-    }
+  packet.findings.forEach((finding) => {
+    finding.evidence.forEach((ref, offset) => {
+      refs.push({ key: evidenceRefKey("findings", finding.id, offset), ref });
+    });
   });
-  packet.open_questions.forEach(
-    (question: ContinuityPacketV1["open_questions"][number], index: number) => {
-      for (const ref of question.evidence) {
-        refs.push({ key: evidenceRefKey("open_questions", question.id, index), ref });
-      }
-    },
-  );
-  packet.next_steps.forEach((step: ContinuityPacketV1["next_steps"][number], index: number) => {
-    for (const ref of step.evidence) {
-      refs.push({ key: evidenceRefKey("next_steps", step.id, index), ref });
-    }
+  packet.open_questions.forEach((question: ContinuityPacketV1["open_questions"][number]) => {
+    question.evidence.forEach((ref, offset) => {
+      refs.push({ key: evidenceRefKey("open_questions", question.id, offset), ref });
+    });
+  });
+  packet.next_steps.forEach((step: ContinuityPacketV1["next_steps"][number]) => {
+    step.evidence.forEach((ref, offset) => {
+      refs.push({ key: evidenceRefKey("next_steps", step.id, offset), ref });
+    });
   });
   return refs;
 }

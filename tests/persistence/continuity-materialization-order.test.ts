@@ -158,7 +158,7 @@ describe("continuity-materialization-order", () => {
       expect(stableJsonStringify(ledger1)).toBe(stableJsonStringify(ledger2));
     });
 
-    it("order matters: later records appear later in envelope list", () => {
+    it("preserves immutable append order even when timestamps regress", () => {
       const packet1 = makePacket("first", [{ id: "finding-1" }]);
       const packet2 = makePacket("second", [{ id: "finding-2" }]);
       const packet3 = makePacket("third", [{ id: "finding-3" }]);
@@ -173,8 +173,8 @@ describe("continuity-materialization-order", () => {
 
       expect(ledger.envelopes.map((envelope) => envelope.packet.summary)).toEqual([
         "first",
-        "second",
         "third",
+        "second",
       ]);
     });
   });

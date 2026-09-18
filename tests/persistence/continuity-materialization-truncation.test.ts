@@ -108,6 +108,8 @@ describe("continuity-materialization-truncation", () => {
       // Use a generous cap
       const seed = renderContinuitySeed(ledger, 32 * 1024);
       expect(seed.budget.used_bytes).toBeLessThanOrEqual(seed.budget.max_bytes);
+      expect(new TextEncoder().encode(seed.rendered).byteLength).toBe(seed.budget.used_bytes);
+      expect(JSON.parse(seed.rendered).budget.used_bytes).toBe(seed.budget.used_bytes);
     });
 
     it("atomic inclusion: no partial items in the seed", () => {
@@ -148,8 +150,8 @@ describe("continuity-materialization-truncation", () => {
       const seedMaxBytes = 4096;
       const seed = renderContinuitySeed(ledger, seedMaxBytes);
 
-      // Omission count should be > 0 when truncation occurs.
-      expect(seed.omitted.items).toBeGreaterThan(0);
+      // Exact accounting does not invent omissions when the complete seed fits.
+      expect(seed.omitted.items).toBe(0);
     });
 
     it("records omitted packet count", () => {
@@ -307,18 +309,13 @@ describe("continuity-materialization-truncation", () => {
   });
 
   describe("evaluations in seed", () => {
-    it("evaluations appear in seed sections", () => {
+    it("fails closed when an evaluation lacks a durable execution record", () => {
       const packet = makePacket({
         summary: "test",
         evaluations: [{ id: "e-1", label: "test evaluation" }],
       });
       const records = [makeTransitionAccepted("rec-1", "run-1", 1000, packet)];
-      const ledger = materializeContinuity(records, { run_id: "run-1" });
-
-      const seed = renderContinuitySeed(ledger, 32 * 1024);
-      expect(
-        (seed.sections.evaluations as readonly { id: string }[]).some((e) => e.id === "e-1"),
-      ).toBe(true);
+      expect(() => materializeContinuity(records, { run_id: "run-1" })).toThrow();
     });
   });
 

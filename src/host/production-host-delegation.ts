@@ -4,9 +4,13 @@ import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-
 import type { Role } from "../core/types.js";
 import type { ControllerConfig } from "../manifest/controller.js";
 import type { RoleConfig, WorkspaceSource } from "../manifest/types.js";
-import { continuityPolicyContext } from "../persistence/continuity.js";
+import {
+  continuityPolicyContext,
+  type PacketValidationContext,
+} from "../persistence/continuity.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { type SnapshotPinnedRecord, snapshotPinned } from "../persistence/log.js";
+import { recordBackedContinuityAuthority } from "./continuity-record-authority.js";
 import type { DelegationAdmissionService } from "./delegation/admission-service.js";
 import type { HostArtifactContextResolver } from "./delegation/context-artifact-contract.js";
 import type {
@@ -239,12 +243,13 @@ export async function createDelegateTool(
     ...(ctx.displaySink !== undefined && { displaySink: ctx.displaySink }),
     sessionDir: ctx.sessionDir,
     records: () => ctx.log.records(ctx.runId),
-    continuityValidation: () => ({
-      knownItemIds: new Set<string>(),
-      verifiedExecutionIds: new Set<string>(),
-      evidenceVerifiedByKey: new Map(),
-      policy: continuityPolicyContext(manifest.continuity ?? null),
-    }),
+    continuityValidation: (childId: string) =>
+      recordBackedChildValidation(
+        ctx.log.records(ctx.runId),
+        ctx.runId,
+        childId,
+        continuityPolicyContext(manifest.continuity ?? null),
+      ),
     isBudgetExhausted: () => {
       const cap = getRunCostCap?.();
       if (cap === null || cap === undefined) return false;
@@ -325,4 +330,71 @@ function delegationPromptRoot(loaded: LoadedManifest, cwd: string): string {
     throw new Error("delegation requires a manifest directory for v2 profile system prompts");
   }
   return loaded.manifestDir;
+}
+
+/** Derive child validation authority from append-only records, never model input. */
+function recordBackedChildValidation(
+  records: readonly PersistedRecord[],
+  runId: string,
+  childId: string,
+  policy: PacketValidationContext["policy"],
+): PacketValidationContext {
+  const authority = recordBackedContinuityAuthority(records, {
+    run_id: runId,
+    child: { child_id: childId, task_id: "record-bound" },
+  });
+  const verifiedExecutionIds = new Set<string>();
+  const knownItemIds = new Set<string>();
+  for (const record of records) {
+    const recordRunId =
+      record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
+    if (recordRunId !== runId) continue;
+    if (
+      record.type === "tool_execution_finished" &&
+      authority.toolExecutions.belongsToRun(record.execution_id, runId)
+    )
+      verifiedExecutionIds.add(record.execution_id);
+    const packet = record.type === "subagent_completed" ? record.continuity?.packet : undefined;
+    if (packet === undefined) continue;
+    for (const collection of [
+      packet.findings,
+      packet.evaluations,
+      packet.open_questions,
+      packet.next_steps,
+    ])
+      for (const item of collection) knownItemIds.add(item.id);
+  }
+  return {
+    knownItemIds,
+    verifiedExecutionIds,
+    evidenceVerifiedByKey: new Map(),
+    resolveEvidence: (key, ref) => {
+      if (ref.kind === "tool_execution")
+        return {
+          ref_key: key,
+          kind: ref.kind,
+          status: authority.toolExecutions.belongsToRun(ref.execution_id, runId)
+            ? "verified"
+            : "missing",
+        };
+      if (ref.kind === "context_artifact")
+        return {
+          ref_key: key,
+          kind: ref.kind,
+          status: authority.contextArtifacts.canRead(
+            ref.artifact_id,
+            ref.sha256,
+            authority.audience,
+          )
+            ? "verified"
+            : "missing",
+        };
+      return {
+        ref_key: key,
+        kind: ref.kind,
+        status: ref.kind === "external" ? "declared" : "missing",
+      };
+    },
+    policy,
+  };
 }

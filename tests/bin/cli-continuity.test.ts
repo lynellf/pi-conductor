@@ -12,6 +12,9 @@
  * 8. Format validation: rejects invalid format values
  */
 
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { runContinuityCli, runContinuityReport } from "../../src/bin/cli-continuity.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
@@ -30,7 +33,23 @@ function makeTransitionAccepted(recordId: string, runId: string, ts: number, con
         recipient_role: "implementer" as const,
         payload: { summary: "test", continuity },
         utf8_bytes: 12,
-        continuity_evidence: [],
+        continuity_evidence:
+          (
+            continuity as {
+              findings?: readonly {
+                id: string;
+                confidence?: string;
+                evidence?: readonly unknown[];
+              }[];
+            }
+          ).findings?.flatMap(
+            (finding) =>
+              finding.evidence?.map((_ref, index) => ({
+                ref_key: `findings:${finding.id}:${index}`,
+                kind: "tool_execution",
+                status: "verified" as const,
+              })) ?? [],
+          ) ?? [],
         continuity_packet_utf8_bytes: JSON.stringify(continuity).length,
       }
     : null;
@@ -76,7 +95,10 @@ function makePacket(opts: {
       kind: f.kind ?? "fact",
       confidence: f.confidence ?? "observed",
       statement: f.statement ?? `finding ${f.id}`,
-      evidence: [],
+      evidence:
+        f.confidence === "verified"
+          ? [{ kind: "tool_execution", execution_id: "exec-verified" }]
+          : [],
       supersedes: f.supersedes ?? [],
     })),
     evaluations: [],
@@ -419,18 +441,18 @@ describe("cli-continuity", () => {
   });
 
   describe("read-only guarantee", () => {
-    it("runContinuityReport does not write to the log directory (no filesystem mutations)", async () => {
-      // This test verifies the function signature: runContinuityReport
-      // is async and returns a result. The read-only behavior is enforced
-      // by the fact that it only calls log.records() and log.close(),
-      // never log.append().
-      const result = await runContinuityReport({
-        logDir: "/tmp/nonexistent-dir-xyz",
-        runId: "run-1",
-        format: "json",
-      });
-      expect(result.exitCode).toBe(1); // fails because dir doesn't exist
-      // No write operations occurred
+    it("preserves an existing log-directory filesystem snapshot", async () => {
+      const logDir = await mkdtemp(join(tmpdir(), "continuity-report-"));
+      try {
+        await writeFile(join(logDir, "sentinel.jsonl"), "immutable\n", "utf8");
+        const before = await readdir(logDir, { withFileTypes: true });
+        const result = await runContinuityReport({ logDir, runId: "run-1", format: "json" });
+        const after = await readdir(logDir, { withFileTypes: true });
+        expect(result.exitCode).toBe(0);
+        expect(after.map((entry) => entry.name)).toEqual(before.map((entry) => entry.name));
+      } finally {
+        await rm(logDir, { recursive: true, force: true });
+      }
     });
   });
 });

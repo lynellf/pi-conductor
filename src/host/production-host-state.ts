@@ -5,6 +5,10 @@ import { buildRunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
 import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
 import { rollup } from "../cost/rollup.js";
+import {
+  materializeContinuity,
+  renderContinuitySeed,
+} from "../persistence/continuity-materialization.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import type { SessionState } from "./cost.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
@@ -76,9 +80,17 @@ export function seedRunMemory(
   // the loop's orchestrator-seed injection (Task 16.5, §8.4
   // single-writer rule).
   const records = host.log.records(host.runId);
+  const continuity = host.loadedManifest.manifest.continuity;
   return buildRunMemory(args.checkpoint, records, args.def, {
     goal: args.goal,
     runCostCap: args.runCostCap,
+    ...(continuity === undefined
+      ? {}
+      : {
+          continuityPolicy: continuity,
+          materializeContinuity,
+          renderContinuitySeed,
+        }),
   });
 }
 

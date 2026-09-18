@@ -509,14 +509,7 @@ export async function runSessionTurn(
 function readContinuityPolicyFromOpts(
   opts: SessionLoopContext["opts"],
 ): { readonly require_handoff: boolean } | null {
-  const candidate = (
-    opts as {
-      continuityPolicy?: { readonly require_handoff?: boolean } | null | undefined;
-    }
-  ).continuityPolicy;
-  if (candidate === undefined || candidate === null) return null;
-  if (typeof candidate.require_handoff !== "boolean") return null;
-  return { require_handoff: candidate.require_handoff };
+  return opts.continuityPolicy ?? null;
 }
 
 /**
@@ -529,11 +522,7 @@ function readContinuityAuthorityFromOpts(
   opts: SessionLoopContext["opts"],
   ctx: SessionLoopContext,
 ): import("./continuity-evidence.js").ContinuityEvidenceAuthority {
-  const candidate = (
-    opts as {
-      continuityAuthority?: import("./continuity-evidence.js").ContinuityEvidenceAuthority;
-    }
-  ).continuityAuthority;
+  const candidate = opts.continuityAuthority?.({ role: ctx.role, visit: ctx.visitIndex });
   if (candidate !== undefined) return candidate;
   return {
     audience: { run_id: ctx.checkpoint.run_id, role: ctx.role, visit_index: ctx.visitIndex },
@@ -549,8 +538,5 @@ function readContinuityAuthorityFromOpts(
  * tests can supply a static set.
  */
 function readKnownContinuityItemIdsFromOpts(opts: SessionLoopContext["opts"]): ReadonlySet<string> {
-  const candidate = (opts as { knownContinuityItemIds?: ReadonlySet<string> | undefined })
-    .knownContinuityItemIds;
-  if (candidate !== undefined) return candidate;
-  return new Set<string>();
+  return opts.knownContinuityItemIds?.() ?? new Set<string>();
 }

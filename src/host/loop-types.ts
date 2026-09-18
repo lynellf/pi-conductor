@@ -7,6 +7,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import type { ArtifactDeliveryRecord, EndGuardRecord } from "../persistence/log.js";
+import type { ContinuityEvidenceAuthority } from "./continuity-evidence.js";
 import type { EndGuardConfig } from "./end-guard-runner.js";
 import type { ArtifactRouteSource, Host, RoleSession, SpawnRoleOptions } from "./host.js";
 import type { RunControl } from "./run-control.js";
@@ -75,6 +76,15 @@ export interface RunLoopOptions {
    * cap without constructing a RunHandle.
    */
   readonly runCostCap?: number | null;
+  /** Pinned continuity policy; absent preserves legacy handoff behavior. */
+  readonly continuityPolicy?: { readonly require_handoff: boolean } | null;
+  /** Host-created, audience-scoped record authority for the current emission. */
+  readonly continuityAuthority?: (input: {
+    readonly role: string;
+    readonly visit: number;
+  }) => ContinuityEvidenceAuthority;
+  /** Current durable item identities, rebuilt from append-only records per attempt. */
+  readonly knownContinuityItemIds?: () => ReadonlySet<string>;
   /** Optional abort bridge used by `RunHandle.abort()` / Escape. */
   readonly abortControl?: RunAbortControl;
   /** Run-owned steering, follow-up mailbox, abort, and response state. */

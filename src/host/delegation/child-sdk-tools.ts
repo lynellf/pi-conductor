@@ -85,13 +85,14 @@ function captureContinuity(
   }
   if (context === null)
     return { kind: "rejected", message: "continuity validation authority is unavailable" };
-  const result = tryValidateContinuityPacket(args.continuity, context);
+  const resolvedContext = withResolvedEvidence(args.continuity, context);
+  const result = tryValidateContinuityPacket(args.continuity, resolvedContext);
   if (result.kind === "rejected")
     return {
       kind: "rejected",
       message: `continuity packet rejected: ${result.diagnostics.map((item) => item.code).join(", ")}`,
     };
-  const evidence_resolutions = continuityEvidenceResolutions(result.packet, context);
+  const evidence_resolutions = continuityEvidenceResolutions(result.packet, resolvedContext);
   return {
     kind: "ok",
     sibling: {
@@ -100,6 +101,35 @@ function captureContinuity(
       evidence_resolutions: evidence_resolutions.map((resolution) => ({ ...resolution })),
     },
   };
+}
+
+function withResolvedEvidence(
+  packet: ContinuityPacketV1,
+  context: NonNullable<ReturnType<ReportCapture["continuityValidation"]>>,
+): NonNullable<ReturnType<ReportCapture["continuityValidation"]>> {
+  if (context.resolveEvidence === undefined) return context;
+  const evidenceVerifiedByKey = new Map(context.evidenceVerifiedByKey);
+  const collections = [
+    ["findings", packet.findings],
+    ["open_questions", packet.open_questions],
+    ["next_steps", packet.next_steps],
+  ] as const;
+  for (const [collection, items] of collections)
+    for (const item of items) {
+      item.evidence.forEach((ref, index) => {
+        const key = evidenceRefKey(collection, item.id, index);
+        evidenceVerifiedByKey.set(
+          key,
+          context.resolveEvidence?.(key, ref) ?? {
+            ref_key: key,
+            kind: ref.kind,
+            status: "missing",
+            diagnostic: "continuity_evidence_audience_denied",
+          },
+        );
+      });
+    }
+  return { ...context, evidenceVerifiedByKey };
 }
 
 function continuityEvidenceResolutions(
