@@ -115,7 +115,7 @@ const commitOid = Type.String({
 const toolExecutionEvidence = Type.Object(
   {
     kind: Type.Literal("tool_execution"),
-    execution_id: Type.String({ minLength: 1, maxLength: 128 }),
+    execution_id: idSchema,
   },
   { additionalProperties: false },
 );
@@ -123,7 +123,7 @@ const toolExecutionEvidence = Type.Object(
 const contextArtifactEvidence = Type.Object(
   {
     kind: Type.Literal("context_artifact"),
-    artifact_id: Type.String({ minLength: 1, maxLength: 64 }),
+    artifact_id: idSchema,
     sha256: sha256Hex,
   },
   { additionalProperties: false },
@@ -170,10 +170,25 @@ const repositoryEvidence = Refine(
     "repository evidence line range must supply both endpoints together and satisfy start <= end",
 );
 
+function isAbsoluteHttpsUrl(value: string): boolean {
+  if (!value.startsWith("https://")) return false;
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+const externalUrlSchema = Refine(
+  Type.String({ minLength: 8, maxLength: 2_048 }),
+  isAbsoluteHttpsUrl,
+  () => "external evidence URL must be an absolute https: URL",
+);
+
 const externalEvidence = Type.Object(
   {
     kind: Type.Literal("external"),
-    url: Type.String({ minLength: 8, maxLength: 2_048, pattern: "^https:" }),
+    url: externalUrlSchema,
     title: Type.String({ minLength: 1, maxLength: 512 }),
   },
   { additionalProperties: false },
@@ -225,7 +240,7 @@ export const continuityEvaluationSchema = Type.Object(
   {
     id: idSchema,
     label: Type.String({ minLength: 1, maxLength: MAX_ITEM_TEXT_LENGTH }),
-    execution_id: Type.String({ minLength: 1, maxLength: 128 }),
+    execution_id: idSchema,
     supersedes: supersedesField,
   },
   { additionalProperties: false },

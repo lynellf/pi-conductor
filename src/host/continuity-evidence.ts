@@ -100,6 +100,9 @@ export interface RepositoryLookup {
     readonly audience: ContinuityAudience;
     readonly commit: string;
     readonly path: string;
+    readonly sha256?: string;
+    readonly line_start?: number;
+    readonly line_end?: number;
   }): Promise<{
     readonly status: "verified" | "missing";
     readonly head_commit?: string;
@@ -179,6 +182,9 @@ export async function resolveSingleEvidence(
     audience: authority.audience,
     commit: ref.commit,
     path: ref.path,
+    ...(ref.sha256 !== undefined && { sha256: ref.sha256 }),
+    ...(ref.line_start !== undefined && { line_start: ref.line_start }),
+    ...(ref.line_end !== undefined && { line_end: ref.line_end }),
   });
   if (result.status === "verified") {
     return {

@@ -373,12 +373,34 @@ describe("evidenceRefSchema", () => {
     ).toBe(false);
   });
 
+  it("rejects an https string that is not an absolute URL", () => {
+    expect(
+      Value.Check(evidenceRefSchema, { kind: "external", url: "https:example.com", title: "x" }),
+    ).toBe(false);
+  });
+
   it("rejects a malformed commit", () => {
     expect(
       Value.Check(evidenceRefSchema, {
         kind: "repository",
         path: "src/x.ts",
         commit: "not-a-commit",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects evidence IDs outside the shared 1–96 character ID contract", () => {
+    expect(
+      Value.Check(evidenceRefSchema, {
+        kind: "tool_execution",
+        execution_id: "a".repeat(97),
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(evidenceRefSchema, {
+        kind: "context_artifact",
+        artifact_id: "!artifact",
+        sha256: "a".repeat(64),
       }),
     ).toBe(false);
   });
