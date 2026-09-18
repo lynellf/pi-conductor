@@ -23,6 +23,8 @@ export interface PoolCompletedResult {
   readonly usage: SubagentUsage;
   /** Issue #57 host-normalization evidence; absent only on pre-feature test doubles. */
   readonly completionEvidence?: ChildCompletionEvidence;
+  /** Validated successful report_result continuity; absent on legacy/minimal results. */
+  readonly continuity?: import("../../persistence/continuity.js").ChildContinuitySibling;
   readonly outputCapture?: ChildOutputCapture;
   readonly outputCaptureFailure?: string;
 }

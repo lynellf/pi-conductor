@@ -307,16 +307,7 @@ async function initializeSdkChild(
   });
   await loader.reload();
   const continuityValidation = opts.continuityValidation;
-  // The lane will extend createReportCapture's signature to accept this
-  // seam. The host wiring intentionally passes it through today so the
-  // lane has the producer already in place.
-  const reportCapture = (
-    createReportCapture as unknown as (options?: {
-      continuityValidation?: () =>
-        | import("../../persistence/continuity.js").PacketValidationContext
-        | null;
-    }) => ReportCapture
-  )(
+  const reportCapture = createReportCapture(
     continuityValidation === undefined
       ? undefined
       : { continuityValidation: () => continuityValidation(config.childId) },

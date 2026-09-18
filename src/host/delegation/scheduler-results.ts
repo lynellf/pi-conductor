@@ -70,6 +70,7 @@ export function terminalToPoolResult(
       ...(record.completion_evidence === undefined
         ? {}
         : { completionEvidence: record.completion_evidence }),
+      ...(record.continuity === undefined ? {} : { continuity: record.continuity }),
     };
   return {
     childId: record.child_id as PoolChildResult["childId"],

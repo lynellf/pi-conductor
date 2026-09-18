@@ -4,6 +4,10 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import type { ChildFileToolCalls } from "../../persistence/child-completion.js";
+import type {
+  ChildContinuitySibling,
+  PacketValidationContext,
+} from "../../persistence/continuity.js";
 import type { SessionState } from "../cost.js";
 import { capChildText, type LegacyChildReport } from "./child-result.js";
 import type { ChildTerminal, SpawnChildConfig } from "./delegate-tool.js";
@@ -12,24 +16,36 @@ import type { DelegationManager } from "./manager.js";
 /** Single-assignment valid legacy report capture from the terminating child tool. */
 export interface ReportCapture {
   readonly report: () => LegacyChildReport | null;
+  readonly continuity: () => ChildContinuitySibling | null;
+  readonly continuityValidation: () => PacketValidationContext | null;
   readonly summaryTruncated: () => boolean;
   readonly isClosed: () => boolean;
-  capture(report: LegacyChildReport, truncated: boolean): void;
+  capture(
+    report: LegacyChildReport,
+    truncated: boolean,
+    continuity?: ChildContinuitySibling | null,
+  ): void;
   close(): void;
 }
 
-/** Make the host-owned capture buffer for one legacy report_result tool. */
-export function createReportCapture(): ReportCapture {
+/** Make the host-owned capture buffer for one report_result tool. */
+export function createReportCapture(options?: {
+  readonly continuityValidation?: () => PacketValidationContext | null;
+}): ReportCapture {
   let value: LegacyChildReport | null = null;
+  let capturedContinuity: ChildContinuitySibling | null = null;
   let truncated = false;
   let closed = false;
   return {
     report: () => value,
+    continuity: () => capturedContinuity,
+    continuityValidation: () => options?.continuityValidation?.() ?? null,
     summaryTruncated: () => truncated,
     isClosed: () => closed,
-    capture(report, didTruncate) {
+    capture(report, didTruncate, continuity = null) {
       if (closed || value !== null) return;
       value = report;
+      capturedContinuity = continuity;
       truncated = didTruncate;
     },
     close() {
@@ -97,10 +113,12 @@ export function observeChildTerminal(args: {
       return;
     }
     const cancelled = args.manager.wasCancelled(args.config.childId);
+    const continuity = args.reportCapture.continuity();
     complete({
       started: true,
       model: args.model,
       report: args.reportCapture.report(),
+      ...(continuity === null ? {} : { continuity }),
       finalResponse,
       summaryTruncated: selectedSummaryTruncated(),
       cancelled,
@@ -115,10 +133,12 @@ export function observeChildTerminal(args: {
   return {
     promise,
     fail(reason) {
+      const continuity = args.reportCapture.continuity();
       complete({
         started: true,
         model: args.model,
         report: args.reportCapture.report(),
+        ...(continuity === null ? {} : { continuity }),
         finalResponse,
         summaryTruncated: selectedSummaryTruncated(),
         cancelled: args.manager.wasCancelled(args.config.childId),

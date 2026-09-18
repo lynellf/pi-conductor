@@ -412,6 +412,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       sessionFile: terminal.sessionFile ?? "",
       usage: terminal.usage,
       completionEvidence: evidence,
+      ...(terminal.continuity === undefined ? {} : { continuity: terminal.continuity }),
     };
   }
   return {

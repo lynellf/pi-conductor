@@ -33,6 +33,7 @@ export function appendCompleted(
     ...(child.completionEvidence === undefined
       ? {}
       : { completion_evidence: child.completionEvidence }),
+    ...(child.continuity === undefined ? {} : { continuity: child.continuity }),
     ...(child.outputCapture === undefined ? {} : { output_capture: child.outputCapture }),
     ...(child.outputCaptureFailure === undefined
       ? {}
