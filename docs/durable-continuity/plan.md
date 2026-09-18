@@ -162,9 +162,10 @@ review at the pre-remediation head `17b129560af988be70dfd00779faa153ee84218a`
 returned `request_changes` for duplicate/malformed pinned snapshots, legacy
 parentless child starts, role-visit evidence scope, repository resolution, and
 stable required-child-packet diagnostics. Those findings are addressed in
-follow-up commit `728a439270a2a5980df1efc8876aae7b9971d3e3`; its current-head
-verification is recorded below. The review axes remain unchecked until a fresh
-read-only reviewer evaluates this clean head.
+follow-up commits `728a439270a2a5980df1efc8876aae7b9971d3e3`,
+`15e3fa6`, and `3fdb605`; current-head verification is recorded below. The
+review axes remain unchecked until a fresh read-only reviewer evaluates this
+clean head.
 
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify
@@ -193,14 +194,16 @@ The previous gate evidence was stale and shard 3 exposed an unhandled Vitest
 worker RPC timeout even though its assertions passed. The packed cleanup probe
 is now split into separate test files so no single file exceeds Birpc's fixed
 60-second task-update timeout. Record only exact current-head results below.
+The full suite below is the authoritative gate for `3fdb605`; the affected
+shards were also rerun at that commit.
 
 - [x] `pnpm typecheck`
 - [x] `pnpm build`
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [x] `pnpm test` after `728a439`: 358 files and 3,686 tests passed; explicit exit 0 and no unhandled errors.
-- [x] standalone shards after `728a439`: `--shard=1/6` (60 files; 651 tests; exit 0), `2/6` (60; 767; exit 0), `3/6` (60; 480; exit 0 on the individual rerun), `4/6` (60; 578; exit 0), `5/6` (60; 561; exit 0), and `6/6` (58; 649; exit 0 on the individual rerun). The initial sequential pass also exposed one artifact-store test flake in shard 3 and one supervised-process cleanup-timing flake in shard 6; neither reproduced on its recorded individual rerun. No shard reported an unhandled error after the packed-test split.
+- [x] `pnpm test` at `3fdb605`: 358 files and 3,687 tests passed; explicit exit 0 and no unhandled errors.
+- [x] standalone shard evidence: the six-shard sequence at `728a439` recorded exit 0 for shards 1, 2, 4, and 5; shards 3 and 6 passed on their explicit individual reruns. The affected shards were rerun again at `3fdb605`: `--shard=3/6` (60 files; 480 tests; exit 0) and `--shard=6/6` (58 files; 649 tests; exit 0). The initial sequence exposed one artifact-store test flake in shard 3 and one supervised-process cleanup-timing flake in shard 6; neither reproduced on its recorded individual rerun. No shard reported an unhandled error after the packed-test split.
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
 - [ ] inspect `git status --short` and final diff inventory after this plan update
 - [x] reconcile the pre-fix shard-3 `Timeout calling "onTaskUpdate"` and the two post-fix one-off test flakes as inconclusive; the final full suite and individual shard reruns completed with exit 0.
