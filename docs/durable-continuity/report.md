@@ -17,7 +17,8 @@ review remains pending.**
   refactoring is not attributed to the child.
 - Independent reviewer routing: `openai-codex/gpt-5.6-luna`, read-only.
 - Reconciliation after remediation: `unresolved: []`, `currentProcesses: []`.
-- Independent read-only review at current clean HEAD: `APPROVE`.
+- Independent read-only review at clean implementation HEAD `3a89948`: `APPROVE`.
+- Documentation closure head: `f144954` (documentation-only after the approved code head).
 
 The original delegated implementation attempts are retained in the plan as
 historical provenance. The remediation requirement used exactly one fresh child;
@@ -74,9 +75,9 @@ All commands below had explicit exit status 0 unless stated otherwise.
 - Read-only `continuity-report --format okf-candidates`: empty candidates output.
   No runtime `.okf/` files were written.
 
-The final documentation commit after the code head changes only the plan/report
-text; the full suite is therefore the authoritative code verification for the
-current clean checkout.
+The documentation closure commits after the approved code head change only
+plan/report/packet text; the full suite is therefore the authoritative code
+verification for the current clean checkout.
 
 ## Curation and closure
 

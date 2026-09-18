@@ -163,8 +163,9 @@ the pre-remediation head `17b129560af988be70dfd00779faa153ee84218a` returned
 child starts, role-visit evidence scope, repository resolution, and stable
 required-child-packet diagnostics. Those findings are addressed in follow-up
 commits `728a439270a2a5980df1efc8876aae7b9971d3e3`, `15e3fa6`, and `3fdb605`.
-A fresh read-only review of clean HEAD `3a89948` returned `APPROVE`; its
-verification and the final report are recorded below.
+A fresh read-only review of clean implementation HEAD `3a89948` returned
+`APPROVE`; the documentation closure head is `f144954`. Its verification and
+the final report are recorded below.
 
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify

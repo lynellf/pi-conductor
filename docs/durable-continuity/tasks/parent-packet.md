@@ -1,7 +1,8 @@
 # Durable continuity — parent packet and dispatch cards
 
-Status: **Implementation complete and independently approved at clean HEAD
-`3a89948`; overseer end-of-loop review remains pending.** The original packet
+Status: **Implementation complete and independently approved at clean
+implementation head `3a89948`; documentation closure head `f144954`; overseer
+end-of-loop review remains pending.** The original packet
 below is preserved as dispatch provenance. The acknowledged revision is the
 runtime base for DC-HANDOFF, DC-CHILD, and DC-LEDGER.
 
@@ -282,7 +283,7 @@ the specification and explicitly asks to begin implementation.
   substantive delegated-authority regression test; parent production-boundary
   work remains parent-owned.
 - Remediation commits: `728a439`, `15e3fa6`, `3fdb605`; documentation closure
-  commits: `3a89948` plus the report/plan updates in the current working loop.
+  commits: `3a89948`, `f144954`, plus this final pointer update.
 - Current reconciliation was `unresolved: []`, `currentProcesses: []`.
 - Final read-only independent review of clean HEAD `3a89948`: `APPROVE`.
 - Exact verification, audit posture, and the empty OKF-candidate result are in
