@@ -186,7 +186,7 @@ The prior report of 3,635 passed tests is stale (the prior branch actually recor
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [ ] independently observed deterministic shard runs: `pnpm vitest run --shard=1/6` (59 files; 640 passed), `--shard=2/6` (59; 766), `--shard=4/6` (59; 565), `--shard=5/6` (59; 544), and `--shard=6/6` (59; 661) passed after final remediation. Shard 3 is unresolved: repeated standard runs ended after `packed-delegation-cleanup` with Vitest's unhandled `Timeout calling onTaskUpdate` error, so no complete-suite union is claimed. The earlier 59-file/478-pass shard-3 result predates the final pure-module split and is not counted.
+- [x] independently observed deterministic shard runs: `pnpm vitest run --shard=1/6` (60 files; 643 passed), `--shard=2/6` (60; 767), `--shard=3/6` (60; 486), `--shard=4/6` (60; 604), `--shard=5/6` (60; 536), and `--shard=6/6` (55; 626) all pass with exit 0 after the host seed wiring, the CR/LF escape fix, the parent takeover of DC-CHILD, and the hook/teardown timeout extension. The previous shard-3 worker-timeout (`onTaskUpdate`) on `packed-delegation-cleanup.test.ts` is resolved by the explicit `hookTimeout`/`teardownTimeout` values in `vitest.config.ts`.
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
 - [x] inspect `git status --short` and final diff inventory
 - [x] reconcile every timed-out/ambiguous tool execution (the failed chained focused command was rerun as separate successful commands)
