@@ -14,7 +14,6 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { runContinuityCli, runContinuityReport } from "../../src/bin/cli-continuity.js";
-import { stableJsonStringify } from "../../src/persistence/continuity.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
 import {
   renderLedgerJson,
@@ -98,9 +97,6 @@ function makePacket(opts: {
     okf_candidate_ids: opts.okfCandidateIds ?? [],
   };
 }
-
-// Mock FileRecordLog that returns synthetic records from a map
-const mockRecords = new Map<string, unknown[]>();
 
 // ─── Test suite ────────────────────────────────────────────────────────
 

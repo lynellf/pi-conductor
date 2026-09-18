@@ -679,11 +679,11 @@ describe("buildRunMemory: continuity seed injection (spec §8 + §11)", () => {
   it("materializer receives the run_id from the checkpoint and the pinned policy", () => {
     const cp = ck("orchestrator");
     const observed: ContinuityMaterializationPolicy[] = [];
-    const materializer: MaterializeContinuity = (records, policy) => {
+    const materializer: MaterializeContinuity = (_records, policy) => {
       observed.push(policy);
       return emptyLedger(policy.run_id);
     };
-    const renderer: RenderContinuitySeed = (ledger, maxBytes) => fixedSeed("ok", maxBytes);
+    const renderer: RenderContinuitySeed = (_ledger, maxBytes) => fixedSeed("ok", maxBytes);
     buildRunMemory(cp, [], DEF, {
       goal: "x",
       runCostCap: null,

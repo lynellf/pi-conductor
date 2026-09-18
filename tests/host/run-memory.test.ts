@@ -587,7 +587,7 @@ describe("formatRunMemorySeed — continuity seed section (spec §8 + §11)", ()
   it("includes the bounded seed verbatim when one is materialized (raw prose never duplicated)", () => {
     const def = makeDef();
     const cp = createInitialCheckpoint(def);
-    const materializer: MaterializeContinuity = (records) => emptyLedger(cp.run_id);
+    const materializer: MaterializeContinuity = (_records) => emptyLedger(cp.run_id);
     const renderer: RenderContinuitySeed = () => fixedSeed("RAW-CONTINUITY-PROSE-12345", 2);
     const mem = buildRunMemory(cp, [], def, {
       goal: "x",

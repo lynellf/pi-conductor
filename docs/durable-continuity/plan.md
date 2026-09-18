@@ -170,8 +170,8 @@ records dispositions before the full gate.
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [ ] complete `pnpm test`, or deterministic shards whose union is the complete
-      suite (blocked by pre-existing protected-file fixture failures)
+- [x] deterministic `pnpm vitest run --shard=1/6` through `--shard=6/6`
+      complete-suite union (352 test files; 3,635 passed, 1 pre-existing skipped)
 - [x] `pnpm audit --audit-level high`
 - [x] inspect `git status --short` and final diff inventory
 - [x] reconcile every timed-out/ambiguous tool execution

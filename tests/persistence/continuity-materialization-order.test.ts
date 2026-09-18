@@ -171,10 +171,11 @@ describe("continuity-materialization-order", () => {
 
       const ledger = materializeContinuity(records, { run_id: "run-1" });
 
-      expect(ledger.envelopes).toHaveLength(3);
-      expect(ledger.envelopes[0]!.packet.summary).toBe("first");
-      expect(ledger.envelopes[1]!.packet.summary).toBe("second");
-      expect(ledger.envelopes[2]!.packet.summary).toBe("third");
+      expect(ledger.envelopes.map((envelope) => envelope.packet.summary)).toEqual([
+        "first",
+        "second",
+        "third",
+      ]);
     });
   });
 
@@ -204,13 +205,14 @@ describe("continuity-materialization-order", () => {
       const ledger = materializeContinuity(records, { run_id: "run-1" });
 
       // f-1 is superseded by f-2
-      const f1 = ledger.findings.find((f) => f.item.id === "f-1")!;
-      expect(f1.superseded_by).toContain("f-2");
-      expect(f1.superseded_by.length).toBe(1);
+      const f1 = ledger.findings.find((f) => f.item.id === "f-1");
+      expect(f1).toBeDefined();
+      expect(f1?.superseded_by).toEqual(["f-2"]);
 
       // f-2 is active (not superseded)
-      const f2 = ledger.findings.find((f) => f.item.id === "f-2")!;
-      expect(f2.superseded_by).toHaveLength(0);
+      const f2 = ledger.findings.find((f) => f.item.id === "f-2");
+      expect(f2).toBeDefined();
+      expect(f2?.superseded_by).toEqual([]);
 
       expect(ledger.counts.active_finding_count).toBe(1);
       expect(ledger.counts.superseded_finding_count).toBe(1);
@@ -418,11 +420,12 @@ describe("continuity-materialization-order", () => {
       const ledger = materializeContinuity(records, { run_id: "run-1" });
 
       expect(ledger.envelopes).toHaveLength(1);
-      expect(ledger.envelopes[0]!.source).toBe("delegated_result");
-      expect(ledger.envelopes[0]!.child).toBeDefined();
-      expect(ledger.envelopes[0]!.child!.child_id).toBe("child-child-1");
-      expect(ledger.envelopes[0]!.role).toBe("orchestrator");
-      expect(ledger.envelopes[0]!.visit).toBe(2);
+      const envelope = ledger.envelopes[0];
+      expect(envelope).toBeDefined();
+      expect(envelope?.source).toBe("delegated_result");
+      expect(envelope?.child?.child_id).toBe("child-child-1");
+      expect(envelope?.role).toBe("orchestrator");
+      expect(envelope?.visit).toBe(2);
     });
   });
 });
