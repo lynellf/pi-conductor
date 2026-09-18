@@ -1,8 +1,9 @@
 # Durable continuity — parent packet and dispatch cards
 
-Status: **Acknowledged by overseer on 2026-09-18. Gate 0 satisfied; the
-acknowledged revision is the runtime base for DC-HANDOFF, DC-CHILD, and
-DC-LEDGER. Dispatch is authorized.**
+Status: **Implementation complete and independently approved at clean HEAD
+`3a89948`; overseer end-of-loop review remains pending.** The original packet
+below is preserved as dispatch provenance. The acknowledged revision is the
+runtime base for DC-HANDOFF, DC-CHILD, and DC-LEDGER.
 
 Prepared repository head: `a3e493e` (pre-spec planning baseline)
 
@@ -272,3 +273,19 @@ This packet and its manifest are planning artifacts only. Static manifest
 validation is permitted before acknowledgement. Do not run `conduct start`,
 `/conduct`, `/conduct:resume`, or any delegation until the overseer acknowledges
 the specification and explicitly asks to begin implementation.
+
+## 9. Completion record
+
+- Remediation run: `f4ab4aac-6e7b-4ac5-8bac-9080a6af34e3`.
+- Exactly one fresh remediation child: `ecf36bf0`, role
+  `child-continuity-worker`, model `MiniMax-M3`. The child supplied the
+  substantive delegated-authority regression test; parent production-boundary
+  work remains parent-owned.
+- Remediation commits: `728a439`, `15e3fa6`, `3fdb605`; documentation closure
+  commits: `3a89948` plus the report/plan updates in the current working loop.
+- Current reconciliation was `unresolved: []`, `currentProcesses: []`.
+- Final read-only independent review of clean HEAD `3a89948`: `APPROVE`.
+- Exact verification, audit posture, and the empty OKF-candidate result are in
+  `docs/durable-continuity/report.md`.
+- No runtime `.okf/` mutation occurred. The only remaining action is the
+  overseer's end-of-loop review.

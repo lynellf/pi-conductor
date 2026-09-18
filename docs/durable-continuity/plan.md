@@ -157,15 +157,14 @@ Child self-report is not sufficient proof.
 
 ## Phase 4 — independent review
 
-**Current disposition: pending independent re-review.** A direct independent
-review at the pre-remediation head `17b129560af988be70dfd00779faa153ee84218a`
-returned `request_changes` for duplicate/malformed pinned snapshots, legacy
-parentless child starts, role-visit evidence scope, repository resolution, and
-stable required-child-packet diagnostics. Those findings are addressed in
-follow-up commits `728a439270a2a5980df1efc8876aae7b9971d3e3`,
-`15e3fa6`, and `3fdb605`; current-head verification is recorded below. The
-review axes remain unchecked until a fresh read-only reviewer evaluates this
-clean head.
+**Current disposition: independently approved.** A direct independent review at
+the pre-remediation head `17b129560af988be70dfd00779faa153ee84218a` returned
+`request_changes` for duplicate/malformed pinned snapshots, legacy parentless
+child starts, role-visit evidence scope, repository resolution, and stable
+required-child-packet diagnostics. Those findings are addressed in follow-up
+commits `728a439270a2a5980df1efc8876aae7b9971d3e3`, `15e3fa6`, and `3fdb605`.
+A fresh read-only review of clean HEAD `3a89948` returned `APPROVE`; its
+verification and the final report are recorded below.
 
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify
@@ -173,16 +172,16 @@ code.
 
 Review axes:
 
-- [ ] spec conformance and scope discipline;
-- [ ] reducer purity and host/core boundaries;
-- [ ] TypeBox single-schema discipline;
-- [ ] append-only durability and restart behavior;
-- [ ] evidence authority, provenance spoofing, and cross-run denial;
-- [ ] UTF-8/item/seed bounds and adversarial input;
-- [ ] legacy manifest/record/minimal-child compatibility;
-- [ ] deterministic rendering and Markdown safety;
-- [ ] tests, docs, and public API quality;
-- [ ] no runtime `.okf/` mutation.
+- [x] spec conformance and scope discipline;
+- [x] reducer purity and host/core boundaries;
+- [x] TypeBox single-schema discipline;
+- [x] append-only durability and restart behavior;
+- [x] evidence authority, provenance spoofing, and cross-run denial;
+- [x] UTF-8/item/seed bounds and adversarial input;
+- [x] legacy manifest/record/minimal-child compatibility;
+- [x] deterministic rendering and Markdown safety;
+- [x] tests, docs, and public API quality;
+- [x] no runtime `.okf/` mutation.
 
 The reviewer returns `approve` or `request_changes` with concrete file/line or
 contract evidence. The implementation lead resolves all blocking findings and
@@ -214,13 +213,15 @@ exit status. Partial shards are never described as the full gate.
 
 ## Phase 6 — final report and optional curation
 
-- [ ] Produce the conductor run report with run ID, manifest path, pinned base
-      SHA, child IDs, model/provider routing, lane inventory, integration
-      commits, reviewer disposition, and exact verification outcomes.
+- [x] Produce `docs/durable-continuity/report.md` with run ID, manifest path,
+      pinned base SHA, child IDs, model/provider routing, lane inventory,
+      integration commits, reviewer disposition, and exact verification
+      outcomes.
 - [x] Render `continuity-report --format okf-candidates` for remediation run `f4ab4aac-6e7b-4ac5-8bac-9080a6af34e3`; the read-only output is `{"candidates":[],...}` with no candidates.
-- [ ] Give the candidates to one parent/reviewer/curator for selective review.
-- [ ] Curator either updates `.okf/` with verified durable knowledge or records
-      an explicit no-op; child/task-log content is not promoted wholesale.
+- [x] Give the empty candidate set to the independent reviewer for selective
+      review; no candidate required promotion.
+- [x] Record the curator no-op in the final report; child/task-log content was
+      not promoted wholesale and `.okf/` was not mutated.
 - [ ] Present the final implementation to the overseer for end-of-loop review.
 
 ## Planned commit sequence
