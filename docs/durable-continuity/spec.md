@@ -1,6 +1,6 @@
 # Durable continuity ledger specification
 
-Status: **Acknowledged by overseer on 2026-09-18 (this revision). Gate 0 satisfied; implementation and dispatch may proceed.**
+Status: **Acknowledged by overseer on 2026-09-18 (revision pinned in commit `7641298`). Gate 0 satisfied; implementation and dispatch may proceed.**
 
 Date: 2026-09-18
 
@@ -539,7 +539,7 @@ role prompts is permitted before acknowledgement; executing those plans is not.
 
 **Acknowledgement record:**
 
-- 2026-09-18 — Overseer acknowledged this specification as written. This commit
-  on branch `feature/bubblewrap-execution-spec` is the acknowledged revision.
-  The implementation lead confirmed the acknowledged revision before changing
-  implementation code. The dispatch SHA is pinned in the commit directly above.
+- 2026-09-18 — Overseer acknowledged this specification as written. Pinned in
+  commit `7641298` on branch `feature/bubblewrap-execution-spec`. Implementation
+  lead confirmed the acknowledged revision before changing implementation code.
+  The dispatch SHA is the commit directly above (`HEAD` at time of dispatch).

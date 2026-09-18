@@ -8,9 +8,10 @@ Prepared repository head: `a3e493e` (pre-spec planning baseline)
 
 Runtime base: the clean commit containing the acknowledged
 `docs/durable-continuity/spec.md`, this plan, the manifest, and role prompts.
-The acknowledged revision is the commit immediately below the dispatch base
-on branch `feature/bubblewrap-execution-spec`. The implementation lead uses
-the current clean HEAD as the dispatch base in every child task. Phase 1
+The acknowledged revision is commit `7641298` on branch
+`feature/bubblewrap-execution-spec`; the dispatch base is the commit directly
+above it (the current HEAD at time of dispatch). The implementation lead uses
+that current clean HEAD as the dispatch base in every child task. Phase 1
 contracts (`81fefaf`) and the spec introduction (`bb20a26`) sit on the
 linear history below the dispatch base.
 
