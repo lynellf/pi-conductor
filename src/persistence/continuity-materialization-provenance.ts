@@ -23,9 +23,11 @@ export class ContinuityLifecycleIndex {
     }
     if (record.type !== "subagent_started") return;
     const key = childKey(record.child_id, record.task_id);
-    if (this.children.has(key)) fail(recordId(record), "duplicate child lifecycle identity");
     if (record.parent_role === undefined || record.parent_visit_index === undefined)
       fail(recordId(record), "child start lacks parent lifecycle provenance");
+    // A child/task may be retried after its preceding terminal record. The
+    // append-only start sequence, not a filename or a constant, is the only
+    // authoritative attempt counter.
     const attempt = (this.attempts.get(key) ?? 0) + 1;
     this.attempts.set(key, attempt);
     this.children.set(key, { start: record, attempt });
