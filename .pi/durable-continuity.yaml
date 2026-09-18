@@ -149,6 +149,13 @@ subagents:
           - src/host/delegation/factory-records.ts
           - src/host/delegation/factory-scheduler.ts
           - src/host/delegation/scheduler-results.ts
+          - src/host/delegation/delegate-tool.ts
+          - src/host/delegation/child-session.ts
+          - src/host/delegation/pool.ts
+          - src/host/delegation/manager.ts
+          - src/host/delegation/delegate-tool-factory.ts
+          - src/host/delegation/admission.ts
+          - src/persistence/tool-execution.ts
           - tests/host/child-result.test.ts
           - tests/host/issue-112-legacy-delegate-race.test.ts
           - tests/host/continuity-child-observation.test.ts
