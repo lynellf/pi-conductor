@@ -157,16 +157,14 @@ Child self-report is not sufficient proof.
 
 ## Phase 4 — independent review
 
-**Current disposition: pending independent re-review.** The latest recorded
-independent review returned `request_changes` in run
-`cc1e8dff-809d-46c6-b795-3c00c85e394f` at the pre-remediation head
-`126de2bb1acaef55389d05c6b3bf9e7e369ba9bf`, identifying fresh-role seed
-wiring, multiline Markdown safety, the missing substantive DC-CHILD lane, and
-an incomplete shard-3 gate. The seed and Markdown fixes are present in the
-current implementation; the substantive child contribution and its parent
-validation are recorded above, and the current six-shard gate is green. The
-review axes below remain unchecked until an independent reviewer evaluates
-this current clean head.
+**Current disposition: pending independent re-review.** A direct independent
+review at the pre-remediation head `17b129560af988be70dfd00779faa153ee84218a`
+returned `request_changes` for duplicate/malformed pinned snapshots, legacy
+parentless child starts, role-visit evidence scope, repository resolution, and
+stable required-child-packet diagnostics. Those findings are addressed in
+follow-up commit `728a439270a2a5980df1efc8876aae7b9971d3e3`; its current-head
+verification is recorded below. The review axes remain unchecked until a fresh
+read-only reviewer evaluates this clean head.
 
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify
@@ -191,19 +189,21 @@ records dispositions before the full gate.
 
 ## Phase 5 — full verification
 
-The prior shard totals are stale because the current remediation adds
-child-authority coverage. Record only the exact post-remediation union below;
-all six standalone shard commands completed with exit 0.
+The previous gate evidence was stale and shard 3 exposed an unhandled Vitest
+worker RPC timeout even though its assertions passed. The packed cleanup probe
+is now split into separate test files so no single file exceeds Birpc's fixed
+60-second task-update timeout. Record only exact current-head results below.
 
 - [x] `pnpm typecheck`
 - [x] `pnpm build`
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [x] independently observed deterministic shard runs after `3f3246c`: `pnpm vitest run --shard=1/6` (60 files; 651 passed), `--shard=2/6` (60; 768), `--shard=3/6` (60; 483), `--shard=4/6` (60; 592), `--shard=5/6` (60; 545), and `--shard=6/6` (56; 634) all pass with exit 0. The union is 356 files and 3,673 passed tests, with no skipped tests reported. Shard 3 completed normally; no nested timeout or output pipeline was used.
+- [x] `pnpm test` after `728a439`: 358 files and 3,686 tests passed; explicit exit 0 and no unhandled errors.
+- [x] standalone shards after `728a439`: `--shard=1/6` (60 files; 651 tests; exit 0), `2/6` (60; 767; exit 0), `3/6` (60; 480; exit 0 on the individual rerun), `4/6` (60; 578; exit 0), `5/6` (60; 561; exit 0), and `6/6` (58; 649; exit 0 on the individual rerun). The initial sequential pass also exposed one artifact-store test flake in shard 3 and one supervised-process cleanup-timing flake in shard 6; neither reproduced on its recorded individual rerun. No shard reported an unhandled error after the packed-test split.
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
-- [x] inspect `git status --short` and final diff inventory
-- [x] reconcile every timed-out/ambiguous tool execution (the failed chained focused command was rerun as separate successful commands)
+- [ ] inspect `git status --short` and final diff inventory after this plan update
+- [x] reconcile the pre-fix shard-3 `Timeout calling "onTaskUpdate"` and the two post-fix one-off test flakes as inconclusive; the final full suite and individual shard reruns completed with exit 0.
 - [x] update only completed checkboxes in this plan
 
 Long suites stream output. No `tail` pipeline may hide the running process or
