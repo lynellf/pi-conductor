@@ -46,6 +46,16 @@ const continuitySiblingSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/**
+ * Spec §9 / §10: additive host-authored continuity sibling persisted on
+ * successful child completion records. Exported so the canonical
+ * TypeScript interface (`SubagentCompletedRecord` in `./log.ts`) and
+ * the shared `ChildContinuitySibling` alias (`./continuity.ts`) both
+ * derive their shape from one source.
+ */
+export { continuitySiblingSchema };
+
 const usage = Type.Object(
   {
     input: nonNegative,

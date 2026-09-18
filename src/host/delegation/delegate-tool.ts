@@ -11,6 +11,7 @@ import type {
   ChildProjectionFingerprint,
   DelegateResultStatus,
 } from "../../persistence/child-completion.js";
+import type { ChildContinuitySibling } from "../../persistence/continuity.js";
 import type { DelegationSourceWorkspace } from "../../persistence/delegation-task-schema.js";
 import type { SubagentUsage } from "../../persistence/log.js";
 import type { SubagentSandboxDescriptor } from "../../persistence/subagent-sandbox.js";
@@ -181,6 +182,15 @@ export interface ChildTerminal {
   readonly duplicateReadCalls?: number;
   readonly sessionFile: string | null;
   readonly usage: SubagentUsage;
+  /**
+   * Spec §9: validated continuity packet + host-authored evidence
+   * resolutions captured at the child tool boundary. Absent when the
+   * child did not supply a packet, when validation rejected it, or
+   * when the pinned ContinuityPolicy did not require one. Provenance
+   * (run/parent/child/task/attempt) is host-derived and never
+   * supplied by the child.
+   */
+  readonly continuity?: ChildContinuitySibling;
   /** Compatibility input for existing direct host adapters; never written by new SDK sessions. */
   readonly status?: "completed" | "failed" | "no_changes" | "cancelled";
   readonly summary?: string;
@@ -379,6 +389,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     ...(terminal.duplicateReadCalls === undefined
       ? {}
       : { duplicateReadCalls: terminal.duplicateReadCalls }),
+    ...(terminal.continuity === undefined ? {} : { continuity: terminal.continuity }),
   } as const;
   const normalized = normalizeChildTerminal(raw);
   const evidence = completionEvidence(raw, normalized, terminal.summaryTruncated ?? false);

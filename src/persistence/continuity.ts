@@ -12,6 +12,8 @@
  *  - ledger and bounded-seed types
  *  - the narrow materializer / renderer signatures consumed by host
  *    and CLI lanes
+ *  - the additive child-continuity sibling type that both transport
+ *    lanes persist on durable records (spec §8, §9, §10)
  *
  * Implementation of the chronological materializer, deterministic
  * bounded seed selection, and renderers lives in
@@ -19,8 +21,10 @@
  * `src/persistence/continuity-render.ts` (Lane C, dispatched later).
  */
 
+import type { Static } from "typebox";
 import type { ContinuityEvidenceResolution, Role } from "../core/types.js";
 import { CONTINUITY_CONSTRAINTS, type ContinuityPacketV1 } from "../seam/continuity.js";
+import type { continuitySiblingSchema } from "./delegation-lifecycle-schema.js";
 import type { PersistedRecord } from "./log.js";
 
 // ─── Stable diagnostic codes (spec §6, §7, §11, §14) ──────────────────
@@ -388,6 +392,15 @@ export interface ContinuityEnvelopeV1 {
   readonly packet: ContinuityPacketV1;
   readonly evidence_resolutions: readonly ContinuityEvidenceResolution[];
 }
+
+/**
+ * Spec §9 / §10: additive host-authored continuity sibling persisted on
+ * successful child completion records. Derived from the TypeBox schema in
+ * `delegation-lifecycle-schema.ts` so the durable record shape stays in
+ * one place. The surrounding `subagent_completed` record remains the
+ * source of run/parent/child/task/attempt provenance — never the child.
+ */
+export type ChildContinuitySibling = Static<typeof continuitySiblingSchema>;
 
 // ─── Materialized ledger + bounded seed (spec §11) ──────────────────────
 

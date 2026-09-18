@@ -17,6 +17,7 @@ import type {
   ChildProjectionFingerprint,
 } from "./child-completion.js";
 import type { ChildOutputCapture, ChildOutputRecord } from "./child-output-records.js";
+import type { ChildContinuitySibling } from "./continuity.js";
 import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
@@ -377,6 +378,15 @@ export interface SubagentCompletedRecord {
   /** Host-measured output bytes, captured before authoritative settlement (#116). */
   readonly output_capture?: ChildOutputCapture;
   readonly output_capture_failure?: string;
+  /**
+   * Spec §9 / §10: additive host-authored continuity sibling on
+   * successful child completions. Absent on legacy records, on
+   * `minimal` children that did not supply a typed packet, and on
+   * successful `report_result` results when the pinned policy does
+   * not require one. Provenance (run/parent/child/task/attempt) is
+   * supplied by the surrounding record; never by the child.
+   */
+  readonly continuity?: ChildContinuitySibling;
   readonly ts: number;
 }
 
