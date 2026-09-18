@@ -61,6 +61,7 @@ import {
   startRun,
 } from "../index.js";
 import { createCliModelRegistry } from "./cli-model-registry.js";
+import { runContinuityCli } from "./cli-continuity.js";
 import { runReconcileCli } from "./cli-reconcile.js";
 import {
   type CliSignalSource,
@@ -246,6 +247,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     signals = processSignalSource,
   } = deps;
 
+  if (argv[0] === "continuity-report") {
+    return runContinuityCli(argv, out);
+  }
+
   if (argv[0] === "reconcile-tools") {
     return runReconcileCli(argv, out);
   }
@@ -430,10 +435,15 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
  * this entirely by calling `runCli(argv, deps)` directly.
  */
 export async function main(): Promise<number> {
-  if (process.argv[2] === "reconcile-tools") {
-    return runReconcileCli(process.argv.slice(2), globalThis.console);
+  const argv = process.argv.slice(2);
+
+  if (argv[0] === "continuity-report") {
+    return runContinuityCli(argv, globalThis.console);
   }
-  return runCli(process.argv.slice(2), {
+  if (argv[0] === "reconcile-tools") {
+    return runReconcileCli(argv, globalThis.console);
+  }
+  return runCli(argv, {
     startRun,
     modelRegistry: await createCliModelRegistry(),
     console: globalThis.console,

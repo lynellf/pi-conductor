@@ -26,7 +26,10 @@ import { Value } from "typebox/value";
 import type { ContinuityEvidenceResolution, Role } from "../core/types.js";
 import {
   CONTINUITY_CONSTRAINTS,
+  type ContinuityFinding,
+  type ContinuityNextStep,
   type ContinuityPacketV1,
+  type ContinuityQuestion,
   continuityPacketV1Schema,
 } from "../seam/continuity.js";
 import type { continuitySiblingSchema } from "./delegation-lifecycle-schema.js";
@@ -609,10 +612,10 @@ export interface ContinuityLedger {
   readonly run_id: string;
   readonly generated_at: string;
   readonly envelopes: readonly ContinuityEnvelopeV1[];
-  readonly findings: readonly ContinuityActiveOrSupersededItem[];
+  readonly findings: readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[];
   readonly evaluations: readonly ContinuityResolvedEvaluation[];
-  readonly open_questions: readonly ContinuityActiveOrSupersededItem[];
-  readonly next_steps: readonly ContinuityActiveOrSupersededItem[];
+  readonly open_questions: readonly ContinuityActiveOrSupersededItem<ContinuityQuestion>[];
+  readonly next_steps: readonly ContinuityActiveOrSupersededItem<ContinuityNextStep>[];
   readonly evidence_resolutions: readonly ContinuityEvidenceResolution[];
   readonly okf_candidates: readonly ContinuityOkfCandidate[];
   readonly counts: ContinuityLedgerCounts;
