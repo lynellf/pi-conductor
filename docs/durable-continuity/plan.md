@@ -81,17 +81,20 @@ Must not edit delegated-child, CLI, manifest-contract, or OKF files.
 
 ### Lane B — delegated-child completion
 
-**Disposition:** DC-CHILD was dispatched five times
-(`5244a451`, `6c995dc5`, `55d4cdbf`, `0b34662a`, `1e71f18a`; the first four
-on `openai-codex:gpt-5.6-terra`, the fifth on `minimax:MiniMax-M3`). The
-first four returned no accepted write. The fifth returned `failed` with a
-valid `BLOCKED:` summary naming the missing production paths
-(`src/host/log-file.ts`, `src/persistence/continuity-materialization.ts`,
-`src/host/delegation/delegate-tool.ts`) required for the assigned
-restart/provenance tests; the child correctly refused to fabricate
-contracts. The authorized parent takeover supplies the production behavior
-and coverage below; do not describe this as a completed child
-implementation.
+**Disposition:** The original DC-CHILD attempts
+(`5244a451`, `6c995dc5`, `55d4cdbf`, `0b34662a`, `1e71f18a`) returned no
+accepted write; the parent takeover was recorded honestly at that point.
+After the later review blocker, one narrow authorized child run
+(`f4ab4aac-6e7b-4ac5-8bac-9080a6af34e3`) dispatched child `ecf36bf0`
+(`child-continuity-worker`, `minimax:MiniMax-M3`) against the clean head. The
+child made one substantive test contribution covering child-produced packet
+evidence under delegated authority. The parent inspected the diff and found
+that its fixtures mirrored authority logic and omitted terminal settlement;
+the parent refactored the contribution to use production
+`recordBackedContinuityAuthority` and real durable execution records, adding
+orphan, unfinished, duplicate-start, wrong-task, sibling, and cross-run
+regressions. The parent validation is committed at `3f3246c`; do not
+attribute the parent fixture refactor to the child.
 
 Parent-takeover behavior:
 
@@ -154,7 +157,16 @@ Child self-report is not sufficient proof.
 
 ## Phase 4 — independent review
 
-**Current disposition: `request_changes` at `b71151c1df14cf764c3af85205e286005b5637b7`.** The reviewer found bounded child/task authority, replay audience binding, host-metadata-only legacy indexing, complete evaluation output, production-log restart/public-reader proof, and module-size defects. Remediation is in progress; no review axis below is accepted until the same reviewer re-reviews the remediation commit.
+**Current disposition: pending independent re-review.** The latest recorded
+independent review returned `request_changes` in run
+`cc1e8dff-809d-46c6-b795-3c00c85e394f` at the pre-remediation head
+`126de2bb1acaef55389d05c6b3bf9e7e369ba9bf`, identifying fresh-role seed
+wiring, multiline Markdown safety, the missing substantive DC-CHILD lane, and
+an incomplete shard-3 gate. The seed and Markdown fixes are present in the
+current implementation; the substantive child contribution and its parent
+validation are recorded above, and the current six-shard gate is green. The
+review axes below remain unchecked until an independent reviewer evaluates
+this current clean head.
 
 An independent reviewer receives the acknowledged spec, plan, integration
 commit, focused test evidence, and diff inventory. The reviewer does not modify
@@ -179,14 +191,16 @@ records dispositions before the full gate.
 
 ## Phase 5 — full verification
 
-The prior report of 3,635 passed tests is stale (the prior branch actually recorded 3,638) and is invalidated by the review remediation. Record the exact post-remediation shard union only after all six shards complete successfully.
+The prior shard totals are stale because the current remediation adds
+child-authority coverage. Record only the exact post-remediation union below;
+all six standalone shard commands completed with exit 0.
 
 - [x] `pnpm typecheck`
 - [x] `pnpm build`
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [x] independently observed deterministic shard runs: `pnpm vitest run --shard=1/6` (60 files; 643 passed), `--shard=2/6` (60; 767), `--shard=3/6` (60; 486), `--shard=4/6` (60; 604), `--shard=5/6` (60; 536), and `--shard=6/6` (55; 626) all pass with exit 0 after the host seed wiring, the CR/LF escape fix, the parent takeover of DC-CHILD, and the hook/teardown timeout extension. The previous shard-3 worker-timeout (`onTaskUpdate`) on `packed-delegation-cleanup.test.ts` is resolved by the explicit `hookTimeout`/`teardownTimeout` values in `vitest.config.ts`.
+- [x] independently observed deterministic shard runs after `3f3246c`: `pnpm vitest run --shard=1/6` (60 files; 651 passed), `--shard=2/6` (60; 768), `--shard=3/6` (60; 483), `--shard=4/6` (60; 592), `--shard=5/6` (60; 545), and `--shard=6/6` (56; 634) all pass with exit 0. The union is 356 files and 3,673 passed tests, with no skipped tests reported. Shard 3 completed normally; no nested timeout or output pipeline was used.
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
 - [x] inspect `git status --short` and final diff inventory
 - [x] reconcile every timed-out/ambiguous tool execution (the failed chained focused command was rerun as separate successful commands)
@@ -200,7 +214,7 @@ exit status. Partial shards are never described as the full gate.
 - [ ] Produce the conductor run report with run ID, manifest path, pinned base
       SHA, child IDs, model/provider routing, lane inventory, integration
       commits, reviewer disposition, and exact verification outcomes.
-- [ ] Render `continuity-report --format okf-candidates`.
+- [x] Render `continuity-report --format okf-candidates` for remediation run `f4ab4aac-6e7b-4ac5-8bac-9080a6af34e3`; the read-only output is `{"candidates":[],...}` with no candidates.
 - [ ] Give the candidates to one parent/reviewer/curator for selective review.
 - [ ] Curator either updates `.okf/` with verified durable knowledge or records
       an explicit no-op; child/task-log content is not promoted wholesale.
