@@ -23,5 +23,12 @@ export default defineConfig({
     isolate: false,
     pool: "forks",
     poolOptions: { forks: { singleFork: true } },
+    // The packed-delegation-cleanup suite drives real bubblewrap work
+    // and exceeds Vitest's default 30s hook-timeout on a busy CI host.
+    // The default test timeout is already 5s; only the in-worker
+    // task-update heartbeat needs the headroom.
+    teardownTimeout: 120_000,
+    testTimeout: 60_000,
+    hookTimeout: 120_000,
   },
 });
