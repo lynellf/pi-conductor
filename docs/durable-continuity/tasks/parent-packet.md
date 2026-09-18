@@ -1,14 +1,18 @@
 # Durable continuity — parent packet and dispatch cards
 
-Status: **Prepared only. Do not dispatch until the overseer acknowledges the
-specification.**
+Status: **Acknowledged by overseer on 2026-09-18. Gate 0 satisfied; the
+acknowledged revision is the runtime base for DC-HANDOFF, DC-CHILD, and
+DC-LEDGER. Dispatch is authorized.**
 
-Prepared repository head: `a3e493e`
+Prepared repository head: `a3e493e` (pre-spec planning baseline)
 
 Runtime base: the clean commit containing the acknowledged
 `docs/durable-continuity/spec.md`, this plan, the manifest, and role prompts.
-The implementation lead must record its full SHA before Phase 1 and use that
-same SHA in every child task.
+The acknowledged revision is the commit immediately below the dispatch base
+on branch `feature/bubblewrap-execution-spec`. The implementation lead uses
+the current clean HEAD as the dispatch base in every child task. Phase 1
+contracts (`81fefaf`) and the spec introduction (`bb20a26`) sit on the
+linear history below the dispatch base.
 
 ## 1. Authoritative inputs
 

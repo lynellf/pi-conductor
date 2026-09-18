@@ -1,19 +1,19 @@
 # Durable continuity ledger implementation plan
 
-Status: **Prepared, not authorized for implementation**
+Status: **Acknowledged by overseer on 2026-09-18; Gate 0 satisfied. Implementation and dispatch are authorized against the pinned revision.**
 
 Spec: `docs/durable-continuity/spec.md`
 
 This plan optimizes elapsed implementation time by fixing shared contracts
-first, then dispatching three disjoint delegated lanes concurrently. It does
-not authorize a conductor run. The spec acknowledgement gate below must be
-satisfied by the overseer before `/conduct` is invoked.
+first, then dispatching three disjoint delegated lanes concurrently. The spec
+acknowledgement gate below has been satisfied by the overseer; `/conduct` may
+now be invoked against the pinned revision.
 
 ## Gate 0 — overseer acknowledgement
 
-- [ ] Overseer acknowledges `docs/durable-continuity/spec.md`.
-- [ ] Requested spec changes, if any, are incorporated and re-acknowledged.
-- [ ] The implementation lead confirms the acknowledged revision/commit in the
+- [x] Overseer acknowledges `docs/durable-continuity/spec.md`.
+- [x] Requested spec changes, if any, are incorporated and re-acknowledged.
+- [x] The implementation lead confirms the acknowledged revision/commit in the
       run record before changing implementation code.
 
 **Stop condition:** no implementation, delegation, or conductor run before all

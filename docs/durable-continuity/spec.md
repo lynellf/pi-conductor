@@ -1,6 +1,6 @@
 # Durable continuity ledger specification
 
-Status: **Draft — implementation is blocked until the overseer acknowledges this specification.**
+Status: **Acknowledged by overseer on 2026-09-18 (this revision). Gate 0 satisfied; implementation and dispatch may proceed.**
 
 Date: 2026-09-18
 
@@ -536,3 +536,10 @@ Implementation and any pi-conductor run are blocked until the overseer records
 acknowledgement of this specification. Acknowledgement may approve it as
 written or request revisions. Creating implementation plans, manifests, and
 role prompts is permitted before acknowledgement; executing those plans is not.
+
+**Acknowledgement record:**
+
+- 2026-09-18 — Overseer acknowledged this specification as written. This commit
+  on branch `feature/bubblewrap-execution-spec` is the acknowledged revision.
+  The implementation lead confirmed the acknowledged revision before changing
+  implementation code. The dispatch SHA is pinned in the commit directly above.
