@@ -5,8 +5,10 @@ import {
   createAcceptedHandoffEnvelope,
   incomingAcceptedHandoff,
   readAcceptedHandoffEnvelope,
+  recipientHandoffPayload,
 } from "../../src/core/accepted-handoff.js";
-import type { TransitionAccepted } from "../../src/core/types.js";
+import type { ContinuityEvidenceResolution, TransitionAccepted } from "../../src/core/types.js";
+import type { ContinuityPacketV1 } from "../../src/seam/continuity.js";
 
 function accepted(): TransitionAccepted {
   const result = createAcceptedHandoffEnvelope(
@@ -34,6 +36,28 @@ function accepted(): TransitionAccepted {
     context_ref: { run_id: "run", source_role: "worker", source_session_file: "worker-session" },
     accepted_handoff: result.envelope,
   };
+}
+
+function minimalPacket(): ContinuityPacketV1 {
+  return {
+    schema_version: 1,
+    summary: "minimal summary",
+    findings: [],
+    evaluations: [],
+    open_questions: [],
+    next_steps: [],
+    okf_candidate_ids: [],
+  };
+}
+
+function resolution(): ContinuityEvidenceResolution {
+  return Object.freeze({
+    ref_key: "findings:f1:0",
+    kind: "repository",
+    status: "verified",
+    resolved_path: "docs/example.md",
+    resolved_commit: "a".repeat(40),
+  });
 }
 
 describe("accepted handoff envelope (issue #110)", () => {
@@ -162,3 +186,157 @@ describe("accepted handoff envelope (issue #110)", () => {
     expect(incomingAcceptedHandoff([earlier], "another-run", "orchestrator")).toBeNull();
   });
 });
+
+// ─── Durable continuity ledger (§8): additive envelope metadata ────────
+
+describe("accepted handoff envelope continuity metadata (durable-continuity §8)", () => {
+  it("creates an envelope with the additive continuity sibling when supplied", () => {
+    const packet = minimalPacket();
+    const result = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", continuity: packet },
+      "orchestrator",
+      {
+        packet_utf8_bytes: 123,
+        evidence_resolutions: [resolution()],
+      },
+    );
+    if (result.kind !== "ok") throw new Error("valid envelope rejected");
+    expect(result.envelope.continuity_packet_utf8_bytes).toBe(123);
+    expect(result.envelope.continuity_evidence).toEqual([resolution()]);
+    expect(result.envelope.payload.continuity).toEqual(packet);
+  });
+
+  it("omits the continuity sibling entirely when the caller did not supply one (legacy)", () => {
+    const result = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", value: "packet" },
+      "orchestrator",
+    );
+    if (result.kind !== "ok") throw new Error("valid envelope rejected");
+    expect(result.envelope.continuity_packet_utf8_bytes).toBeUndefined();
+    expect(result.envelope.continuity_evidence).toBeUndefined();
+  });
+
+  it("rejects a payload containing a continuity packet whose UTF-8 length exceeds the 64 KiB envelope limit", () => {
+    const oversized = ACCEPTED_HANDOFF_MAX_UTF8_BYTES;
+    const packet: ContinuityPacketV1 = {
+      schema_version: 1,
+      summary: "x".repeat(oversized),
+      findings: [],
+      evaluations: [],
+      open_questions: [],
+      next_steps: [],
+      okf_candidate_ids: [],
+    };
+    const result = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", continuity: packet },
+      "orchestrator",
+    );
+    expect(result).toMatchObject({ kind: "rejected", reason: "handoff_envelope_too_large" });
+  });
+
+  it("strips continuity, context_ref, and artifacts from the recipient projection", () => {
+    const packet = minimalPacket();
+    const packetBytes = Buffer.byteLength(JSON.stringify(packet));
+    const result = createAcceptedHandoffEnvelope(
+      {
+        target_role: "orchestrator",
+        status: "ready",
+        objective: "x",
+        summary: "y",
+        requested_action: "z",
+        continuity: packet,
+        context_ref: { source_session_file: "ignored" },
+        artifacts: [{ path: "ignored" }],
+      },
+      "orchestrator",
+      { packet_utf8_bytes: packetBytes, evidence_resolutions: [] },
+    );
+    if (result.kind !== "ok") throw new Error("valid envelope rejected");
+    const projection = recipientHandoffPayload(result.envelope);
+    expect(projectingKeys(projection)).not.toContain("continuity");
+    expect(projectingKeys(projection)).not.toContain("context_ref");
+    expect(projectingKeys(projection)).not.toContain("artifacts");
+  });
+
+  it("round-trips continuity metadata intact through readAcceptedHandoffEnvelope", () => {
+    const packet = minimalPacket();
+    const packetBytes = Buffer.byteLength(JSON.stringify(packet));
+    const created = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", continuity: packet, value: "p" },
+      "orchestrator",
+      { packet_utf8_bytes: packetBytes, evidence_resolutions: [resolution()] },
+    );
+    if (created.kind !== "ok") throw new Error("valid envelope rejected");
+    const reread = readAcceptedHandoffEnvelope(created.envelope, "orchestrator");
+    expect(reread.continuity_packet_utf8_bytes).toBe(packetBytes);
+    expect(reread.continuity_evidence).toEqual([resolution()]);
+  });
+
+  it("rejects a round-tripped envelope whose continuity byte count drifts", () => {
+    const packet = minimalPacket();
+    const packetBytes = Buffer.byteLength(JSON.stringify(packet));
+    const created = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", continuity: packet, value: "p" },
+      "orchestrator",
+      { packet_utf8_bytes: packetBytes, evidence_resolutions: [] },
+    );
+    if (created.kind !== "ok") throw new Error("valid envelope rejected");
+    const tampered = {
+      ...created.envelope,
+      continuity_packet_utf8_bytes: packetBytes + 1,
+    };
+    expect(() => readAcceptedHandoffEnvelope(tampered, "orchestrator")).toThrow();
+  });
+
+  it("rejects a round-tripped envelope with an unsupported continuity schema_version", () => {
+    const packetBytes = Buffer.byteLength(JSON.stringify(minimalPacket()));
+    const created = createAcceptedHandoffEnvelope(
+      {
+        target_role: "orchestrator",
+        continuity: { ...minimalPacket(), schema_version: 2 as never },
+        value: "p",
+      },
+      "orchestrator",
+      { packet_utf8_bytes: packetBytes, evidence_resolutions: [] },
+    );
+    if (created.kind !== "ok") throw new Error("valid envelope rejected");
+    expect(() => readAcceptedHandoffEnvelope(created.envelope, "orchestrator")).toThrow(
+      /schema_version/,
+    );
+  });
+
+  it("preserves legacy envelopes without continuity so they parse unchanged", () => {
+    const result = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", value: "legacy" },
+      "orchestrator",
+    );
+    if (result.kind !== "ok") throw new Error("valid envelope rejected");
+    const reread = readAcceptedHandoffEnvelope(result.envelope, "orchestrator");
+    expect(reread.continuity_packet_utf8_bytes).toBeUndefined();
+    expect(reread.continuity_evidence).toBeUndefined();
+    expect(reread.payload).toEqual({ target_role: "orchestrator", value: "legacy" });
+  });
+
+  it("round-trips continuity metadata through incomingAcceptedHandoff", () => {
+    const packet = minimalPacket();
+    const packetBytes = Buffer.byteLength(JSON.stringify(packet));
+    const result = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", continuity: packet, value: "p" },
+      "orchestrator",
+      { packet_utf8_bytes: packetBytes, evidence_resolutions: [] },
+    );
+    if (result.kind !== "ok") throw new Error("valid envelope rejected");
+    const record = accepted();
+    const enriched = {
+      ...record,
+      accepted_handoff: result.envelope,
+    };
+    const incoming = incomingAcceptedHandoff([enriched], "run", "orchestrator");
+    expect(incoming?.envelope?.continuity_packet_utf8_bytes).toBe(packetBytes);
+    expect(incoming?.envelope?.continuity_evidence).toEqual([]);
+  });
+});
+
+function projectingKeys(value: Readonly<Record<string, unknown>>): readonly string[] {
+  return Object.keys(value);
+}

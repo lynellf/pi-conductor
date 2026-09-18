@@ -27,6 +27,12 @@ import {
   type MachineDefinition,
   StubHost,
 } from "../../src/index.js";
+import type {
+  ContinuityLedger,
+  ContinuitySeed,
+  MaterializeContinuity,
+  RenderContinuitySeed,
+} from "../../src/persistence/continuity.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 function makeDef(): MachineDefinition {
@@ -512,5 +518,146 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
       expect(seed).not.toContain("gated run has no pending authorized end request");
       expect(seed).not.toContain("Continue toward the goal");
     }
+  });
+});
+
+// ─── Durable continuity §8 + §11 — bounded seed formatting ──────────────
+
+function emptyLedger(runId: string): ContinuityLedger {
+  return Object.freeze({
+    run_id: runId,
+    generated_at: "2026-09-18T00:00:00.000Z",
+    envelopes: Object.freeze([]),
+    findings: Object.freeze([]),
+    evaluations: Object.freeze([]),
+    open_questions: Object.freeze([]),
+    next_steps: Object.freeze([]),
+    evidence_resolutions: Object.freeze([]),
+    okf_candidates: Object.freeze([]),
+    counts: Object.freeze({
+      envelope_count: 0,
+      byte_count: 0,
+      active_finding_count: 0,
+      superseded_finding_count: 0,
+      active_question_count: 0,
+      superseded_question_count: 0,
+      active_next_step_count: 0,
+      superseded_next_step_count: 0,
+      okf_candidate_count: 0,
+    }),
+  }) as ContinuityLedger;
+}
+
+function fixedSeed(rendered: string, omitted = 0): ContinuitySeed {
+  return Object.freeze({
+    schema_version: 1,
+    run_id: "run-1",
+    budget: Object.freeze({ max_bytes: 32_768, used_bytes: rendered.length }),
+    omitted: Object.freeze({ items: omitted, packets: 0 }),
+    rendered,
+    sections: Object.freeze({
+      blocking_questions: Object.freeze([]),
+      recipient_next_steps: Object.freeze([]),
+      risks_and_decisions: Object.freeze([]),
+      other_active_findings: Object.freeze([]),
+      evaluations: Object.freeze([]),
+      packet_summaries: Object.freeze([]),
+    }),
+  }) as ContinuitySeed;
+}
+
+function policy() {
+  return {
+    schema_version: 1 as const,
+    require_handoff: false,
+    require_delegated_result: false,
+    seed_max_utf8_bytes: 32_768,
+  };
+}
+
+describe("formatRunMemorySeed — continuity seed section (spec §8 + §11)", () => {
+  it("omits the continuity_seed section when the run memory has no seed (legacy preservation)", () => {
+    const def = makeDef();
+    const cp = createInitialCheckpoint(def);
+    const mem = buildRunMemory(cp, [], def, { goal: "x", runCostCap: null });
+    const seed = formatRunMemorySeed(mem);
+    expect(seed).not.toContain("continuity_seed:");
+  });
+
+  it("includes the bounded seed verbatim when one is materialized (raw prose never duplicated)", () => {
+    const def = makeDef();
+    const cp = createInitialCheckpoint(def);
+    const materializer: MaterializeContinuity = (records) => emptyLedger(cp.run_id);
+    const renderer: RenderContinuitySeed = () => fixedSeed("RAW-CONTINUITY-PROSE-12345", 2);
+    const mem = buildRunMemory(cp, [], def, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: policy(),
+      materializeContinuity: materializer,
+      renderContinuitySeed: renderer,
+    });
+    const seed = formatRunMemorySeed(mem);
+    expect(seed).toContain("continuity_seed:");
+    expect(seed).toContain("RAW-CONTINUITY-PROSE-12345");
+    expect(seed).toContain("budget: 26/32768 UTF-8 bytes");
+    expect(seed).toContain("omitted: 2 item(s), 0 packet(s)");
+  });
+
+  it("renders omission counts verbatim from the materializer (no host reformatting)", () => {
+    const def = makeDef();
+    const cp = createInitialCheckpoint(def);
+    const omittedSeed: ContinuitySeed = {
+      ...fixedSeed("seed", 0),
+      omitted: Object.freeze({ items: 5, packets: 2 }) as ContinuitySeed["omitted"],
+    };
+    const mem = buildRunMemory(cp, [], def, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: policy(),
+      materializeContinuity: () => emptyLedger(cp.run_id),
+      renderContinuitySeed: () => omittedSeed,
+    });
+    const seed = formatRunMemorySeed(mem);
+    expect(seed).toContain("omitted: 5 item(s), 2 packet(s)");
+  });
+
+  it("produces a byte-stable seed when the same ledger is materialized twice", () => {
+    const def = makeDef();
+    const cp = createInitialCheckpoint(def);
+    const renderer: RenderContinuitySeed = () => fixedSeed("seed-text", 1);
+    const materializer: MaterializeContinuity = () => emptyLedger(cp.run_id);
+    const first = formatRunMemorySeed(
+      buildRunMemory(cp, [], def, {
+        goal: "x",
+        runCostCap: null,
+        continuityPolicy: policy(),
+        materializeContinuity: materializer,
+        renderContinuitySeed: renderer,
+      }),
+    );
+    const second = formatRunMemorySeed(
+      buildRunMemory(cp, [], def, {
+        goal: "x",
+        runCostCap: null,
+        continuityPolicy: policy(),
+        materializeContinuity: materializer,
+        renderContinuitySeed: renderer,
+      }),
+    );
+    expect(first).toBe(second);
+  });
+
+  it("omits the section when the renderer returns null (no continuity in scope)", () => {
+    const def = makeDef();
+    const cp = createInitialCheckpoint(def);
+    const mem = buildRunMemory(cp, [], def, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: policy(),
+      materializeContinuity: () => emptyLedger(cp.run_id),
+      renderContinuitySeed: () => null as unknown as ContinuitySeed,
+    });
+    const seed = formatRunMemorySeed(mem);
+    expect(seed).not.toContain("continuity_seed:");
   });
 });

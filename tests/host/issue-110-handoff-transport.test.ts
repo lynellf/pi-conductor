@@ -4,6 +4,17 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  createAcceptedHandoffEnvelope,
+  incomingAcceptedHandoff,
+  readAcceptedHandoffEnvelope,
+  recipientHandoffPayload,
+} from "../../src/core/accepted-handoff.js";
+import type {
+  AcceptedHandoffEnvelope,
+  ContinuityEvidenceResolution,
+  TransitionAccepted,
+} from "../../src/core/types.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import { runLoop } from "../../src/host/loop.js";
 import { StubHost } from "../../src/host/stub-host.js";
@@ -14,6 +25,7 @@ import {
   resumeRun,
   startRun,
 } from "../../src/index.js";
+import type { ContinuityPacketV1 } from "../../src/seam/continuity.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 function makeDef(): MachineDefinition {
@@ -394,5 +406,192 @@ describe("issue #110 — accepted handoff transport", () => {
     } finally {
       await rm(workdir, { recursive: true, force: true });
     }
+  });
+});
+
+// ─── Durable continuity §8 — additive metadata over issue #110 transport ──────────────
+//
+// These tests target the pure envelope/seed pipeline; they exercise only
+// the production write-owned paths. The integration tests in the existing
+// describe block cover the full loop, which the parent wires with the
+// materializer/renderer.
+
+function minimalContinuityPacket(): ContinuityPacketV1 {
+  return {
+    schema_version: 1,
+    summary: "minimal continuity summary",
+    findings: [],
+    evaluations: [],
+    open_questions: [],
+    next_steps: [],
+    okf_candidate_ids: [],
+  };
+}
+
+function verifiedResolution(): ContinuityEvidenceResolution {
+  return Object.freeze({
+    ref_key: "findings:f1:0",
+    kind: "repository",
+    status: "verified",
+    resolved_path: "docs/example.md",
+    resolved_commit: "a".repeat(40),
+  }) as ContinuityEvidenceResolution;
+}
+
+function buildAcceptedWithContinuity(): TransitionAccepted {
+  const packet = minimalContinuityPacket();
+  const packetBytes = Buffer.byteLength(JSON.stringify(packet));
+  // Spec §8: packet lives in payload.continuity (model-authored); host
+  // adds only the flat siblings `continuity_packet_utf8_bytes` and
+  // `continuity_evidence`. The packet is NOT duplicated as a sibling.
+  const envelope = createAcceptedHandoffEnvelope(
+    {
+      target_role: "orchestrator",
+      status: "ready",
+      objective: "Continue.",
+      summary: "Public summary.",
+      requested_action: "act",
+      continuity: packet,
+    },
+    "orchestrator",
+    {
+      packet_utf8_bytes: packetBytes,
+      evidence_resolutions: [verifiedResolution()],
+    },
+  );
+  if (envelope.kind !== "ok") throw new Error("valid envelope rejected");
+  return {
+    type: "transition_accepted",
+    run_id: "run-1",
+    from: "worker",
+    to: "orchestrator",
+    event: "handoff",
+    target_role: "orchestrator",
+    role: "worker",
+    request_end: false,
+    end_authority: null,
+    end_requested_by: null,
+    suggests_next: null,
+    payload_summary: { field_names: ["continuity"] },
+    guard: null,
+    effect: [],
+    session_file: "/worker.jsonl",
+    ts: 1,
+    context_ref: {
+      run_id: "run-1",
+      source_role: "worker",
+      source_session_file: "/worker.jsonl",
+    },
+    accepted_handoff: envelope.envelope,
+  };
+}
+
+describe("durable-continuity §8 — additive envelope metadata over issue #110 transport", () => {
+  it("round-trips continuity metadata across readAcceptedHandoffEnvelope for a fresh-log replay", () => {
+    const record = buildAcceptedWithContinuity();
+    const incoming = incomingAcceptedHandoff([record], "run-1", "orchestrator");
+    if (incoming === null || incoming.envelope === null) {
+      throw new Error("expected an incoming envelope");
+    }
+    const packetBytes = Buffer.byteLength(JSON.stringify(minimalContinuityPacket()));
+    expect(incoming.envelope.continuity_packet_utf8_bytes).toBe(packetBytes);
+    expect(incoming.envelope.continuity_evidence).toEqual([verifiedResolution()]);
+  });
+
+  it("strips continuity from the recipient payload so raw packet prose never reaches the recipient seed", () => {
+    const record = buildAcceptedWithContinuity();
+    const incoming = incomingAcceptedHandoff([record], "run-1", "orchestrator");
+    if (incoming === null || incoming.envelope === null) {
+      throw new Error("expected an incoming envelope");
+    }
+    const projection = recipientHandoffPayload(incoming.envelope);
+    expect(Object.keys(projection)).not.toContain("continuity");
+    expect(projection).toMatchObject({
+      target_role: "orchestrator",
+      status: "ready",
+      objective: "Continue.",
+      summary: "Public summary.",
+      requested_action: "act",
+    });
+  });
+
+  it("re-reads byte-integrity of the embedded packet so a tampered round-trip is rejected", () => {
+    const record = buildAcceptedWithContinuity();
+    const tampered = {
+      ...record,
+      accepted_handoff: {
+        ...(record.accepted_handoff as AcceptedHandoffEnvelope),
+        continuity_packet_utf8_bytes: 999,
+      },
+    } as TransitionAccepted;
+    expect(() => incomingAcceptedHandoff([tampered], "run-1", "orchestrator")).toThrow();
+  });
+
+  it("preserves legacy envelopes without continuity so old runs parse unchanged", () => {
+    const created = createAcceptedHandoffEnvelope(
+      { target_role: "orchestrator", value: "legacy" },
+      "orchestrator",
+    );
+    if (created.kind !== "ok") throw new Error("valid envelope rejected");
+    const record: TransitionAccepted = {
+      type: "transition_accepted",
+      run_id: "run-legacy",
+      from: "worker",
+      to: "orchestrator",
+      event: "handoff",
+      target_role: "orchestrator",
+      role: "worker",
+      request_end: false,
+      end_authority: null,
+      end_requested_by: null,
+      suggests_next: null,
+      payload_summary: { field_names: ["value"] },
+      guard: null,
+      effect: [],
+      session_file: "/worker.jsonl",
+      ts: 1,
+      context_ref: {
+        run_id: "run-legacy",
+        source_role: "worker",
+        source_session_file: "/worker.jsonl",
+      },
+      accepted_handoff: created.envelope,
+    };
+    const incoming = incomingAcceptedHandoff([record], "run-legacy", "orchestrator");
+    if (incoming === null || incoming.envelope === null) {
+      throw new Error("expected an incoming envelope");
+    }
+    expect(incoming.envelope.continuity_packet_utf8_bytes).toBeUndefined();
+    expect(
+      readAcceptedHandoffEnvelope(created.envelope, "orchestrator").continuity_packet_utf8_bytes,
+    ).toBeUndefined();
+  });
+});
+
+describe("durable-continuity §11 — restart reconstruction is byte-identical", () => {
+  it("a fresh log read yields a byte-identical bounded seed (host log round-trip)", () => {
+    const record = buildAcceptedWithContinuity();
+    // First read (initial host run): serialize, then re-parse via
+    // JSON.parse(JSON.stringify(...)) to simulate a fresh-log replay
+    // where the host materializer sees only durable records.
+    const firstIncoming = incomingAcceptedHandoff([record], "run-1", "orchestrator");
+    if (firstIncoming === null || firstIncoming.envelope === null) {
+      throw new Error("expected an incoming envelope");
+    }
+
+    // Round-trip via the JSON serialization used by the durable log.
+    const json = JSON.stringify(firstIncoming.envelope);
+    const rehydrated = JSON.parse(json) as unknown;
+    const reread = readAcceptedHandoffEnvelope(rehydrated, "orchestrator");
+
+    // The rehydrated envelope must be byte-identical to the original
+    // envelope on the JSON shape used by the host log reader. The
+    // materializer downstream operates over records alone (not the
+    // live envelope), but its inputs are stable.
+    expect(JSON.stringify(reread)).toBe(json);
+    expect(reread.continuity_packet_utf8_bytes).toBe(
+      firstIncoming.envelope.continuity_packet_utf8_bytes,
+    );
+    expect(reread.continuity_evidence).toEqual(firstIncoming.envelope.continuity_evidence);
   });
 });

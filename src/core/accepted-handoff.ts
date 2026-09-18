@@ -1,7 +1,17 @@
-/** Durable accepted-handoff envelope encoding and validation (issue #110). */
+/** Durable accepted-handoff envelope encoding and validation (issue #110 + durable-continuity §8). */
 
+import {
+  CONTINUITY_MAX_PACKET_BYTES,
+  normalizeAndMeasurePacket,
+} from "../persistence/continuity.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import type { AcceptedHandoffEnvelope, Role, TransitionAccepted } from "./types.js";
+import type { ContinuityPacketV1 } from "../seam/continuity.js";
+import type {
+  AcceptedHandoffEnvelope,
+  ContinuityEvidenceResolution,
+  Role,
+  TransitionAccepted,
+} from "./types.js";
 
 /** Maximum compact JSON bytes accepted for durable recipient transport. */
 export const ACCEPTED_HANDOFF_MAX_UTF8_BYTES = 64 * 1024;
@@ -10,6 +20,22 @@ export const ACCEPTED_HANDOFF_MAX_UTF8_BYTES = 64 * 1024;
 export type AcceptedHandoffEnvelopeRejection =
   | "handoff_envelope_not_json"
   | "handoff_envelope_too_large";
+
+/**
+ * Host-authored additive continuity metadata to attach to an accepted-handoff
+ * envelope when a model-emitted `continuity` packet is validated and persisted
+ * (durable-continuity spec §8). The packet lives inside the JSON-safe envelope
+ * payload (where the model emitted it); the byte measurement and host-derived
+ * evidence resolutions are recorded as siblings on the envelope so the
+ * materializer can replay them from a fresh log without re-resolving.
+ *
+ * Per spec §8 the envelope gains ONLY `continuity_evidence` and
+ * `continuity_packet_utf8_bytes` as siblings; the packet is not duplicated.
+ */
+export interface AcceptedHandoffContinuityMetadata {
+  readonly packet_utf8_bytes: number;
+  readonly evidence_resolutions: readonly ContinuityEvidenceResolution[];
+}
 
 /** Result of making the immutable recipient transport snapshot. */
 export type CreateAcceptedHandoffEnvelopeResult =
@@ -28,10 +54,19 @@ export class AcceptedHandoffEnvelopeError extends Error {
   }
 }
 
-/** Snapshot a JSON-safe handoff before it is captured and sealed. */
+/**
+ * Snapshot a JSON-safe handoff before it is captured and sealed. When the
+ * caller supplies `continuity`, the validated packet already lives inside
+ * `payload.continuity`; the host adds only `continuity_packet_utf8_bytes`
+ * and `continuity_evidence` siblings on the envelope (spec §8).
+ *
+ * Without `continuity`, legacy envelopes remain byte-stable so older
+ * records continue to parse.
+ */
 export function createAcceptedHandoffEnvelope(
   payload: unknown,
   recipientRole: Role,
+  continuity?: AcceptedHandoffContinuityMetadata,
 ): CreateAcceptedHandoffEnvelopeResult {
   const compact = compactJsonObject(payload);
   if (compact === null) {
@@ -53,11 +88,22 @@ export function createAcceptedHandoffEnvelope(
       recipient_role: recipientRole,
       payload: deepFreeze(parsed),
       utf8_bytes: utf8Bytes,
+      ...(continuity !== undefined && {
+        continuity_packet_utf8_bytes: continuity.packet_utf8_bytes,
+        continuity_evidence: Object.freeze(
+          continuity.evidence_resolutions.map((resolution) => Object.freeze({ ...resolution })),
+        ) as readonly ContinuityEvidenceResolution[],
+      }),
     }) as AcceptedHandoffEnvelope,
   };
 }
 
-/** Validate and return a present persisted envelope for its accepted receiver. */
+/**
+ * Validate and return a present persisted envelope for its accepted receiver.
+ * Legacy envelopes without continuity siblings parse unchanged. New envelopes
+ * with continuity are byte-checked against the embedded `payload.continuity`
+ * packet so a fresh-log re-read round-trips continuity intact.
+ */
 export function readAcceptedHandoffEnvelope(
   value: unknown,
   recipientRole: Role,
@@ -87,12 +133,90 @@ export function readAcceptedHandoffEnvelope(
       "accepted_handoff payload target_role does not match transition",
     );
   }
+  const continuityMetadata = readContinuitySiblings(value);
   return Object.freeze({
     schema_version: 1,
     recipient_role: recipientRole,
     payload: deepFreeze(payload),
     utf8_bytes: utf8Bytes,
+    ...(continuityMetadata !== undefined && {
+      continuity_packet_utf8_bytes: continuityMetadata.packet_utf8_bytes,
+    }),
+    ...(continuityMetadata !== undefined && {
+      continuity_evidence: continuityMetadata.evidence_resolutions,
+    }),
   }) as AcceptedHandoffEnvelope;
+}
+
+/**
+ * Validate the additive continuity siblings on an envelope that carries
+ * `continuity_payload` in its payload. The packet is the model-authored
+ * value at `payload.continuity`; the host-measured `packet_utf8_bytes`
+ * must match the deterministic byte measurement of that packet.
+ */
+function readContinuitySiblings(
+  value: Record<string, unknown>,
+): AcceptedHandoffContinuityMetadata | undefined {
+  if (value.continuity_packet_utf8_bytes === undefined && value.continuity_evidence === undefined) {
+    return undefined;
+  }
+  const declaredBytes = value.continuity_packet_utf8_bytes;
+  if (
+    declaredBytes !== undefined &&
+    declaredBytes !== null &&
+    (typeof declaredBytes !== "number" ||
+      !Number.isSafeInteger(declaredBytes) ||
+      declaredBytes <= 0 ||
+      declaredBytes > CONTINUITY_MAX_PACKET_BYTES)
+  ) {
+    throw new AcceptedHandoffEnvelopeError(
+      "accepted_handoff continuity_packet_utf8_bytes is out of range",
+    );
+  }
+  const packet = readPacketFromPayload(value.payload);
+  if (packet === null) {
+    throw new AcceptedHandoffEnvelopeError(
+      "accepted_handoff carries continuity siblings but payload.continuity is absent or invalid",
+    );
+  }
+  const measured = normalizeAndMeasurePacket(packet);
+  if (declaredBytes !== undefined && declaredBytes !== measured.bytes) {
+    throw new AcceptedHandoffEnvelopeError(
+      "accepted_handoff continuity_packet_utf8_bytes does not match measured bytes",
+    );
+  }
+  const resolutions = value.continuity_evidence;
+  if (resolutions === undefined) {
+    throw new AcceptedHandoffEnvelopeError(
+      "accepted_handoff continuity_packet_utf8_bytes is set without continuity_evidence",
+    );
+  }
+  if (!Array.isArray(resolutions)) {
+    throw new AcceptedHandoffEnvelopeError("accepted_handoff continuity_evidence must be an array");
+  }
+  return Object.freeze({
+    packet_utf8_bytes: measured.bytes,
+    evidence_resolutions: Object.freeze(
+      resolutions.map((resolution) => {
+        if (!isRecord(resolution)) {
+          throw new AcceptedHandoffEnvelopeError(
+            "accepted_handoff continuity_evidence entry is not a record",
+          );
+        }
+        return Object.freeze({ ...resolution }) as unknown as ContinuityEvidenceResolution;
+      }),
+    ),
+  }) as AcceptedHandoffContinuityMetadata;
+}
+
+function readPacketFromPayload(payload: unknown): ContinuityPacketV1 | null {
+  if (!isRecord(payload)) return null;
+  const candidate = payload.continuity;
+  if (candidate === undefined || candidate === null) return null;
+  if (!isRecord(candidate)) return null;
+  if (candidate.schema_version !== 1)
+    throw new AcceptedHandoffEnvelopeError("accepted_handoff continuity schema_version must be 1");
+  return candidate as unknown as ContinuityPacketV1;
 }
 
 /** Find the exact accepted handoff addressed to a checkpoint recipient. */
@@ -136,7 +260,7 @@ export function recipientHandoffPayload(
   return Object.freeze(
     Object.fromEntries(
       Object.entries(envelope.payload).filter(
-        ([key]) => key !== "context_ref" && key !== "artifacts",
+        ([key]) => key !== "context_ref" && key !== "artifacts" && key !== "continuity",
       ),
     ),
   );

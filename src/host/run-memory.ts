@@ -23,10 +23,17 @@
  *   - visit_history — past sessions
  *   - per_role_cost — cost roll-up
  *   - configured_workers, next_candidates — top-level FSM handoff topology
+ *   - continuity_seed — bounded, structured fresh-session continuity
  *
  * The orchestrator is told explicitly what to do: dispatch top-level work via
  * `handoff(target_role=<worker>)`, use `delegate` only through its separately
  * admitted tool interface, and call `end` only when `can_end` is true.
+ *
+ * **Continuity seed rendering (spec §8, §11).** When the run memory carries
+ * a `continuity_seed`, the formatter injects its `rendered` text and the
+ * omission / budget summary verbatim — the host never reformats the prose
+ * (which would duplicate raw packet content) and never strips its omission
+ * counts (which come from the materializer, not the host).
  */
 
 import { recipientHandoffPayload } from "../core/accepted-handoff.js";
@@ -65,10 +72,11 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     memory.end_request === null ? "(none)" : `role: ${memory.end_request.role}`;
   const terminalLine = formatTerminalGuidance(memory);
   const delegationGuidance = formatDelegationGuidance(memory);
+  const continuitySection = formatContinuitySection(memory);
 
   const lastMessageText =
     memory.last_message === null
-      ? "(no prior worker message — this is the first orchestrator turn)"
+      ? "(no prior worker message \u2014 this is the first orchestrator turn)"
       : [
           `  from: ${memory.last_message.from}`,
           memory.last_message.text === null
@@ -124,6 +132,7 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     delegationGuidance,
     "",
     terminalLine,
+    ...(continuitySection === null ? [] : ["", continuitySection]),
   ].join("\n");
 }
 
@@ -175,4 +184,32 @@ function formatTerminalGuidance(memory: RunMemory): string {
   return memory.can_end
     ? "Continue toward the goal using the permitted routing above; call end only if the goal is complete."
     : "Continue toward the goal using the permitted routing above. Do not call end: this gated run has no pending authorized end request.";
+}
+
+/**
+ * Format the bounded continuity seed section (spec §11). The seed's
+ * `rendered` text is injected verbatim so the materializer/renderer own
+ * the prose. Omission counts and budget summary are surfaced so the
+ * orchestrator can recognize truncation without re-fetching the ledger.
+ * When the host has not wired the seed pipeline (legacy preservation),
+ * the field is absent and the section is omitted entirely.
+ */
+function formatContinuitySection(memory: RunMemory): string | null {
+  if (memory.continuity_seed === undefined) return null;
+  if (memory.continuity_seed === null) return null;
+  const seed = memory.continuity_seed;
+  const budgetText = `budget: ${seed.budget.used_bytes}/${seed.budget.max_bytes} UTF-8 bytes`;
+  const omittedText =
+    seed.omitted.items > 0 || seed.omitted.packets > 0
+      ? `omitted: ${seed.omitted.items} item(s), ${seed.omitted.packets} packet(s)`
+      : "omitted: (none)";
+  return [
+    "continuity_seed:",
+    `  schema_version: ${seed.schema_version}`,
+    `  run_id: ${seed.run_id}`,
+    `  ${budgetText}`,
+    `  ${omittedText}`,
+    "",
+    seed.rendered,
+  ].join("\n");
 }

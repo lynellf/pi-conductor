@@ -29,6 +29,13 @@ import type {
   TransitionAccepted,
   UsageRecord,
 } from "../../src/core/types.js";
+import type {
+  ContinuityLedger,
+  ContinuityMaterializationPolicy,
+  ContinuitySeed,
+  MaterializeContinuity,
+  RenderContinuitySeed,
+} from "../../src/persistence/continuity.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
 const DEF: MachineDefinition = Object.freeze({
@@ -527,3 +534,254 @@ describe("buildRunMemory: last_message (§8.4)", () => {
 // Type-level guard: a RunMemory from this build is assignable to itself.
 const _typeCheck: RunMemory = {} as RunMemory;
 void _typeCheck;
+
+// ─── Continuity seed injection (spec §8 + §11) ──────────────────────
+
+function emptyLedger(runId: string): ContinuityLedger {
+  return Object.freeze({
+    run_id: runId,
+    generated_at: "2026-09-18T00:00:00.000Z",
+    envelopes: Object.freeze([]),
+    findings: Object.freeze([]),
+    evaluations: Object.freeze([]),
+    open_questions: Object.freeze([]),
+    next_steps: Object.freeze([]),
+    evidence_resolutions: Object.freeze([]),
+    okf_candidates: Object.freeze([]),
+    counts: Object.freeze({
+      envelope_count: 0,
+      byte_count: 0,
+      active_finding_count: 0,
+      superseded_finding_count: 0,
+      active_question_count: 0,
+      superseded_question_count: 0,
+      active_next_step_count: 0,
+      superseded_next_step_count: 0,
+      okf_candidate_count: 0,
+    }),
+  }) as ContinuityLedger;
+}
+
+function fixedSeed(rendered: string, maxBytes = 32_768): ContinuitySeed {
+  return Object.freeze({
+    schema_version: 1,
+    run_id: "run-1",
+    budget: Object.freeze({ max_bytes: maxBytes, used_bytes: 100 }),
+    omitted: Object.freeze({ items: 2, packets: 1 }),
+    rendered,
+    sections: Object.freeze({
+      blocking_questions: Object.freeze([]),
+      recipient_next_steps: Object.freeze([]),
+      risks_and_decisions: Object.freeze([]),
+      other_active_findings: Object.freeze([]),
+      evaluations: Object.freeze([]),
+      packet_summaries: Object.freeze([]),
+    }),
+  }) as ContinuitySeed;
+}
+
+function recordingMaterializer(): {
+  readonly fn: MaterializeContinuity;
+  readonly calls: number;
+} {
+  const calls = { value: 0 };
+  return {
+    get calls() {
+      return calls.value;
+    },
+    fn: ((_records, policy) => {
+      calls.value += 1;
+      return emptyLedger(policy.run_id);
+    }) as MaterializeContinuity,
+  };
+}
+
+function recordingRenderer(seed: ContinuitySeed): {
+  readonly fn: RenderContinuitySeed;
+  readonly calls: number;
+} {
+  const calls = { value: 0 };
+  return {
+    get calls() {
+      return calls.value;
+    },
+    fn: ((ledger, maxBytes) => {
+      calls.value += 1;
+      expect(maxBytes).toBe(32_768);
+      expect(ledger.run_id).toBe("run-1");
+      return seed;
+    }) as RenderContinuitySeed,
+  };
+}
+
+describe("buildRunMemory: continuity seed injection (spec §8 + §11)", () => {
+  it("omits the continuity_seed field when no policy or materializer is supplied", () => {
+    const cp = ck("orchestrator");
+    const mem = buildRunMemory(cp, [], DEF, { goal: "x", runCostCap: null });
+    expect((mem as { continuity_seed?: unknown }).continuity_seed).toBeUndefined();
+  });
+
+  it("omits the continuity_seed field when the policy is present but no materializer is wired", () => {
+    const cp = ck("orchestrator");
+    const mem = buildRunMemory(cp, [], DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: true,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+    });
+    expect((mem as { continuity_seed?: unknown }).continuity_seed).toBeUndefined();
+  });
+
+  it("omits the continuity_seed field when only the materializer is wired without the renderer", () => {
+    const cp = ck("orchestrator");
+    const materializer = recordingMaterializer();
+    const mem = buildRunMemory(cp, [], DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: false,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: materializer.fn,
+    });
+    expect((mem as { continuity_seed?: unknown }).continuity_seed).toBeUndefined();
+    expect(materializer.calls).toBe(0);
+  });
+
+  it("produces exactly one bounded continuity_seed when materializer + renderer + policy are wired", () => {
+    const cp = ck("orchestrator");
+    const seed = fixedSeed("RENDERED");
+    const materializer = recordingMaterializer();
+    const renderer = recordingRenderer(seed);
+    const mem = buildRunMemory(cp, [], DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: true,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: materializer.fn,
+      renderContinuitySeed: renderer.fn,
+    });
+    expect(mem.continuity_seed).toBe(seed);
+    expect(materializer.calls).toBe(1);
+    expect(renderer.calls).toBe(1);
+  });
+
+  it("materializer receives the run_id from the checkpoint and the pinned policy", () => {
+    const cp = ck("orchestrator");
+    const observed: ContinuityMaterializationPolicy[] = [];
+    const materializer: MaterializeContinuity = (records, policy) => {
+      observed.push(policy);
+      return emptyLedger(policy.run_id);
+    };
+    const renderer: RenderContinuitySeed = (ledger, maxBytes) => fixedSeed("ok", maxBytes);
+    buildRunMemory(cp, [], DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: false,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: materializer,
+      renderContinuitySeed: renderer,
+    });
+    expect(observed).toHaveLength(1);
+    expect(observed[0]?.run_id).toBe("run-1");
+    expect(observed[0]?.continuity).toEqual({
+      schema_version: 1,
+      require_handoff: false,
+      require_delegated_result: false,
+      seed_max_utf8_bytes: 32_768,
+    });
+  });
+
+  it("materializer + renderer compose to produce a byte-stable seed across replays", () => {
+    const cp = ck("orchestrator");
+    const records: PersistedRecord[] = [
+      ended("implementer", 1.0, 1),
+      ended("orchestrator", 0.5, 1),
+    ];
+    const materializer: MaterializeContinuity = (recs) => {
+      expect(recs).toBe(records);
+      return emptyLedger("run-1");
+    };
+    const renderer: RenderContinuitySeed = () => fixedSeed("seed-text");
+    const first = buildRunMemory(cp, records, DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: false,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: materializer,
+      renderContinuitySeed: renderer,
+    });
+    const second = buildRunMemory(cp, records, DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: false,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: materializer,
+      renderContinuitySeed: renderer,
+    });
+    expect(first.continuity_seed).toEqual(second.continuity_seed);
+    expect(first.continuity_seed?.rendered).toBe("seed-text");
+  });
+
+  it("renders the seed verbatim into the run-memory seed (raw packet prose never duplicated)", () => {
+    const cp = ck("orchestrator");
+    const seed = fixedSeed("INJECTED-PROSE-12345");
+    const mem = buildRunMemory(cp, [], DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: true,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: () => emptyLedger("run-1"),
+      renderContinuitySeed: () => seed,
+    });
+    expect(mem.continuity_seed?.rendered).toBe("INJECTED-PROSE-12345");
+  });
+
+  it("returns the renderer's seed verbatim (including an empty rendered string)", () => {
+    const cp = ck("orchestrator");
+    const empty = emptyLedger("run-1");
+    const mem = buildRunMemory(cp, [], DEF, {
+      goal: "x",
+      runCostCap: null,
+      continuityPolicy: {
+        schema_version: 1,
+        require_handoff: false,
+        require_delegated_result: false,
+        seed_max_utf8_bytes: 32_768,
+      },
+      materializeContinuity: () => empty,
+      renderContinuitySeed: () => fixedSeed("", 32_768),
+    });
+    // The materializer can produce an empty ledger, but the renderer
+    // still returns a (possibly empty) seed — the host treats that as
+    // "no continuity in scope" and the formatter omits the section.
+    expect(mem.continuity_seed).not.toBeNull();
+    expect(mem.continuity_seed?.rendered).toBe("");
+  });
+});

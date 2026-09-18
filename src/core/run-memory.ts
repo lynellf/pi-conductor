@@ -37,10 +37,24 @@
  *    only visit caps gate candidacy.
  *  - When `current_role === "done"`, next_candidates is empty (terminal).
  *
+ * **Continuity seed (spec §8, §11):** when a `ContinuityPolicy` and the
+ * materializer/renderer are supplied, the artifact includes a single
+ * bounded `continuity_seed` (a `ContinuitySeed`). The seed is built
+ * deterministically by the materializer over the record log and the
+ * pinned policy; the host does not reformat prose and never duplicates
+ * raw packet content. Without a policy or materializer, the field is
+ * absent and legacy behavior is preserved.
+ *
  * Pure. No I/O, no pi imports.
  */
 
 import { rollup } from "../cost/rollup.js";
+import type {
+  ContinuityMaterializationPolicy,
+  ContinuitySeed,
+  MaterializeContinuity,
+  RenderContinuitySeed,
+} from "../persistence/continuity.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import { incomingAcceptedHandoff } from "./accepted-handoff.js";
 import { availableTargets } from "./targets.js";
@@ -91,6 +105,14 @@ export interface LastMessage {
   readonly accepted_handoff?: AcceptedHandoffEnvelope;
 }
 
+/**
+ * §8.4 + §11: optional bounded continuity seed attached to the run
+ * memory when the manifest pins a `ContinuityPolicy` and the host wires
+ * the materializer + renderer. `null` means "no continuity in scope";
+ * legacy runs and runs without a policy both produce `null`.
+ */
+export type ContinuitySeedField = ContinuitySeed | null;
+
 /** §8.4 run memory artifact. */
 export interface RunMemory {
   readonly run_id: string;
@@ -108,6 +130,13 @@ export interface RunMemory {
   /** Pinned top-level FSM worker topology; absent only in legacy externally built memories. */
   readonly configured_workers?: readonly string[];
   readonly next_candidates: readonly string[];
+  /**
+   * Spec §8 + §11: bounded continuity seed built by the host materializer
+   * and renderer. `null` when the manifest omits the continuity policy,
+   * the materializer/renderer are absent, or there are no envelopes to
+   * project. Legacy runs remain byte-stable without this field.
+   */
+  readonly continuity_seed?: ContinuitySeedField;
   // open_concerns intentionally absent (dropped for v1, §8.4).
 }
 
@@ -117,6 +146,21 @@ export interface BuildRunMemoryOptions {
   readonly goal: string;
   /** The run-level cost cap (`max_run_cost_usd`); null = uncapped. */
   readonly runCostCap: number | null;
+  /**
+   * Spec §5: pinned continuity policy. When absent, the run memory
+   * contains no continuity seed and legacy behavior is preserved.
+   */
+  readonly continuityPolicy?: ContinuityMaterializationPolicy["continuity"];
+  /**
+   * Spec §11: optional materializer. When `continuityPolicy` and
+   * `materializeContinuity` + `renderContinuitySeed` are all supplied,
+   * the run memory contains exactly one bounded seed. When any of the
+   * three is missing, `continuity_seed` is `null` (legacy preservation).
+   */
+  readonly materializeContinuity?: MaterializeContinuity | null;
+  readonly renderContinuitySeed?: RenderContinuitySeed | null;
+  /** Optional override for materialization `now`. */
+  readonly continuityNow?: () => Date;
 }
 
 // ─── Builder ────────────────────────────────────────────────────────────
@@ -167,6 +211,11 @@ export function buildRunMemory(
   //  - Empty when current_role === "done".
   const next_candidates = computeNextCandidates(checkpoint, def, remaining_budget);
 
+  // Spec §8 + §11: bounded continuity seed. Exactly one seed (or null
+  // when there are no envelopes). The host wires the materializer and
+  // renderer; without either, the legacy path remains byte-stable.
+  const continuity_seed = buildContinuitySeed(checkpoint.run_id, records, opts);
+
   return Object.freeze({
     run_id: checkpoint.run_id,
     goal: opts.goal,
@@ -182,10 +231,42 @@ export function buildRunMemory(
     per_role_cost: Object.freeze(per_role_cost),
     configured_workers: Object.freeze([...def.workers]),
     next_candidates: Object.freeze([...next_candidates]),
+    ...(continuity_seed !== undefined && { continuity_seed }),
   }) as RunMemory;
 }
 
 // ─── Internals ──────────────────────────────────────────────────────────
+
+/**
+ * Spec §8 + §11: build a single bounded continuity seed. Returns
+ * `undefined` when the host has not wired the materializer or renderer
+ * (legacy preservation) so older memory bytes remain stable. Returns
+ * `null` to signal "no continuity in scope" (policy absent or no
+ * envelopes) so the formatter omits the section rather than printing
+ * empty state.
+ */
+function buildContinuitySeed(
+  runId: string,
+  records: readonly PersistedRecord[],
+  opts: BuildRunMemoryOptions,
+): ContinuitySeedField | undefined {
+  const materializer = opts.materializeContinuity ?? null;
+  const renderer = opts.renderContinuitySeed ?? null;
+  const policy = opts.continuityPolicy;
+  if (materializer === null || renderer === null || policy === undefined) {
+    // Legacy preservation: when the host has not wired the seed
+    // pipeline, omit the field entirely so older memory bytes are stable.
+    return undefined;
+  }
+  const policyArgs: ContinuityMaterializationPolicy = {
+    run_id: runId,
+    continuity: policy,
+    ...(opts.continuityNow !== undefined && { now: opts.continuityNow }),
+  };
+  const ledger = materializer(records, policyArgs);
+  const seed = renderer(ledger, policy.seed_max_utf8_bytes);
+  return seed;
+}
 
 /**
  * §8.4 `last_message`: scan records for the latest `transition_accepted`

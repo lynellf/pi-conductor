@@ -345,13 +345,16 @@ export async function runSessionTurn(
 
     const acceptedEnvelope =
       validated.event.type === "handoff"
-        ? prepareAcceptedHandoffAtLoopBoundary({
+        ? await prepareAcceptedHandoffAtLoopBoundary({
             event: validated.event,
             host,
             runId: ctx.checkpoint.run_id,
             role,
             sessionId,
             sessionFile,
+            policy: readContinuityPolicyFromOpts(opts),
+            authority: readContinuityAuthorityFromOpts(opts, ctx),
+            knownItemIds: readKnownContinuityItemIdsFromOpts(opts),
             resetCapture: () => session.resetCaptureBuffer(),
             reopen: () => opts.runControl?.reopenActiveSession(session),
             setCorrection: (correction) => {
@@ -496,4 +499,58 @@ export async function runSessionTurn(
     break;
   }
   return { kind: "settled", state };
+}
+
+/**
+ * Read the optional continuity policy from `opts`. The host wires the
+ * pinned policy at run-start; tests inject a policy through this hook.
+ * Returns `null` when the manifest omits continuity (legacy preservation).
+ */
+function readContinuityPolicyFromOpts(
+  opts: SessionLoopContext["opts"],
+): { readonly require_handoff: boolean } | null {
+  const candidate = (
+    opts as {
+      continuityPolicy?: { readonly require_handoff?: boolean } | null | undefined;
+    }
+  ).continuityPolicy;
+  if (candidate === undefined || candidate === null) return null;
+  if (typeof candidate.require_handoff !== "boolean") return null;
+  return { require_handoff: candidate.require_handoff };
+}
+
+/**
+ * Read the optional host-supplied `ContinuityEvidenceAuthority` from
+ * `opts`. Returns a default permissive authority when absent so callers
+ * don't need to wire one in for legacy runs; production wiring lives in
+ * the host (Phase 3 integration).
+ */
+function readContinuityAuthorityFromOpts(
+  opts: SessionLoopContext["opts"],
+  ctx: SessionLoopContext,
+): import("./continuity-evidence.js").ContinuityEvidenceAuthority {
+  const candidate = (
+    opts as {
+      continuityAuthority?: import("./continuity-evidence.js").ContinuityEvidenceAuthority;
+    }
+  ).continuityAuthority;
+  if (candidate !== undefined) return candidate;
+  return {
+    audience: { run_id: ctx.checkpoint.run_id, role: ctx.role, visit_index: ctx.visitIndex },
+    toolExecutions: { belongsToRun: () => false },
+    contextArtifacts: { canRead: () => false },
+    repository: { resolveCommit: async () => ({ status: "missing" }) },
+  };
+}
+
+/**
+ * Read the optional set of continuity item IDs already present in the
+ * current ledger. The host materializer tracks these at run time;
+ * tests can supply a static set.
+ */
+function readKnownContinuityItemIdsFromOpts(opts: SessionLoopContext["opts"]): ReadonlySet<string> {
+  const candidate = (opts as { knownContinuityItemIds?: ReadonlySet<string> | undefined })
+    .knownContinuityItemIds;
+  if (candidate !== undefined) return candidate;
+  return new Set<string>();
 }
