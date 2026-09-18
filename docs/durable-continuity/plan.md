@@ -174,8 +174,13 @@ The prior report of 3,635 passed tests is stale (the prior branch actually recor
 - [x] `pnpm lint`
 - [x] `pnpm format:check`
 - [x] `git diff --check`
-- [x] deterministic `pnpm vitest run --shard=1/6` through `--shard=6/6`
-      complete-suite union (353 test files; 3,645 passed; 0 skipped)
+- [x] independently observed deterministic shard runs (the former chained
+      shards 2–6 command timed out and is **not** recorded as passed):
+      `pnpm vitest run --shard=1/6` (59 files; 639 passed),
+      `--shard=2/6` (59; 766), `--shard=3/6` (59; 478),
+      `--shard=4/6` (59; 563), `--shard=5/6` (59; 555), and
+      `--shard=6/6` (58; 644); complete-suite union: 353 test files,
+      3,645 passed, 0 skipped
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
 - [x] inspect `git status --short` and final diff inventory
 - [x] reconcile every timed-out/ambiguous tool execution
