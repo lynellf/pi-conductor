@@ -154,6 +154,7 @@ scratch/
 
 # Agent orchestration, including local conductor manifests and role prompts.
 .pi
+.pi/
 
 # Keep runtime/local `.pi/` state ignored, but allow the committed
 # default-conductor fixture used by tests.
