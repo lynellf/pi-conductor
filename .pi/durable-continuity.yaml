@@ -1,0 +1,199 @@
+# Prepared speed-policy implementation manifest for the durable continuity spec.
+# Planning/validation only: do not start until the overseer acknowledges
+# docs/durable-continuity/spec.md and explicitly authorizes implementation.
+# Fresh FSM handoffs are used; concurrency exists only in the one three-child
+# blocking batch owned by implementation-lead.
+version: 2
+end_request_roles: [reviewer]
+
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    context_retention: run
+    models:
+      - model: minimax:MiniMax-M2.7
+        effort: high
+      - model: openai-codex:gpt-5.6-terra
+        effort: high
+      - model: openai-codex:gpt-5.6-luna
+        effort: high
+    max_run_cost_usd: 120
+    system_prompt: ./roles/durable-continuity/orchestrator.md
+    tools: [read, grep, find, ls, bash, handoff, end]
+
+  - name: implementation-lead
+    max_visits: 8
+    models:
+      - model: minimax:MiniMax-M3
+        effort: high
+      - model: openai-codex:gpt-5.6-terra
+        effort: high
+      - model: openai-codex:gpt-5.6-luna
+        effort: high
+    max_session_cost_usd: 35
+    system_prompt: ./roles/durable-continuity/implementation-lead.md
+    tools: [read, grep, find, ls, edit, write, bash, delegate, handoff, end]
+    delegation:
+      mode: blocking
+      allowed_subagents:
+        - handoff-runtime-worker
+        - child-continuity-worker
+        - continuity-ledger-worker
+      max_children_per_session: 6
+      max_parallel: 3
+      context_artifact_limits:
+        max_items: 8
+        max_item_utf8_bytes: 16384
+        max_total_utf8_bytes: 65536
+
+  - name: reviewer
+    max_visits: 4
+    models:
+      - model: openai-codex:gpt-5.6-sol
+        effort: high
+      - model: minimax:MiniMax-M3
+        effort: high
+      - model: openai-codex:gpt-5.6-terra
+        effort: high
+    max_session_cost_usd: 25
+    system_prompt: ./roles/durable-continuity/reviewer.md
+    tools: [read, grep, find, ls, bash, handoff, end]
+
+subagents:
+  - name: handoff-runtime-worker
+    models:
+      - model: minimax:MiniMax-M3
+        effort: high
+      - model: openai-codex:gpt-5.6-terra
+        effort: high
+      - model: openai-codex:gpt-5.6-luna
+        effort: high
+    max_session_cost_usd: 18
+    system_prompt: ./subagents/durable-continuity/handoff-runtime-worker.md
+    completion_protocol: report_result
+    workspace:
+      projection:
+        required: true
+        allowed_paths:
+          - AGENTS.md
+          - docs/archive/orchestrator-fsm-spec.md
+          - docs/durable-continuity/spec.md
+          - docs/durable-continuity/plan.md
+          - docs/durable-continuity/tasks/parent-packet.md
+          - docs/issue-110-handoff-transport.md
+          - src/core/accepted-handoff.ts
+          - src/core/run-memory.ts
+          - src/core/types.ts
+          - src/seam/continuity.ts
+          - src/seam/schema.ts
+          - src/manifest/continuity.ts
+          - src/manifest/parse.ts
+          - src/manifest/types.ts
+          - src/persistence/continuity.ts
+          - src/persistence/log.ts
+          - src/persistence/record-materialization.ts
+          - src/persistence/delegation-lifecycle-schema.ts
+          - src/host/continuity-evidence.ts
+          - src/host/accepted-handoff-validation.ts
+          - src/host/loop-format.ts
+          - src/host/loop-session-accepted.ts
+          - src/host/loop-session-turn.ts
+          - src/host/run-memory.ts
+          - tests/core/accepted-handoff.test.ts
+          - tests/core/run-memory.test.ts
+          - tests/host/accepted-handoff-validation.test.ts
+          - tests/host/issue-110-handoff-transport.test.ts
+          - tests/host/run-memory.test.ts
+
+  - name: child-continuity-worker
+    models:
+      - model: openai-codex:gpt-5.6-terra
+        effort: high
+      - model: minimax:MiniMax-M3
+        effort: high
+      - model: openai-codex:gpt-5.6-luna
+        effort: high
+    max_session_cost_usd: 18
+    system_prompt: ./subagents/durable-continuity/child-continuity-worker.md
+    completion_protocol: report_result
+    workspace:
+      projection:
+        required: true
+        allowed_paths:
+          - AGENTS.md
+          - docs/archive/orchestrator-fsm-spec.md
+          - docs/durable-continuity/spec.md
+          - docs/durable-continuity/plan.md
+          - docs/durable-continuity/tasks/parent-packet.md
+          - docs/issue-57-minimal-child-protocol.md
+          - docs/issue-60-context-artifacts/spec.md
+          - src/core/types.ts
+          - src/seam/continuity.ts
+          - src/seam/schema.ts
+          - src/manifest/continuity.ts
+          - src/manifest/parse.ts
+          - src/manifest/types.ts
+          - src/persistence/continuity.ts
+          - src/persistence/child-completion.ts
+          - src/persistence/delegation-lifecycle-schema.ts
+          - src/persistence/delegation-task.ts
+          - src/persistence/log.ts
+          - src/persistence/record-materialization.ts
+          - src/host/continuity-evidence.ts
+          - src/host/delegation/child-observation.ts
+          - src/host/delegation/child-result.ts
+          - src/host/delegation/child-result-mapping.ts
+          - src/host/delegation/child-sdk-tools.ts
+          - src/host/delegation/context-artifact-contract.ts
+          - src/host/delegation/context-artifact-admission.ts
+          - src/host/delegation/factory-records.ts
+          - src/host/delegation/factory-scheduler.ts
+          - src/host/delegation/scheduler-results.ts
+          - tests/host/child-result.test.ts
+          - tests/host/issue-112-legacy-delegate-race.test.ts
+          - tests/host/continuity-child-observation.test.ts
+          - tests/host/continuity-child-restart.test.ts
+          - tests/persistence/continuity-child-completion.test.ts
+
+  - name: continuity-ledger-worker
+    models:
+      - model: minimax:MiniMax-M2.7
+        effort: high
+      - model: openai-codex:gpt-5.6-terra
+        effort: high
+      - model: minimax:MiniMax-M3
+        effort: high
+    max_session_cost_usd: 14
+    system_prompt: ./subagents/durable-continuity/continuity-ledger-worker.md
+    completion_protocol: report_result
+    workspace:
+      projection:
+        required: true
+        allowed_paths:
+          - AGENTS.md
+          - docs/archive/orchestrator-fsm-spec.md
+          - docs/durable-continuity/spec.md
+          - docs/durable-continuity/plan.md
+          - docs/durable-continuity/tasks/parent-packet.md
+          - src/core/types.ts
+          - src/seam/continuity.ts
+          - src/seam/schema.ts
+          - src/manifest/continuity.ts
+          - src/manifest/parse.ts
+          - src/manifest/types.ts
+          - src/persistence/continuity.ts
+          - src/persistence/continuity-materialization.ts
+          - src/persistence/continuity-render.ts
+          - src/persistence/log.ts
+          - src/persistence/record-materialization.ts
+          - src/persistence/trajectory-records.ts
+          - src/persistence/delegation-lifecycle-schema.ts
+          - src/bin/cli-main.ts
+          - src/bin/cli-ui.ts
+          - src/bin/cli-reconcile.ts
+          - src/bin/cli-continuity.ts
+          - src/host/log-file.ts
+          - tests/persistence/continuity-contract.test.ts
+          - tests/persistence/continuity-materialization-order.test.ts
+          - tests/persistence/continuity-materialization-truncation.test.ts
+          - tests/bin/cli-continuity.test.ts
