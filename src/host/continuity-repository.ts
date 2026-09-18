@@ -37,11 +37,13 @@ export function createCanonicalRepositoryLookup(repositoryPath: string): Reposit
           "blob",
           `${input.commit}:${input.path}`,
         ]);
-        const selected = selectRange(content, input.line_start, input.line_end);
-        if (selected === null) return missing("repository_invalid_line_range");
+        const selectedRange = selectRange(content, input.line_start, input.line_end);
+        if (selectedRange === null) return missing("repository_invalid_line_range");
+        // `sha256` is the optional blob digest from spec §7. The range is
+        // validated independently; it never changes the digest subject.
         if (
           input.sha256 !== undefined &&
-          createHash("sha256").update(selected).digest("hex") !== input.sha256
+          createHash("sha256").update(content).digest("hex") !== input.sha256
         )
           return missing("repository_digest_mismatch");
         return {

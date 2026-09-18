@@ -130,12 +130,21 @@ describe("record-backed child continuity authority", () => {
       commit,
       path: "package.json",
       sha256: createHash("sha256").update(content).digest("hex"),
+      line_start: 1,
+      line_end: 1,
     };
     await expect(resolveSingleEvidence(authority, repositoryRef)).resolves.toMatchObject({
       status: "verified",
       resolved_path: "package.json",
       resolved_commit: commit,
     });
+    const firstLineEnd = content.indexOf(0x0a) + 1;
+    await expect(
+      resolveSingleEvidence(authority, {
+        ...repositoryRef,
+        sha256: createHash("sha256").update(content.subarray(0, firstLineEnd)).digest("hex"),
+      }),
+    ).resolves.toMatchObject({ status: "missing", diagnostic: "repository_digest_mismatch" });
   });
 
   it("scopes role-visit execution evidence to the emitting role session", async () => {
