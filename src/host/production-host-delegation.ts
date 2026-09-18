@@ -4,6 +4,7 @@ import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-
 import type { Role } from "../core/types.js";
 import type { ControllerConfig } from "../manifest/controller.js";
 import type { RoleConfig, WorkspaceSource } from "../manifest/types.js";
+import { continuityPolicyContext } from "../persistence/continuity.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { type SnapshotPinnedRecord, snapshotPinned } from "../persistence/log.js";
 import type { DelegationAdmissionService } from "./delegation/admission-service.js";
@@ -238,6 +239,12 @@ export async function createDelegateTool(
     ...(ctx.displaySink !== undefined && { displaySink: ctx.displaySink }),
     sessionDir: ctx.sessionDir,
     records: () => ctx.log.records(ctx.runId),
+    continuityValidation: () => ({
+      knownItemIds: new Set<string>(),
+      verifiedExecutionIds: new Set<string>(),
+      evidenceVerifiedByKey: new Map(),
+      policy: continuityPolicyContext(manifest.continuity ?? null),
+    }),
     isBudgetExhausted: () => {
       const cap = getRunCostCap?.();
       if (cap === null || cap === undefined) return false;

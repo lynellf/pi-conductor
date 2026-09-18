@@ -262,7 +262,12 @@ function extractEnvelope(
  * Returns `null` when the payload is absent or structurally incomplete.
  */
 function assertPacketBytes(recordId: string, actual: number, declared: unknown): void {
-  if (!Number.isSafeInteger(declared) || declared <= 0 || declared > CONTINUITY_MAX_PACKET_BYTES)
+  if (
+    typeof declared !== "number" ||
+    !Number.isSafeInteger(declared) ||
+    declared <= 0 ||
+    declared > CONTINUITY_MAX_PACKET_BYTES
+  )
     throw new ContinuityMaterializationException(
       recordId,
       "continuity_packet_too_large",
@@ -674,7 +679,13 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
   // subagent_started records in this run; child output never supplies it.
   const childParents = new Map<string, { readonly role: string; readonly visit: number }>();
   for (const record of canonicalRecords) {
-    if (record.type !== "subagent_started" || record.run_id !== policy.run_id) continue;
+    if (
+      record.type !== "subagent_started" ||
+      record.run_id !== policy.run_id ||
+      record.parent_role === undefined ||
+      record.parent_visit_index === undefined
+    )
+      continue;
     childParents.set(record.child_id, {
       role: record.parent_role,
       visit: record.parent_visit_index,

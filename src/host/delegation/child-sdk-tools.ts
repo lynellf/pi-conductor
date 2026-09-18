@@ -91,10 +91,7 @@ function captureContinuity(
       kind: "rejected",
       message: `continuity packet rejected: ${result.diagnostics.map((item) => item.code).join(", ")}`,
     };
-  const keys = continuityEvidenceKeys(result.packet);
-  const evidence_resolutions = [...context.evidenceVerifiedByKey.values()].filter((resolution) =>
-    keys.has(resolution.ref_key),
-  );
+  const evidence_resolutions = continuityEvidenceResolutions(result.packet, context);
   return {
     kind: "ok",
     sibling: {
@@ -105,22 +102,35 @@ function captureContinuity(
   };
 }
 
-function continuityEvidenceKeys(packet: ContinuityPacketV1): ReadonlySet<string> {
-  const keys = new Set<string>();
-  packet.findings.forEach((item) => {
-    item.evidence.forEach((_ref, index) => {
-      keys.add(evidenceRefKey("findings", item.id, index));
+function continuityEvidenceResolutions(
+  packet: ContinuityPacketV1,
+  context: NonNullable<ReturnType<ReportCapture["continuityValidation"]>>,
+): readonly import("../../core/types.js").ContinuityEvidenceResolution[] {
+  const refs: { key: string; kind: import("../../seam/continuity.js").EvidenceRef["kind"] }[] = [];
+  const collect = (
+    collection: "findings" | "open_questions" | "next_steps",
+    items: readonly {
+      readonly id: string;
+      readonly evidence: readonly import("../../seam/continuity.js").EvidenceRef[];
+    }[],
+  ): void => {
+    items.forEach((item) => {
+      item.evidence.forEach((ref, index) => {
+        refs.push({ key: evidenceRefKey(collection, item.id, index), kind: ref.kind });
+      });
     });
+  };
+  collect("findings", packet.findings);
+  collect("open_questions", packet.open_questions);
+  collect("next_steps", packet.next_steps);
+  return refs.map(({ key, kind }) => {
+    const resolved = context.evidenceVerifiedByKey.get(key);
+    if (resolved !== undefined) return { ...resolved };
+    return {
+      ref_key: key,
+      kind,
+      status: kind === "external" ? "declared" : "missing",
+      diagnostic: kind === "external" ? "external_declared" : "continuity_evidence_audience_denied",
+    };
   });
-  packet.open_questions.forEach((item) => {
-    item.evidence.forEach((_ref, index) => {
-      keys.add(evidenceRefKey("open_questions", item.id, index));
-    });
-  });
-  packet.next_steps.forEach((item) => {
-    item.evidence.forEach((_ref, index) => {
-      keys.add(evidenceRefKey("next_steps", item.id, index));
-    });
-  });
-  return keys;
 }
