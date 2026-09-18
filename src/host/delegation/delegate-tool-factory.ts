@@ -80,6 +80,17 @@ export interface DelegateChildFactoryOptions {
     ref: string,
     profileId: string,
   ) => Promise<ResolvedDelegatedSource>;
+  /**
+   * Spec §9: optional host-owned getter that builds the per-child
+   * `PacketValidationContext` (run_id, child_id, pinned policy,
+   * granted artifact inventory, run-local verified execution ids)
+   * used by `buildReportResultTool` to validate continuity packets
+   * at the SDK tool boundary. Absent when no `ContinuityPolicy` is
+   * pinned or when the host has not wired the authority bridge.
+   */
+  readonly continuityValidation?: (
+    childId: string,
+  ) => import("../../persistence/continuity.js").PacketValidationContext;
 }
 
 /** Dependencies for a parent role's SDK-visible delegate tool. */

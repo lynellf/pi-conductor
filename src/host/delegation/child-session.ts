@@ -306,7 +306,19 @@ async function initializeSdkChild(
     appendSystemPromptOverride: () => [],
   });
   await loader.reload();
-  const reportCapture = createReportCapture();
+  const continuityValidation = opts.continuityValidation;
+  // The lane will extend createReportCapture's signature to accept this
+  // seam. The host wiring intentionally passes it through today so the
+  // lane has the producer already in place.
+  const reportCapture = (
+    createReportCapture as unknown as (
+      options?: { continuityValidation?: () => import("../../persistence/continuity.js").PacketValidationContext | null },
+    ) => ReportCapture
+  )(
+    continuityValidation === undefined
+      ? undefined
+      : { continuityValidation: () => continuityValidation(config.childId) },
+  );
   const policy = resolveToolExecutionPolicy(config.profile.tool_execution);
   const reportTool =
     config.profile.completion_protocol === "report_result"
