@@ -27,26 +27,26 @@ starts from one immutable base commit.
 
 ### Tasks
 
-- [ ] Add the continuity manifest policy and strict parser/static validation.
-- [ ] Define the TypeBox `ContinuityPacketV1`, item, and `EvidenceRef` schemas;
+- [x] Add the continuity manifest policy and strict parser/static validation.
+- [x] Define the TypeBox `ContinuityPacketV1`, item, and `EvidenceRef` schemas;
       derive TypeScript types with `Static<>`.
-- [ ] Add pure normalization, UTF-8 measurement, ID, supersession, and packet
+- [x] Add pure normalization, UTF-8 measurement, ID, supersession, and packet
       validation contracts with stable diagnostics.
-- [ ] Define versioned envelope, evidence-resolution, ledger, and bounded-seed
+- [x] Define versioned envelope, evidence-resolution, ledger, and bounded-seed
       types.
-- [ ] Define a narrow pure materializer API consumed by host and CLI lanes.
-- [ ] Add focused red tests for shared contracts, then make them green.
-- [ ] Confirm no pi imports entered pure layers.
-- [ ] Commit the shared baseline and record the commit in the parent packet.
+- [x] Define a narrow pure materializer API consumed by host and CLI lanes.
+- [x] Add focused red tests for shared contracts, then make them green.
+- [x] Confirm no pi imports entered pure layers.
+- [x] Commit the shared baseline and record the commit in the parent packet.
 
 ### Acceptance
 
-- [ ] Omitted continuity policy is backward-compatible.
-- [ ] The exact v1 schema and bounds in the spec have one runtime source of
+- [x] Omitted continuity policy is backward-compatible.
+- [x] The exact v1 schema and bounds in the spec have one runtime source of
       truth.
-- [ ] Reachable `minimal` children are rejected only when delegated continuity
+- [x] Reachable `minimal` children are rejected only when delegated continuity
       is required.
-- [ ] All three lanes can code against named, committed interfaces without
+- [x] All three lanes can code against named, committed interfaces without
       editing the same production files.
 
 ### Verification
