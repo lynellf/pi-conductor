@@ -205,7 +205,7 @@ shards were also rerun at that commit.
 - [x] `pnpm test` at `3fdb605`: 358 files and 3,687 tests passed; explicit exit 0 and no unhandled errors.
 - [x] standalone shard evidence: the six-shard sequence at `728a439` recorded exit 0 for shards 1, 2, 4, and 5; shards 3 and 6 passed on their explicit individual reruns. The affected shards were rerun again at `3fdb605`: `--shard=3/6` (60 files; 480 tests; exit 0) and `--shard=6/6` (58 files; 649 tests; exit 0). The initial sequence exposed one artifact-store test flake in shard 3 and one supervised-process cleanup-timing flake in shard 6; neither reproduced on its recorded individual rerun. No shard reported an unhandled error after the packed-test split.
 - [x] `pnpm audit --audit-level high` (no high/critical advisories; 1 low and 2 moderate reported)
-- [ ] inspect `git status --short` and final diff inventory after this plan update
+- [x] inspect `git status --short` and final diff inventory after the final plan update
 - [x] reconcile the pre-fix shard-3 `Timeout calling "onTaskUpdate"` and the two post-fix one-off test flakes as inconclusive; the final full suite and individual shard reruns completed with exit 0.
 - [x] update only completed checkboxes in this plan
 
