@@ -165,17 +165,17 @@ records dispositions before the full gate.
 
 ## Phase 5 — full verification
 
-- [ ] `pnpm typecheck`
-- [ ] `pnpm build`
-- [ ] `pnpm lint`
-- [ ] `pnpm format:check`
-- [ ] `git diff --check`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] `pnpm lint`
+- [x] `pnpm format:check`
+- [x] `git diff --check`
 - [ ] complete `pnpm test`, or deterministic shards whose union is the complete
-      suite
-- [ ] `pnpm audit --audit-level high`
-- [ ] inspect `git status --short` and final diff inventory
-- [ ] reconcile every timed-out/ambiguous tool execution
-- [ ] update all completed checkboxes in this plan
+      suite (blocked by pre-existing protected-file fixture failures)
+- [x] `pnpm audit --audit-level high`
+- [x] inspect `git status --short` and final diff inventory
+- [x] reconcile every timed-out/ambiguous tool execution
+- [x] update all completed checkboxes in this plan
 
 Long suites stream output. No `tail` pipeline may hide the running process or
 exit status. Partial shards are never described as the full gate.
