@@ -280,6 +280,7 @@ export type {
   ChildFileToolCalls,
   ChildNormalizationReason,
   ChildProjectionFingerprint,
+  ChildProtocolDiagnostic,
   ChildWorktreeState,
   DelegateResultStatus,
 } from "./persistence/child-completion.js";

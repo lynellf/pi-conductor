@@ -76,11 +76,14 @@ function captureContinuity(
   const context = capture.continuityValidation();
   const isSuccessful = args.status === "completed" || args.status === "no_changes";
   if (args.continuity === undefined) {
-    if (isSuccessful && context?.policy?.require_delegated_result === true)
+    if (isSuccessful && context?.policy?.require_delegated_result === true) {
+      capture.setProtocolDiagnostic("continuity_packet_required");
       return {
         kind: "rejected",
-        message: "continuity packet is required for a successful report_result",
+        message:
+          "continuity_packet_required: continuity packet is required for a successful report_result",
       };
+    }
     return { kind: "ok", sibling: null };
   }
   if (context === null)

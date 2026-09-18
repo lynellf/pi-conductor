@@ -144,11 +144,17 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
             readonly role: string;
             readonly visit: number;
           }) =>
-            recordBackedContinuityAuthority(log.records(runId), {
-              run_id: runId,
-              role: role as import("../core/types.js").Role,
-              visit_index: visit,
-            }),
+            recordBackedContinuityAuthority(
+              log.records(runId),
+              {
+                run_id: runId,
+                role: role as import("../core/types.js").Role,
+                visit_index: visit,
+              },
+              host.continuityRepositoryPath === undefined
+                ? {}
+                : { repositoryPath: host.continuityRepositoryPath },
+            ),
           knownContinuityItemIds: () => continuityItemIds(log.records(runId), runId),
         }),
     runControl,

@@ -4,6 +4,7 @@ import type {
   ChildCompletionProtocol,
   ChildCompletionSource,
   ChildNormalizationReason,
+  ChildProtocolDiagnostic,
   ChildWorktreeState,
   DelegateResultStatus,
 } from "../../persistence/child-completion.js";
@@ -33,6 +34,7 @@ export interface RawChildTerminal {
   readonly cancelled: boolean;
   readonly sessionError: string | null;
   readonly report: LegacyChildReport | null;
+  readonly protocolDiagnostic?: ChildProtocolDiagnostic;
   /** Text-only final assistant response, already bounded; null means absent. */
   readonly finalResponse: string | null;
   readonly worktree: ChildWorktreeInspection;

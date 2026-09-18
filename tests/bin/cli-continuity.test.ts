@@ -267,6 +267,21 @@ describe("cli-continuity", () => {
       expect(result.exitCode).toBe(1);
       expect(result.errorMessage).toContain("not found");
     });
+
+    it("returns exit 1 when the requested run is not present", async () => {
+      const logDir = await mkdtemp(join(tmpdir(), "continuity-missing-run-"));
+      try {
+        const result = await runContinuityReport({
+          logDir,
+          runId: "run-does-not-exist",
+          format: "json",
+        });
+        expect(result.exitCode).toBe(1);
+        expect(result.errorMessage).toContain("run not found");
+      } finally {
+        await rm(logDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("Markdown escaping", () => {
@@ -584,7 +599,8 @@ roles:
         const before = await readdir(logDir, { withFileTypes: true });
         const result = await runContinuityReport({ logDir, runId: "run-1", format: "json" });
         const after = await readdir(logDir, { withFileTypes: true });
-        expect(result.exitCode).toBe(0);
+        expect(result.exitCode).toBe(1);
+        expect(result.errorMessage).toContain("run not found");
         expect(after.map((entry) => entry.name)).toEqual(before.map((entry) => entry.name));
       } finally {
         await rm(logDir, { recursive: true, force: true });

@@ -83,6 +83,18 @@ export async function runContinuityReport(
     };
   }
 
+  // Reject unknown or path-ambiguous IDs before asking the log reader to open
+  // a file. `listRunIds()` is scoped to the chosen log directory and keeps
+  // the read-only CLI from interpreting an arbitrary path as a run.
+  if (!log.listRunIds().includes(runId)) {
+    log.close();
+    return {
+      output: "",
+      exitCode: 1,
+      errorMessage: `run not found: ${runId}`,
+    };
+  }
+
   // Read all records for the run
   let records: readonly PersistedRecord[];
   try {

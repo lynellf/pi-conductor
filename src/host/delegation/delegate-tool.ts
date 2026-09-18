@@ -9,6 +9,7 @@ import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js"
 import type {
   ChildCompletionEvidence,
   ChildProjectionFingerprint,
+  ChildProtocolDiagnostic,
   DelegateResultStatus,
 } from "../../persistence/child-completion.js";
 import type { ChildContinuitySibling } from "../../persistence/continuity.js";
@@ -191,6 +192,8 @@ export interface ChildTerminal {
    * supplied by the child.
    */
   readonly continuity?: ChildContinuitySibling;
+  /** Stable host protocol diagnostic retained when the child violates a pinned requirement. */
+  readonly protocolDiagnostic?: ChildProtocolDiagnostic;
   /** Compatibility input for existing direct host adapters; never written by new SDK sessions. */
   readonly status?: "completed" | "failed" | "no_changes" | "cancelled";
   readonly summary?: string;
@@ -390,6 +393,9 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       ? {}
       : { duplicateReadCalls: terminal.duplicateReadCalls }),
     ...(terminal.continuity === undefined ? {} : { continuity: terminal.continuity }),
+    ...(terminal.protocolDiagnostic === undefined
+      ? {}
+      : { protocolDiagnostic: terminal.protocolDiagnostic }),
   } as const;
   const normalized = normalizeChildTerminal(raw);
   const evidence = completionEvidence(raw, normalized, terminal.summaryTruncated ?? false);

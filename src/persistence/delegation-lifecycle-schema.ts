@@ -98,6 +98,7 @@ const evidence = Type.Object(
       Type.Literal("report_result_no_changes_clean"),
       Type.Literal("report_result_conflicts_with_worktree"),
     ]),
+    protocol_diagnostic: Type.Optional(Type.Literal("continuity_packet_required")),
     report_result_called: Type.Boolean(),
     reported_status: Type.Optional(
       Type.Union([Type.Literal("completed"), Type.Literal("no_changes"), Type.Literal("failed")]),

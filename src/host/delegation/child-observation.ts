@@ -2,8 +2,10 @@
 
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-
-import type { ChildFileToolCalls } from "../../persistence/child-completion.js";
+import type {
+  ChildFileToolCalls,
+  ChildProtocolDiagnostic,
+} from "../../persistence/child-completion.js";
 import type {
   ChildContinuitySibling,
   PacketValidationContext,
@@ -17,6 +19,7 @@ import type { DelegationManager } from "./manager.js";
 export interface ReportCapture {
   readonly report: () => LegacyChildReport | null;
   readonly continuity: () => ChildContinuitySibling | null;
+  readonly protocolDiagnostic: () => ChildProtocolDiagnostic | null;
   readonly continuityValidation: () => PacketValidationContext | null;
   readonly summaryTruncated: () => boolean;
   readonly isClosed: () => boolean;
@@ -25,6 +28,7 @@ export interface ReportCapture {
     truncated: boolean,
     continuity?: ChildContinuitySibling | null,
   ): void;
+  setProtocolDiagnostic(diagnostic: ChildProtocolDiagnostic): void;
   close(): void;
 }
 
@@ -34,11 +38,13 @@ export function createReportCapture(options?: {
 }): ReportCapture {
   let value: LegacyChildReport | null = null;
   let capturedContinuity: ChildContinuitySibling | null = null;
+  let protocolDiagnostic: ChildProtocolDiagnostic | null = null;
   let truncated = false;
   let closed = false;
   return {
     report: () => value,
     continuity: () => capturedContinuity,
+    protocolDiagnostic: () => protocolDiagnostic,
     continuityValidation: () => options?.continuityValidation?.() ?? null,
     summaryTruncated: () => truncated,
     isClosed: () => closed,
@@ -47,6 +53,9 @@ export function createReportCapture(options?: {
       value = report;
       capturedContinuity = continuity;
       truncated = didTruncate;
+    },
+    setProtocolDiagnostic(diagnostic) {
+      if (!closed && value === null) protocolDiagnostic = diagnostic;
     },
     close() {
       closed = true;
@@ -114,11 +123,13 @@ export function observeChildTerminal(args: {
     }
     const cancelled = args.manager.wasCancelled(args.config.childId);
     const continuity = args.reportCapture.continuity();
+    const protocolDiagnostic = args.reportCapture.protocolDiagnostic();
     complete({
       started: true,
       model: args.model,
       report: args.reportCapture.report(),
       ...(continuity === null ? {} : { continuity }),
+      ...(protocolDiagnostic === null ? {} : { protocolDiagnostic }),
       finalResponse,
       summaryTruncated: selectedSummaryTruncated(),
       cancelled,
@@ -134,11 +145,13 @@ export function observeChildTerminal(args: {
     promise,
     fail(reason) {
       const continuity = args.reportCapture.continuity();
+      const protocolDiagnostic = args.reportCapture.protocolDiagnostic();
       complete({
         started: true,
         model: args.model,
         report: args.reportCapture.report(),
         ...(continuity === null ? {} : { continuity }),
+        ...(protocolDiagnostic === null ? {} : { protocolDiagnostic }),
         finalResponse,
         summaryTruncated: selectedSummaryTruncated(),
         cancelled: args.manager.wasCancelled(args.config.childId),

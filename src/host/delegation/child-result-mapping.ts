@@ -28,6 +28,9 @@ export function completionEvidence(
     completion_protocol: raw.protocol,
     completion_source: normalized.completionSource,
     normalization_reason: normalized.normalizationReason,
+    ...(raw.protocolDiagnostic === undefined
+      ? {}
+      : { protocol_diagnostic: raw.protocolDiagnostic }),
     report_result_called: raw.report !== null,
     ...(raw.report === null ? {} : { reported_status: raw.report.status }),
     final_response_present: raw.protocol === "minimal" && raw.finalResponse !== null,

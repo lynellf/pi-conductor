@@ -170,6 +170,9 @@ export interface SeedRunMemoryArgs {
  * is the only place that touches SDK I/O.
  */
 export interface Host {
+  /** Canonical checkout used for host-side repository evidence, when available. */
+  readonly continuityRepositoryPath?: string;
+
   /**
    * Spawn a fresh role session. The Host calls `createAgentSession`
    * with the per-role options (model, system prompt via

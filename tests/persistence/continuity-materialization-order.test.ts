@@ -822,6 +822,18 @@ describe("continuity-materialization-order", () => {
       const ledger = materializeContinuity(withLifecycles(records), { run_id: "run-1" });
       expect(ledger.envelopes).toHaveLength(0);
     });
+
+    it("keeps parentless legacy child lifecycles readable when no packet is present", () => {
+      const started = makeSubagentStarted("legacy-child", "run-1", 1000);
+      const completed = makeSubagentCompleted("legacy-child", "run-1", 1100, null);
+      const { parent_role, parent_visit_index, ...legacyStarted } = started;
+      void parent_role;
+      void parent_visit_index;
+
+      const ledger = materializeContinuity([legacyStarted, completed], { run_id: "run-1" });
+
+      expect(ledger.envelopes).toHaveLength(0);
+    });
   });
 
   it("replays one handoff and one child result after a restart", () => {

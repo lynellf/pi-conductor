@@ -19,6 +19,7 @@ import type {
 } from "../persistence/log.js";
 import {
   type HandoffTransportSelectedRecord,
+  ManifestSnapshotError,
   type ManifestSnapshotRecord,
   type TrajectoryHandoffFailedRecord,
   TrajectoryResumeError,
@@ -28,17 +29,19 @@ import {
 import { reconcileDelegationChildren } from "./delegation/reconcile.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
-/** Find and validate the latest pinned manifest snapshot for a run. */
+/** Find and validate the single pinned manifest snapshot for a run. */
 export function latestManifestSnapshot(
   records: readonly PersistedRecord[],
   runId: string,
 ): ManifestSnapshotRecord | null {
-  for (let index = records.length - 1; index >= 0; index -= 1) {
-    const record = records[index];
-    if (record?.type !== "manifest_snapshot" || record.run_id !== runId) continue;
-    return verifyManifestSnapshot(record);
+  let snapshot: ManifestSnapshotRecord | null = null;
+  for (const record of records) {
+    if (record.type !== "manifest_snapshot" || record.run_id !== runId) continue;
+    if (snapshot !== null)
+      throw new ManifestSnapshotError("run contains multiple pinned manifest snapshots");
+    snapshot = verifyManifestSnapshot(record);
   }
-  return null;
+  return snapshot;
 }
 
 /** Find the latest artifact delivery addressed to the resumed checkpoint. */

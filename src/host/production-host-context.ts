@@ -25,6 +25,7 @@ import { assertTrajectorySdkSupportedForHandoffs } from "./trajectory-sdk-capabi
 export class ProductionHostContext {
   readonly modelRegistry: ModelRegistry;
   readonly cwd: string;
+  readonly continuityRepositoryPath: string;
   readonly log: RecordLog;
   readonly loadedManifest: LoadedManifest;
   readonly runId: string;
@@ -65,6 +66,7 @@ export class ProductionHostContext {
     assertTrajectorySdkSupportedForHandoffs(opts.loadedManifest.manifest.handoffs);
     this.modelRegistry = opts.modelRegistry;
     this.cwd = resolve(opts.cwd);
+    this.continuityRepositoryPath = this.cwd;
     this.log = opts.log;
     this.loadedManifest = opts.loadedManifest;
     this.runId = opts.runId;

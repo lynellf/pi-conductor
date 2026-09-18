@@ -6,6 +6,7 @@ import {
   normalizeChildTerminal,
   type RawChildTerminal,
 } from "../../src/host/delegation/child-result.js";
+import { completionEvidence } from "../../src/host/delegation/child-result-mapping.js";
 
 const changedWorktree = {
   state: "changed" as const,
@@ -139,6 +140,17 @@ describe("legacy report-result normalization (Issue #57 §7.3)", () => {
       status: "failed",
       normalizationReason: "missing_report_result",
     });
+  });
+
+  it("retains the continuity protocol diagnostic beside the compatibility reason", () => {
+    const terminal = raw({
+      protocol: "report_result",
+      protocolDiagnostic: "continuity_packet_required",
+    });
+    const normalized = normalizeChildTerminal(terminal);
+    expect(completionEvidence(terminal, normalized, false).protocol_diagnostic).toBe(
+      "continuity_packet_required",
+    );
   });
 });
 

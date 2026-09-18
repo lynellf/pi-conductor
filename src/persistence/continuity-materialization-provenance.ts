@@ -34,8 +34,6 @@ export class ContinuityLifecycleIndex {
     }
     if (record.type === "subagent_started") {
       const key = childKey(record.child_id, record.task_id);
-      if (record.parent_role === undefined || record.parent_visit_index === undefined)
-        fail(recordId(record), "child start lacks parent lifecycle provenance");
       const boundTask = this.taskByChild.get(record.child_id);
       if (boundTask !== undefined && boundTask !== record.task_id)
         fail(recordId(record), "child start reuses child identity for another task");
@@ -89,9 +87,14 @@ export class ContinuityLifecycleIndex {
       lifecycle.start.run_id !== record.run_id
     )
       fail(recordId(record), "child completion does not match a preceding child lifecycle");
+    if (
+      lifecycle.start.parent_role === undefined ||
+      lifecycle.start.parent_visit_index === undefined
+    )
+      fail(recordId(record), "child lifecycle lacks parent lifecycle provenance");
     return {
-      role: lifecycle.start.parent_role as Role,
-      visit: lifecycle.start.parent_visit_index as number,
+      role: lifecycle.start.parent_role,
+      visit: lifecycle.start.parent_visit_index,
       completion_protocol: lifecycle.start.completion_protocol ?? ("report_result" as const),
       child: {
         child_id: record.child_id,

@@ -40,6 +40,10 @@ describe("delegated report_result continuity", () => {
     );
 
     expect(result).toMatchObject({ isError: true });
+    expect(result.content).toEqual([
+      { type: "text", text: expect.stringContaining("continuity_packet_required") },
+    ]);
+    expect(capture.protocolDiagnostic()).toBe("continuity_packet_required");
     expect(capture.report()).toBeNull();
   });
 

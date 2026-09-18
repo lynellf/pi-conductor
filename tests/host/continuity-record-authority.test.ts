@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { resolveSingleEvidence } from "../../src/host/continuity-evidence.js";
 import { recordBackedContinuityAuthority } from "../../src/host/continuity-record-authority.js";
@@ -82,7 +84,109 @@ function execution(child_id: string, execution_id: string) {
   ];
 }
 
+function roleExecution(roleSessionId: string, executionId: string, ts: number) {
+  const common = {
+    schema_version: 1 as const,
+    run_id: "run-1",
+    execution_id: executionId,
+    supervision_id: `${executionId}-supervision`,
+    logical_session_id: `${roleSessionId}-logical`,
+    role_session_id: roleSessionId,
+    tool_call_id: `${executionId}-call`,
+    tool_name: "bash",
+  };
+  return [
+    {
+      type: "tool_execution_started" as const,
+      ...common,
+      timeout_ms: 100,
+      recovery_count: 0,
+      ts,
+    },
+    {
+      type: "tool_execution_finished" as const,
+      ...common,
+      elapsed_ms: 1,
+      recovery_count: 0,
+      outcome: "completed" as const,
+      cleanup: "confirmed" as const,
+      ts: ts + 1,
+    },
+  ];
+}
+
 describe("record-backed child continuity authority", () => {
+  it("verifies canonical repository evidence when a host checkout is supplied", async () => {
+    const commit = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const content = execFileSync("/usr/bin/git", ["show", `${commit}:package.json`]);
+    const authority = recordBackedContinuityAuthority(
+      [],
+      { run_id: "run-1", role: "orchestrator", visit_index: 1 },
+      { repositoryPath: process.cwd() },
+    );
+
+    const repositoryRef = {
+      kind: "repository" as const,
+      commit,
+      path: "package.json",
+      sha256: createHash("sha256").update(content).digest("hex"),
+    };
+    await expect(resolveSingleEvidence(authority, repositoryRef)).resolves.toMatchObject({
+      status: "verified",
+      resolved_path: "package.json",
+      resolved_commit: commit,
+    });
+  });
+
+  it("scopes role-visit execution evidence to the emitting role session", async () => {
+    const records = [
+      {
+        type: "session_started" as const,
+        run_id: "run-1",
+        role: "orchestrator" as const,
+        visit_index: 1,
+        state: "orchestrator" as const,
+        model: "test",
+        session_file: "orchestrator.jsonl",
+        role_session_id: "orchestrator-session",
+        parent_session: null,
+        ts: 1,
+      },
+      {
+        type: "session_started" as const,
+        run_id: "run-1",
+        role: "implementer" as const,
+        visit_index: 1,
+        state: "implementer" as const,
+        model: "test",
+        session_file: "implementer.jsonl",
+        role_session_id: "implementer-session",
+        parent_session: "orchestrator.jsonl",
+        ts: 2,
+      },
+      ...roleExecution("orchestrator-session", "exec-orchestrator", 3),
+      ...roleExecution("implementer-session", "exec-implementer", 5),
+    ] as PersistedRecord[];
+    const authority = recordBackedContinuityAuthority(records, {
+      run_id: "run-1",
+      role: "orchestrator",
+      visit_index: 1,
+    });
+
+    await expect(
+      resolveSingleEvidence(authority, {
+        kind: "tool_execution",
+        execution_id: "exec-orchestrator",
+      }),
+    ).resolves.toMatchObject({ status: "verified" });
+    await expect(
+      resolveSingleEvidence(authority, {
+        kind: "tool_execution",
+        execution_id: "exec-implementer",
+      }),
+    ).resolves.toMatchObject({ status: "missing" });
+  });
+
   it("authorizes only the reconciled execution and artifact owned by the exact child task", async () => {
     const authority = recordBackedContinuityAuthority(
       [childStart("child-a", "task-a"), ...execution("child-a", "exec-a")] as PersistedRecord[],

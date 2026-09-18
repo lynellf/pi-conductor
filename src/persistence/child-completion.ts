@@ -9,6 +9,9 @@ export type DelegateResultStatus = "completed" | "no_changes" | "blocked" | "fai
 /** The observation which selected the authoritative normalized result. */
 export type ChildCompletionSource = "report_result" | "final_response" | "host";
 
+/** Stable host protocol diagnostics retained alongside normalized compatibility reasons. */
+export type ChildProtocolDiagnostic = "continuity_packet_required";
+
 /** The total-precedence reason for a delegated child result (§7.2–§7.3). */
 export type ChildNormalizationReason =
   | "cancelled"
@@ -43,6 +46,7 @@ export interface ChildCompletionEvidence {
   readonly completion_protocol: ChildCompletionProtocol;
   readonly completion_source: ChildCompletionSource;
   readonly normalization_reason: ChildNormalizationReason;
+  readonly protocol_diagnostic?: ChildProtocolDiagnostic;
   readonly report_result_called: boolean;
   readonly reported_status?: "completed" | "no_changes" | "failed";
   readonly final_response_present: boolean;
