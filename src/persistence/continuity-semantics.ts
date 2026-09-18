@@ -56,6 +56,11 @@ export interface PacketValidationContext {
   readonly evidenceVerifiedByKey: ReadonlyMap<string, ContinuityEvidenceResolution>;
   /** Optional host-owned synchronous record authority for child tool capture. */
   readonly resolveEvidence?: (key: string, ref: EvidenceRef) => ContinuityEvidenceResolution;
+  /** Optional asynchronous authority for evidence requiring canonical repository I/O. */
+  readonly resolveEvidenceAsync?: (
+    key: string,
+    ref: EvidenceRef,
+  ) => Promise<ContinuityEvidenceResolution>;
   /**
    * Spec §5 / §8 / §9: the pinned `ContinuityPolicy` derived from the
    * current manifest. When `require_handoff` is true, every accepted

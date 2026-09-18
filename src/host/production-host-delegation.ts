@@ -11,6 +11,7 @@ import {
 } from "../persistence/continuity.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
 import { type SnapshotPinnedRecord, snapshotPinned } from "../persistence/log.js";
+import { resolveSingleEvidence } from "./continuity-evidence.js";
 import { recordBackedContinuityAuthority } from "./continuity-record-authority.js";
 import type { DelegationAdmissionService } from "./delegation/admission-service.js";
 import type { HostArtifactContextResolver } from "./delegation/context-artifact-contract.js";
@@ -250,6 +251,7 @@ export async function createDelegateTool(
         ctx.runId,
         childId,
         continuityPolicyContext(manifest.continuity ?? null),
+        ctx.cwd,
       ),
     isBudgetExhausted: () => {
       const cap = getRunCostCap?.();
@@ -339,6 +341,7 @@ function recordBackedChildValidation(
   runId: string,
   childId: string,
   policy: PacketValidationContext["policy"],
+  repositoryPath: string,
 ): PacketValidationContext {
   const starts = records.filter(
     (record): record is import("../persistence/log.js").SubagentStartedRecord =>
@@ -348,10 +351,14 @@ function recordBackedChildValidation(
   // Retries reuse the exact task identity after a durable terminal. A child
   // ID reused for another task remains unbound and is denied by the authority.
   const taskId = taskIds.size === 1 ? starts[0]?.task_id : undefined;
-  const authority = recordBackedContinuityAuthority(records, {
-    run_id: runId,
-    child: { child_id: childId, task_id: taskId ?? "unbound-child" },
-  });
+  const authority = recordBackedContinuityAuthority(
+    records,
+    {
+      run_id: runId,
+      child: { child_id: childId, task_id: taskId ?? "unbound-child" },
+    },
+    { repositoryPath },
+  );
   const verifiedExecutionIds = new Set<string>();
   for (const record of records)
     if (
@@ -364,6 +371,8 @@ function recordBackedChildValidation(
     knownItemIds,
     verifiedExecutionIds,
     evidenceVerifiedByKey: new Map(),
+    resolveEvidenceAsync: (key, ref) =>
+      resolveSingleEvidence(authority, ref).then((resolution) => ({ ref_key: key, ...resolution })),
     resolveEvidence: (key, ref) => {
       if (ref.kind === "tool_execution")
         return {

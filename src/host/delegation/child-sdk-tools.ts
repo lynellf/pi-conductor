@@ -41,7 +41,7 @@ export function buildReportResultTool(capture: ReportCapture): ToolDefinition {
           isError: true,
           terminate: true,
         };
-      const continuity = captureContinuity(args, capture);
+      const continuity = await captureContinuity(args, capture);
       if (continuity.kind === "rejected") {
         return {
           content: [{ type: "text", text: continuity.message }],
@@ -67,12 +67,13 @@ export function buildReportResultTool(capture: ReportCapture): ToolDefinition {
   });
 }
 
-function captureContinuity(
+async function captureContinuity(
   args: Static<typeof reportResultArgsSchema>,
   capture: ReportCapture,
-):
+): Promise<
   | { readonly kind: "ok"; readonly sibling: ChildContinuitySibling | null }
-  | { readonly kind: "rejected"; readonly message: string } {
+  | { readonly kind: "rejected"; readonly message: string }
+> {
   const context = capture.continuityValidation();
   const isSuccessful = args.status === "completed" || args.status === "no_changes";
   if (args.continuity === undefined) {
@@ -88,7 +89,7 @@ function captureContinuity(
   }
   if (context === null)
     return { kind: "rejected", message: "continuity validation authority is unavailable" };
-  const resolvedContext = withResolvedEvidence(args.continuity, context);
+  const resolvedContext = await withResolvedEvidence(args.continuity, context);
   const result = tryValidateContinuityPacket(args.continuity, resolvedContext);
   if (result.kind === "rejected")
     return {
@@ -106,11 +107,12 @@ function captureContinuity(
   };
 }
 
-function withResolvedEvidence(
+async function withResolvedEvidence(
   packet: ContinuityPacketV1,
   context: NonNullable<ReturnType<ReportCapture["continuityValidation"]>>,
-): NonNullable<ReturnType<ReportCapture["continuityValidation"]>> {
-  if (context.resolveEvidence === undefined) return context;
+): Promise<NonNullable<ReturnType<ReportCapture["continuityValidation"]>>> {
+  if (context.resolveEvidence === undefined && context.resolveEvidenceAsync === undefined)
+    return context;
   const evidenceVerifiedByKey = new Map(context.evidenceVerifiedByKey);
   const collections = [
     ["findings", packet.findings],
@@ -118,20 +120,23 @@ function withResolvedEvidence(
     ["next_steps", packet.next_steps],
   ] as const;
   for (const [collection, items] of collections)
-    for (const item of items) {
-      item.evidence.forEach((ref, index) => {
+    for (const item of items)
+      for (const [index, ref] of item.evidence.entries()) {
         const key = evidenceRefKey(collection, item.id, index);
+        const resolution =
+          context.resolveEvidenceAsync === undefined
+            ? context.resolveEvidence?.(key, ref)
+            : await context.resolveEvidenceAsync(key, ref);
         evidenceVerifiedByKey.set(
           key,
-          context.resolveEvidence?.(key, ref) ?? {
+          resolution ?? {
             ref_key: key,
             kind: ref.kind,
             status: "missing",
             diagnostic: "continuity_evidence_audience_denied",
           },
         );
-      });
-    }
+      }
   return { ...context, evidenceVerifiedByKey };
 }
 
