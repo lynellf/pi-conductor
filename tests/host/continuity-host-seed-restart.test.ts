@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createInitialCheckpoint } from "../../src/core/reduce.js";
-import type { MachineDefinition } from "../../src/core/types.js";
+import type { MachineDefinition, TransitionAccepted } from "../../src/core/types.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import { runLoop } from "../../src/host/loop.js";
 import { formatIncomingHandoffSeed } from "../../src/host/loop-format.js";
@@ -15,7 +15,7 @@ import { loadManifestFromString } from "../../src/host/manifest.js";
 import { StubHost } from "../../src/host/stub-host.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../../src/persistence/continuity-seed.js";
-import { InMemoryRecordLog, type TransitionAcceptedRecord } from "../../src/persistence/log.js";
+import { InMemoryRecordLog } from "../../src/persistence/log.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 let directory: string | undefined;
@@ -62,7 +62,7 @@ const packet = {
 function transitionAccepted(
   ts: number,
   continuityBytes = JSON.stringify(packet).length,
-): TransitionAcceptedRecord {
+): TransitionAccepted {
   const payload = {
     target_role: "implementer",
     summary: "continue",
@@ -102,7 +102,7 @@ function transitionAccepted(
   };
 }
 
-function sessionStarted(ts: number): Record<string, unknown> {
+function sessionStarted(ts: number): import("../../src/persistence/log.js").PersistedRecord {
   return {
     type: "session_started",
     run_id: "run-host-seed",
