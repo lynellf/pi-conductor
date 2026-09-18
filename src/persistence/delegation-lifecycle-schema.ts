@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { CONTINUITY_CONSTRAINTS, continuityPacketV1Schema } from "../seam/continuity.js";
 import { childOutputCaptureSchema } from "./child-output-records.js";
 import { delegationSourceWorkspaceSchema } from "./delegation-task-schema.js";
 import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
@@ -9,6 +10,42 @@ import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
 const id = Type.String({ minLength: 1 });
 const nonNegative = Type.Number({ minimum: 0 });
 const nonNegativeInteger = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+/**
+ * Spec §9: additive host-authored continuity sibling persisted on
+ * successful child completion records. Source provenance fields
+ * (run/parent/child/task/attempt/record) come from the surrounding
+ * `subagent_completed` record — never from the child model.
+ */
+const evidenceResolutionSchema = Type.Object(
+  {
+    ref_key: Type.String({ minLength: 1, maxLength: 256 }),
+    kind: Type.String({ minLength: 1, maxLength: 32 }),
+    status: Type.Union([
+      Type.Literal("verified"),
+      Type.Literal("declared"),
+      Type.Literal("missing"),
+    ]),
+    diagnostic: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+    message: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+    resolved_path: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
+    resolved_commit: Type.Optional(
+      Type.String({ minLength: 40, maxLength: 40, pattern: "^[0-9a-f]{40}$" }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+const continuitySiblingSchema = Type.Object(
+  {
+    packet: continuityPacketV1Schema,
+    packet_utf8_bytes: Type.Integer({
+      minimum: 1,
+      maximum: CONTINUITY_CONSTRAINTS.MAX_PACKET_BYTES,
+    }),
+    evidence_resolutions: Type.Array(evidenceResolutionSchema, { maxItems: 256 }),
+  },
+  { additionalProperties: false },
+);
 const usage = Type.Object(
   {
     input: nonNegative,
@@ -130,6 +167,9 @@ export const acceptedChildCompletedSchema = Type.Object(
     completion_evidence: Type.Optional(evidence),
     output_capture: Type.Optional(childOutputCaptureSchema),
     output_capture_failure: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,95}$" })),
+    // Spec §9: additive continuity sibling. Absent on legacy records and
+    // on `minimal` children that did not supply a typed packet.
+    continuity: Type.Optional(continuitySiblingSchema),
   },
   { additionalProperties: false },
 );

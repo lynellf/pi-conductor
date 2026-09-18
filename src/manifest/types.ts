@@ -74,6 +74,26 @@ export interface ContextArtifactLimits {
 /** Issue #86: trusted parent behavior for delegate submissions. */
 export type DelegationMode = "blocking" | "nonblocking";
 
+// ─── Durable continuity policy (docs/durable-continuity/spec.md §5) ────
+
+/**
+ * Spec §5 manifest policy for the opt-in durable continuity ledger.
+ *
+ * When absent, the manifest behaves exactly as before. When present,
+ * all four keys are required, schema_version must be `1`, and the
+ * `seed_max_utf8_bytes` is bounded 8,192–65,536 inclusive.
+ */
+export interface ContinuityPolicy {
+  /** Spec §5: schema version; must be `1`. */
+  readonly schema_version: 1;
+  /** Require a valid packet on every accepted `handoff`. */
+  readonly require_handoff: boolean;
+  /** Require a valid packet on every successful delegated `report_result`. */
+  readonly require_delegated_result: boolean;
+  /** UTF-8 byte cap on the materialized fresh-session seed (8,192–65,536). */
+  readonly seed_max_utf8_bytes: number;
+}
+
 /** Issue #87: whether the orchestrator conversation survives role turns. */
 export type ContextRetention = "none" | "run";
 
@@ -130,6 +150,8 @@ export interface Manifest {
   readonly end_guard?: EndGuardConfig;
   /** Issue #115: optional pinned repository controller definition. */
   readonly controller?: ControllerConfig;
+  /** Durable continuity ledger policy (spec §5). Absent preserves legacy behavior. */
+  readonly continuity?: ContinuityPolicy;
 }
 
 /**

@@ -147,6 +147,47 @@ export interface AcceptedHandoffEnvelope {
   readonly recipient_role: Role;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly utf8_bytes: number;
+  /**
+   * Spec §8: additive host-authored evidence-resolution metadata for the
+   * durable continuity packet, when present. Absent on legacy envelopes
+   * without continuity. Status is `verified | declared | missing`; the host
+   * is the sole source. Model-supplied resolution status is never trusted.
+   */
+  readonly continuity_evidence?: readonly ContinuityEvidenceResolution[];
+  /**
+   * Spec §8: UTF-8 byte length of the normalized continuity packet when
+   * present. Absent on legacy envelopes without continuity. Measured
+   * deterministically from JSON-safe normalized content.
+   */
+  readonly continuity_packet_utf8_bytes?: number;
+}
+
+/** Host-derived resolution status for a single evidence reference (spec §7). */
+export type ContinuityEvidenceStatus = "verified" | "declared" | "missing";
+
+/**
+ * Spec §7: host-authored evidence-resolution metadata, attached alongside
+ * the normalized packet on an accepted envelope. The model cannot supply
+ * or override this metadata; it is derived per-resolution with a stable
+ * diagnostic code so failures are recoverable.
+ */
+export interface ContinuityEvidenceResolution {
+  /**
+   * Stable identifier the model uses to point at this evidence on the
+   * packet (e.g. its array index, item id + reference tuple). The host
+   * surfaces this unchanged in the persisted record.
+   */
+  readonly ref_key: string;
+  readonly kind: string;
+  readonly status: ContinuityEvidenceStatus;
+  /** Stable diagnostic code (e.g. `tool_execution_not_found`). */
+  readonly diagnostic?: string;
+  /** Free resolution message surfaced to operators; safe to render. */
+  readonly message?: string;
+  /** Optional resolved path for repository evidence. */
+  readonly resolved_path?: string;
+  /** Optional resolved head OID when the host resolved a ref. */
+  readonly resolved_commit?: string;
 }
 
 /**

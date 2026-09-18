@@ -34,6 +34,7 @@ import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
   ContextRetention,
+  ContinuityPolicy,
   DelegationPolicy,
   HandoffMode,
   HandoffPolicy,
@@ -106,6 +107,8 @@ export function parseManifestFromObject(raw: unknown): Manifest {
   const end_guard = obj.end_guard === undefined ? undefined : parseEndGuardConfig(obj.end_guard);
   const controller =
     obj.controller === undefined ? undefined : parseControllerConfig(obj.controller);
+  const continuity =
+    obj.continuity === undefined ? undefined : parseContinuityPolicy(obj.continuity);
 
   const manifest = Object.freeze({
     version,
@@ -115,6 +118,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(subagents !== undefined && { subagents: Object.freeze(subagents) }),
     ...(end_guard === undefined ? {} : { end_guard }),
     ...(controller === undefined ? {} : { controller }),
+    ...(continuity === undefined ? {} : { continuity }),
   }) as Manifest;
   return manifest;
 }
@@ -664,4 +668,56 @@ function toModelEffort(value: unknown, path: string): ModelEffort {
     );
   }
   return value as ModelEffort;
+}
+
+// ─── Durable continuity policy (spec §5) ────────────────────────────────
+
+const CONTINUITY_KEYS = new Set([
+  "schema_version",
+  "require_handoff",
+  "require_delegated_result",
+  "seed_max_utf8_bytes",
+]);
+
+const CONTINUITY_SEED_MIN_BYTES = 8_192;
+const CONTINUITY_SEED_MAX_BYTES = 65_536;
+
+function parseContinuityPolicy(raw: unknown): ContinuityPolicy {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ManifestParseError("`continuity:` must be a YAML mapping (object)");
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of Object.keys(entry)) {
+    if (!CONTINUITY_KEYS.has(key)) {
+      throw new ManifestParseError(`continuity has unknown key '${key}'`);
+    }
+  }
+  if (entry.schema_version !== 1) {
+    throw new ManifestParseError("`continuity.schema_version` must be 1");
+  }
+  const requireHandoff = entry.require_handoff;
+  if (typeof requireHandoff !== "boolean") {
+    throw new ManifestParseError("`continuity.require_handoff` must be a boolean");
+  }
+  const requireDelegated = entry.require_delegated_result;
+  if (typeof requireDelegated !== "boolean") {
+    throw new ManifestParseError("`continuity.require_delegated_result` must be a boolean");
+  }
+  const seedMax = entry.seed_max_utf8_bytes;
+  if (
+    typeof seedMax !== "number" ||
+    !Number.isInteger(seedMax) ||
+    seedMax < CONTINUITY_SEED_MIN_BYTES ||
+    seedMax > CONTINUITY_SEED_MAX_BYTES
+  ) {
+    throw new ManifestParseError(
+      `\`continuity.seed_max_utf8_bytes\` must be an integer between ${CONTINUITY_SEED_MIN_BYTES} and ${CONTINUITY_SEED_MAX_BYTES} inclusive`,
+    );
+  }
+  return Object.freeze({
+    schema_version: 1,
+    require_handoff: requireHandoff,
+    require_delegated_result: requireDelegated,
+    seed_max_utf8_bytes: seedMax,
+  }) as ContinuityPolicy;
 }

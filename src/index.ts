@@ -63,6 +63,29 @@ export { ReduceLifecycleError, reduceLifecycle } from "./core/reduce-lifecycle.j
 // parser + the typed error so consumers can `import { parseManifest }`
 // and `catch (e) { if (e instanceof ManifestParseError) ... }`.
 
+// Spec §8 envelope metadata types now live on core types.
+export type { ContinuityEvidenceResolution, ContinuityEvidenceStatus } from "./core/types.js";
+// Host-side evidence resolver API shared by both transport lanes.
+export type {
+  ContextArtifactAudience,
+  ContinuityAudience,
+  ContinuityEvidenceAudience,
+  ContinuityEvidenceAuthority,
+  ContinuityEvidenceDiagnostic,
+  ContinuityResolution,
+  RepositoryLookup,
+  ToolExecutionLookup,
+} from "./host/continuity-evidence.js";
+export {
+  resolveContinuityEvidence,
+  resolveSingleEvidence,
+  toEnvelopeResolutions,
+} from "./host/continuity-evidence.js";
+export {
+  type ContinuityError,
+  type ContinuityErrorCode,
+  validateContinuityPolicy,
+} from "./manifest/continuity.js";
 export type { ControllerAdapterConfig, ControllerConfig } from "./manifest/controller.js";
 export {
   controllerAdapterSchema,
@@ -109,8 +132,10 @@ export {
 } from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
 export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
+// Durable continuity policy (spec §5): optional opt-in manifest policy.
 export type {
   ContextRetention,
+  ContinuityPolicy,
   DelegationMode,
   DelegationPolicy,
   Manifest,
@@ -120,6 +145,49 @@ export type {
   SubagentSnapshotPolicy,
 } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
+// Pure continuity contracts (spec §6, §10, §11) consumed by host + CLI lanes.
+export type {
+  ContinuityActiveOrSupersededItem,
+  ContinuityChildProvenance,
+  ContinuityDiagnostic,
+  ContinuityDiagnosticCode,
+  ContinuityEnvelopeSource,
+  ContinuityEnvelopeV1,
+  ContinuityLedger,
+  ContinuityLedgerCounts,
+  ContinuityMaterializationPolicy,
+  ContinuityOkfCandidate,
+  ContinuityResolvedEvaluation,
+  ContinuitySeed,
+  ContinuitySeedSections,
+  MaterializeContinuity,
+  PacketValidationContext,
+  RenderContinuitySeed,
+} from "./persistence/continuity.js";
+export {
+  CONTINUITY_MAX_PACKET_BYTES,
+  ContinuityValidationError,
+  escapeMarkdownText,
+  evidenceRefKey,
+  normalizeAndMeasurePacket,
+  okfCandidateKey,
+  stableJsonStringify,
+  validatePacketSemantics,
+} from "./persistence/continuity.js";
+// Seam TypeBox schemas for the v1 packet (spec §6). Single source of truth.
+export type {
+  ContinuityEvaluation,
+  ContinuityFinding,
+  ContinuityNextStep,
+  ContinuityPacketV1,
+  ContinuityQuestion,
+  EvidenceRef,
+} from "./seam/continuity.js";
+export {
+  CONTINUITY_CONSTRAINTS,
+  continuityPacketV1Schema,
+  evidenceRefSchema,
+} from "./seam/continuity.js";
 
 // ─── Manifest validation + derivation (§13, §12) ──────────────────────
 // validateManifest surfaces hard errors vs soft warnings; toMachineDefinition

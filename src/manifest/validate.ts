@@ -20,6 +20,7 @@
 
 import type { ModelEffort, Role } from "../core/types.js";
 import { validateContextRetention } from "./context-retention.js";
+import { validateContinuityPolicy } from "./continuity.js";
 import { validateControllerConfig } from "./controller-validation.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
@@ -107,7 +108,9 @@ export type ManifestErrorCode =
   | "controller-orchestrator-delegation-unsupported"
   | "controller-end-request-roles-unsupported"
   | "controller-missing-delegation"
-  | "controller-duplicate-adapter-id";
+  | "controller-duplicate-adapter-id"
+  /** Durable continuity policy exposes a reachable minimal child (§5). */
+  | "continuity-reachable-minimal-subagent";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -225,6 +228,14 @@ export function validateManifest(m: Manifest): ManifestReport {
   const warnings: ManifestWarning[] = [];
 
   validateControllerConfig(m, errors);
+
+  for (const error of validateContinuityPolicy(m)) {
+    errors.push({
+      code: error.code,
+      message: error.message,
+      ...(error.role !== undefined && { role: error.role }),
+    });
+  }
 
   for (const message of validateEndGuardConfig(m.end_guard)) {
     errors.push({ code: "invalid-end-guard", message });

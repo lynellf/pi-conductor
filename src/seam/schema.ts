@@ -32,6 +32,7 @@
 // this is the peer-dependency identity requirement documented in the
 // extension pivot plan §4 (typebox identity risk).
 import { type Static, Type } from "typebox";
+import { continuityPacketV1Schema } from "./continuity.js";
 
 // ─── Core FSM tools (§5.1) ────────────────────────────────────────────
 
@@ -99,6 +100,12 @@ export const handoffArgsSchema = Type.Object(
         { maxItems: 64, description: "At most 64 declared file artifacts per handoff." },
       ),
     ),
+    // Spec §6: reserved optional `continuity` field on handoff. Reserved
+    // and stripped from generic recipient payload (alongside `context_ref`
+    // and `artifacts`) so fresh sessions receive only the materialized
+    // bounded seed and not raw packet prose. Validated at the seam when
+    // the manifest's `continuity.require_handoff` is true.
+    continuity: Type.Optional(continuityPacketV1Schema),
   },
   { additionalProperties: true },
 );
@@ -380,6 +387,11 @@ export const reportResultArgsSchema = Type.Object({
   status: childResultStatusSchema,
   summary: Type.String({ minLength: 1, maxLength: 4096 }),
   verification: Type.Optional(Type.Array(Type.String({ maxLength: 256 }), { maxItems: 16 })),
+  // Spec §6: reserved optional `continuity` field on report_result. Required
+  // only when the parent's manifest pins `continuity.require_delegated_result`
+  // AND the profile is not `minimal`. Child-authored provenance fields are
+  // never trusted; provenance is host-derived on the persisted record.
+  continuity: Type.Optional(continuityPacketV1Schema),
 });
 
 /** Typed view of validated report_result args. */
