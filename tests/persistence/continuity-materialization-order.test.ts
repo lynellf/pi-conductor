@@ -11,11 +11,11 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { stableJsonStringify } from "../../src/persistence/continuity.js";
 import {
   ContinuityMaterializationException,
   materializeContinuity,
 } from "../../src/persistence/continuity-materialization.js";
-import { stableJsonStringify } from "../../src/persistence/continuity.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -80,6 +80,24 @@ function makeSubagentCompleted(recordId: string, runId: string, ts: number, cont
   };
 }
 
+function makeSubagentStarted(recordId: string, runId: string, ts: number) {
+  return {
+    type: "subagent_started" as const,
+    run_id: runId,
+    child_id: `child-${recordId}`,
+    task_id: `task-${recordId}`,
+    subagent: "coder",
+    parent_role: "orchestrator",
+    parent_visit_index: 2,
+    model: "test",
+    session_file: `session-${recordId}.jsonl`,
+    worktree_path: "/tmp/test",
+    branch: "main",
+    base_commit: "0000000000000000000000000000000000000000",
+    ts,
+  };
+}
+
 function makePacket(
   summary: string,
   findings: Array<{ id: string; kind?: string; supersedes?: string[]; statement?: string }> = [],
@@ -119,7 +137,6 @@ function makePacket(
 // ─── Test suite ────────────────────────────────────────────────────────
 
 describe("continuity-materialization-order", () => {
-
   describe("canonical record order", () => {
     it("produces identical ledger from same records in same order", () => {
       const packet1 = makePacket("first packet", [{ id: "finding-1" }]);
@@ -175,7 +192,9 @@ describe("continuity-materialization-order", () => {
 
     it("newer item supersedes earlier item listed in its supersedes", () => {
       const packet1 = makePacket("first", [{ id: "f-1", kind: "fact", statement: "old finding" }]);
-      const packet2 = makePacket("second", [{ id: "f-2", kind: "fact", statement: "new finding", supersedes: ["f-1"] }]);
+      const packet2 = makePacket("second", [
+        { id: "f-2", kind: "fact", statement: "new finding", supersedes: ["f-1"] },
+      ]);
 
       const records = [
         makeTransitionAccepted("rec-1", "run-1", 1000, packet1),
@@ -334,9 +353,7 @@ describe("continuity-materialization-order", () => {
 
   describe("empty ledger", () => {
     it("no continuity records produces valid empty ledger", () => {
-      const records = [
-        makeTransitionAccepted("rec-1", "run-1", 1000, null),
-      ];
+      const records = [makeTransitionAccepted("rec-1", "run-1", 1000, null)];
 
       const ledger = materializeContinuity(records, { run_id: "run-1" });
 
@@ -352,7 +369,17 @@ describe("continuity-materialization-order", () => {
     it("mixed records with only legacy ones produces empty ledger", () => {
       const records = [
         makeTransitionAccepted("rec-1", "run-1", 1000, null),
-        { type: "session_started" as const, run_id: "run-1", role: "orchestrator" as const, visit_index: 1, state: "orchestrator" as const, model: "test", session_file: "s1", parent_session: null, ts: 500 },
+        {
+          type: "session_started" as const,
+          run_id: "run-1",
+          role: "orchestrator" as const,
+          visit_index: 1,
+          state: "orchestrator" as const,
+          model: "test",
+          session_file: "s1",
+          parent_session: null,
+          ts: 500,
+        },
       ];
 
       const ledger = materializeContinuity(records, { run_id: "run-1" });
@@ -362,10 +389,11 @@ describe("continuity-materialization-order", () => {
 
   describe("delegated result envelopes", () => {
     it("extracts continuity from subagent_completed records", () => {
-      const packet = makePacket("child result", [
-        { id: "cf-1", statement: "child finding" },
-      ]);
-      const records = [makeSubagentCompleted("child-1", "run-1", 2000, packet)];
+      const packet = makePacket("child result", [{ id: "cf-1", statement: "child finding" }]);
+      const records = [
+        makeSubagentStarted("child-1", "run-1", 1000),
+        makeSubagentCompleted("child-1", "run-1", 2000, packet),
+      ];
 
       const ledger = materializeContinuity(records, { run_id: "run-1" });
 
@@ -373,7 +401,8 @@ describe("continuity-materialization-order", () => {
       expect(ledger.envelopes[0]!.source).toBe("delegated_result");
       expect(ledger.envelopes[0]!.child).toBeDefined();
       expect(ledger.envelopes[0]!.child!.child_id).toBe("child-child-1");
+      expect(ledger.envelopes[0]!.role).toBe("orchestrator");
+      expect(ledger.envelopes[0]!.visit).toBe(2);
     });
   });
-
 });

@@ -60,8 +60,8 @@ import {
   type StartRunOptions,
   startRun,
 } from "../index.js";
-import { createCliModelRegistry } from "./cli-model-registry.js";
 import { runContinuityCli } from "./cli-continuity.js";
+import { createCliModelRegistry } from "./cli-model-registry.js";
 import { runReconcileCli } from "./cli-reconcile.js";
 import {
   type CliSignalSource,

@@ -23,29 +23,27 @@
 import { Value } from "typebox/value";
 
 import type { ContinuityEvidenceResolution } from "../core/types.js";
-import {
-  continuityPacketV1Schema,
-} from "../seam/continuity.js";
 import type {
   ContinuityFinding,
   ContinuityNextStep,
   ContinuityQuestion,
 } from "../seam/continuity.js";
+import { continuityPacketV1Schema } from "../seam/continuity.js";
 import type {
   ContinuityActiveOrSupersededItem,
   ContinuityChildProvenance,
   ContinuityEnvelopeV1,
   ContinuityLedger,
   ContinuityLedgerCounts,
-  ContinuityMaterializationPolicy,
   ContinuityOkfCandidate,
   ContinuityResolvedEvaluation,
-  MaterializeContinuity,
-  RenderContinuitySeed,
   ContinuitySeed,
   ContinuitySeedSections,
+  MaterializeContinuity,
+  RenderContinuitySeed,
 } from "./continuity.js";
 import {
+  CONTINUITY_MAX_PACKET_BYTES,
   normalizeAndMeasurePacket,
   stableJsonStringify,
 } from "./continuity.js";
@@ -110,7 +108,10 @@ function recordIdOf(record: PersistedRecord): string {
  * or terminal states without continuity). Throws ContinuityMaterializationException
  * when the record is structurally present but malformed.
  */
-function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
+function extractEnvelope(
+  record: PersistedRecord,
+  childParents: ReadonlyMap<string, { readonly role: string; readonly visit: number }>,
+): ContinuityEnvelopeV1 | null {
   // 1. accepted_handoff continuity siblings (spec §8). Packet lives in
   // `payload.continuity`; `continuity_packet_utf8_bytes` and
   // `continuity_evidence` are host-produced sibling fields and never
@@ -150,6 +151,7 @@ function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
       );
     }
     const normalized = normalizeAndMeasurePacket(parsedPacket);
+    assertPacketBytes(recordIdOf(record), normalized.bytes, declaredBytes);
 
     const envelope: ContinuityEnvelopeV1 = {
       schema_version: 1,
@@ -157,11 +159,13 @@ function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
       record_id: recordIdOf(record),
       run_id: record.run_id,
       role: record.role,
-      visit: extractVisitFromRole(record.role, record.session_file),
+      visit: extractVisitFromSessionFile(record.session_file),
       accepted_at: new Date(record.ts).toISOString(),
       packet_utf8_bytes: normalized.bytes,
       packet: parsedPacket as ContinuityEnvelopeV1["packet"],
-      evidence_resolutions: Object.freeze(evidenceSiblings.map((resolution) => Object.freeze({ ...resolution }))),
+      evidence_resolutions: Object.freeze(
+        evidenceSiblings.map((resolution) => Object.freeze({ ...resolution })),
+      ),
     };
 
     return envelope;
@@ -191,6 +195,14 @@ function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
       );
     }
     const normalized = normalizeAndMeasurePacket(parsedPacket);
+    assertPacketBytes(recordIdOf(record), normalized.bytes, declaredBytes);
+    const parent = childParents.get(record.child_id);
+    if (parent === undefined)
+      throw new ContinuityMaterializationException(
+        recordIdOf(record),
+        "continuity_malformed_record",
+        `subagent_completed record ${recordIdOf(record)} has no matching subagent_started provenance`,
+      );
 
     const evidenceResolutions = evidenceSiblings.map((resolution, i) => {
       const refKey = resolution.ref_key.length > 0 ? resolution.ref_key : `delegated:${i}`;
@@ -210,7 +222,8 @@ function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
       if (resolution.diagnostic !== undefined) out.diagnostic = resolution.diagnostic;
       if (resolution.message !== undefined) out.message = resolution.message;
       if (resolution.resolved_path !== undefined) out.resolved_path = resolution.resolved_path;
-      if (resolution.resolved_commit !== undefined) out.resolved_commit = resolution.resolved_commit;
+      if (resolution.resolved_commit !== undefined)
+        out.resolved_commit = resolution.resolved_commit;
       return Object.freeze(out) as ContinuityEvidenceResolution;
     });
 
@@ -228,13 +241,8 @@ function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
       source: "delegated_result",
       record_id: recordIdOf(record),
       run_id: record.run_id,
-      // The parent role and visit are host-derived from the surrounding
-      // `subagent_started` record; the materializer reports those as
-      // placeholders when the host has not supplied a precomputed
-      // provenance map. They remain host-controlled and stable across
-      // replays because they are derived only from authoritative state.
-      role: "",
-      visit: 0,
+      role: parent.role,
+      visit: parent.visit,
       child,
       accepted_at: new Date(record.ts).toISOString(),
       packet_utf8_bytes: normalized.bytes,
@@ -253,6 +261,21 @@ function extractEnvelope(record: PersistedRecord): ContinuityEnvelopeV1 | null {
  * Read the `payload.continuity` packet from an accepted_handoff payload.
  * Returns `null` when the payload is absent or structurally incomplete.
  */
+function assertPacketBytes(recordId: string, actual: number, declared: unknown): void {
+  if (!Number.isSafeInteger(declared) || declared <= 0 || declared > CONTINUITY_MAX_PACKET_BYTES)
+    throw new ContinuityMaterializationException(
+      recordId,
+      "continuity_packet_too_large",
+      `record ${recordId} has out-of-range continuity packet_utf8_bytes`,
+    );
+  if (actual > CONTINUITY_MAX_PACKET_BYTES || actual !== declared)
+    throw new ContinuityMaterializationException(
+      recordId,
+      "continuity_packet_too_large",
+      `record ${recordId} continuity packet byte count does not match its bounded payload`,
+    );
+}
+
 function readPayloadContinuityPacket(payload: unknown): unknown {
   if (typeof payload !== "object" || payload === null) return null;
   const obj = payload as Record<string, unknown>;
@@ -263,11 +286,12 @@ function readPayloadContinuityPacket(payload: unknown): unknown {
 }
 
 /** Extract a synthetic visit index from the session file string. */
-function extractVisitFromRole(role: string, session_file: string): number {
+function extractVisitFromSessionFile(session_file: string): number {
   // session_file format: typically ends with a sequence number or contains
   // role-based context. We derive a synthetic stable visit from the file path.
   const match = /(\d+)/.exec(session_file);
-  if (match) return parseInt(match[1]!, 10) || 1;
+  const visit = match?.[1];
+  if (visit !== undefined) return Number.parseInt(visit, 10) || 1;
   return 1;
 }
 
@@ -331,9 +355,7 @@ function validatePacketSchema(recordId: string, packet: unknown): void {
  * - Pass 1: collect all local item IDs
  * - Pass 2: resolve supersedes with local-first, then global lookback
  */
-function resolveSupersession(
-  envelopes: readonly ContinuityEnvelopeV1[],
-): {
+function resolveSupersession(envelopes: readonly ContinuityEnvelopeV1[]): {
   findings: readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[];
   questions: readonly ContinuityActiveOrSupersededItem<ContinuityQuestion>[];
   nextSteps: readonly ContinuityActiveOrSupersededItem<ContinuityNextStep>[];
@@ -428,7 +450,7 @@ function resolveSupersession(
 
   for (const env of envelopes) {
     for (const f of env.packet.findings) {
-      const meta = allItems.get(f.id)!;
+      const meta = requiredItemMeta(allItems, f.id, env.record_id);
       findings.push({
         item: f,
         superseded_by: Object.freeze([...meta.superseded_by]),
@@ -437,7 +459,7 @@ function resolveSupersession(
       });
     }
     for (const q of env.packet.open_questions) {
-      const meta = allItems.get(q.id)!;
+      const meta = requiredItemMeta(allItems, q.id, env.record_id);
       questions.push({
         item: q,
         superseded_by: Object.freeze([...meta.superseded_by]),
@@ -446,7 +468,7 @@ function resolveSupersession(
       });
     }
     for (const ns of env.packet.next_steps) {
-      const meta = allItems.get(ns.id)!;
+      const meta = requiredItemMeta(allItems, ns.id, env.record_id);
       nextSteps.push({
         item: ns,
         superseded_by: Object.freeze([...meta.superseded_by]),
@@ -461,6 +483,21 @@ function resolveSupersession(
     questions: Object.freeze(questions),
     nextSteps: Object.freeze(nextSteps),
   };
+}
+
+function requiredItemMeta(
+  items: ReadonlyMap<string, { superseded_by: string[]; envelope_id: string }>,
+  itemId: string,
+  recordId: string,
+): { superseded_by: string[]; envelope_id: string } {
+  const meta = items.get(itemId);
+  if (meta === undefined)
+    throw new ContinuityMaterializationException(
+      recordId,
+      "continuity_malformed_record",
+      `item '${itemId}' was not registered for supersession resolution`,
+    );
+  return meta;
 }
 
 function validateSupersedes(
@@ -548,10 +585,7 @@ function deriveOkfCandidates(
   // Build a map: envelope_record_id → set of candidate IDs
   const candidateIdsByEnvelope = new Map<string, ReadonlySet<string>>();
   for (const env of envelopes) {
-    candidateIdsByEnvelope.set(
-      env.record_id,
-      new Set(env.packet.okf_candidate_ids ?? []),
-    );
+    candidateIdsByEnvelope.set(env.record_id, new Set(env.packet.okf_candidate_ids ?? []));
   }
 
   // Build evidence resolution lookup: ref_key → resolution
@@ -632,11 +666,20 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
   const fallbackTimestamp =
     canonicalRecords.length === 0
       ? 0
-      : recordTimestamp(
-          canonicalRecords[canonicalRecords.length - 1] as PersistedRecord,
-        );
+      : recordTimestamp(canonicalRecords[canonicalRecords.length - 1] as PersistedRecord);
   const now = policy.now ?? (() => new Date(fallbackTimestamp));
   const generated_at = now().toISOString();
+
+  // Derive delegated-result parent provenance only from durable
+  // subagent_started records in this run; child output never supplies it.
+  const childParents = new Map<string, { readonly role: string; readonly visit: number }>();
+  for (const record of canonicalRecords) {
+    if (record.type !== "subagent_started" || record.run_id !== policy.run_id) continue;
+    childParents.set(record.child_id, {
+      role: record.parent_role,
+      visit: record.parent_visit_index,
+    });
+  }
 
   // Extract envelopes in record order (canonical)
   const envelopes: ContinuityEnvelopeV1[] = [];
@@ -644,7 +687,7 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
 
   for (const record of canonicalRecords) {
     try {
-      const envelope = extractEnvelope(record);
+      const envelope = extractEnvelope(record, childParents);
       if (envelope === null) continue;
 
       // Validate the packet schema
@@ -797,8 +840,6 @@ function truncateSeedSections(
     );
   }
 
-  const remainingBudget = maxBytes - overheadBytes;
-
   type SectionKey = keyof ContinuitySeedSections;
   const sectionOrder: readonly SectionKey[] = [
     "blocking_questions",
@@ -835,7 +876,7 @@ function truncateSeedSections(
     let taken = 0;
     for (const item of items) {
       const next = [...accepted[key], item];
-      const trial = assembleTrial(accepted, key, next, fullSections);
+      const trial = assembleTrial(accepted, key, next);
       const trialBytes = measureTrial(trial, usedBytes);
       if (trialBytes > maxBytes) break;
       accepted[key] = next;
@@ -857,10 +898,18 @@ function truncateSeedSections(
 
   return {
     sections: Object.freeze({
-      blocking_questions: Object.freeze(accepted.blocking_questions as readonly ContinuityQuestion[]),
-      recipient_next_steps: Object.freeze(accepted.recipient_next_steps as readonly ContinuityNextStep[]),
-      risks_and_decisions: Object.freeze(accepted.risks_and_decisions as readonly ContinuityFinding[]),
-      other_active_findings: Object.freeze(accepted.other_active_findings as readonly ContinuityFinding[]),
+      blocking_questions: Object.freeze(
+        accepted.blocking_questions as readonly ContinuityQuestion[],
+      ),
+      recipient_next_steps: Object.freeze(
+        accepted.recipient_next_steps as readonly ContinuityNextStep[],
+      ),
+      risks_and_decisions: Object.freeze(
+        accepted.risks_and_decisions as readonly ContinuityFinding[],
+      ),
+      other_active_findings: Object.freeze(
+        accepted.other_active_findings as readonly ContinuityFinding[],
+      ),
       evaluations: Object.freeze(accepted.evaluations as readonly ContinuityResolvedEvaluation[]),
       packet_summaries: Object.freeze([...accepted.packet_summaries]),
     }),
@@ -885,7 +934,6 @@ function assembleTrial(
   accepted: Record<keyof ContinuitySeedSections, readonly unknown[]>,
   key: keyof ContinuitySeedSections,
   next: readonly unknown[],
-  fullSections: ContinuitySeedSections,
 ): {
   schema_version: 1;
   run_id: string;
@@ -912,23 +960,9 @@ function assembleTrial(
   };
 }
 
-function measureTrial(
-  trial: { readonly [k: string]: unknown },
-  fallbackUsedBytes: number,
-): number {
+function measureTrial(trial: { readonly [k: string]: unknown }, fallbackUsedBytes: number): number {
   const text = stableJsonStringify(trial);
   return new TextEncoder().encode(text).byteLength + (fallbackUsedBytes - 0);
-}
-
-function countTotalItems(sections: ContinuitySeedSections): number {
-  return (
-    sections.blocking_questions.length +
-    sections.recipient_next_steps.length +
-    sections.risks_and_decisions.length +
-    sections.other_active_findings.length +
-    sections.evaluations.length +
-    sections.packet_summaries.length
-  );
 }
 
 function buildSeedSections(ledger: ContinuityLedger): ContinuitySeedSections {
@@ -951,9 +985,7 @@ function buildSeedSections(ledger: ContinuityLedger): ContinuitySeedSections {
   // 3. Active risks and decisions (newest first)
   const risksAndDecisions = ledger.findings
     .filter(
-      (f) =>
-        (f.item.kind === "risk" || f.item.kind === "decision") &&
-        f.superseded_by.length === 0,
+      (f) => (f.item.kind === "risk" || f.item.kind === "decision") && f.superseded_by.length === 0,
     )
     .reverse()
     .map((f) => f.item);
@@ -961,10 +993,7 @@ function buildSeedSections(ledger: ContinuityLedger): ContinuitySeedSections {
   // 4. Other active findings (newest first)
   const otherFindings = ledger.findings
     .filter(
-      (f) =>
-        f.item.kind !== "risk" &&
-        f.item.kind !== "decision" &&
-        f.superseded_by.length === 0,
+      (f) => f.item.kind !== "risk" && f.item.kind !== "decision" && f.superseded_by.length === 0,
     )
     .reverse()
     .map((f) => f.item);
@@ -973,14 +1002,12 @@ function buildSeedSections(ledger: ContinuityLedger): ContinuitySeedSections {
   const evaluations = [...ledger.evaluations].reverse();
 
   // 6. Packet summaries (newest first)
-  const packetSummaries = [...ledger.envelopes]
-    .reverse()
-    .map((env) => ({
-      source: env.source,
-      role: env.role,
-      summary: env.packet.summary,
-      record_id: env.record_id,
-    }));
+  const packetSummaries = [...ledger.envelopes].reverse().map((env) => ({
+    source: env.source,
+    role: env.role,
+    summary: env.packet.summary,
+    record_id: env.record_id,
+  }));
 
   return Object.freeze({
     blocking_questions: Object.freeze(blockingQuestions),

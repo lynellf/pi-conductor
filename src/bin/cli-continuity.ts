@@ -28,7 +28,7 @@
 import { existsSync } from "node:fs";
 
 import { FileRecordLog } from "../host/log-file.js";
-import type { PersistedRecord } from "../persistence/log.js";
+import type { ContinuityLedger } from "../persistence/continuity.js";
 import {
   ContinuityMaterializationException,
   materializeContinuity,
@@ -38,6 +38,7 @@ import {
   renderLedgerMarkdown,
   renderOkfCandidates,
 } from "../persistence/continuity-render.js";
+import type { PersistedRecord } from "../persistence/log.js";
 
 // ─── Public API ─────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ export async function runContinuityReport(
   log.close();
 
   // Materialize the ledger
-  let ledger;
+  let ledger: ContinuityLedger;
   try {
     ledger = materializeContinuity(records, { run_id: runId });
   } catch (error) {
@@ -173,19 +174,23 @@ function parseContinuityArgv(argv: readonly string[]): ParsedContinuityArgs | { 
 
   let i = 0;
   while (i < args.length) {
-    const arg = args[i]!;
+    const arg = args[i];
+    if (arg === undefined) return { error: CONTINUITY_USAGE };
     if (arg === "--log-dir") {
-      if (i + 1 >= args.length) return { error: "pi-conductor: --log-dir requires a path" };
-      logDir = args[i + 1]!;
-      if (logDir.startsWith("--")) return { error: "pi-conductor: --log-dir requires a path" };
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--"))
+        return { error: "pi-conductor: --log-dir requires a path" };
+      logDir = value;
       i += 2;
     } else if (arg === "--format") {
-      if (i + 1 >= args.length) return { error: "pi-conductor: --format requires a value" };
-      const fmt = args[i + 1]!;
+      const fmt = args[i + 1];
+      if (fmt === undefined) return { error: "pi-conductor: --format requires a value" };
       if (fmt === "json" || fmt === "markdown" || fmt === "okf-candidates") {
         format = fmt;
       } else {
-        return { error: `pi-conductor: --format must be json|markdown|okf-candidates, got '${fmt}'` };
+        return {
+          error: `pi-conductor: --format must be json|markdown|okf-candidates, got '${fmt}'`,
+        };
       }
       i += 2;
     } else if (arg.startsWith("-")) {

@@ -14,22 +14,17 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { runContinuityCli, runContinuityReport } from "../../src/bin/cli-continuity.js";
+import { stableJsonStringify } from "../../src/persistence/continuity.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
 import {
   renderLedgerJson,
   renderLedgerMarkdown,
   renderOkfCandidates,
 } from "../../src/persistence/continuity-render.js";
-import { stableJsonStringify } from "../../src/persistence/continuity.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
-function makeTransitionAccepted(
-  recordId: string,
-  runId: string,
-  ts: number,
-  continuity: unknown,
-) {
+function makeTransitionAccepted(recordId: string, runId: string, ts: number, continuity: unknown) {
   const accepted_handoff = continuity
     ? {
         schema_version: 1 as const,
@@ -110,7 +105,6 @@ const mockRecords = new Map<string, unknown[]>();
 // ─── Test suite ────────────────────────────────────────────────────────
 
 describe("cli-continuity", () => {
-
   // Note: These tests verify the CLI's argv parsing, format dispatch,
   // and error handling. Full end-to-end tests with real FileRecordLog
   // would require temp file system operations, which are deferred to
@@ -326,7 +320,10 @@ describe("cli-continuity", () => {
     });
 
     it("superseded findings do not appear as OKF candidates", () => {
-      const packet1 = makePacket({ summary: "first", findings: [{ id: "f-old", confidence: "verified" }] });
+      const packet1 = makePacket({
+        summary: "first",
+        findings: [{ id: "f-old", confidence: "verified" }],
+      });
       const packet2 = makePacket({
         summary: "second",
         findings: [{ id: "f-new", confidence: "verified", supersedes: ["f-old"] }],
@@ -341,8 +338,12 @@ describe("cli-continuity", () => {
 
       const json = renderOkfCandidates(ledger);
       const parsed = JSON.parse(json);
-      expect(parsed.candidates.some((c: { finding_id: string }) => c.finding_id === "f-new")).toBe(true);
-      expect(parsed.candidates.some((c: { finding_id: string }) => c.finding_id === "f-old")).toBe(false);
+      expect(parsed.candidates.some((c: { finding_id: string }) => c.finding_id === "f-new")).toBe(
+        true,
+      );
+      expect(parsed.candidates.some((c: { finding_id: string }) => c.finding_id === "f-old")).toBe(
+        false,
+      );
     });
 
     it("empty okf_candidate_ids produces empty candidates array", () => {
@@ -436,5 +437,4 @@ describe("cli-continuity", () => {
       // No write operations occurred
     });
   });
-
 });

@@ -13,7 +13,6 @@
  * `src/persistence/continuity.ts` and `src/persistence/continuity-materialization.ts`.
  */
 
-import type { ContinuityEvidenceResolution } from "../core/types.js";
 import type {
   ContinuityFinding,
   ContinuityNextStep,
@@ -276,16 +275,12 @@ export function renderLedgerMarkdown(ledger: ContinuityLedger): string {
   if (ledger.envelopes.length > 0) {
     lines.push("## Provenance Log");
     lines.push("");
-    lines.push(
-      `| # | Source | Role | Record | Timestamp | Bytes |`,
-    );
+    lines.push(`| # | Source | Role | Record | Timestamp | Bytes |`);
     lines.push(`|---|---|---|---|---|---|`);
     ledger.envelopes.forEach((env, i) => {
       const sourceBadge = env.source === "handoff" ? "handoff" : "delegated";
       const childInfo =
-        env.child !== undefined
-          ? ` → ${escapeMarkdownText(env.child.subagent)}`
-          : "";
+        env.child !== undefined ? ` → ${escapeMarkdownText(env.child.subagent)}` : "";
       lines.push(
         `| ${i + 1} | ${sourceBadge}${childInfo} | ${escapeMarkdownText(env.role)} | ${escapeMarkdownText(env.record_id)} | ${escapeMarkdownText(env.accepted_at)} | ${env.packet_utf8_bytes} |`,
       );
@@ -297,18 +292,12 @@ export function renderLedgerMarkdown(ledger: ContinuityLedger): string {
   if (ledger.okf_candidates.length > 0) {
     lines.push("## OKF Candidates");
     lines.push("");
-    lines.push(
-      "| Finding | Statement | Evidence | Source |",
-    );
+    lines.push("| Finding | Statement | Evidence | Source |");
     lines.push("|---|---|---|---|");
     for (const c of ledger.okf_candidates) {
-      const evidenceStatus = c.evidence
-        .map((e) => `${e.ref_key}: ${e.status}`)
-        .join(", ");
+      const evidenceStatus = c.evidence.map((e) => `${e.ref_key}: ${e.status}`).join(", ");
       const truncatedStatement =
-        c.statement.length > 80
-          ? `${c.statement.slice(0, 80)}\u2026`
-          : c.statement;
+        c.statement.length > 80 ? `${c.statement.slice(0, 80)}\u2026` : c.statement;
       lines.push(
         `| ${escapeMarkdownText(c.finding_id)} | ${escapeMarkdownText(truncatedStatement)} | ${escapeMarkdownText(evidenceStatus)} | ${c.envelope_source} |`,
       );
@@ -378,14 +367,13 @@ function renderNextStepMarkdown(
   lines.push(`- **Action:** ${escapeBlock(ns.item.action)}`);
   lines.push(`- **Owner:** ${escapeMarkdownText(ns.item.owner)}`);
   lines.push(`- **Evidence:** ${ns.item.evidence.length} reference(s)${supersessionNote}`);
-  lines.push(`- **Source:** ${ns.envelope_source} | **Record:** ${escapeMarkdownText(ns.record_id)}`);
+  lines.push(
+    `- **Source:** ${ns.envelope_source} | **Record:** ${escapeMarkdownText(ns.record_id)}`,
+  );
   lines.push("");
 }
 
-function renderEvaluationMarkdown(
-  lines: string[],
-  e: ContinuityResolvedEvaluation,
-): void {
+function renderEvaluationMarkdown(lines: string[], e: ContinuityResolvedEvaluation): void {
   const supersessionNote =
     e.superseded_by.length > 0
       ? ` *(superseded by: ${e.superseded_by.map(escapeMarkdownText).join(", ")})*`

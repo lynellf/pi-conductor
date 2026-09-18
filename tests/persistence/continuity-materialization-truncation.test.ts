@@ -11,8 +11,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { materializeContinuity, renderContinuitySeed } from "../../src/persistence/continuity-materialization.js";
 import { stableJsonStringify } from "../../src/persistence/continuity.js";
+import {
+  materializeContinuity,
+  renderContinuitySeed,
+} from "../../src/persistence/continuity-materialization.js";
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 
@@ -93,7 +96,6 @@ function makePacket(opts: {
 // ─── Test suite ────────────────────────────────────────────────────────
 
 describe("continuity-materialization-truncation", () => {
-
   describe("seed respects max_bytes cap", () => {
     it("seed budget.used_bytes does not exceed max_bytes", () => {
       const packet = makePacket({
@@ -220,7 +222,10 @@ describe("continuity-materialization-truncation", () => {
 
       const seed = renderContinuitySeed(ledger, 32 * 1024);
 
-      const risksDecisions = seed.sections.risks_and_decisions as Array<{ id: string; kind: string }>;
+      const risksDecisions = seed.sections.risks_and_decisions as Array<{
+        id: string;
+        kind: string;
+      }>;
       expect(risksDecisions.some((f) => f.id === "f-risk")).toBe(true);
       expect(risksDecisions.some((f) => f.id === "f-decision")).toBe(true);
 
@@ -231,8 +236,14 @@ describe("continuity-materialization-truncation", () => {
 
   describe("newest-first ordering within sections", () => {
     it("findings are ordered newest-first (reverse chronological)", () => {
-      const packet1 = makePacket({ summary: "old", findings: [{ id: "f-old", statement: "old finding" }] });
-      const packet2 = makePacket({ summary: "new", findings: [{ id: "f-new", statement: "new finding" }] });
+      const packet1 = makePacket({
+        summary: "old",
+        findings: [{ id: "f-old", statement: "old finding" }],
+      });
+      const packet2 = makePacket({
+        summary: "new",
+        findings: [{ id: "f-new", statement: "new finding" }],
+      });
 
       const records = [
         makeTransitionAccepted("rec-1", "run-1", 1000, packet1),
@@ -305,7 +316,9 @@ describe("continuity-materialization-truncation", () => {
       const ledger = materializeContinuity(records, { run_id: "run-1" });
 
       const seed = renderContinuitySeed(ledger, 32 * 1024);
-      expect((seed.sections.evaluations as readonly { id: string }[]).some((e) => e.id === "e-1")).toBe(true);
+      expect(
+        (seed.sections.evaluations as readonly { id: string }[]).some((e) => e.id === "e-1"),
+      ).toBe(true);
     });
   });
 
@@ -327,5 +340,4 @@ describe("continuity-materialization-truncation", () => {
       expect(summaries[1]?.summary).toBe("first summary");
     });
   });
-
 });
