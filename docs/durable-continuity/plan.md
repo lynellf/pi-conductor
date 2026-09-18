@@ -81,11 +81,17 @@ Must not edit delegated-child, CLI, manifest-contract, or OKF files.
 
 ### Lane B — delegated-child completion
 
-**Disposition:** DC-CHILD was dispatched as required but all four attempts
-(`5244a451`, `6c995dc5`, `55d4cdbf`, `0b34662a`; `openai-codex:gpt-5.6-terra`)
-returned no accepted write. The authorized parent takeover supplies the
-production behavior and coverage below; do not describe this as a completed
-child implementation.
+**Disposition:** DC-CHILD was dispatched five times
+(`5244a451`, `6c995dc5`, `55d4cdbf`, `0b34662a`, `1e71f18a`; the first four
+on `openai-codex:gpt-5.6-terra`, the fifth on `minimax:MiniMax-M3`). The
+first four returned no accepted write. The fifth returned `failed` with a
+valid `BLOCKED:` summary naming the missing production paths
+(`src/host/log-file.ts`, `src/persistence/continuity-materialization.ts`,
+`src/host/delegation/delegate-tool.ts`) required for the assigned
+restart/provenance tests; the child correctly refused to fabricate
+contracts. The authorized parent takeover supplies the production behavior
+and coverage below; do not describe this as a completed child
+implementation.
 
 Parent-takeover behavior:
 
