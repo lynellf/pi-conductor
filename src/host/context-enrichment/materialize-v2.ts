@@ -111,13 +111,15 @@ function rankedWorkObservationOrder(args: {
   );
   if (identityMatch !== undefined && identityMatch.input_sha256 !== fingerprint)
     throw new ContextEnrichmentV2Error("context_enrichment_v2_input_mismatch");
+  if (identityMatch !== undefined) {
+    assertContextEnrichmentRecordV2(identityMatch, {
+      expectedFingerprint: fingerprint,
+      expectedCandidateCount: built.candidates.length,
+      expectedKeys: new Set(built.candidates.map((candidate) => candidate.observation_key)),
+      expectedOrderedKeys: built.candidates.map((candidate) => candidate.observation_key),
+    });
+  }
   if (identityMatch === undefined || identityMatch.status !== "completed") return null;
-  assertContextEnrichmentRecordV2(identityMatch, {
-    expectedFingerprint: fingerprint,
-    expectedCandidateCount: built.candidates.length,
-    expectedKeys: new Set(built.candidates.map((candidate) => candidate.observation_key)),
-    expectedOrderedKeys: built.candidates.map((candidate) => candidate.observation_key),
-  });
   const direct = args.observations.at(-1);
   const historical = orderWorkObservationHistory({
     observations: args.observations,

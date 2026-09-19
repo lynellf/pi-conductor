@@ -62,6 +62,25 @@ function asyncRepositoryContext() {
 }
 
 describe("delegated report_result continuity", () => {
+  it("captures v2 terminal intent and optional status without treating status as authority", async () => {
+    const capture = createReportCapture();
+    const tool = buildReportResultTool(capture, "v2");
+
+    const result = await tool.execute(
+      "tool-call-v2",
+      { status: "completed", summary: "reported but untrusted" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+
+    expect(result).not.toMatchObject({ isError: true });
+    expect(capture.terminalIntent()).toBe(true);
+    expect(capture.terminalToolCallId()).toBe("tool-call-v2");
+    expect(capture.reportedStatus()).toBe("completed");
+    expect(capture.report()).toBeNull();
+  });
+
   it("rejects a successful required result without a packet before capture", async () => {
     const capture = createReportCapture({ continuityValidation: requiredContext });
     const tool = buildReportResultTool(capture);

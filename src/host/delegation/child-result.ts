@@ -36,6 +36,8 @@ export interface RawChildTerminal {
   readonly report: LegacyChildReport | null;
   /** v2 report_result terminal intent; status remains host-derived. */
   readonly v2_terminal_intent?: boolean;
+  /** Optional bounded child status retained as reported context only. */
+  readonly reported_status?: string;
   readonly protocolDiagnostic?: ChildProtocolDiagnostic;
   /** Text-only final assistant response, already bounded; null means absent. */
   readonly finalResponse: string | null;

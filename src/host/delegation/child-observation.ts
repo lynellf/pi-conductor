@@ -23,8 +23,10 @@ export interface ReportCapture {
   readonly continuityValidation: () => PacketValidationContext | null;
   readonly summaryTruncated: () => boolean;
   readonly terminalIntent: () => boolean;
+  readonly reportedStatus: () => string | undefined;
+  readonly terminalToolCallId: () => string | undefined;
   readonly isClosed: () => boolean;
-  signalTerminalIntent(): void;
+  signalTerminalIntent(toolCallId?: string, reportedStatus?: string): void;
   capture(
     report: LegacyChildReport,
     truncated: boolean,
@@ -43,6 +45,8 @@ export function createReportCapture(options?: {
   let protocolDiagnostic: ChildProtocolDiagnostic | null = null;
   let truncated = false;
   let terminalIntent = false;
+  let terminalToolCallId: string | undefined;
+  let reportedStatus: string | undefined;
   let closed = false;
   return {
     report: () => value,
@@ -51,9 +55,15 @@ export function createReportCapture(options?: {
     continuityValidation: () => options?.continuityValidation?.() ?? null,
     summaryTruncated: () => truncated,
     terminalIntent: () => terminalIntent,
+    reportedStatus: () => reportedStatus,
+    terminalToolCallId: () => terminalToolCallId,
     isClosed: () => closed,
-    signalTerminalIntent() {
-      if (!closed && value === null) terminalIntent = true;
+    signalTerminalIntent(toolCallId, status) {
+      if (!closed && value === null) {
+        terminalIntent = true;
+        terminalToolCallId = toolCallId;
+        reportedStatus = status;
+      }
     },
     capture(report, didTruncate, continuity = null) {
       if (closed || value !== null) return;
@@ -113,7 +123,10 @@ export function observeChildTerminal(args: {
     });
     if (event.type === "message_end") {
       const message = event.message as AssistantMessage;
-      if (message.role === "assistant") {
+      if (message.role === "assistant" && args.config.profile.completion_protocol === "minimal") {
+        // Report-result children do not have an exact tool-call-bound prose
+        // capture here; omit nearby/final-message text rather than treating
+        // it as context for the terminal call (§8).
         const captured = captureTextOnlyFinalResponse(message);
         finalResponse = captured.text;
         finalResponseTruncated = captured.truncated;
@@ -131,10 +144,12 @@ export function observeChildTerminal(args: {
     const cancelled = args.manager.wasCancelled(args.config.childId);
     const continuity = args.reportCapture.continuity();
     const protocolDiagnostic = args.reportCapture.protocolDiagnostic();
+    const reportedStatus = args.reportCapture.reportedStatus();
     complete({
       started: true,
       model: args.model,
       ...(args.reportCapture.terminalIntent() ? { v2TerminalIntent: true } : {}),
+      ...(reportedStatus === undefined ? {} : { reportedStatus }),
       report: args.reportCapture.report(),
       ...(continuity === null ? {} : { continuity }),
       ...(protocolDiagnostic === null ? {} : { protocolDiagnostic }),
@@ -154,10 +169,12 @@ export function observeChildTerminal(args: {
     fail(reason) {
       const continuity = args.reportCapture.continuity();
       const protocolDiagnostic = args.reportCapture.protocolDiagnostic();
+      const reportedStatus = args.reportCapture.reportedStatus();
       complete({
         started: true,
         model: args.model,
         ...(args.reportCapture.terminalIntent() ? { v2TerminalIntent: true } : {}),
+        ...(reportedStatus === undefined ? {} : { reportedStatus }),
         report: args.reportCapture.report(),
         ...(continuity === null ? {} : { continuity }),
         ...(protocolDiagnostic === null ? {} : { protocolDiagnostic }),

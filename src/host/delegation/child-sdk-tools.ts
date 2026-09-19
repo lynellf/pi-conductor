@@ -45,7 +45,7 @@ export function buildReportResultTool(
         ? "Signal terminal intent to the conductor host. Optional fields are untrusted hints."
         : "Report the child result and terminate this child session.",
     parameters: protocol === "v2" ? reportResultArgsSchema : legacyReportResultArgsSchema,
-    async execute(_toolCallId, args: unknown) {
+    async execute(toolCallId, args: unknown) {
       const raw = readRawControlArguments(args);
       if (raw.kind === "rejected") {
         return {
@@ -72,7 +72,7 @@ export function buildReportResultTool(
         };
       if (protocol === "v2") {
         sanitizeReportedHintsV2(raw.value);
-        capture.signalTerminalIntent();
+        capture.signalTerminalIntent(toolCallId, boundedReportedStatus(raw.value.status));
         return {
           content: [{ type: "text", text: "result recorded" }],
           details: { ok: true } as ReportResultToolDetails,
@@ -112,6 +112,13 @@ export function buildReportResultTool(
       };
     },
   }) as unknown as ToolDefinition;
+}
+
+function boundedReportedStatus(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || new TextEncoder().encode(trimmed).byteLength > 128) return undefined;
+  return trimmed;
 }
 
 async function captureContinuity(

@@ -167,7 +167,7 @@ export function redactOutboundText(value: string): string {
     .replace(/\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s<>"'`]+/gi, "<url omitted>")
     .replace(/(^|[\s([{])((?:\/|~\/|\\\\|[A-Za-z]:[\\/])[^\s<>"'`,;:!?)}\]]*)/g, "$1<path omitted>")
     .replace(
-      /\b(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|secret)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi,
+      /\b(?:api[_-]?key|(?:access[_-]?)?token|auth(?:orization)?|password|passwd|secret)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi,
       "<credential omitted>",
     )
     .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "<credential omitted>")

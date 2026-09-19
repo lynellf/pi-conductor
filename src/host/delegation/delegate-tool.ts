@@ -180,6 +180,8 @@ export interface ChildTerminal {
   readonly report?: LegacyChildReport | null;
   /** v2 report_result terminal intent, without importing legacy status semantics. */
   readonly v2TerminalIntent?: boolean;
+  /** Optional bounded child status, retained as reported context only. */
+  readonly reportedStatus?: string;
   readonly finalResponse?: string | null;
   readonly summaryTruncated?: boolean;
   readonly cancelled?: boolean;
@@ -398,6 +400,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     cancelled: terminal.cancelled === true || terminal.status === "cancelled",
     sessionError: terminal.sessionError ?? terminal.failureReason ?? null,
     ...(terminal.v2TerminalIntent === true ? { v2_terminal_intent: true } : {}),
+    ...(terminal.reportedStatus === undefined ? {} : { reported_status: terminal.reportedStatus }),
     report: terminal.v2TerminalIntent === true ? null : report,
     finalResponse: terminal.finalResponse ?? null,
     worktree,
@@ -415,16 +418,14 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   const terminalObservation =
     options.controlProtocol === "v2"
       ? {
-          outcome: raw.cancelled
-            ? ("cancelled" as const)
-            : raw.sessionError !== null ||
-                (raw.worktree.state !== "changed" && raw.worktree.state !== "clean")
-              ? ("failed" as const)
-              : ("returned" as const),
+          outcome:
+            raw.cancelled || normalized.status === "cancelled"
+              ? ("cancelled" as const)
+              : normalized.status === "failed" || normalized.status === "blocked"
+                ? ("failed" as const)
+                : ("returned" as const),
           workspace_state: raw.worktree.state,
-          ...(options.controlProtocol === "v2" || raw.report?.status === undefined
-            ? {}
-            : { reported_status: raw.report.status }),
+          ...(raw.reported_status === undefined ? {} : { reported_status: raw.reported_status }),
         }
       : undefined;
   const summary = selectedSummary(raw, normalized.normalizationReason);
