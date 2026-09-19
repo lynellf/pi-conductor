@@ -24,8 +24,9 @@ This record preserves the final gate evidence for run
 | `pnpm test` | 364 files, 3819 tests passed; exit status 0 |
 | `pnpm audit --audit-level high` | no high/critical failure; audit reports 1 low and 2 moderate advisories |
 
-The full suite was run against the documentation evidence revision on 2026-09-19
-and completed in 423.99 seconds. The final reviewer must inspect this record,
+The full suite was run against `7262cb3` on 2026-09-19 and completed in
+423.99 seconds. The later documentation-only evidence commit does not alter
+source or tests. The final reviewer must inspect this record,
 the focused tests, the source diff, and the explicit non-fabricating child-lane
 waiver; this record does not claim delegated child authorship or replace the
 required reviewer transition.
