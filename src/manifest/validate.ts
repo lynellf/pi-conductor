@@ -110,7 +110,9 @@ export type ManifestErrorCode =
   | "controller-missing-delegation"
   | "controller-duplicate-adapter-id"
   /** Durable continuity policy exposes a reachable minimal child (§5). */
-  | "continuity-reachable-minimal-subagent";
+  | "continuity-reachable-minimal-subagent"
+  /** Opt-in context enrichment requires a valid continuity policy (§5). */
+  | "context-enrichment-requires-continuity";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -234,6 +236,19 @@ export function validateManifest(m: Manifest): ManifestReport {
       code: error.code,
       message: error.message,
       ...(error.role !== undefined && { role: error.role }),
+    });
+  }
+
+  // Spec §5: opt-in context enrichment requires a valid continuity policy.
+  // Enrichment operates only on the durable continuity ledger; without one,
+  // the host cannot satisfy the deterministic-prefix + within-section
+  // ranking contracts. The block is rejected at parse-equivalent depth
+  // so the manifest is never silently half-accepted.
+  if (m.context_enrichment !== undefined && m.continuity === undefined) {
+    errors.push({
+      code: "context-enrichment-requires-continuity",
+      message:
+        "`context_enrichment` requires a valid `continuity` policy; enrichment operates only on the durable continuity ledger",
     });
   }
 
