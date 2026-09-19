@@ -28,11 +28,23 @@ type ScoreBucket = (typeof SCORE_BUCKETS)[number];
 
 // ─── Score answer (spec §7) ─────────────────────────────────────────────
 
-/** Strict closed Score answer shape from the TypeSafe Jev endpoint. */
+/**
+ * Strict closed Score answer shape from the TypeSafe Jev endpoint
+ * (official docs.typesafe.ai/api.md + score.md).
+ *
+ * Score is a finite fractional `0..3` (spec §7 says "finite score from
+ * 0 through 3"). The TypeBox `Integer` constraint has been removed to
+ * match the official wire contract. The `legend` is a MAP keyed by the
+ * score bucket (`"0" | "1" | "2" | "3"`); the host validator confirms
+ * it matches the criteria the request asked for.
+ *
+ * `model` and `usage` are response-level (per the official contract);
+ * this schema describes only the per-answer closed shape.
+ */
 export const contextRelevanceScoreAnswerSchema = Type.Object(
   {
     type: Type.Literal("score"),
-    score: Type.Integer({ minimum: 0, maximum: 3 }),
+    score: Type.Number({ minimum: 0, maximum: 3 }),
     confidence: Type.Number({ minimum: 0, maximum: 1 }),
     probabilities: Type.Object(
       {
@@ -43,15 +55,12 @@ export const contextRelevanceScoreAnswerSchema = Type.Object(
       },
       { additionalProperties: false },
     ),
-    legend: Type.Array(Type.String({ minLength: 1 }), {
-      minItems: 4,
-      maxItems: 4,
-    }),
-    model: Type.String({ minLength: 1 }),
-    usage: Type.Object(
+    legend: Type.Object(
       {
-        input_tokens: Type.Integer({ minimum: 0 }),
-        output_tokens: Type.Integer({ minimum: 0 }),
+        "0": Type.String({ minLength: 1 }),
+        "1": Type.String({ minLength: 1 }),
+        "2": Type.String({ minLength: 1 }),
+        "3": Type.String({ minLength: 1 }),
       },
       { additionalProperties: false },
     ),
@@ -65,9 +74,7 @@ export type ContextRelevanceScoreAnswer = {
   readonly score: number;
   readonly confidence: number;
   readonly probabilities: Readonly<Record<ScoreBucket, number>>;
-  readonly legend: readonly [string, string, string, string];
-  readonly model: string;
-  readonly usage: { readonly input_tokens: number; readonly output_tokens: number };
+  readonly legend: Readonly<Record<ScoreBucket, string>>;
 };
 
 /**

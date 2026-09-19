@@ -27,6 +27,7 @@ import {
   type FetchLike,
   TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA,
   TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
+  TYPESAFE_RECIPIENT_RELEVANCE_QUESTION,
 } from "../../src/host/context-enrichment/typesafe-client.js";
 import type { LoadedManifest } from "../../src/host/manifest.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
@@ -39,14 +40,20 @@ const VALID_ANSWER = (model: string, score: number, certainty: number) => ({
   score,
   confidence: certainty,
   probabilities: { "0": 0.05, "1": 0.1, "2": 0.7, "3": 0.15 },
-  legend: [
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[0],
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[1],
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[2],
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[3],
-  ],
+  legend: {
+    "0": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[0],
+    "1": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[1],
+    "2": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[2],
+    "3": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[3],
+  },
+});
+
+const VALID_RESPONSE = (model: string, score: number, certainty: number) => ({
   model,
   usage: { input_tokens: 123, output_tokens: 17 },
+  answers: {
+    [TYPESAFE_RECIPIENT_RELEVANCE_QUESTION]: VALID_ANSWER(model, score, certainty),
+  },
 });
 
 function loadedManifest(): LoadedManifest {
@@ -219,7 +226,7 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
       counter += 1;
       return {
         status: 200,
-        body: { answers: [VALID_ANSWER(`jev-${counter}`, 2 - counter * 0.1, 0.5 + counter * 0.1)] },
+        body: VALID_RESPONSE(`jev-${counter}`, 2 - counter * 0.1, 0.5 + counter * 0.1),
       };
     });
 
@@ -305,7 +312,7 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     const { fetchImpl } = setupFakeFetch(() => {
       counter += 1;
       if (counter === 1) {
-        return { status: 200, body: { answers: [VALID_ANSWER("jev-1", 1, 0.4)] } };
+        return { status: 200, body: VALID_RESPONSE("jev-1", 1, 0.4) };
       }
       return { status: 429, body: {} };
     });
@@ -356,7 +363,7 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     let firstRunCalls = 0;
     const { fetchImpl: fetch1 } = setupFakeFetch(() => {
       firstRunCalls += 1;
-      return { status: 200, body: { answers: [VALID_ANSWER("jev-1", 2, 0.8)] } };
+      return { status: 200, body: VALID_RESPONSE("jev-1", 2, 0.8) };
     });
     await prepareFreshContinuityEnrichment({
       loadedManifest: loadedManifest(),
@@ -382,7 +389,7 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     let restartCalls = 0;
     const { fetchImpl: fetch2 } = setupFakeFetch(() => {
       restartCalls += 1;
-      return { status: 200, body: { answers: [VALID_ANSWER("jev-restart", 0, 0)] } };
+      return { status: 200, body: VALID_RESPONSE("jev-restart", 0, 0) };
     });
 
     const record = await prepareFreshContinuityEnrichment({
@@ -425,7 +432,7 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     log.append(accepted);
     const { calls, fetchImpl } = setupFakeFetch(() => ({
       status: 200,
-      body: { answers: [VALID_ANSWER("jev-1", 1, 0.5)] },
+      body: VALID_RESPONSE("jev-1", 1, 0.5),
     }));
     await prepareFreshContinuityEnrichment({
       loadedManifest: loadedManifest(),
@@ -445,9 +452,12 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     expect(calls.length).toBeGreaterThan(0);
     const firstCall = calls[0];
     if (firstCall === undefined) throw new Error("expected call");
-    const question = (
-      firstCall.body as { questions: Array<{ instructions: string; criteria: readonly string[] }> }
-    ).questions[0];
+    const questionsMap = (
+      firstCall.body as {
+        questions: Record<string, { instructions: string; criteria: readonly string[] }>;
+      }
+    ).questions;
+    const question = questionsMap[TYPESAFE_RECIPIENT_RELEVANCE_QUESTION];
     expect(question?.instructions).toBe(TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS);
     expect(question?.criteria).toEqual(TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA);
   });

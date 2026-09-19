@@ -3,20 +3,38 @@
  *
  * Direct HTTP avoids a new dependency (`@typesafe-ai/sdk`); the wire
  * contract is exactly `POST https://api.typesafe.ai/v1/systemone` with
- * one Bearer API key, one `recipient_relevance` Score question per
- * request, and one candidate per request. The transport is injected
- * via `fetch` so tests can capture outbound state without a live API
- * key or network. Production configuration cannot redirect the URL.
+ * one Bearer API key, one Score question per request, and one candidate
+ * per request. The transport is injected via `fetch` so tests can
+ * capture outbound state without a live API key or network. Production
+ * configuration cannot redirect the URL.
  *
  * The adapter is provider-neutral at its boundary: it only translates
  * provider wire bytes into the typed `ContextEnrichmentOutcome` and
  * aggregates usage. Persistence, ranking, seed rendering, and
  * transport selection remain host-owned.
+ *
+ * Wire contract (official TypeSafe `docs.typesafe.ai`):
+ *   request body:
+ *     {
+ *       model: <requested policy model>,                  // requested, NOT a transition hash
+ *       state: { recipient: { role, objective, requested_action },
+ *                candidate: { section, kind, text, attributes } },
+ *       questions: { <question_id>: { type, instructions, criteria } } // MAP keyed by id
+ *     }
+ *   response body:
+ *     {
+ *       model: <provider-actual model>,                   // response-level
+ *       usage: { input_tokens, output_tokens },          // response-level
+ *       answers: { <question_id>: { type, score, confidence,
+ *                                   probabilities, legend } } // MAP keyed by id
+ *     }
  */
 
+import { Value } from "typebox/value";
 import {
   type ContextEnrichmentOutcome,
   type ContextRelevanceJudgment,
+  type ContextRelevanceProbabilities,
   contextRelevanceScoreAnswerSchema,
 } from "../../seam/context-enrichment.js";
 import type { ContextEnricher, ContextEnrichmentRequest } from "./contracts.js";
@@ -79,7 +97,7 @@ export type FetchLike = (
 export interface TypesafeContextEnricherOptions {
   /** Bearer API key; the production boundary reads `TYPESAFE_API_KEY` once. */
   readonly apiKey: string | null;
-  /** Per-attempt timeout in milliseconds. */
+  /** Per-attempt timeout in milliseconds (covers fetch + JSON parse). */
   readonly requestTimeoutMs: number;
   /** Total attempts including the initial one. */
   readonly maxAttempts: number;
@@ -93,26 +111,25 @@ export interface TypesafeContextEnricherOptions {
   readonly createAbortController?: () => AbortController;
 }
 
+/** Strict wire answer shape — MAP keyed by question id (official contract). */
 interface TypesafeAnswer {
   readonly score: number;
   readonly confidence: number;
-  readonly probabilities: Readonly<Record<"0" | "1" | "2" | "3", number>>;
-  readonly legend: readonly string[];
+  readonly probabilities: ContextRelevanceProbabilities;
+  readonly legend: Readonly<Record<"0" | "1" | "2" | "3", string>>;
+}
+
+/** Strict wire response shape — response-level model/usage, answers as MAP. */
+interface TypesafeResponse {
   readonly model: string;
   readonly usage: { readonly input_tokens: number; readonly output_tokens: number };
-}
-
-interface TypesafeResponse {
-  readonly answers: readonly TypesafeAnswer[];
-}
-
-interface AttemptError {
-  readonly code: TypesafeAdapterFailureCode;
-  readonly attempts: number;
+  readonly answers: Readonly<Record<string, TypesafeAnswer>>;
 }
 
 const DEFAULT_RETRY_DELAYS_MS = [100, 200, 400, 800, 1000] as const;
 const MAX_RETRY_DELAY_MS = 1000;
+/** Floating-point tolerance for probability sum-to-one (spec §7). */
+const PROBABILITY_SUM_TOLERANCE = 1e-6;
 
 function delaySequence(maxAttempts: number): readonly number[] {
   return DEFAULT_RETRY_DELAYS_MS.slice(0, Math.max(0, maxAttempts - 1));
@@ -122,94 +139,129 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function validateAnswerShape(answer: unknown): TypesafeAnswer {
-  if (typeof answer !== "object" || answer === null || Array.isArray(answer)) {
-    throw new Error("score answer must be a JSON object");
+/**
+ * Atomic exception conversion — the host treats every rejection the
+ * adapter raises as one provider-level outcome. Callers must never
+ * see raw exceptions; each path resolves to a typed failure code.
+ */
+class TypesafeAdapterRejection extends Error {
+  constructor(readonly code: TypesafeAdapterFailureCode) {
+    super(`typesafe adapter rejected: ${code}`);
+    this.name = "TypesafeAdapterRejection";
   }
-  const candidate = answer as Record<string, unknown>;
-  if (candidate.type !== "score") {
-    throw new Error("score answer `type` must equal 'score'");
+}
+
+function validateAnswerShape(answer: unknown, criteria: readonly string[]): TypesafeAnswer {
+  // First gate: TypeBox structural validation against the official
+  // wire contract. The imported schema enforces exact keys, score
+  // range, confidence range, probability buckets, and legend MAP.
+  if (!Value.Check(contextRelevanceScoreAnswerSchema, answer)) {
+    throw new TypesafeAdapterRejection("response_invalid");
   }
-  if (!isFiniteNumber(candidate.score) || candidate.score < 0 || candidate.score > 3) {
-    throw new Error("score answer `score` must be a finite number in [0, 3]");
-  }
-  if (
-    !isFiniteNumber(candidate.confidence) ||
-    candidate.confidence < 0 ||
-    candidate.confidence > 1
-  ) {
-    throw new Error("score answer `confidence` must be a finite number in [0, 1]");
-  }
-  if (typeof candidate.probabilities !== "object" || candidate.probabilities === null) {
-    throw new Error("score answer `probabilities` must be an object");
-  }
-  const probs = candidate.probabilities as Record<string, unknown>;
-  const validatedProbs: Record<"0" | "1" | "2" | "3", number> = {
-    "0": 0,
-    "1": 0,
-    "2": 0,
-    "3": 0,
+  const checked = answer as {
+    type: "score";
+    score: number;
+    confidence: number;
+    probabilities: Record<"0" | "1" | "2" | "3", number>;
+    legend: Record<"0" | "1" | "2" | "3", string>;
   };
-  for (const key of ["0", "1", "2", "3"] as const) {
-    if (!isFiniteNumber(probs[key]) || (probs[key] as number) < 0 || (probs[key] as number) > 1) {
-      throw new Error(`probability for bucket '${key}' must be a finite number in [0, 1]`);
+  // Sum-to-one: spec §7 requires the four probabilities to sum to 1
+  // within a documented floating-point tolerance.
+  const sum =
+    checked.probabilities["0"] +
+    checked.probabilities["1"] +
+    checked.probabilities["2"] +
+    checked.probabilities["3"];
+  if (Math.abs(sum - 1) > PROBABILITY_SUM_TOLERANCE) {
+    throw new TypesafeAdapterRejection("response_invalid");
+  }
+  // Legend values must match the criteria the request asked for, in
+  // exact order. The Score instructions are model-side and the legend
+  // is a closed rubric; the host enforces rubric stability.
+  const expected = [...criteria];
+  const actual = [
+    checked.legend["0"],
+    checked.legend["1"],
+    checked.legend["2"],
+    checked.legend["3"],
+  ];
+  for (let index = 0; index < expected.length; index += 1) {
+    if (actual[index] !== expected[index]) {
+      throw new TypesafeAdapterRejection("response_invalid");
     }
-    validatedProbs[key] = probs[key] as number;
   }
-  if (!Array.isArray(candidate.legend) || candidate.legend.length !== 4) {
-    throw new Error("score answer `legend` must be an array of exactly 4 strings");
+  return {
+    score: checked.score,
+    confidence: checked.confidence,
+    probabilities: checked.probabilities,
+    legend: checked.legend,
+  };
+}
+
+function validateResponseShape(
+  response: unknown,
+  criteria: readonly string[],
+): { response: TypesafeResponse; answer: TypesafeAnswer } {
+  if (typeof response !== "object" || response === null || Array.isArray(response)) {
+    throw new TypesafeAdapterRejection("response_invalid");
   }
-  if (!candidate.legend.every((entry) => typeof entry === "string" && entry.length > 0)) {
-    throw new Error("score answer `legend` must contain 4 non-empty strings");
-  }
+  const candidate = response as Record<string, unknown>;
+  // Response-level model and usage (official contract).
   if (typeof candidate.model !== "string" || candidate.model.length === 0) {
-    throw new Error("score answer `model` must be a non-empty string");
+    throw new TypesafeAdapterRejection("response_invalid");
   }
   if (typeof candidate.usage !== "object" || candidate.usage === null) {
-    throw new Error("score answer `usage` must be an object");
+    throw new TypesafeAdapterRejection("response_invalid");
   }
   const usage = candidate.usage as Record<string, unknown>;
   if (
     !isFiniteNumber(usage.input_tokens) ||
     !isFiniteNumber(usage.output_tokens) ||
+    !Number.isInteger(usage.input_tokens) ||
+    !Number.isInteger(usage.output_tokens) ||
     (usage.input_tokens as number) < 0 ||
     (usage.output_tokens as number) < 0
   ) {
-    throw new Error("score answer `usage` must carry non-negative integer token counts");
+    throw new TypesafeAdapterRejection("response_invalid");
   }
+  if (typeof candidate.answers !== "object" || candidate.answers === null || Array.isArray(candidate.answers)) {
+    throw new TypesafeAdapterRejection("response_invalid");
+  }
+  const answers = candidate.answers as Record<string, unknown>;
+  const keys = Object.keys(answers);
+  if (keys.length !== 1 || keys[0] !== TYPESAFE_RECIPIENT_RELEVANCE_QUESTION) {
+    throw new TypesafeAdapterRejection("response_invalid");
+  }
+  const answer = validateAnswerShape(answers[TYPESAFE_RECIPIENT_RELEVANCE_QUESTION], criteria);
   return {
-    score: candidate.score,
-    confidence: candidate.confidence,
-    probabilities: validatedProbs,
-    legend: candidate.legend as readonly string[],
-    model: candidate.model,
-    usage: {
-      input_tokens: usage.input_tokens as number,
-      output_tokens: usage.output_tokens as number,
+    response: {
+      model: candidate.model,
+      usage: {
+        input_tokens: usage.input_tokens as number,
+        output_tokens: usage.output_tokens as number,
+      },
+      answers,
     },
+    answer,
   };
-}
-
-function validateResponseShape(response: unknown): TypesafeResponse {
-  if (typeof response !== "object" || response === null || Array.isArray(response)) {
-    throw new Error("response must be a JSON object");
-  }
-  const candidate = response as Record<string, unknown>;
-  if (!Array.isArray(candidate.answers)) {
-    throw new Error("response must carry an `answers` array");
-  }
-  const answers = candidate.answers.map((entry) => validateAnswerShape(entry));
-  return { answers };
 }
 
 /**
  * Build the exact Score request body for one candidate (spec §7). The
  * host-supplied outbound state is embedded under `state`; the fixed
  * question name is used because IDs are not model-visible.
+ *
+ * Official contract (MAP keyed by question id; flat state; requested
+ * policy model):
+ *   {
+ *     model: request.policy.model,
+ *     state: { recipient: {...}, candidate: {...} },
+ *     questions: { recipient_relevance: { type, instructions, criteria } }
+ *   }
  */
 export function buildScoreRequestBody(request: ContextEnrichmentRequest): unknown {
   return {
-    model: request.identity.source_transition_key, // unused placeholder; replaced via override
+    model: request.policy.model,
     state: {
       recipient: {
         role: request.recipient.role,
@@ -218,14 +270,13 @@ export function buildScoreRequestBody(request: ContextEnrichmentRequest): unknow
       },
       candidate: request.candidate.outbound,
     },
-    questions: [
-      {
-        id: TYPESAFE_RECIPIENT_RELEVANCE_QUESTION,
+    questions: {
+      [TYPESAFE_RECIPIENT_RELEVANCE_QUESTION]: {
         type: "score",
         instructions: request.instructions,
         criteria: [...request.criteria],
       },
-    ],
+    },
   };
 }
 
@@ -237,7 +288,9 @@ function originFor(options: TypesafeContextEnricherOptions): string {
 /**
  * Construct the TypeSafe HTTP adapter. The adapter returns one of the
  * two documented outcomes; every retryable failure is bounded by
- * `max_attempts` and the documented retry policy.
+ * `max_attempts` and the documented retry policy. All exceptions
+ * raised by validation helpers are converted to typed failure codes
+ * before they leave the adapter — callers never see raw throw values.
  */
 export function createTypesafeContextEnricher(
   options: TypesafeContextEnricherOptions,
@@ -274,7 +327,6 @@ export function createTypesafeContextEnricher(
       const body = JSON.stringify(buildScoreRequestBody(request));
       const delays = delaySequence(options.maxAttempts);
       let attempts = 0;
-      let lastError: TypesafeAdapterFailureCode | null = null;
 
       for (let attemptIndex = 0; attemptIndex < options.maxAttempts; attemptIndex += 1) {
         attempts = attemptIndex + 1;
@@ -287,53 +339,59 @@ export function createTypesafeContextEnricher(
             body,
             signal: controller.signal,
           });
-          clearTimeout(timeout);
           if (response.status === 401) {
+            clearTimeout(timeout);
             return { kind: "unavailable", code: "authentication_failed", attempts };
           }
           if (response.status === 422) {
+            clearTimeout(timeout);
             return { kind: "unavailable", code: "request_rejected", attempts };
           }
           if (response.status === 429 || response.status === 529) {
-            lastError = response.status === 429 ? "rate_limited" : "provider_overloaded";
+            clearTimeout(timeout);
+            const code = response.status === 429 ? "rate_limited" : "provider_overloaded";
             if (attemptIndex < options.maxAttempts - 1) {
               await sleep(delays[attemptIndex] ?? MAX_RETRY_DELAY_MS);
               continue;
             }
-            return { kind: "unavailable", code: lastError, attempts };
+            return { kind: "unavailable", code, attempts };
           }
           if (response.status < 200 || response.status >= 300) {
+            clearTimeout(timeout);
             return { kind: "unavailable", code: "provider_http_error", attempts };
           }
+          // The timeout stays armed through JSON parsing so the
+          // documented per-attempt timeout covers the full wire
+          // exchange — including response-body decoding.
           let payload: unknown;
           try {
             payload = await response.json();
           } catch {
+            clearTimeout(timeout);
             return { kind: "unavailable", code: "response_invalid", attempts };
           }
-          let parsed: TypesafeResponse;
+          clearTimeout(timeout);
           try {
-            parsed = validateResponseShape(payload);
-            validateAnswerWireContract(parsed.answers[0]);
-          } catch {
-            return { kind: "unavailable", code: "response_invalid", attempts };
+            const { response: parsedResponse, answer } = validateResponseShape(
+              payload,
+              request.criteria,
+            );
+            return composeCompleted(request, answer, parsedResponse);
+          } catch (error) {
+            if (error instanceof TypesafeAdapterRejection) {
+              return { kind: "unavailable", code: error.code, attempts };
+            }
+            throw error;
           }
-          const answer = parsed.answers[0];
-          if (answer === undefined) {
-            return { kind: "unavailable", code: "response_invalid", attempts };
-          }
-          return composeCompleted(request, answer);
         } catch (error) {
           clearTimeout(timeout);
           if (isAbortError(error)) {
-            lastError = "request_timeout";
             if (attemptIndex < options.maxAttempts - 1) {
               await sleep(delays[attemptIndex] ?? MAX_RETRY_DELAY_MS);
               continue;
             }
             return { kind: "unavailable", code: "request_timeout", attempts };
           }
-          lastError = "network_error";
           if (attemptIndex < options.maxAttempts - 1) {
             await sleep(delays[attemptIndex] ?? MAX_RETRY_DELAY_MS);
             continue;
@@ -341,9 +399,6 @@ export function createTypesafeContextEnricher(
           return { kind: "unavailable", code: "network_error", attempts };
         }
       }
-      // Fallback: exhausted retries on a retryable surface that did not
-      // produce a typed terminal error.
-      void lastError;
       return { kind: "unavailable", code: "network_error", attempts };
     },
   };
@@ -352,6 +407,7 @@ export function createTypesafeContextEnricher(
 function composeCompleted(
   request: ContextEnrichmentRequest,
   answer: TypesafeAnswer,
+  parsedResponse: TypesafeResponse,
 ): ContextEnrichmentOutcome {
   const judgment: ContextRelevanceJudgment = {
     candidate_key: request.candidate.candidate_key,
@@ -362,23 +418,10 @@ function composeCompleted(
   };
   return {
     kind: "completed",
-    actual_model: answer.model,
+    actual_model: parsedResponse.model,
     judgments: [judgment],
-    usage: {
-      input_tokens: answer.usage.input_tokens,
-      output_tokens: answer.usage.output_tokens,
-    },
+    usage: parsedResponse.usage,
   };
-}
-
-function validateAnswerWireContract(answer: TypesafeAnswer | undefined): void {
-  if (answer === undefined) throw new Error("response must contain exactly one answer");
-  // Re-run TypeBox structural validation as the final wire guard; the
-  // adapter never returns diagnostics that violate this contract.
-  // The shape we build satisfies the schema so the TypeBox check
-  // cannot fail in normal operation, but tests that mutate the wire
-  // response can rely on the schema as the strict gate.
-  void contextRelevanceScoreAnswerSchema;
 }
 
 function isAbortError(error: unknown): boolean {
@@ -393,5 +436,3 @@ class StaticFailureEnricher implements ContextEnricher {
     return { kind: "unavailable", code: this.code, attempts: 0 };
   }
 }
-
-export type { AttemptError };

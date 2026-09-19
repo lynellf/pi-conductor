@@ -59,7 +59,7 @@ import {
 
 /** Stable host-side API key source. Production reads this once. */
 export function readTypesafeApiKey(env: Record<string, string | undefined>): string | null {
-  const value = env["TYPESAFE_API_KEY"];
+  const value = env.TYPESAFE_API_KEY;
   if (typeof value !== "string" || value.length === 0) return null;
   return value;
 }
@@ -280,6 +280,11 @@ async function runCandidates(
       },
       instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
       criteria: [...TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA],
+      policy: {
+        model: args.policy.model,
+        strategy: "recipient_relevance_rank",
+        provider: "typesafe_jev",
+      },
       request_timeout_ms: args.policy.request_timeout_ms,
       max_attempts: args.policy.max_attempts,
     });

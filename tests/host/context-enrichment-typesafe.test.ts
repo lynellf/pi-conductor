@@ -58,6 +58,11 @@ function makeRequest(overrides: Partial<ContextEnrichmentRequest> = {}): Context
     },
     instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
     criteria: TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA,
+    policy: {
+      model: "jev-latest",
+      strategy: "recipient_relevance_rank",
+      provider: "typesafe_jev",
+    },
     request_timeout_ms: 5000,
     max_attempts: 3,
     ...overrides,
@@ -69,17 +74,21 @@ const VALID_ANSWER = {
   score: 2,
   confidence: 0.81,
   probabilities: { "0": 0.05, "1": 0.1, "2": 0.7, "3": 0.15 },
-  legend: [
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[0],
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[1],
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[2],
-    TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[3],
-  ],
-  model: "jev-1.13",
-  usage: { input_tokens: 123, output_tokens: 17 },
+  legend: {
+    "0": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[0],
+    "1": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[1],
+    "2": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[2],
+    "3": TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA[3],
+  },
 };
 
-const VALID_RESPONSE = { answers: [VALID_ANSWER] };
+const VALID_RESPONSE = {
+  model: "jev-1.13",
+  usage: { input_tokens: 123, output_tokens: 17 },
+  answers: {
+    [TYPESAFE_RECIPIENT_RELEVANCE_QUESTION]: VALID_ANSWER,
+  },
+};
 
 describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
   it("targets the fixed official TypeSafe origin", async () => {
@@ -130,18 +139,20 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
     expect(call?.headers.authorization).toBe("Bearer secret-key");
     expect(call?.headers["content-type"]).toBe("application/json");
     const body = call?.body as {
-      questions: Array<{
-        id: string;
-        type: string;
-        instructions: string;
-        criteria: readonly string[];
-      }>;
+      model: string;
+      questions: Record<
+        string,
+        { type: string; instructions: string; criteria: readonly string[] }
+      >;
     };
-    expect(body.questions).toHaveLength(1);
-    expect(body.questions[0]?.id).toBe(TYPESAFE_RECIPIENT_RELEVANCE_QUESTION);
-    expect(body.questions[0]?.type).toBe("score");
-    expect(body.questions[0]?.instructions).toBe(TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS);
-    expect(body.questions[0]?.criteria).toEqual(TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA);
+    expect(body.model).toBe("jev-latest");
+    const questionKeys = Object.keys(body.questions);
+    expect(questionKeys).toHaveLength(1);
+    expect(questionKeys[0]).toBe(TYPESAFE_RECIPIENT_RELEVANCE_QUESTION);
+    const question = body.questions[TYPESAFE_RECIPIENT_RELEVANCE_QUESTION];
+    expect(question?.type).toBe("score");
+    expect(question?.instructions).toBe(TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS);
+    expect(question?.criteria).toEqual(TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA);
   });
 
   it("returns missing_api_key without making any network call", async () => {
@@ -377,18 +388,27 @@ describe("buildScoreRequestBody (spec §7)", () => {
   it("produces the documented score request with one question and four criteria", () => {
     const request = makeRequest();
     const body = buildScoreRequestBody(request) as {
+      model: string;
       state: { recipient: unknown; candidate: unknown };
-      questions: Array<{
-        id: string;
-        type: string;
-        instructions: string;
-        criteria: readonly string[];
-      }>;
+      questions: Record<
+        string,
+        { type: string; instructions: string; criteria: readonly string[] }
+      >;
     };
+    expect(body.model).toBe("jev-latest");
     expect(body.state.recipient).toBeDefined();
     expect(body.state.candidate).toBeDefined();
-    expect(body.questions).toHaveLength(1);
-    expect(body.questions[0]?.id).toBe(TYPESAFE_RECIPIENT_RELEVANCE_QUESTION);
-    expect(body.questions[0]?.criteria).toEqual(TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA);
+    const keys = Object.keys(body.questions);
+    expect(keys).toHaveLength(1);
+    expect(keys[0]).toBe(TYPESAFE_RECIPIENT_RELEVANCE_QUESTION);
+    expect(body.questions[TYPESAFE_RECIPIENT_RELEVANCE_QUESTION]?.criteria).toEqual(
+      TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA,
+    );
+  });
+
+  it("uses the requested policy model, not a transition hash", () => {
+    const body = buildScoreRequestBody(makeRequest()) as { model: string };
+    expect(body.model).toBe("jev-latest");
+    expect(body.model).not.toMatch(/^[a-f0-9]{64}$/);
   });
 });

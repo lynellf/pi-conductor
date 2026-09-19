@@ -24,17 +24,15 @@ describe("contextRelevanceScoreAnswerSchema (spec §7)", () => {
   function validResponse() {
     return {
       type: "score",
-      score: 2,
+      score: 2.74,
       confidence: 0.81,
       probabilities: { "0": 0.05, "1": 0.1, "2": 0.7, "3": 0.15 },
-      legend: [
-        "Unrelated: the recipient can ignore this candidate without affecting the stated work.",
-        "Useful background: it may orient the recipient but does not directly change the next action.",
-        "Directly useful: it informs a decision or action needed for the stated work.",
-        "Necessary: omitting it would create a material risk of incorrect or blocked completion of the stated work.",
-      ],
-      model: "jev-latest",
-      usage: { input_tokens: 123, output_tokens: 17 },
+      legend: {
+        "0": "Unrelated: the recipient can ignore this candidate without affecting the stated work.",
+        "1": "Useful background: it may orient the recipient but does not directly change the next action.",
+        "2": "Directly useful: it informs a decision or action needed for the stated work.",
+        "3": "Necessary: omitting it would create a material risk of incorrect or blocked completion of the stated work.",
+      },
     };
   }
 
@@ -56,9 +54,9 @@ describe("contextRelevanceScoreAnswerSchema (spec §7)", () => {
     );
   });
 
-  it("rejects a non-integer score", () => {
+  it("accepts a fractional score (spec §7: finite, not integer)", () => {
     expect(Value.Check(contextRelevanceScoreAnswerSchema, { ...validResponse(), score: 1.5 })).toBe(
-      false,
+      true,
     );
   });
 
@@ -97,31 +95,35 @@ describe("contextRelevanceScoreAnswerSchema (spec §7)", () => {
     expect(Value.Check(contextRelevanceScoreAnswerSchema, bad)).toBe(false);
   });
 
-  it("rejects an empty model string", () => {
-    expect(Value.Check(contextRelevanceScoreAnswerSchema, { ...validResponse(), model: "" })).toBe(
-      false,
-    );
-  });
-
-  it("rejects negative token usage", () => {
+  it("rejects an empty model string at the response level", () => {
+    // model is response-level, not answer-level; answers must not
+    // carry their own model/usage (official contract).
     expect(
-      Value.Check(contextRelevanceScoreAnswerSchema, {
-        ...validResponse(),
-        usage: { input_tokens: -1, output_tokens: 0 },
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(contextRelevanceScoreAnswerSchema, {
-        ...validResponse(),
-        usage: { input_tokens: 0, output_tokens: -1 },
-      }),
+      Value.Check(contextRelevanceScoreAnswerSchema, { ...validResponse(), model: "" }),
     ).toBe(false);
   });
 
-  it("rejects a legend shorter than 4 entries", () => {
+  it("rejects a legend with an unknown key (must be exactly {0,1,2,3})", () => {
     const bad = {
       ...validResponse(),
-      legend: ["Unrelated: ignore.", "Useful background: orient.", "Directly useful: inform."],
+      legend: {
+        "0": "Unrelated",
+        "1": "Background",
+        "2": "Directly useful",
+        "4": "Necessary",
+      },
+    };
+    expect(Value.Check(contextRelevanceScoreAnswerSchema, bad)).toBe(false);
+  });
+
+  it("rejects a legend with a missing key", () => {
+    const bad = {
+      ...validResponse(),
+      legend: {
+        "0": "Unrelated",
+        "1": "Background",
+        "2": "Directly useful",
+      },
     };
     expect(Value.Check(contextRelevanceScoreAnswerSchema, bad)).toBe(false);
   });

@@ -44,6 +44,12 @@ export interface ContextEnrichmentRequest {
   readonly candidate: ContextEnrichmentRequestCandidate;
   readonly instructions: string;
   readonly criteria: readonly string[];
+  /** Pinned policy snapshot the adapter must use to select the requested model. */
+  readonly policy: {
+    readonly model: string;
+    readonly strategy: "recipient_relevance_rank";
+    readonly provider: "typesafe_jev";
+  };
   readonly request_timeout_ms: number;
   readonly max_attempts: number;
 }
