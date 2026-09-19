@@ -341,6 +341,31 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
     expect(calls).toBe(2);
   });
 
+  it("retries a response-body network failure before accepting a later body", async () => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async () => {
+      calls += 1;
+      return {
+        status: 200,
+        statusText: "OK",
+        json: async () => {
+          if (calls === 1) throw new TypeError("body stream failed");
+          return VALID_RESPONSE;
+        },
+      };
+    };
+    const adapter = createTypesafeContextEnricher({
+      apiKey: "test-key",
+      requestTimeoutMs: 1000,
+      maxAttempts: 2,
+      fetchImpl,
+      sleep: async () => {},
+    });
+    const outcome = await adapter.enrich(makeRequest());
+    expect(outcome).toMatchObject({ kind: "completed", attempts: 2 });
+    expect(calls).toBe(2);
+  });
+
   it("returns response_invalid when the body does not match the contract", async () => {
     let calls = 0;
     const fetchImpl: FetchLike = async () => {

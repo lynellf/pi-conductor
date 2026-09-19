@@ -67,6 +67,13 @@ export function findRestartContextEnrichment(
     targetVisitIndex,
   };
   const expectedKey = computeTransitionKey(identity);
+  const targetTerminals = terminals.filter(
+    (record) =>
+      record.recipient_role === baseIdentity.to && record.recipient_visit === targetVisitIndex,
+  );
+  if (targetTerminals.some((record) => record.source_transition_key !== expectedKey)) {
+    throw new Error("context_enrichment terminal identity conflicts with the current target");
+  }
   const matches = terminals.filter(
     (record) =>
       record.recipient_role === baseIdentity.to && record.source_transition_key === expectedKey,

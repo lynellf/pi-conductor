@@ -16,16 +16,18 @@
  * The function returns frozen objects so accidental mutation is caught
  * at runtime; records are immutable throughout the system.
  *
- * NOTE: 500 LOC (exceeded 400-LOC guideline). Splitting would break
- * the coherent concept of a single YAML→Manifest parser. The additional
- * ~160 lines cover Issue #48 `workspace`/`artifacts` parsing (10 helper
- * functions for 6 config fields). Validation lives in `validate.ts`.
+ * NOTE: ~730 LOC (exceeded the ~400-LOC guideline). This historical
+ * YAML→Manifest integration point remains cohesive; feature-specific policy
+ * parsers are delegated to small modules (including context enrichment),
+ * while the remaining role/workspace/config helpers share one parse boundary.
+ * Validation lives in `validate.ts`.
  */
 
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
+import { parseContextEnrichmentPolicy } from "./context-enrichment.js";
 import { parseControllerConfig } from "./controller.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
@@ -33,7 +35,6 @@ import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import type {
   ArtifactConfig,
-  ContextEnrichmentPolicy,
   ContextRetention,
   ContinuityPolicy,
   DelegationPolicy,
@@ -726,115 +727,4 @@ function parseContinuityPolicy(raw: unknown): ContinuityPolicy {
     require_delegated_result: requireDelegated,
     seed_max_utf8_bytes: seedMax,
   }) as ContinuityPolicy;
-}
-
-// ─── Opt-in Jev context enrichment policy (spec §5) ─────────────────────
-
-const CONTEXT_ENRICHMENT_KEYS = new Set([
-  "schema_version",
-  "provider",
-  "model",
-  "strategy",
-  "candidate_limit",
-  "max_parallel",
-  "request_timeout_ms",
-  "max_attempts",
-]);
-
-const CONTEXT_ENRICHMENT_CANDIDATE_LIMIT_MIN = 1;
-const CONTEXT_ENRICHMENT_CANDIDATE_LIMIT_MAX = 64;
-const CONTEXT_ENRICHMENT_MAX_PARALLEL_MIN = 1;
-const CONTEXT_ENRICHMENT_MAX_PARALLEL_MAX = 16;
-const CONTEXT_ENRICHMENT_REQUEST_TIMEOUT_MIN_MS = 100;
-const CONTEXT_ENRICHMENT_REQUEST_TIMEOUT_MAX_MS = 30_000;
-const CONTEXT_ENRICHMENT_MAX_ATTEMPTS_MIN = 1;
-const CONTEXT_ENRICHMENT_MAX_ATTEMPTS_MAX = 5;
-const CONTEXT_ENRICHMENT_MODEL_MAX_LENGTH = 128;
-
-function parseContextEnrichmentPolicy(raw: unknown): ContextEnrichmentPolicy {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new ManifestParseError("`context_enrichment:` must be a YAML mapping (object)");
-  }
-  const entry = raw as Record<string, unknown>;
-  for (const key of Object.keys(entry)) {
-    if (!CONTEXT_ENRICHMENT_KEYS.has(key)) {
-      throw new ManifestParseError(`context_enrichment has unknown key '${key}'`);
-    }
-  }
-  if (entry.schema_version !== 1) {
-    throw new ManifestParseError("`context_enrichment.schema_version` must be 1");
-  }
-  if (entry.provider !== "typesafe_jev") {
-    throw new ManifestParseError('`context_enrichment.provider` must be "typesafe_jev" in v1');
-  }
-  if (entry.strategy !== "recipient_relevance_rank") {
-    throw new ManifestParseError(
-      '`context_enrichment.strategy` must be "recipient_relevance_rank" in v1',
-    );
-  }
-  const model = entry.model;
-  if (typeof model !== "string" || model.length === 0) {
-    throw new ManifestParseError(
-      "`context_enrichment.model` must be a non-empty string (1–128 characters)",
-    );
-  }
-  if (model.length > CONTEXT_ENRICHMENT_MODEL_MAX_LENGTH) {
-    throw new ManifestParseError(
-      `\`context_enrichment.model\` length must be ≤ ${CONTEXT_ENRICHMENT_MODEL_MAX_LENGTH} characters (received ${model.length})`,
-    );
-  }
-  const candidateLimit = toBoundedInt(
-    entry.candidate_limit,
-    "`context_enrichment.candidate_limit`",
-    CONTEXT_ENRICHMENT_CANDIDATE_LIMIT_MAX,
-    "candidates",
-  );
-  if (candidateLimit < CONTEXT_ENRICHMENT_CANDIDATE_LIMIT_MIN) {
-    throw new ManifestParseError(
-      `\`context_enrichment.candidate_limit\` must be ≥ ${CONTEXT_ENRICHMENT_CANDIDATE_LIMIT_MIN} (received ${candidateLimit})`,
-    );
-  }
-  const maxParallel = toBoundedInt(
-    entry.max_parallel,
-    "`context_enrichment.max_parallel`",
-    CONTEXT_ENRICHMENT_MAX_PARALLEL_MAX,
-    "concurrent requests",
-  );
-  if (maxParallel < CONTEXT_ENRICHMENT_MAX_PARALLEL_MIN) {
-    throw new ManifestParseError(
-      `\`context_enrichment.max_parallel\` must be ≥ ${CONTEXT_ENRICHMENT_MAX_PARALLEL_MIN} (received ${maxParallel})`,
-    );
-  }
-  const requestTimeoutMs = entry.request_timeout_ms;
-  if (
-    typeof requestTimeoutMs !== "number" ||
-    !Number.isInteger(requestTimeoutMs) ||
-    requestTimeoutMs < CONTEXT_ENRICHMENT_REQUEST_TIMEOUT_MIN_MS ||
-    requestTimeoutMs > CONTEXT_ENRICHMENT_REQUEST_TIMEOUT_MAX_MS
-  ) {
-    throw new ManifestParseError(
-      `\`context_enrichment.request_timeout_ms\` must be an integer between ${CONTEXT_ENRICHMENT_REQUEST_TIMEOUT_MIN_MS} and ${CONTEXT_ENRICHMENT_REQUEST_TIMEOUT_MAX_MS} inclusive`,
-    );
-  }
-  const maxAttempts = entry.max_attempts;
-  if (
-    typeof maxAttempts !== "number" ||
-    !Number.isInteger(maxAttempts) ||
-    maxAttempts < CONTEXT_ENRICHMENT_MAX_ATTEMPTS_MIN ||
-    maxAttempts > CONTEXT_ENRICHMENT_MAX_ATTEMPTS_MAX
-  ) {
-    throw new ManifestParseError(
-      `\`context_enrichment.max_attempts\` must be an integer between ${CONTEXT_ENRICHMENT_MAX_ATTEMPTS_MIN} and ${CONTEXT_ENRICHMENT_MAX_ATTEMPTS_MAX} inclusive`,
-    );
-  }
-  return Object.freeze({
-    schema_version: 1,
-    provider: "typesafe_jev",
-    model,
-    strategy: "recipient_relevance_rank",
-    candidate_limit: candidateLimit,
-    max_parallel: maxParallel,
-    request_timeout_ms: requestTimeoutMs,
-    max_attempts: maxAttempts,
-  }) as ContextEnrichmentPolicy;
 }

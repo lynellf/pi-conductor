@@ -277,6 +277,17 @@ No reviewer edits were accepted.
 - [x] Document cohesive under-500-line exceptions for the three reviewed modules.
 - [ ] Obtain a fresh independent reviewer approval transition on this repaired HEAD.
 
+### Third independent review cycle (post-`912ff0d` review)
+
+The isolated read-only reviewer accepted the process waiver and official wire
+contract but identified four bounded issues. No reviewer edits were accepted.
+
+- [x] Retry response-body `TypeError` failures while keeping malformed JSON non-retryable.
+- [x] Reject wrong-key terminals for the independently derived current target in both fresh and restart lookup paths.
+- [x] Leave an empty candidate prefix on the exact baseline without fabricating a provider model or terminal.
+- [x] Delegate strict `context_enrichment` policy parsing to `src/manifest/context-enrichment.ts`.
+- [ ] Obtain a fresh independent reviewer approval transition on this repaired HEAD.
+
 ## Phase 5 — complete repository gates
 
 - [x] `pnpm typecheck`

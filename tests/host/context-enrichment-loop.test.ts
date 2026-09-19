@@ -359,6 +359,109 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     );
   });
 
+  it("leaves an empty candidate prefix on the exact baseline without a terminal", async () => {
+    const log = new InMemoryRecordLog();
+    const runId = "run-empty-prefix";
+    const accepted = makeTransitionAccepted("empty", runId, 1000, null);
+    log.append({
+      type: "session_started",
+      run_id: runId,
+      role: accepted.role,
+      visit_index: 1,
+      state: accepted.role,
+      model: "test",
+      session_file: accepted.session_file,
+      parent_session: null,
+      ts: 999,
+    });
+    log.append(accepted);
+    let calls = 0;
+
+    const record = await prepareFreshContinuityEnrichment({
+      loadedManifest: loadedManifest(),
+      log,
+      runId,
+      recipient: "implementer",
+      recipientObjective: "ship it",
+      recipientRequestedAction: "implement",
+      from: "orchestrator",
+      transitionTs: 1000,
+      sourceRoleSessionId: null,
+      sourceSessionFile: accepted.session_file,
+      targetVisitIndex: 1,
+      enricher: {
+        enrich: async () => {
+          calls += 1;
+          throw new Error("must not call provider");
+        },
+      },
+    });
+
+    expect(record).toBeNull();
+    expect(calls).toBe(0);
+    expect(log.records(runId).filter((entry) => entry.type === "context_enrichment")).toHaveLength(
+      0,
+    );
+  });
+
+  it("rejects a wrong-key terminal for the current recipient visit before provider calls", async () => {
+    const log = new InMemoryRecordLog();
+    const runId = "run-wrong-key";
+    const accepted = makeTransitionAccepted("wrong-key", runId, 1000, makePacket("test", []));
+    log.append({
+      type: "session_started",
+      run_id: runId,
+      role: accepted.role,
+      visit_index: 1,
+      state: accepted.role,
+      model: "test",
+      session_file: accepted.session_file,
+      parent_session: null,
+      ts: 999,
+    });
+    log.append(accepted);
+    log.append({
+      type: "context_enrichment",
+      schema_version: 1,
+      run_id: runId,
+      source_transition_key: "e".repeat(64),
+      input_sha256: "f".repeat(64),
+      recipient_role: "implementer",
+      recipient_visit: 1,
+      status: "unavailable",
+      provider: "typesafe_jev",
+      requested_model: "jev-latest",
+      strategy: "recipient_relevance_rank",
+      candidate_count: 0,
+      failure: { code: "missing_api_key", attempts: 0 },
+      ts: 1001,
+    });
+    let calls = 0;
+
+    await expect(
+      prepareFreshContinuityEnrichment({
+        loadedManifest: loadedManifest(),
+        log,
+        runId,
+        recipient: "implementer",
+        recipientObjective: "ship it",
+        recipientRequestedAction: "implement",
+        from: "orchestrator",
+        transitionTs: 1000,
+        sourceRoleSessionId: null,
+        sourceSessionFile: accepted.session_file,
+        targetVisitIndex: 1,
+        enricher: {
+          enrich: async () => {
+            calls += 1;
+            throw new Error("must not call provider");
+          },
+        },
+      }),
+    ).rejects.toThrow(/identity/);
+    expect(calls).toBe(0);
+  });
+
   it("produces an unavailable record on one candidate failure and falls back to baseline", async () => {
     const log = new InMemoryRecordLog();
     const runId = "run-1";

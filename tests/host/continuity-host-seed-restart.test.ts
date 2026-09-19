@@ -350,6 +350,42 @@ describe("host seed restart reconstruction", () => {
     ).toThrow(/visit|transition/i);
   });
 
+  it("rejects a wrong-key terminal for the current visit on restart", () => {
+    const runId = "run-wrong-key-restart";
+    const accepted = { ...transitionAccepted(2), run_id: runId };
+    const terminal: ContextEnrichmentRecord = {
+      type: "context_enrichment",
+      schema_version: 1,
+      run_id: runId,
+      source_transition_key: "e".repeat(64),
+      input_sha256: "f".repeat(64),
+      recipient_role: "implementer",
+      recipient_visit: 1,
+      status: "unavailable",
+      provider: "typesafe_jev",
+      requested_model: ENRICHMENT_POLICY.model,
+      strategy: "recipient_relevance_rank",
+      candidate_count: 0,
+      failure: { code: "missing_api_key", attempts: 0 },
+      ts: 3,
+    };
+
+    expect(() =>
+      findRestartContextEnrichment(
+        [accepted, terminal],
+        {
+          runId,
+          from: "orchestrator",
+          to: "implementer",
+          transitionTs: accepted.ts,
+          sourceRoleSessionId: "source-role-session",
+          sourceSessionFile: accepted.session_file,
+        },
+        1,
+      ),
+    ).toThrow(/identity/);
+  });
+
   it("retries enrichment before the first resumed prompt when no terminal exists", async () => {
     const workdir = await mkdtemp(join(tmpdir(), "continuity-host-seed-retry-"));
     directory = workdir;

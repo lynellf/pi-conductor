@@ -380,8 +380,10 @@ export function createTypesafeContextEnricher(
             clearTimeout(timeout);
             // A provider can reject body decoding after the abort signal
             // fires. Preserve the timeout classification so JSON parsing
-            // remains inside the documented per-attempt deadline.
-            if (isAbortError(error)) throw error;
+            // remains inside the documented per-attempt deadline. Fetch
+            // surfaces body-stream failures as TypeError; retry those while
+            // treating syntax/shape failures as a terminal invalid response.
+            if (isAbortError(error) || isBodyNetworkError(error)) throw error;
             return { kind: "unavailable", code: "response_invalid", attempts };
           }
           clearTimeout(timeout);
@@ -438,6 +440,12 @@ function composeCompleted(
     usage: parsedResponse.usage,
     attempts,
   };
+}
+
+function isBodyNetworkError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  if (error === null || typeof error !== "object") return false;
+  return (error as { name?: unknown }).name === "TypeError";
 }
 
 function isAbortError(error: unknown): boolean {

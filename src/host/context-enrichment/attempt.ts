@@ -38,8 +38,11 @@ export interface ContextEnrichmentAttemptArgs {
 /** Execute and validate one all-or-nothing enrichment attempt before prompting. */
 export async function executeContextEnrichmentAttempt(
   args: ContextEnrichmentAttemptArgs,
-): Promise<ContextEnrichmentRecord> {
+): Promise<ContextEnrichmentRecord | null> {
   const candidates = args.projection.scored_prefix;
+  // There is no provider result to persist for an empty prefix. Returning
+  // null preserves the exact baseline and never fabricates an actual model.
+  if (candidates.length === 0) return null;
   const aggregate = await runCandidates(args.enricher, args, candidates);
   const ts = (args.now ?? Date.now)();
   if (aggregate.kind === "completed") {

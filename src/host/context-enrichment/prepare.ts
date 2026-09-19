@@ -104,7 +104,8 @@ export interface PrepareFreshContinuityEnrichmentArgs {
  * materializer) or `null` when no enrichment should run.
  *
  * The function never throws on provider failures; every rejection
- * becomes one `unavailable` record with a stable failure code.
+ * becomes one `unavailable` record with a stable failure code. An empty
+ * candidate prefix returns `null` and leaves the exact baseline untouched.
  */
 export async function prepareFreshContinuityEnrichment(
   args: PrepareFreshContinuityEnrichmentArgs,
@@ -176,6 +177,7 @@ export async function prepareFreshContinuityEnrichment(
     runId: args.runId,
     now: args.now,
   });
+  if (record === null) return null;
   args.log.append(record as unknown as PersistedRecord);
   return record;
 }
@@ -229,6 +231,12 @@ function findMatchingRecord(
   recipientVisit: number,
 ): ContextEnrichmentRecord | null {
   const terminals = findContextEnrichmentTerminals(log.records(runId) as readonly unknown[], runId);
+  const targetTerminals = terminals.filter(
+    (record) => record.recipient_role === recipient && record.recipient_visit === recipientVisit,
+  );
+  if (targetTerminals.some((record) => record.source_transition_key !== transitionKey)) {
+    throw new Error("context_enrichment terminal identity conflicts with the current target");
+  }
   const match = selectUniqueTerminalForTransition(terminals, transitionKey);
   if (match === null) return null;
   if (match.recipient_role !== recipient || match.recipient_visit !== recipientVisit) {
