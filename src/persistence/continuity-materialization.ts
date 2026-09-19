@@ -64,6 +64,14 @@ export class ContinuityMaterializationException extends Error {
 
 type Item = ContinuityFinding | ContinuityQuestion | ContinuityNextStep;
 
+function isHostOnlySyntheticRecord(record: PersistedRecord): boolean {
+  if (!("session_file" in record) || typeof record.session_file !== "string") return false;
+  return (
+    record.session_file.startsWith("<operator-routing:") ||
+    record.session_file.startsWith("<synthesized:")
+  );
+}
+
 /** Fold records in append order; malformed authority or resolution metadata never replays. */
 export const materializeContinuity: MaterializeContinuity = (records, policy) => {
   const lifecycle = new ContinuityLifecycleIndex();
@@ -75,6 +83,10 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
   const requirements = continuityRequirements(policy);
   for (const record of records) {
     if (recordRunId(record) !== policy.run_id) continue;
+    // Operator routing and synthesized terminal records are host-only
+    // placeholders, not continuity authority. Ignore them before lifecycle
+    // reconstruction so repeated routing attempts cannot poison replay.
+    if (isHostOnlySyntheticRecord(record)) continue;
     lifecycle.observe(record, fail);
     assertRequiredPacket(record, requirements, lifecycle, fail);
     const envelope = envelopeFromRecord(record, lifecycle, fail);

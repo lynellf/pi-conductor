@@ -227,6 +227,32 @@ function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] 
 
 describe("continuity-materialization-order", () => {
   describe("canonical record order", () => {
+    it("ignores repeated host-only synthetic lifecycle placeholders", () => {
+      const synthetic = {
+        ...makeTransitionAccepted("synthetic", "run-1", 1000, makePacket("synthetic")),
+        session_file: "<operator-routing:orchestrator>",
+      };
+      const syntheticStarted = {
+        type: "session_started" as const,
+        run_id: "run-1",
+        role: "orchestrator" as const,
+        visit_index: 1,
+        state: "orchestrator" as const,
+        model: "operator-routing",
+        session_file: synthetic.session_file,
+        parent_session: null,
+        ts: 999,
+      };
+      const normal = makeTransitionAccepted("normal", "run-1", 2000, makePacket("normal"));
+
+      const ledger = materializeContinuity(
+        [syntheticStarted, syntheticStarted, synthetic, ...withLifecycles([normal])],
+        { run_id: "run-1" },
+      );
+
+      expect(ledger.envelopes.map((envelope) => envelope.packet.summary)).toEqual(["normal"]);
+    });
+
     it("produces identical ledger from same records in same order", () => {
       const packet1 = makePacket("first packet", [{ id: "finding-1" }]);
       const packet2 = makePacket("second packet", [{ id: "finding-2" }]);
