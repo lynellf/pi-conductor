@@ -27,7 +27,9 @@ import { validateToolExecutionPolicy } from "./execution-policy.js";
 import { validateSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
 import { validateSubagentSnapshotPolicy } from "./subagent-snapshot.js";
+import { validateSubagentToolPolicy } from "./subagent-tool-policy.js";
 import type { Manifest } from "./types.js";
+import { validateVerificationRecipes } from "./verification-recipes.js";
 
 // ─── Result types ─────────────────────────────────────────────────────
 
@@ -114,7 +116,11 @@ export type ManifestErrorCode =
   /** Opt-in context enrichment requires a valid continuity policy (§5). */
   | "context-enrichment-requires-continuity"
   /** V1 and v2 continuity/enrichment policies cannot be mixed. */
-  | "context-enrichment-continuity-version-mismatch";
+  | "context-enrichment-continuity-version-mismatch"
+  /** Delegated verification §3.1: verification_recipes payload is malformed. */
+  | "invalid-verification-recipes"
+  /** Delegated verification §3.3 / §3.4: subagent tool policy is malformed. */
+  | "invalid-subagent-tool-policy";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -660,12 +666,39 @@ export function validateManifest(m: Manifest): ManifestReport {
     )) {
       errors.push({ code: "invalid-subagent-execution-policy", message });
     }
+    const executionBackend =
+      profile.execution?.backend === "bubblewrap" ? "bubblewrap" : "file_only";
+    const opts: {
+      topLevelRecipeNames: readonly string[];
+      executionBackend: "file_only" | "bubblewrap";
+      hasProfileRecipes: boolean;
+      profileRecipes?: readonly string[];
+    } = {
+      topLevelRecipeNames: topLevelRecipeNames(m),
+      executionBackend,
+      hasProfileRecipes: (profile.verification_recipes?.length ?? 0) > 0,
+    };
+    if (profile.verification_recipes !== undefined) {
+      opts.profileRecipes = profile.verification_recipes;
+    }
+    for (const message of validateSubagentToolPolicy(profile.name, profile.tools, opts)) {
+      errors.push(message);
+    }
+  }
+
+  // Delegated verification §3.1: semantic validation of the top-level recipe inventory.
+  for (const recipe of validateVerificationRecipes(m.verification_recipes ?? [])) {
+    errors.push(recipe);
   }
 
   return {
     errors: Object.freeze(errors),
     warnings: Object.freeze(warnings),
   };
+}
+
+function topLevelRecipeNames(manifest: Manifest): readonly string[] {
+  return manifest.verification_recipes?.map((recipe) => recipe.name) ?? Object.freeze([]);
 }
 
 function validateHandoffPolicies(

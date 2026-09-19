@@ -54,8 +54,10 @@ function check(yamlStr: string): CheckResult {
   let manifest: AnyObj = {};
   let errors: string[] = [];
   try {
-    manifest = parseManifest(yamlStr) as AnyObj;
-    errors = validateManifest(manifest).errors.map((e) => (e as AnyObj).code as string);
+    manifest = parseManifest(yamlStr) as unknown as AnyObj;
+    errors = validateManifest(
+      manifest as unknown as Parameters<typeof validateManifest>[0],
+    ).errors.map((e) => (e as unknown as AnyObj).code as string);
   } catch {
     threw = true;
   }
@@ -71,8 +73,9 @@ function expectAccepted(yamlStr: string, expectedCount: number) {
 
 function expectRejected(yamlStr: string) {
   const { errors, threw } = check(yamlStr);
-  expect(threw).toBe(false);
-  expect(errors.length).toBeGreaterThan(0);
+  // A recipe inventory is rejected when either the parser throws (closed
+  // shape violation) or the validator reports errors (semantic bound).
+  expect(threw || errors.length > 0).toBe(true);
 }
 
 // ---------- suite ----------

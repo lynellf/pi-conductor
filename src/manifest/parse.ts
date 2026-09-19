@@ -33,6 +33,7 @@ import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
 import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
+import { parseSubagentToolPolicy, resolveEffectiveTools } from "./subagent-tool-policy.js";
 import type {
   ArtifactConfig,
   ContextRetention,
@@ -52,6 +53,7 @@ import type {
   WorkspaceSource,
 } from "./types.js";
 import { ManifestParseError } from "./types.js";
+import { parseVerificationRecipes } from "./verification-recipes.js";
 
 const MAX_MODEL_RETRY_DELAY_MS = 60_000;
 const MAX_MODEL_RETRIES = 10;
@@ -98,6 +100,10 @@ export function parseManifestFromObject(raw: unknown): Manifest {
   }
 
   const subagentsRaw = obj.subagents;
+  const verificationRecipes =
+    obj.verification_recipes === undefined
+      ? undefined
+      : parseVerificationRecipes(obj.verification_recipes, "verification_recipes");
   const subagents = subagentsRaw !== undefined ? parseSubagentProfiles(subagentsRaw) : undefined;
   // Absent policy is the immutable empty policy, not an optional runtime
   // branch. This makes the all-fresh default a normalized manifest contract.
@@ -127,6 +133,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(controller === undefined ? {} : { controller }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(context_enrichment === undefined ? {} : { context_enrichment }),
+    ...(verificationRecipes === undefined ? {} : { verification_recipes: verificationRecipes }),
   }) as Manifest;
   return manifest;
 }
@@ -211,6 +218,13 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     entry.execution === undefined
       ? undefined
       : parseSubagentExecutionPolicy(entry.execution, `${path}.execution`);
+  const tools =
+    entry.tools === undefined ? undefined : parseSubagentToolPolicy(entry.tools, `${path}.tools`);
+  const verificationRecipes =
+    entry.verification_recipes === undefined
+      ? undefined
+      : toNonEmptyStringArray(entry.verification_recipes, `${path}.verification_recipes`);
+  const effectiveTools = tools === undefined ? undefined : resolveEffectiveTools(tools);
 
   return Object.freeze({
     name,
@@ -221,6 +235,9 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     ...(tool_execution === undefined ? {} : { tool_execution }),
     ...(workspace === undefined ? {} : { workspace }),
     ...(execution === undefined ? {} : { execution }),
+    ...(tools === undefined ? {} : { tools }),
+    ...(verificationRecipes === undefined ? {} : { verification_recipes: verificationRecipes }),
+    ...(effectiveTools === undefined ? {} : { effective_tools: effectiveTools }),
   }) as SubagentProfile;
 }
 

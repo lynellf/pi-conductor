@@ -54,14 +54,44 @@ function buildYaml(subagent: Record<string, unknown>, opts: BuildOpts = {}): str
   return yamlStringify(manifest);
 }
 
-function parseAndValidate(yaml: string) {
-  const m = parseManifest(yaml);
+function parseAndValidate(yaml: string): {
+  m: ReturnType<typeof parseManifest> | null;
+  errors: readonly { code: string; message: string }[];
+} {
+  let m: ReturnType<typeof parseManifest>;
+  try {
+    m = parseManifest(yaml);
+  } catch {
+    return {
+      m: null,
+      errors: [
+        {
+          code: "parse-error",
+          message: "parseManifest threw",
+        },
+      ],
+    };
+  }
   const errors = validateManifest(m).errors;
   return { m, errors };
 }
 
-const lintRecipe = { name: "lint", command: "echo lint" };
-const testRecipe = { name: "test", command: "echo test" };
+const lintRecipe = {
+  name: "lint",
+  commands: [{ executable: "/usr/bin/git", args: ["status"] }],
+  evaluation: "report_only",
+  required_paths: ["src/foo.ts"],
+  timeout_seconds: 30,
+  max_calls: 1,
+};
+const testRecipe = {
+  name: "test",
+  commands: [{ executable: "/usr/bin/git", args: ["diff"] }],
+  evaluation: "report_only",
+  required_paths: ["src/foo.ts"],
+  timeout_seconds: 30,
+  max_calls: 1,
+};
 
 // ---------------------------------------------------------------------------
 // Contract cases — docs/delegated-verification/spec.md §3.3 / §3.4
@@ -71,7 +101,9 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
   // (1) PROFILE WITHOUT `tools:` PRESERVES LEGACY
   it("(1) profile without `tools` block — legacy preserved", () => {
     const { m, errors } = parseAndValidate(buildYaml(bubblewrap()));
-    expect(m.subagents[0].tools).toBeUndefined();
+    const subagents = (m as unknown as { subagents?: { tools?: unknown }[] }).subagents;
+    const profile = subagents?.[0];
+    expect(profile?.tools).toBeUndefined();
     expect(errors).toEqual([]);
   });
 
@@ -213,7 +245,9 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
             ],
             default: ["read"],
           },
+          verification_recipes: ["lint"],
         }),
+        { recipes: [lintRecipe] },
       ),
     );
     expect(errors).toEqual([]);
@@ -354,8 +388,9 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
         }),
       ),
     );
-    const profile = m.subagents[0] as Record<string, unknown>;
-    const effective = profile.effective_tools as string[];
+    const subagents = (m as unknown as { subagents?: { effective_tools?: string[] }[] }).subagents;
+    const profile = subagents?.[0];
+    const effective = profile?.effective_tools ?? [];
     expect(Array.isArray(effective)).toBe(true);
     expect(effective.length).toBeGreaterThan(0);
     const sorted = [...effective].sort();

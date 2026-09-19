@@ -272,6 +272,8 @@ export type ContextArtifacts = Static<typeof contextArtifactsSchema>;
  * - `projection_paths`: optional 1–64 exact file subset (each ≤1,024 characters);
  *   host validates safe syntax and membership in the clean parent's materialized sparse set
  * - `context_artifacts`: optional prompt-only immutable text inventory (Issue #60)
+ * - `tools`: optional 1–16 closed child-tool names (delegated verification §3.3)
+ * - `verification_recipe`: optional top-level recipe name this task should invoke (delegated verification §3.4)
  */
 export const delegateTaskSchema = Type.Object({
   id: Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }),
@@ -284,10 +286,38 @@ export const delegateTaskSchema = Type.Object({
     Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 64 }),
   ),
   context_artifacts: Type.Optional(contextArtifactsSchema),
+  tools: Type.Optional(
+    Type.Array(
+      Type.Union(
+        [
+          Type.Literal("read"),
+          Type.Literal("grep"),
+          Type.Literal("find"),
+          Type.Literal("ls"),
+          Type.Literal("edit"),
+          Type.Literal("write"),
+          Type.Literal("bash"),
+          Type.Literal("read_execution_output"),
+          Type.Literal("verify"),
+        ],
+        { description: "Closed child tool surface; bare names only." },
+      ),
+      { minItems: 1, maxItems: 16, uniqueItems: true },
+    ),
+  ),
+  verification_recipe: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
 });
 
 /** Typed view of a single delegation task. */
 export type DelegateTask = Static<typeof delegateTaskSchema>;
+
+/**
+ * §5.2: `verify` tool payload schema. The model declares no further fields;
+ * the host supplies the recipe binding from the task's `verification_recipe`
+ * reference. Closed shape (additionalProperties: false) prevents the model
+ * from smuggling parameters.
+ */
+export const verifyArgsSchema = Type.Object({}, { additionalProperties: false });
 
 /**
  * §4: `delegate` tool arguments schema.

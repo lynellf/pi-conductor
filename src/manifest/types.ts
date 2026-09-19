@@ -22,6 +22,13 @@ import type { ControllerConfig } from "./controller.js";
 import type { EndGuardConfig } from "./end-guard.js";
 import type { ToolExecutionPolicy } from "./execution-policy.js";
 import type { SubagentExecutionConfig } from "./subagent-execution-policy.js";
+import type { ChildToolName, SubagentToolPolicy } from "./subagent-tool-policy.js";
+import type { VerificationRecipe } from "./verification-recipes.js";
+
+export { canonicalizeVerificationRecipe } from "./verification-recipes.js";
+// Re-export the delegated-verification types so callers can import the
+// canonical name from the manifest barrel without traversing submodules.
+export type { ChildToolName, SubagentToolPolicy, VerificationRecipe };
 
 // ─── Subagent profile types (delegation lite §3) ───────────────────────
 
@@ -44,6 +51,16 @@ export interface SubagentProfile {
   readonly execution?: SubagentExecutionConfig;
   /** Issues #55 / #111: opt-in exact projection or sandbox snapshot workspace. */
   readonly workspace?: SubagentWorkspaceConfig;
+  /** Delegated verification §3.3: closed child tool surface. */
+  readonly tools?: SubagentToolPolicy;
+  /** Delegated verification §3.4: top-level recipe names this profile may invoke. */
+  readonly verification_recipes?: readonly string[];
+  /**
+   * Delegated verification §3.3: sorted, deduped, non-empty effective
+   * tool surface — computed at parse time so the host and the verifier
+   * agree on the closed alphabet without recomputing it on the read path.
+   */
+  readonly effective_tools?: readonly ChildToolName[];
 }
 
 /** Exclusive exact projection or explicit sandbox snapshot authority (#55 / #111). */
@@ -186,6 +203,8 @@ export interface Manifest {
   readonly continuity?: ContinuityPolicy;
   /** Opt-in Jev recipient-context ranking policy (spec §5). Absent preserves legacy behavior. */
   readonly context_enrichment?: ContextEnrichmentPolicy;
+  /** Delegated verification §3.1: top-level verification recipe inventory. */
+  readonly verification_recipes?: readonly VerificationRecipe[];
 }
 
 /**
