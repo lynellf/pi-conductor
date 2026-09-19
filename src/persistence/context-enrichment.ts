@@ -117,17 +117,20 @@ export function computeContextEnrichmentTransitionKey(
 
 /**
  * Lowercase sha256 over stable JSON for the recipient-relevance input
- * (spec §10.2). Candidate keys are sorted before hashing so order changes
- * in caller code do not change the fingerprint. The full outbound state is
- * retained via `outbound` — the host re-hashes the same shape on replay
- * and fails closed when the fingerprints disagree.
+ * (spec §10.2). Candidate order is part of the domain: the spec pins
+ * the first `candidate_limit` candidates in baseline order, and the
+ * fingerprint MUST remain stable across replays of the same baseline.
+ * The full outbound state is retained via `outbound` — the host re-hashes
+ * the same shape on replay and fails closed when the fingerprints
+ * disagree.
  */
 export function computeContextEnrichmentInputFingerprint(
   args: ContextEnrichmentInputFingerprintArgs,
 ): string {
-  const sortedCandidates = [...args.candidates].sort((left, right) =>
-    left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
-  );
+  const orderedCandidates = args.candidates.map((candidate) => ({
+    key: candidate.key,
+    outbound: candidate.outbound,
+  }));
   const payload = {
     domain: INPUT_FINGERPRINT_DOMAIN,
     policy: {
@@ -143,10 +146,7 @@ export function computeContextEnrichmentInputFingerprint(
       objective: args.recipient.objective,
       requested_action: args.recipient.requested_action,
     },
-    candidates: sortedCandidates.map((candidate) => ({
-      key: candidate.key,
-      outbound: candidate.outbound,
-    })),
+    candidates: orderedCandidates,
     instructions: args.instructions,
     criteria: [...args.criteria],
   };
@@ -168,7 +168,10 @@ export type ContextEnrichmentMaterializationCode =
   | "context_enrichment_unavailable_missing_failure"
   | "context_enrichment_unknown_failure_code"
   | "context_enrichment_invalid_failure_attempts"
-  | "context_enrichment_input_mismatch";
+  | "context_enrichment_input_mismatch"
+  | "context_enrichment_unsupported_version"
+  | "context_enrichment_unexpected_candidate_key"
+  | "context_enrichment_duplicate_terminal";
 
 /** Typed materialization rejection. Carries the bounded record identity. */
 export class ContextEnrichmentMaterializationError extends Error {
@@ -189,10 +192,35 @@ export class ContextEnrichmentMaterializationError extends Error {
  *
  * The function throws `ContextEnrichmentMaterializationError` on every
  * rejection. Callers persist a fresh record only after it returns.
+ *
+ * When `expectedKeys` is supplied, every judgment's candidate_key must
+ * appear in the expected set and every expected key must appear in the
+ * judgments (spec §10.3: "Record validation rejects duplicate candidate
+ * keys, missing candidates, out-of-order ordinals, non-finite values,
+ * input mismatches, and multiple terminal records for one transition").
+ * When `expectedFingerprint` is supplied, the record's `input_sha256`
+ * MUST match — a mismatch fails closed with `input_mismatch`.
  */
 export function assertContextEnrichmentRecord(
   record: unknown,
+  options: {
+    readonly expectedKeys?: ReadonlySet<string>;
+    readonly expectedFingerprint?: string;
+  } = {},
 ): asserts record is ContextEnrichmentRecord {
+  if (!isObject(record)) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_invalid_schema",
+      "context_enrichment record must be a JSON object",
+    );
+  }
+  const versionCheck = record as { schema_version?: unknown };
+  if (versionCheck.schema_version !== 1) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_unsupported_version",
+      `unsupported context_enrichment schema_version: ${String(versionCheck.schema_version)}`,
+    );
+  }
   if (!Value.Check(contextEnrichmentRecordSchema, record)) {
     throw new ContextEnrichmentMaterializationError(
       "context_enrichment_invalid_schema",
@@ -200,6 +228,14 @@ export function assertContextEnrichmentRecord(
     );
   }
   const checked = record as ContextEnrichmentRecord;
+  if (options.expectedFingerprint !== undefined) {
+    if (checked.input_sha256 !== options.expectedFingerprint) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_input_mismatch",
+        `context_enrichment input_sha256 mismatch: expected ${options.expectedFingerprint}, got ${checked.input_sha256}`,
+      );
+    }
+  }
   if (checked.status === "completed") {
     if (checked.judgments === undefined) {
       throw new ContextEnrichmentMaterializationError(
@@ -213,7 +249,7 @@ export function assertContextEnrichmentRecord(
         "completed context_enrichment record is missing usage",
       );
     }
-    assertJudgments(checked.judgments, checked.candidate_count);
+    assertJudgments(checked.judgments, checked.candidate_count, options.expectedKeys);
   } else {
     if (checked.judgments !== undefined) {
       throw new ContextEnrichmentMaterializationError(
@@ -231,9 +267,63 @@ export function assertContextEnrichmentRecord(
   }
 }
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Scan the full run log for `context_enrichment` records and surface
+ * any duplicate or conflicting terminal record for the same
+ * `source_transition_key`. The host must call this before prompting;
+ * two competing terminals fail closed with `duplicate_terminal` per
+ * spec §10.3 and §10.4.
+ */
+export function findContextEnrichmentTerminals(
+  records: readonly unknown[],
+  runId: string,
+): readonly ContextEnrichmentRecord[] {
+  const terminals: ContextEnrichmentRecord[] = [];
+  for (const record of records) {
+    if (!isObject(record)) continue;
+    if (record.type !== "context_enrichment") continue;
+    if (record.run_id !== runId) continue;
+    if (record.schema_version !== 1) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_unsupported_version",
+        `unsupported context_enrichment schema_version: ${String(record.schema_version)}`,
+      );
+    }
+    assertContextEnrichmentRecord(record);
+    terminals.push(record as ContextEnrichmentRecord);
+  }
+  return Object.freeze(terminals);
+}
+
+/**
+ * Validate that exactly one terminal record exists for a transition
+ * key. Throws `duplicate_terminal` when two compete for the same key.
+ * Returns the single matching terminal when present, otherwise `null`.
+ */
+export function selectUniqueTerminalForTransition(
+  terminals: readonly ContextEnrichmentRecord[],
+  transitionKey: string,
+): ContextEnrichmentRecord | null {
+  const matches = terminals.filter(
+    (record) => record.source_transition_key === transitionKey,
+  );
+  if (matches.length > 1) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_duplicate_terminal",
+      `context_enrichment has ${matches.length} terminal records for transition ${transitionKey}`,
+    );
+  }
+  return matches[0] ?? null;
+}
+
 function assertJudgments(
   judgments: readonly ContextRelevanceJudgment[],
   candidateCount: number,
+  expectedKeys?: ReadonlySet<string>,
 ): void {
   if (judgments.length !== candidateCount) {
     throw new ContextEnrichmentMaterializationError(
@@ -263,6 +353,12 @@ function assertJudgments(
         `judgment at ordinal ${index} carries baseline_ordinal ${judgment.baseline_ordinal}`,
       );
     }
+    if (expectedKeys !== undefined && !expectedKeys.has(judgment.candidate_key)) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_unexpected_candidate_key",
+        `judgment '${judgment.candidate_key}' is not in the expected candidate set`,
+      );
+    }
     if (!Number.isFinite(judgment.score) || !Number.isFinite(judgment.ranking_certainty)) {
       throw new ContextEnrichmentMaterializationError(
         "context_enrichment_non_finite_value",
@@ -274,6 +370,16 @@ function assertJudgments(
         throw new ContextEnrichmentMaterializationError(
           "context_enrichment_non_finite_value",
           `judgment '${judgment.candidate_key}' carries a non-finite probability for bucket ${key}`,
+        );
+      }
+    }
+  }
+  if (expectedKeys !== undefined) {
+    for (const expected of expectedKeys) {
+      if (!seen.has(expected)) {
+        throw new ContextEnrichmentMaterializationError(
+          "context_enrichment_missing_candidate",
+          `expected candidate '${expected}' is missing from context_enrichment judgments`,
         );
       }
     }

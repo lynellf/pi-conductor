@@ -151,6 +151,9 @@ describe("computeContextEnrichmentInputFingerprint (spec §10.2)", () => {
   });
 
   it("is order-stable for candidate keys", () => {
+    // Spec §6.2: candidate order is part of the domain (the first
+    // `candidate_limit` candidates are taken in baseline order). The
+    // fingerprint must therefore change if the same set is reordered.
     const a = computeContextEnrichmentInputFingerprint(
       makeInput({
         candidates: [
@@ -179,7 +182,7 @@ describe("computeContextEnrichmentInputFingerprint (spec §10.2)", () => {
         ],
       }),
     );
-    expect(a).toBe(b);
+    expect(a).not.toBe(b);
   });
 
   it("changes when the recipient objective changes", () => {

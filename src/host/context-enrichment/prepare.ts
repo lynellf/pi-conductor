@@ -31,6 +31,8 @@ import {
   type ContextEnrichmentInputFingerprintArgs,
   computeContextEnrichmentInputFingerprint,
   computeContextEnrichmentTransitionKey,
+  findContextEnrichmentTerminals,
+  selectUniqueTerminalForTransition,
 } from "../../persistence/context-enrichment.js";
 import { materializeContinuity } from "../../persistence/continuity-materialization.js";
 import {
@@ -398,8 +400,11 @@ function sortJudgments(
 /**
  * Find an existing terminal record for this transition. The host
  * treats any record whose transition key matches as authoritative;
- * mismatched recipient/visit/candidate-count reject with a typed
- * materialization error rather than silently applying stale data.
+ * mismatched recipient/visit reject with a typed materialization
+ * error rather than silently applying stale data. The full run log
+ * is scanned so duplicate terminals are detected (spec §10.4 —
+ * "Duplicate or conflicting terminal records: fail closed before
+ * prompting").
  */
 function findMatchingRecord(
   log: RecordLog,
@@ -408,18 +413,18 @@ function findMatchingRecord(
   recipient: Role,
   recipientVisit: number,
 ): ContextEnrichmentRecord | null {
-  for (const record of log.records(runId)) {
-    if (record.type !== "context_enrichment") continue;
-    if (record.source_transition_key !== transitionKey) continue;
-    if (record.recipient_role !== recipient || record.recipient_visit !== recipientVisit) {
-      throw new Error(
-        `mismatched recipient for context_enrichment transition ${transitionKey}: expected ${recipient}@${recipientVisit}, got ${record.recipient_role}@${record.recipient_visit}`,
-      );
-    }
-    assertContextEnrichmentRecord(record);
-    return record;
+  const terminals = findContextEnrichmentTerminals(
+    log.records(runId) as readonly unknown[],
+    runId,
+  );
+  const match = selectUniqueTerminalForTransition(terminals, transitionKey);
+  if (match === null) return null;
+  if (match.recipient_role !== recipient || match.recipient_visit !== recipientVisit) {
+    throw new Error(
+      `mismatched recipient for context_enrichment transition ${transitionKey}: expected ${recipient}@${recipientVisit}, got ${match.recipient_role}@${match.recipient_visit}`,
+    );
   }
-  return null;
+  return match;
 }
 
 /**
