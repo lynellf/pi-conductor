@@ -288,6 +288,21 @@ contract but identified four bounded issues. No reviewer edits were accepted.
 - [x] Delegate strict `context_enrichment` policy parsing to `src/manifest/context-enrichment.ts`.
 - [ ] Obtain a fresh independent reviewer approval transition on this repaired HEAD.
 
+### Fourth independent review cycle (post-`1689b24` review)
+
+The canonical reviewer identified four bounded code/convention issues and target
+or gate-evidence drift. The parent-owned corrective commit `cce3daa` resolves
+those findings without claiming child authorship. The final source revision was
+verified before this documentation-only evidence update.
+
+- [x] Preserve valid continuity-bearing handoffs while tolerating duplicate synthetic lifecycle placeholders.
+- [x] Remove the undocumented candidate-key length cap and add long-identity coverage.
+- [x] Reject zero-attempt unavailable records for every provider failure code except `missing_api_key`.
+- [x] Bring `src/host/production-host.ts` below 500 LOC and add JSDoc to new ranking exports.
+- [x] Focused enrichment/replay suite: 8 files, 157 tests.
+- [x] Exact source revision gates: typecheck, build, lint, format check, diff check, full `pnpm test` (364 files, 3819 tests), high-severity audit, and pure-layer import guard passed; general audit remains 1 low and 2 moderate advisories.
+- [ ] Obtain a fresh independent reviewer approval transition on the final integrated revision.
+
 ## Phase 5 — complete repository gates
 
 - [x] `pnpm typecheck`
