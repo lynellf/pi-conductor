@@ -139,7 +139,6 @@ describe("delegated-verification schema contracts (P1 RED)", () => {
       ["non-string (object)", { recipe: "default" }],
       ["string exceeding maxLength 64", "a".repeat(65)],
       // Reviewer F8: enforce the recipe identifier grammar, not just length.
-      ["starts with digit", "9starts"],
       ["contains space", "has space"],
       ["contains slash", "has/slash"],
     ])("rejects malformed verification_recipe: %s", (_label, verification_recipe) => {

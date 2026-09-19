@@ -170,7 +170,19 @@ export function validateSubagentToolPolicy(
   opts: ValidateSubagentToolPolicyOptions,
 ): readonly ManifestError[] {
   const errors: ManifestError[] = [];
-  if (policy === undefined) return Object.freeze(errors);
+
+  // Reviewer F2 remediation: a profile with NO `tools` policy but with
+  // non-empty `profile.verification_recipes` is rejected. The cross-field
+  // rule of spec §3.4 is independent of the existence of a tools block.
+  if (policy === undefined) {
+    if (opts.profileRecipes !== undefined && opts.profileRecipes.length > 0) {
+      errors.push({
+        code: "invalid-subagent-tool-policy",
+        message: `subagent '${profileName}' declares profile.verification_recipes without a tools policy (must include 'verify' in tools.allowed per spec §3.4)`,
+      });
+    }
+    return Object.freeze(errors);
+  }
 
   // (5) allowed shape: non-empty, dedupe, ≤16 entries, closed-set names.
   if (
@@ -214,6 +226,7 @@ export function validateSubagentToolPolicy(
       });
     } else {
       const allowedSet = new Set(policy.allowed);
+      const defaultSeen = new Map<ChildToolName, number>();
       policy.default.forEach((name, index) => {
         if (!CHILD_TOOL_NAME_SET.has(name)) {
           errors.push({
@@ -225,6 +238,15 @@ export function validateSubagentToolPolicy(
             code: "invalid-subagent-tool-policy",
             message: `subagent '${profileName}' tools.default contains '${name}' which is not in \`allowed\``,
           });
+        } else if (defaultSeen.has(name)) {
+          // Reviewer F4 remediation: dedupe tool-policy arrays.
+          const firstIndex = defaultSeen.get(name);
+          errors.push({
+            code: "invalid-subagent-tool-policy",
+            message: `subagent '${profileName}' tools.default[${index}] repeats child tool name '${name}' (also at index ${firstIndex})`,
+          });
+        } else {
+          defaultSeen.set(name, index);
         }
       });
     }

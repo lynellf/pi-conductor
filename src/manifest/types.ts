@@ -56,11 +56,10 @@ export interface SubagentProfile {
   /** Delegated verification §3.4: top-level recipe names this profile may invoke. */
   readonly verification_recipes?: readonly string[];
   /**
-   * Delegated verification §3.3: sorted, deduped, non-empty effective
-   * tool surface — computed at parse time so the host and the verifier
-   * agree on the closed alphabet without recomputing it on the read path.
+   * P2 admission work: per-task effective tools (sorted, deduped, non-empty)
+   * are computed at admission time from `(profile.tools, task.tools)`,
+   * not at parse time. See spec §4.
    */
-  readonly effective_tools?: readonly ChildToolName[];
 }
 
 /** Exclusive exact projection or explicit sandbox snapshot authority (#55 / #111). */

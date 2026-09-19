@@ -104,7 +104,7 @@ export interface VerificationCommand {
 export interface VerificationRecipe {
   readonly name: string;
   readonly commands: readonly VerificationCommand[];
-  readonly evaluation: string;
+  readonly evaluation: VerificationEvaluation;
   readonly required_paths: readonly string[];
   readonly timeout_seconds: number;
   readonly max_calls: number;
@@ -147,9 +147,33 @@ function isValidExecutableAbsolutePath(value: string): boolean {
   if (value.length === 0 || value.includes("\u0000")) return false;
   if (utf8ByteLength(value) > VERIFICATION_COMMAND_EXECUTABLE_MAX_UTF8_BYTES) return false;
   if (!value.startsWith("/")) return false;
+  // Reviewer F1 remediation: require a canonical POSIX path. Reject dot
+  // segments, redundant separators, and any value whose normalized form
+  // diverges from the input. Prefix matching alone is bypassable.
+  if (value !== posixNormalize(value)) return false;
   return VERIFICATION_EXECUTABLE_ROOTS.some(
     (root) => value === root || value.startsWith(`${root}/`),
   );
+}
+
+/** Minimal POSIX path normalization for the executable check (no syscalls). */
+function posixNormalize(value: string): string {
+  const absolute = value.startsWith("/");
+  const segments: string[] = [];
+  for (const raw of value.split("/")) {
+    if (raw === "" || raw === ".") continue;
+    if (raw === "..") {
+      if (segments.length > 0) {
+        segments.pop();
+      } else if (!absolute) {
+        segments.push("..");
+      }
+      // absolute && segments.length === 0: cannot escape root, drop the ..
+      continue;
+    }
+    segments.push(raw);
+  }
+  return (absolute ? "/" : "") + segments.join("/");
 }
 
 function isValidArgument(value: string): boolean {
@@ -181,8 +205,11 @@ export function canonicalizeVerificationRecipe(recipe: VerificationRecipe): stri
 }
 
 function canonicalizeInventory(recipes: readonly VerificationRecipe[]): string {
-  const ordered = recipes.map(canonicalizeVerificationRecipe);
-  return JSON.stringify(ordered);
+  // Reviewer F9 remediation: build the inventory canonical form as an array
+  // of canonical recipe objects (preserving array order), not as an array of
+  // escaped JSON strings. The previous form double-encoded each recipe and
+  // inflated the measured UTF-8 byte count.
+  return `[${recipes.map(canonicalizeVerificationRecipe).join(",")}]`;
 }
 
 // ─── Parsing (structural shape only) ──────────────────────────────────
@@ -273,20 +300,20 @@ function parseVerificationCommand(raw: unknown, path: string): VerificationComma
     throw new ManifestParseError(`${path}.executable must be a non-empty string`);
   }
 
-  let parsedArgs: readonly string[] = Object.freeze([]);
-  if (entry.args !== undefined) {
-    if (!Array.isArray(entry.args)) {
-      throw new ManifestParseError(`${path}.args must be an array`);
-    }
-    const args: string[] = [];
-    for (const [index, arg] of entry.args.entries()) {
-      if (typeof arg !== "string" || arg.length === 0) {
-        throw new ManifestParseError(`${path}.args[${index}] must be a non-empty string`);
-      }
-      args.push(arg);
-    }
-    parsedArgs = Object.freeze(args);
+  // Reviewer F6/F7 remediation: `args` is structurally required as an array.
+  // Empty arrays and empty-string elements are allowed (size, NUL, and count
+  // bounds are enforced at validate time).
+  if (!Array.isArray(entry.args)) {
+    throw new ManifestParseError(`${path}.args must be an array`);
   }
+  const args: string[] = [];
+  for (const [index, arg] of entry.args.entries()) {
+    if (typeof arg !== "string") {
+      throw new ManifestParseError(`${path}.args[${index}] must be a string`);
+    }
+    args.push(arg);
+  }
+  const parsedArgs: readonly string[] = Object.freeze(args);
 
   return Object.freeze({ executable: entry.executable, args: parsedArgs }) as VerificationCommand;
 }

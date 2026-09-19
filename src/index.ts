@@ -136,6 +136,15 @@ export {
 } from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
 export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
+// Reviewer F10 remediation: surface the delegated-verification public
+// surface (P1) on the package barrel so consumers can import the closed
+// child-tool alphabet, profile tool policy, top-level verification recipe
+// shape, canonical recipe helper, and the empty verify() schema without
+// traversing internal modules.
+export type {
+  ChildToolName,
+  SubagentToolPolicy,
+} from "./manifest/subagent-tool-policy.js";
 // Durable continuity policy (spec §5): optional opt-in manifest policy.
 export type {
   ContextEnrichmentPolicy,
@@ -154,6 +163,13 @@ export type {
   SubagentSnapshotPolicy,
 } from "./manifest/types.js";
 export { ManifestParseError } from "./manifest/types.js";
+export {
+  canonicalizeVerificationRecipe,
+  parseVerificationRecipes,
+  type VerificationEvaluation,
+  type VerificationRecipe,
+  validateVerificationRecipes,
+} from "./manifest/verification-recipes.js";
 // Pure continuity contracts (spec §6, §10, §11) consumed by host + CLI lanes.
 export type {
   ContinuityActiveOrSupersededItem,
@@ -209,6 +225,7 @@ export {
   continuityPacketV1Schema,
   evidenceRefSchema,
 } from "./seam/continuity.js";
+export { verifyArgsSchema } from "./seam/schema.js";
 
 // ─── Manifest validation + derivation (§13, §12) ──────────────────────
 // validateManifest surfaces hard errors vs soft warnings; toMachineDefinition

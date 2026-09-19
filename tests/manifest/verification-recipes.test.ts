@@ -367,36 +367,49 @@ describe("delegated-verification §3.1 top-level verification_recipes", () => {
     });
   });
 
-  describe("(F9 MEDIUM) inventory canonical JSON size is the OBJECT-array form, not an escaped string-array", () => {
-    // 17 individually valid recipes each with ~61,500-byte canonical JSON
-    // (~17 × 61,500 ≈ 1,045,500 bytes aggregate) must be ACCEPTED because the
-    // object-array canonical form is under the 1,048,596 cap. Adding one more
-    // ~61,500-byte recipe (~1,107,000 bytes aggregate) must be REJECTED.
-    function paddedRecipe(name: string, padLen: number) {
-      return {
-        name,
-        commands: [{ executable: "/usr/bin/git", args: ["x".repeat(padLen)] }],
-        evaluation: "report_only",
-        required_paths: ["src/foo.ts"],
-        timeout_seconds: 30,
-        max_calls: 1,
-      };
-    }
-
-    it("accepts 17 padded recipes whose aggregate object-array canonical form is under the cap", () => {
-      const recipes: AnyObj[] = [];
-      for (let i = 0; i < 17; i++) {
-        recipes.push(paddedRecipe(`pad-${String(i).padStart(2, "0")}`, 61_000));
-      }
-      expectAccepted(minimalYaml(recipes), 17);
-    });
-
-    it("rejects 18 padded recipes whose aggregate object-array canonical form exceeds the cap", () => {
-      const recipes: AnyObj[] = [];
-      for (let i = 0; i < 18; i++) {
-        recipes.push(paddedRecipe(`pad-${String(i).padStart(2, "0")}`, 61_000));
-      }
-      expectRejected(minimalYaml(recipes));
+  describe("(F9 MEDIUM) inventory canonical JSON is the OBJECT-array form, not an escaped string-array", () => {
+    // With the per-arg 4,096-byte cap and 64-recipe cap, no public inventory
+    // can exceed the 1 MB cap under either canonical form, so we assert the
+    // canonical form structurally: importing canonicalizeVerificationRecipe
+    // and confirming the inventory canonical JSON parses to an array of
+    // OBJECTS, not an array of escaped strings (the buggy F9 form).
+    it("inventory canonical form is an array of objects, not an array of escaped strings", async () => {
+      const { canonicalizeVerificationRecipe } = await import(
+        "../../src/manifest/verification-recipes.js"
+      );
+      const recipes: Array<{
+        name: string;
+        commands: Array<{ executable: string; args: string[] }>;
+        evaluation: "report_only" | "require_pass" | "require_fail";
+        required_paths: string[];
+        timeout_seconds: number;
+        max_calls: number;
+      }> = [
+        {
+          name: "a",
+          commands: [{ executable: "/usr/bin/git", args: ["x"] }],
+          evaluation: "report_only",
+          required_paths: ["src/a.ts"],
+          timeout_seconds: 30,
+          max_calls: 1,
+        },
+        {
+          name: "b",
+          commands: [{ executable: "/usr/bin/git", args: ["y"] }],
+          evaluation: "report_only",
+          required_paths: ["src/b.ts"],
+          timeout_seconds: 30,
+          max_calls: 1,
+        },
+      ];
+      const inventoryCanonical = `[${recipes.map(canonicalizeVerificationRecipe).join(",")}]`;
+      const parsed = JSON.parse(inventoryCanonical);
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed).toHaveLength(2);
+      expect(typeof parsed[0]).toBe("object");
+      expect(typeof parsed[1]).toBe("object");
+      expect(parsed[0].name).toBe("a");
+      expect(parsed[1].name).toBe("b");
     });
   });
 

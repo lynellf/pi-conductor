@@ -33,7 +33,7 @@ import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
 import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
-import { parseSubagentToolPolicy, resolveEffectiveTools } from "./subagent-tool-policy.js";
+import { parseSubagentToolPolicy } from "./subagent-tool-policy.js";
 import type {
   ArtifactConfig,
   ContextRetention,
@@ -224,7 +224,9 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     entry.verification_recipes === undefined
       ? undefined
       : toNonEmptyStringArray(entry.verification_recipes, `${path}.verification_recipes`);
-  const effectiveTools = tools === undefined ? undefined : resolveEffectiveTools(tools);
+  // Reviewer F11 remediation: effective_tools materialization is P2 admission
+  // work (per spec §4). P1 only captures the profile-level policy + recipe
+  // authorization; per-task tool resolution lives in the host admission path.
 
   return Object.freeze({
     name,
@@ -237,7 +239,6 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     ...(execution === undefined ? {} : { execution }),
     ...(tools === undefined ? {} : { tools }),
     ...(verificationRecipes === undefined ? {} : { verification_recipes: verificationRecipes }),
-    ...(effectiveTools === undefined ? {} : { effective_tools: effectiveTools }),
   }) as SubagentProfile;
 }
 

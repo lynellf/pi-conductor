@@ -305,7 +305,15 @@ export const delegateTaskSchema = Type.Object({
       { minItems: 1, maxItems: 16, uniqueItems: true },
     ),
   ),
-  verification_recipe: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
+  verification_recipe: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 64,
+      // Reviewer F8 remediation: enforce the recipe identifier grammar at the
+      // schema boundary (mirrors the manifest-side recipe-name regex).
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+    }),
+  ),
 });
 
 /** Typed view of a single delegation task. */
