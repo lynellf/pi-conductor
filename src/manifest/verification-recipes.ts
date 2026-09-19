@@ -30,8 +30,16 @@
  *     authoritative pinned source for downstream admission.
  */
 
+import { isSafeSnapshotPath } from "./subagent-snapshot.js";
 import { ManifestParseError } from "./types.js";
 import type { ManifestError } from "./validate.js";
+import {
+  canonicalizeInventory,
+  canonicalizeVerificationRecipe,
+} from "./verification-recipes-canonical.js";
+
+// Re-export canonical helpers so the public API surface stays in one place.
+export { canonicalizeInventory, canonicalizeVerificationRecipe };
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -129,18 +137,11 @@ function rejectUnknownKeys(
 }
 
 function isSafeRepositoryRelativePath(path: string): boolean {
-  if (
-    path.trim().length === 0 ||
-    path.startsWith("~") ||
-    path.startsWith("/") ||
-    path.startsWith("\\") ||
-    /^[a-zA-Z]:/.test(path) ||
-    path.includes("\u0000") ||
-    /[*?[\]{}$`]/.test(path)
-  ) {
-    return false;
-  }
-  return !path.split(/[\\/]/).some((segment) => segment === "." || segment === "..");
+  // Reviewer G2 remediation: reuse the strict subagent-snapshot exact-path
+  // predicate so all profile policies share one source of truth for safe
+  // exact repository-relative file literals. Tracked-file / effective-
+  // projection membership remains a P2 admission concern.
+  return isSafeSnapshotPath(path);
 }
 
 function isValidExecutableAbsolutePath(value: string): boolean {
@@ -180,36 +181,6 @@ function isValidArgument(value: string): boolean {
   if (value.includes("\u0000")) return false;
   if (utf8ByteLength(value) > VERIFICATION_COMMAND_ARG_MAX_UTF8_BYTES) return false;
   return true;
-}
-
-// ─── Canonicalization (sorted keys, preserved array order) ────────────
-
-/**
- * Compute the canonical JSON form of one recipe. Keys are sorted at every
- * level; array order is preserved. The result is the canonical encoding
- * used for size accounting and downstream hashing.
- */
-export function canonicalizeVerificationRecipe(recipe: VerificationRecipe): string {
-  const ordered: Record<string, unknown> = {
-    commands: recipe.commands.map((command) => ({
-      args: [...command.args],
-      executable: command.executable,
-    })),
-    evaluation: recipe.evaluation,
-    max_calls: recipe.max_calls,
-    name: recipe.name,
-    required_paths: [...recipe.required_paths],
-    timeout_seconds: recipe.timeout_seconds,
-  };
-  return JSON.stringify(ordered);
-}
-
-function canonicalizeInventory(recipes: readonly VerificationRecipe[]): string {
-  // Reviewer F9 remediation: build the inventory canonical form as an array
-  // of canonical recipe objects (preserving array order), not as an array of
-  // escaped JSON strings. The previous form double-encoded each recipe and
-  // inflated the measured UTF-8 byte count.
-  return `[${recipes.map(canonicalizeVerificationRecipe).join(",")}]`;
 }
 
 // ─── Parsing (structural shape only) ──────────────────────────────────
@@ -258,6 +229,15 @@ function parseVerificationRecipe(raw: unknown, path: string): VerificationRecipe
 
   if (typeof entry.evaluation !== "string") {
     throw new ManifestParseError(`${path}.evaluation must be a string`);
+  }
+  // Reviewer G3 remediation: reject closed evaluation literals at parse so
+  // the parsed `VerificationRecipe.evaluation` is guaranteed to satisfy
+  // the `VerificationEvaluation` union. Honest narrowing, no unchecked
+  // semantic cast.
+  if (!VERIFICATION_EVALUATIONS.includes(entry.evaluation as VerificationEvaluation)) {
+    throw new ManifestParseError(
+      `${path}.evaluation must be one of ${VERIFICATION_EVALUATIONS.join(", ")}`,
+    );
   }
 
   if (!Array.isArray(entry.required_paths)) {
@@ -318,158 +298,8 @@ function parseVerificationCommand(raw: unknown, path: string): VerificationComma
   return Object.freeze({ executable: entry.executable, args: parsedArgs }) as VerificationCommand;
 }
 
-// ─── Validation (semantic bounds + cross-field + size caps) ───────────
-
-/**
- * Semantic validation for an already-parsed verification-recipe inventory.
- *
- * Always returns a (possibly empty) readonly ManifestError[]. Errors carry
- * the shared `invalid-verification-recipes` code.
- */
-export function validateVerificationRecipes(
-  recipes: readonly VerificationRecipe[],
-): readonly ManifestError[] {
-  const errors: ManifestError[] = [];
-
-  if (recipes.length > VERIFICATION_INVENTORY_MAX) {
-    errors.push({
-      code: "invalid-verification-recipes",
-      message: `verification_recipes contains ${recipes.length} entries; maximum is ${VERIFICATION_INVENTORY_MAX}`,
-    });
-  }
-
-  const seenNames = new Map<string, number>();
-  recipes.forEach((recipe, index) => {
-    const path = `verification_recipes[${index}]`;
-    if (!VERIFICATION_RECIPE_NAME_PATTERN.test(recipe.name)) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.name '${recipe.name}' must match ${VERIFICATION_RECIPE_NAME_PATTERN}`,
-      });
-    }
-    if (seenNames.has(recipe.name)) {
-      const firstIndex = seenNames.get(recipe.name);
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.name '${recipe.name}' repeats verification_recipes[${firstIndex}].name`,
-      });
-    } else {
-      seenNames.set(recipe.name, index);
-    }
-
-    if (
-      recipe.commands.length < VERIFICATION_COMMANDS_MIN ||
-      recipe.commands.length > VERIFICATION_COMMANDS_MAX
-    ) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.commands must contain between ${VERIFICATION_COMMANDS_MIN} and ${VERIFICATION_COMMANDS_MAX} entries`,
-      });
-    }
-    for (const [cIndex, command] of recipe.commands.entries()) {
-      const cPath = `${path}.commands[${cIndex}]`;
-      if (!isValidExecutableAbsolutePath(command.executable)) {
-        errors.push({
-          code: "invalid-verification-recipes",
-          message: `${cPath}.executable '${command.executable}' is not an absolute NUL-free path under ${VERIFICATION_EXECUTABLE_ROOTS.join(", ")} ≤ ${VERIFICATION_COMMAND_EXECUTABLE_MAX_UTF8_BYTES} UTF-8 bytes`,
-        });
-      }
-      if (
-        command.args.length < VERIFICATION_ARGS_MIN ||
-        command.args.length > VERIFICATION_ARGS_MAX
-      ) {
-        errors.push({
-          code: "invalid-verification-recipes",
-          message: `${cPath}.args must contain between ${VERIFICATION_ARGS_MIN} and ${VERIFICATION_ARGS_MAX} entries`,
-        });
-      }
-      for (const [aIndex, arg] of command.args.entries()) {
-        if (!isValidArgument(arg)) {
-          errors.push({
-            code: "invalid-verification-recipes",
-            message: `${cPath}.args[${aIndex}] is not a NUL-free string ≤ ${VERIFICATION_COMMAND_ARG_MAX_UTF8_BYTES} UTF-8 bytes`,
-          });
-        }
-      }
-    }
-
-    if (!VERIFICATION_EVALUATIONS.includes(recipe.evaluation as VerificationEvaluation)) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.evaluation must be one of ${VERIFICATION_EVALUATIONS.join(", ")}`,
-      });
-    } else if (recipe.evaluation === "require_fail" && recipe.commands.length !== 1) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.evaluation='require_fail' requires exactly one command (got ${recipe.commands.length})`,
-      });
-    }
-
-    if (
-      recipe.required_paths.length < VERIFICATION_REQUIRED_PATHS_MIN ||
-      recipe.required_paths.length > VERIFICATION_REQUIRED_PATHS_MAX
-    ) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.required_paths must contain between ${VERIFICATION_REQUIRED_PATHS_MIN} and ${VERIFICATION_REQUIRED_PATHS_MAX} entries`,
-      });
-    }
-    const seenPaths = new Set<string>();
-    for (const [pIndex, p] of recipe.required_paths.entries()) {
-      if (seenPaths.has(p)) {
-        errors.push({
-          code: "invalid-verification-recipes",
-          message: `${path}.required_paths[${pIndex}] repeats path '${p}'`,
-        });
-      } else {
-        seenPaths.add(p);
-      }
-      if (!isSafeRepositoryRelativePath(p)) {
-        errors.push({
-          code: "invalid-verification-recipes",
-          message: `${path}.required_paths[${pIndex}] '${p}' is not a safe repository-relative path`,
-        });
-      }
-    }
-
-    if (
-      recipe.timeout_seconds < VERIFICATION_TIMEOUT_SECONDS_MIN ||
-      recipe.timeout_seconds > VERIFICATION_TIMEOUT_SECONDS_MAX
-    ) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.timeout_seconds must be between ${VERIFICATION_TIMEOUT_SECONDS_MIN} and ${VERIFICATION_TIMEOUT_SECONDS_MAX}`,
-      });
-    }
-
-    if (
-      recipe.max_calls < VERIFICATION_MAX_CALLS_MIN ||
-      recipe.max_calls > VERIFICATION_MAX_CALLS_MAX
-    ) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path}.max_calls must be between ${VERIFICATION_MAX_CALLS_MIN} and ${VERIFICATION_MAX_CALLS_MAX}`,
-      });
-    }
-
-    const canonical = canonicalizeVerificationRecipe(recipe);
-    if (utf8ByteLength(canonical) > VERIFICATION_RECIPE_CANONICAL_MAX_UTF8_BYTES) {
-      errors.push({
-        code: "invalid-verification-recipes",
-        message: `${path} canonical JSON exceeds ${VERIFICATION_RECIPE_CANONICAL_MAX_UTF8_BYTES} UTF-8 bytes`,
-      });
-    }
-  });
-
-  if (
-    recipes.length <= VERIFICATION_INVENTORY_MAX &&
-    utf8ByteLength(canonicalizeInventory(recipes)) > VERIFICATION_INVENTORY_CANONICAL_MAX_UTF8_BYTES
-  ) {
-    errors.push({
-      code: "invalid-verification-recipes",
-      message: `verification_recipes inventory canonical JSON exceeds ${VERIFICATION_INVENTORY_CANONICAL_MAX_UTF8_BYTES} UTF-8 bytes`,
-    });
-  }
-
-  return Object.freeze(errors);
-}
+// Reviewer G5 split: validation function lives in
+// `verification-recipes-validate.ts` to keep this module under the
+// approximate 400-LOC guideline. Re-exported here so the public API
+// surface stays in one place.
+export { validateVerificationRecipes } from "./verification-recipes-validate.js";

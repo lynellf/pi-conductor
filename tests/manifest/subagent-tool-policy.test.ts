@@ -406,6 +406,22 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
     const { errors } = parseAndValidate(buildYaml(subagent));
     expect(errors.length).toBeGreaterThan(0);
   });
+
+  // Reviewer G3 remediation: bogus tool names must throw at parse, not be
+  // silently narrowed to ChildToolName. Use parseAndValidate which catches
+  // the parse error and reports it.
+  it.each([
+    { label: "root_shell in allowed", tools: { required: true, allowed: ["root_shell"] } },
+    {
+      label: "network_curl in default",
+      tools: { required: false, allowed: ["read"], default: ["network_curl"] },
+    },
+  ])("(G3 MEDIUM) rejects an unsupported child tool name at parse: %s", ({ tools }) => {
+    const { errors } = parseAndValidate(
+      buildYaml(bubblewrap({ tools } as Record<string, unknown>)),
+    );
+    expect(errors.some((e) => e.code === "parse-error")).toBe(true);
+  });
 });
 
 // Reference the imported ManifestParseError so the exact import path stays

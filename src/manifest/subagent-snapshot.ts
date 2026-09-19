@@ -41,9 +41,12 @@ export function validateSubagentSnapshotPolicy(policy: SubagentSnapshotPolicy): 
 export function isSafeSnapshotPath(path: string): boolean {
   return (
     path.length > 0 &&
+    // Reject leading/trailing whitespace and any non-canonical whitespace forms.
+    path === path.trim() &&
+    !/\s/.test(path) &&
     !path.startsWith("~") &&
     !/^[A-Za-z]:/.test(path) &&
-    !/[\\\0*?[\]{}]/.test(path) &&
+    !/[\\\0*?[\]{}$`]/.test(path) &&
     path
       .split("/")
       .every(

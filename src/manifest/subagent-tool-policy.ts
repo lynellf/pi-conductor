@@ -124,6 +124,11 @@ export function parseSubagentToolPolicy(
     if (typeof item !== "string" || item.length === 0) {
       throw new ManifestParseError(`${path}.allowed[${index}] must be a non-empty string`);
     }
+    if (!CHILD_TOOL_NAME_SET.has(item)) {
+      throw new ManifestParseError(
+        `${path}.allowed[${index}] '${item}' is not a trusted child tool name`,
+      );
+    }
     allowed.push(item as ChildToolName);
   }
 
@@ -136,6 +141,11 @@ export function parseSubagentToolPolicy(
     for (const [index, item] of entry.default.entries()) {
       if (typeof item !== "string" || item.length === 0) {
         throw new ManifestParseError(`${path}.default[${index}] must be a non-empty string`);
+      }
+      if (!CHILD_TOOL_NAME_SET.has(item)) {
+        throw new ManifestParseError(
+          `${path}.default[${index}] '${item}' is not a trusted child tool name`,
+        );
       }
       defaults.push(item as ChildToolName);
     }
@@ -312,21 +322,10 @@ export function validateSubagentToolPolicy(
 // ─── Effective tool surface ──────────────────────────────────────────
 
 /**
- * Resolve the effective tool surface for a profile. Returns a sorted,
- * dedupe readonly list. When `required: false`, falls back to `default`;
- * when `required: true`, returns the closed `allowed` surface.
- *
- * Defensive: returns an empty list when the policy inputs are missing
- * (e.g. `required: false` with no `default`). Callers that require a
- * non-empty surface must check via `validateSubagentToolPolicy`.
+ * Reviewer G3 remediation: resolveEffectiveTools is P2 admission work
+ * (spec §4 — per-task resolution from `(profile.tools, task.tools)`). The
+ * P1 parser/validator only captures the profile-level policy and recipe
+ * authorization; task-aware resolution lands with P2 RED tests where
+ * `required: true` rejects absent selections and `default` can only
+ * narrow `allowed`.
  */
-export function resolveEffectiveTools(policy: SubagentToolPolicy): readonly ChildToolName[] {
-  const source = policy.required
-    ? policy.allowed
-    : (policy.default ?? (Object.freeze([]) as readonly ChildToolName[]));
-  if (source.length === 0) {
-    return Object.freeze([]);
-  }
-  const sorted = [...source].sort();
-  return Object.freeze(sorted);
-}

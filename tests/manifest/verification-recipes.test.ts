@@ -367,49 +367,55 @@ describe("delegated-verification §3.1 top-level verification_recipes", () => {
     });
   });
 
-  describe("(F9 MEDIUM) inventory canonical JSON is the OBJECT-array form, not an escaped string-array", () => {
-    // With the per-arg 4,096-byte cap and 64-recipe cap, no public inventory
-    // can exceed the 1 MB cap under either canonical form, so we assert the
-    // canonical form structurally: importing canonicalizeVerificationRecipe
-    // and confirming the inventory canonical JSON parses to an array of
-    // OBJECTS, not an array of escaped strings (the buggy F9 form).
-    it("inventory canonical form is an array of objects, not an array of escaped strings", async () => {
-      const { canonicalizeVerificationRecipe } = await import(
-        "../../src/manifest/verification-recipes.js"
+  describe("(F9 MEDIUM) inventory canonical JSON aggregate cap exercises validateManifest, not the test", () => {
+    // Reviewer G4 remediation: drive canonicalizeInventory through the public
+    // validator boundary. 17 individually valid ~61.5 KiB recipes (each = 16
+    // commands x one 1,900-backslash arg per command) must ACCEPT under the
+    // 1,048,576-byte aggregate cap; 18 such recipes must be REJECTED with the
+    // inventory-size error (not the per-recipe cap, since each is well under
+    // 65,536 bytes). Backslashes double in size during canonical JSON
+    // escaping, so this exercises the object-array form (reviewer F9 fix),
+    // not the previous double-encoded escaped-string form.
+    function paddedRecipe(name: string) {
+      const arg = "\\".repeat(1900);
+      const commands = Array.from({ length: 16 }, () => ({
+        executable: "/usr/bin/git",
+        args: [arg],
+      }));
+      return {
+        name,
+        commands,
+        evaluation: "report_only",
+        required_paths: ["src/foo.ts"],
+        timeout_seconds: 30,
+        max_calls: 1,
+      };
+    }
+    function recipesYaml(n: number) {
+      const recipes = Array.from({ length: n }, (_, i) =>
+        paddedRecipe(`big-${String(i).padStart(2, "0")}`),
       );
-      const recipes: Array<{
-        name: string;
-        commands: Array<{ executable: string; args: string[] }>;
-        evaluation: "report_only" | "require_pass" | "require_fail";
-        required_paths: string[];
-        timeout_seconds: number;
-        max_calls: number;
-      }> = [
-        {
-          name: "a",
-          commands: [{ executable: "/usr/bin/git", args: ["x"] }],
-          evaluation: "report_only",
-          required_paths: ["src/a.ts"],
-          timeout_seconds: 30,
-          max_calls: 1,
-        },
-        {
-          name: "b",
-          commands: [{ executable: "/usr/bin/git", args: ["y"] }],
-          evaluation: "report_only",
-          required_paths: ["src/b.ts"],
-          timeout_seconds: 30,
-          max_calls: 1,
-        },
-      ];
-      const inventoryCanonical = `[${recipes.map(canonicalizeVerificationRecipe).join(",")}]`;
-      const parsed = JSON.parse(inventoryCanonical);
-      expect(Array.isArray(parsed)).toBe(true);
-      expect(parsed).toHaveLength(2);
-      expect(typeof parsed[0]).toBe("object");
-      expect(typeof parsed[1]).toBe("object");
-      expect(parsed[0].name).toBe("a");
-      expect(parsed[1].name).toBe("b");
+      return minimalYaml(recipes);
+    }
+
+    it("accepts 17 padded recipes whose aggregate object-array canonical form is under the 1 MiB cap", () => {
+      expectAccepted(recipesYaml(17), 17);
+    });
+
+    it("rejects 18 padded recipes specifically on the aggregate inventory-size error", () => {
+      let threw = false;
+      let errors: string[] = [];
+      try {
+        const m = parseManifest(recipesYaml(18));
+        errors = validateManifest(m).errors.map((e) => (e as unknown as AnyObj).code as string);
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(false);
+      // The aggregate inventory cap must surface as exactly one error;
+      // the per-recipe cap must not (each padded recipe is well under
+      // 65,536 bytes).
+      expect(errors).toEqual(["invalid-verification-recipes"]);
     });
   });
 
@@ -432,6 +438,44 @@ describe("delegated-verification §3.1 top-level verification_recipes", () => {
         minimalYaml([recipe({ commands: [{ executable: "/usr/bin/git", args: [""] }] })]),
         1,
       );
+    });
+  });
+
+  describe("(G2 HIGH) required_paths uses the strict safe exact repository-relative contract", () => {
+    // Reviewer G2 remediation: the recipe.required_paths predicate reuses
+    // isSafeSnapshotPath so backslashes, empty segments, repeated
+    // separators, trailing separators, leading/trailing whitespace, and
+    // .git/.pi-conductor control segments are all rejected.
+    it.each([
+      ["backslash", "src\\\\foo.ts"],
+      ["trailing separator", "src/"],
+      ["repeated separators", "src//foo.ts"],
+      ["leading whitespace", " src/foo.ts"],
+      ["trailing whitespace", "src/foo.ts "],
+      ["git control segment", ".git/config"],
+      ["conductor control segment", ".pi-conductor/state"],
+      ["absolute path", "/etc/passwd"],
+      ["tilde home expansion", "~/foo"],
+    ])("rejects unsafe required_paths entry: %s", (_label, p) => {
+      expectRejected(minimalYaml([recipe({ required_paths: [p] })]));
+    });
+
+    it.each([
+      ["nested file", "src/foo.ts"],
+      ["nested directory", "src/foo/bar.ts"],
+      ["package file", "package.json"],
+    ])("accepts normalized required_paths entry: %s", (_label, p) => {
+      expectAccepted(minimalYaml([recipe({ required_paths: [p] })]), 1);
+    });
+  });
+
+  describe("(G3 MEDIUM) parse rejects closed evaluation literals before narrowing", () => {
+    // Reviewer G3 remediation: bogus evaluation values must throw at parse,
+    // not silently narrow to the union. Use expectRejected (which accepts
+    // either parse-throw or validate-error) to assert the parse layer
+    // closes the door.
+    it("(G3) rejects a recipe with an unknown evaluation value", () => {
+      expectRejected(minimalYaml([recipe({ evaluation: "bogus" })]));
     });
   });
 });
