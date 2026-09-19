@@ -326,6 +326,45 @@ describe("buildRankedSeed (spec §8 byte accounting)", () => {
     expect((item.item as Record<string, unknown>).confidence).toBe("observed");
   });
 
+  it("uses prospective omission counts at digit-width boundaries", () => {
+    const records = Array.from({ length: 100 }, (_, index) =>
+      makeTransitionAccepted(
+        `rec-${index}`,
+        "run-1",
+        1000 + index,
+        makePacket("test", [
+          {
+            id: `f-${index}`,
+            statement: `finding ${index} with enough stable text to exercise omission accounting`,
+          },
+        ]),
+      ),
+    );
+    const ledgerValue = ledger(withLifecycles(records));
+    const projection = projectRankedCandidates(ledgerValue, SCORED_RANK_INPUT);
+    const judgments = projection.scored_prefix.map((candidate) => ({
+      candidate_key: candidate.candidate_key,
+      baseline_ordinal: candidate.baseline_ordinal,
+      score: 1,
+      ranking_certainty: 0.5,
+      probabilities: { "0": 0.25, "1": 0.25, "2": 0.25, "3": 0.25 },
+    }));
+
+    // These caps straddle the decimal-width changes in the omitted counters.
+    // Every cap above the fixed metadata floor must either admit a valid prefix
+    // or return a bounded seed; it must never reject after admission.
+    for (let maxBytes = 8_307; maxBytes <= 8_309; maxBytes += 1) {
+      expect(() =>
+        buildRankedSeed({
+          ledger: ledgerValue,
+          max_bytes: maxBytes,
+          ranking_input: SCORED_RANK_INPUT,
+          judgments,
+        }),
+      ).not.toThrow();
+    }
+  });
+
   it("is byte-identical to baseline when enrichment is disabled (omission compat)", () => {
     const ledgerValue = ledger(
       withLifecycles([

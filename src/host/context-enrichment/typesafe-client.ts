@@ -101,8 +101,6 @@ export interface TypesafeContextEnricherOptions {
   readonly requestTimeoutMs: number;
   /** Total attempts including the initial one. */
   readonly maxAttempts: number;
-  /** Override the origin (tests only — production must keep the official URL). */
-  readonly originOverride?: string;
   /** Override the runtime fetch (tests inject a fake transport here). */
   readonly fetchImpl?: FetchLike;
   /** Sleep helper for retry backoff (tests inject a no-op). */
@@ -211,11 +209,7 @@ function validateResponseShape(
     throw new TypesafeAdapterRejection("response_invalid");
   }
   // Response-level model and usage (official contract).
-  if (
-    typeof candidate.model !== "string" ||
-    candidate.model.length === 0 ||
-    candidate.model.length > 128
-  ) {
+  if (typeof candidate.model !== "string" || candidate.model.length === 0) {
     throw new TypesafeAdapterRejection("response_invalid");
   }
   if (typeof candidate.usage !== "object" || candidate.usage === null) {
@@ -296,11 +290,6 @@ export function buildScoreRequestBody(request: ContextEnrichmentRequest): unknow
   };
 }
 
-/** Build the official origin URL (fixed for production). */
-function originFor(options: TypesafeContextEnricherOptions): string {
-  return options.originOverride ?? `${TYPESAFE_API_ORIGIN}${TYPESAFE_SYSTEMONE_PATH}`;
-}
-
 /**
  * Construct the TypeSafe HTTP adapter. The adapter returns one of the
  * two documented outcomes; every retryable failure is bounded by
@@ -335,7 +324,7 @@ export function createTypesafeContextEnricher(
 
   return {
     async enrich(request: ContextEnrichmentRequest): Promise<ContextEnrichmentOutcome> {
-      const url = originFor(options);
+      const url = `${TYPESAFE_API_ORIGIN}${TYPESAFE_SYSTEMONE_PATH}`;
       const headers: Record<string, string> = {
         "content-type": "application/json",
         authorization: `Bearer ${options.apiKey ?? ""}`,

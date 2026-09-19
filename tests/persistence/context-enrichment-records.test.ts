@@ -239,6 +239,7 @@ describe("assertContextEnrichmentRecord (spec §10.3)", () => {
     requested_model: "jev-latest",
     strategy: "recipient_relevance_rank" as const,
     candidate_count: 1,
+    actual_model: "jev-1.13",
     ts: 1700,
   };
 
@@ -261,8 +262,10 @@ describe("assertContextEnrichmentRecord (spec §10.3)", () => {
   }
 
   function makeUnavailable(overrides: Record<string, unknown> = {}) {
+    const { actual_model, ...unavailableBase } = baseRecord;
+    void actual_model;
     return {
-      ...baseRecord,
+      ...unavailableBase,
       status: "unavailable" as const,
       failure: { code: "rate_limited", attempts: 2 },
       ...overrides,
@@ -358,6 +361,59 @@ describe("assertContextEnrichmentRecord (spec §10.3)", () => {
         makeUnavailable({ usage: { input_tokens: 1, output_tokens: 1 } }),
       ),
     ).toThrow(ContextEnrichmentMaterializationError);
+  });
+
+  it("rejects a completed record missing the returned provider model", () => {
+    expect(() => assertContextEnrichmentRecord(makeCompleted({ actual_model: undefined }))).toThrow(
+      ContextEnrichmentMaterializationError,
+    );
+  });
+
+  it("rejects a completed record whose probabilities do not sum to one", () => {
+    expect(() =>
+      assertContextEnrichmentRecord(
+        makeCompleted({
+          judgments: [
+            {
+              candidate_key: "blocking_questions:f-1:0",
+              baseline_ordinal: 0,
+              score: 2,
+              ranking_certainty: 0.81,
+              probabilities: { "0": 0.8, "1": 0.8, "2": 0.8, "3": 0.8 },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(ContextEnrichmentMaterializationError);
+  });
+
+  it("rejects missing-api-key records that claim provider attempts", () => {
+    expect(() =>
+      assertContextEnrichmentRecord(
+        makeUnavailable({ failure: { code: "missing_api_key", attempts: 320 } }),
+      ),
+    ).toThrow(ContextEnrichmentMaterializationError);
+  });
+
+  it("rejects failure totals above the pinned per-candidate budget", () => {
+    expect(() =>
+      assertContextEnrichmentRecord(
+        makeUnavailable({ failure: { code: "rate_limited", attempts: 4 } }),
+        { expectedCandidateCount: 1, maxAttemptsPerCandidate: 3 },
+      ),
+    ).toThrow(ContextEnrichmentMaterializationError);
+  });
+
+  it("does not expose input hashes or candidate keys in validation diagnostics", () => {
+    let caught: unknown;
+    try {
+      assertContextEnrichmentRecord(makeCompleted(), { expectedFingerprint: "c".repeat(64) });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ContextEnrichmentMaterializationError);
+    expect((caught as Error).message).not.toContain("c".repeat(64));
+    expect((caught as Error).message).not.toContain("blocking_questions:f-1:0");
   });
 
   it("rejects a completed record missing required usage", () => {

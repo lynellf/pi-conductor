@@ -157,6 +157,22 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
     expect(state.candidate).not.toHaveProperty("recipient");
   });
 
+  it("accepts a non-empty provider model name without applying the requested-model bound", async () => {
+    const longModel = `provider-model-${"x".repeat(129)}`;
+    const adapter = createTypesafeContextEnricher({
+      apiKey: "test-key",
+      requestTimeoutMs: 1000,
+      maxAttempts: 1,
+      fetchImpl: async () => ({
+        status: 200,
+        statusText: "OK",
+        json: async () => ({ ...VALID_RESPONSE, model: longModel }),
+      }),
+    });
+    const outcome = await adapter.enrich(makeRequest());
+    expect(outcome).toMatchObject({ kind: "completed", actual_model: longModel });
+  });
+
   it("returns missing_api_key without making any network call", async () => {
     let calls = 0;
     const fetchImpl: FetchLike = async () => {

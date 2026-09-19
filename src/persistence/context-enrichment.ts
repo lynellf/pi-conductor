@@ -156,6 +156,8 @@ export function computeContextEnrichmentInputFingerprint(
 // ─── Record validation (spec §10.3) ─────────────────────────────────────
 
 /** Stable error code surface for materialization rejections. */
+const PROBABILITY_SUM_TOLERANCE = 1e-6;
+
 export type ContextEnrichmentMaterializationCode =
   | "context_enrichment_invalid_schema"
   | "context_enrichment_duplicate_candidate_key"
@@ -165,6 +167,8 @@ export type ContextEnrichmentMaterializationCode =
   | "context_enrichment_unavailable_with_judgments"
   | "context_enrichment_unavailable_with_usage"
   | "context_enrichment_completed_missing_usage"
+  | "context_enrichment_completed_missing_actual_model"
+  | "context_enrichment_probability_sum"
   | "context_enrichment_unavailable_missing_failure"
   | "context_enrichment_unknown_failure_code"
   | "context_enrichment_invalid_failure_attempts"
@@ -177,9 +181,9 @@ export type ContextEnrichmentMaterializationCode =
 export class ContextEnrichmentMaterializationError extends Error {
   constructor(
     readonly code: ContextEnrichmentMaterializationCode,
-    message: string,
+    _message: string,
   ) {
-    super(message);
+    super(`context_enrichment materialization rejected: ${code}`);
     this.name = "ContextEnrichmentMaterializationError";
   }
 }
@@ -207,6 +211,8 @@ export function assertContextEnrichmentRecord(
     readonly expectedKeys?: ReadonlySet<string>;
     readonly expectedFingerprint?: string;
     readonly expectedCandidateCount?: number;
+    /** Pinned per-candidate attempt limit used for aggregate failure totals. */
+    readonly maxAttemptsPerCandidate?: number;
   } = {},
 ): asserts record is ContextEnrichmentRecord {
   if (!isObject(record)) {
@@ -247,6 +253,12 @@ export function assertContextEnrichmentRecord(
     }
   }
   if (checked.status === "completed") {
+    if (checked.actual_model === undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_completed_missing_actual_model",
+        "completed context_enrichment record is missing actual_model",
+      );
+    }
     if (checked.failure !== undefined) {
       throw new ContextEnrichmentMaterializationError(
         "context_enrichment_invalid_schema",
@@ -285,7 +297,7 @@ export function assertContextEnrichmentRecord(
         "unavailable context_enrichment record must not carry usage",
       );
     }
-    assertFailure(checked);
+    assertFailure(checked, options);
   }
 }
 
@@ -394,13 +406,22 @@ function assertJudgments(
         `judgment '${judgment.candidate_key}' carries a non-finite score or certainty`,
       );
     }
+    let probabilitySum = 0;
     for (const key of ["0", "1", "2", "3"] as const) {
-      if (!Number.isFinite(judgment.probabilities[key])) {
+      const probability = judgment.probabilities[key];
+      if (!Number.isFinite(probability)) {
         throw new ContextEnrichmentMaterializationError(
           "context_enrichment_non_finite_value",
           `judgment '${judgment.candidate_key}' carries a non-finite probability for bucket ${key}`,
         );
       }
+      probabilitySum += probability;
+    }
+    if (Math.abs(probabilitySum - 1) > PROBABILITY_SUM_TOLERANCE) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_probability_sum",
+        `judgment '${judgment.candidate_key}' probability distribution does not sum to one`,
+      );
     }
   }
   if (expectedKeys !== undefined) {
@@ -415,7 +436,13 @@ function assertJudgments(
   }
 }
 
-function assertFailure(record: ContextEnrichmentRecord): void {
+function assertFailure(
+  record: ContextEnrichmentRecord,
+  options: {
+    readonly expectedCandidateCount?: number;
+    readonly maxAttemptsPerCandidate?: number;
+  },
+): void {
   if (record.failure === undefined) {
     throw new ContextEnrichmentMaterializationError(
       "context_enrichment_unavailable_missing_failure",
@@ -429,10 +456,16 @@ function assertFailure(record: ContextEnrichmentRecord): void {
       `unknown context_enrichment failure code '${record.failure.code}'`,
     );
   }
+  const maxAttempts =
+    options.expectedCandidateCount !== undefined && options.maxAttemptsPerCandidate !== undefined
+      ? options.expectedCandidateCount * options.maxAttemptsPerCandidate
+      : 320;
+  const attemptsMustBeZero = record.failure.code === "missing_api_key";
   if (
     !Number.isInteger(record.failure.attempts) ||
     record.failure.attempts < 0 ||
-    record.failure.attempts > 320
+    record.failure.attempts > maxAttempts ||
+    (attemptsMustBeZero && record.failure.attempts !== 0)
   ) {
     throw new ContextEnrichmentMaterializationError(
       "context_enrichment_invalid_failure_attempts",

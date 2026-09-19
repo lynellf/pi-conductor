@@ -1,6 +1,6 @@
 # Implementation plan: opt-in Jev recipient-context ranking
 
-Status: **Specification approved by the overseer on 2026-09-19; implementation and dispatch not started**
+Status: **Specification approved; implementation is parent-owned at the corrective cycle, with final approval still blocked by missing genuine delegated-lane evidence and the repaired run's review transition.**
 
 Run policy: **speed**. The topology fixes shared contracts first, then dispatches
 two disjoint implementation lanes concurrently. Fresh FSM handoffs remain the
@@ -161,20 +161,18 @@ unavailable output.
 
 ### Checkpoint B — child reconciliation
 
-- [x] Both task/result identities and effective projections are recorded.
-- [x] Every changed path is within declared ownership.
-- [x] Child claims are checked against diffs; reports are not treated as proof.
-- [x] Accepted patches are integrated in dependency order.
-- [x] Focused tests pass after each integration.
-- [x] Any parent takeover has prior orchestrator approval and explicit attribution.
+- [ ] Both task/result identities and effective projections are recorded.
+- [ ] Every changed path is within declared child ownership.
+- [ ] Child claims are checked against diffs; reports are not treated as proof.
+- [ ] Accepted child patches are integrated in dependency order.
+- [ ] Focused child-lane tests pass after each integration.
+- [x] Any parent takeover has prior overseer authorization and explicit attribution.
 
-> **Process note.** The original lane work was parent-takeover with
-> explicit attribution (per the overseer's authorization for that
-> cycle). The corrective cycle in this round is also parent-owned
-> because the delegate tool remains unavailable in this conductor
-> runtime; the corrective summary carries explicit attribution and
-> is NOT a retroactive authorship claim on the original lane
-> commits.
+> **Process note.** No genuine child task/result records exist in the
+> current conductor run. The corrective implementation is explicitly
+> parent-owned because delegation was unavailable; it makes no retroactive
+> authorship claim on the original lane commits. Checkpoint B remains open
+> until a capable runtime records substantive child contributions.
 
 ## Phase 3 — host integration and resume (implementation lead, sequential)
 
@@ -250,9 +248,10 @@ read-only and checks:
 - [ ] Reviewer approves the final integrated revision.
 
 > **Corrective cycle review note.** The original Phase 4 cycle
-> returned `request_changes` (six P0/P1/P2 findings). The corrective
-> cycle in this round resolves every blocking finding; the reviewer
-> must re-validate Phase 4 against the revised HEAD.
+> returned `request_changes` (six P0/P1/P2 findings). The parent-owned
+> corrective cycle addresses the code findings, but Checkpoint B and the
+> missing child-lane evidence remain open; a reviewer must re-validate
+> the revised HEAD before approval.
 
 ## Phase 5 — complete repository gates
 
@@ -289,6 +288,6 @@ read-only and checks:
 
 ## No-run reminder
 
-The manifest and prompts are preparation artifacts only. Do not invoke
-`/conduct`, the CLI, or delegated work until the overseer acknowledges the spec
-and explicitly authorizes implementation.
+The manifest and prompts document the originally approved topology. The
+implementation and corrective cycle were authorized by the overseer; this run
+must not be represented as having child-lane evidence that it does not contain.

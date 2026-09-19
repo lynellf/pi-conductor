@@ -138,6 +138,7 @@ export function renderPersistedContextEnrichmentSeed(args: {
     expectedFingerprint: inputFingerprint,
     expectedKeys: new Set(projection.scored_prefix.map((entry) => entry.candidate_key)),
     expectedCandidateCount: projection.scored_count,
+    maxAttemptsPerCandidate: args.policy.max_attempts,
   });
   if (match.record.status !== "completed") return null;
 

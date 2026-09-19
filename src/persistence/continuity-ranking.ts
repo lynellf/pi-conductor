@@ -291,10 +291,12 @@ function renderRanked(args: RenderArgs): RankedSeedResult {
   let admitted = 0;
   for (const candidate of ordered) {
     accepted[candidate.key].push(candidate.value);
-    const serialized = serialize(args.ledger.run_id, args.max_bytes, accepted, {
-      items: 0,
-      packets: 0,
-    });
+    const serialized = serialize(
+      args.ledger.run_id,
+      args.max_bytes,
+      accepted,
+      omissions(ordered, admitted + 1),
+    );
     if (encoder.encode(serialized).byteLength > args.max_bytes) {
       accepted[candidate.key].pop();
       break;
@@ -302,12 +304,7 @@ function renderRanked(args: RenderArgs): RankedSeedResult {
     admitted += 1;
   }
   // Compute truthful omission counts from the items we did NOT admit.
-  let omittedItems = 0;
-  let omittedPackets = 0;
-  for (const candidate of ordered.slice(admitted)) {
-    if (candidate.packet) omittedPackets += 1;
-    else omittedItems += 1;
-  }
+  const { items: omittedItems, packets: omittedPackets } = omissions(ordered, admitted);
   const serialized = serialize(args.ledger.run_id, args.max_bytes, accepted, {
     items: omittedItems,
     packets: omittedPackets,
@@ -333,6 +330,19 @@ function renderRanked(args: RenderArgs): RankedSeedResult {
     used_bytes: usedBytes,
     max_bytes: args.max_bytes,
   });
+}
+
+function omissions(
+  all: readonly { readonly packet: boolean }[],
+  admitted: number,
+): { readonly items: number; readonly packets: number } {
+  let items = 0;
+  let packets = 0;
+  for (const candidate of all.slice(admitted)) {
+    if (candidate.packet) packets += 1;
+    else items += 1;
+  }
+  return { items, packets };
 }
 
 function serialize(

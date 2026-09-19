@@ -168,7 +168,9 @@ export const contextEnrichmentRecordSchema = Type.Object(
     status: Type.Union([Type.Literal("completed"), Type.Literal("unavailable")]),
     provider: Type.Literal("typesafe_jev"),
     requested_model: Type.String({ minLength: 1, maxLength: 128 }),
-    actual_model: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+    // Optional at the union envelope; completed records require it and
+    // unavailable records omit it (semantic validation in persistence).
+    actual_model: Type.Optional(Type.String({ minLength: 1 })),
     strategy: Type.Literal("recipient_relevance_rank"),
     candidate_count: Type.Integer({ minimum: 0, maximum: 64 }),
     judgments: Type.Optional(Type.Array(contextRelevanceJudgmentSchema, { maxItems: 64 })),
@@ -202,6 +204,7 @@ export type ContextEnrichmentRecord = {
   readonly status: "completed" | "unavailable";
   readonly provider: "typesafe_jev";
   readonly requested_model: string;
+  /** Present for completed records; omitted for unavailable records. */
   readonly actual_model?: string;
   readonly strategy: "recipient_relevance_rank";
   readonly candidate_count: number;
@@ -218,7 +221,7 @@ export const contextEnrichmentOutcomeSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("completed"),
-      actual_model: Type.String({ minLength: 1, maxLength: 128 }),
+      actual_model: Type.String({ minLength: 1 }),
       judgments: Type.Array(contextRelevanceJudgmentSchema, { maxItems: 64 }),
       usage: contextEnrichmentUsageSchema,
       attempts: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
