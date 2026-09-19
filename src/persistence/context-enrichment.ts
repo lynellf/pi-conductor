@@ -8,6 +8,11 @@
  * — it imports no pi SDK and persists no provider bodies, headers, or
  * raw response text. Diagnostics are bounded to stable failure codes
  * (spec §11) and never include API keys, transcripts, or paths.
+ *
+ * Identity hashing, strict terminal validation, and duplicate detection remain
+ * one cohesive persistence contract: splitting them would make it possible to
+ * change the accepted record domain without updating its replay guard. This
+ * module remains below the permitted 500-line exception.
  */
 
 import { createHash } from "node:crypto";

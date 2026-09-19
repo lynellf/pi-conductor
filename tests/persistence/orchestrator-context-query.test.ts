@@ -101,6 +101,22 @@ const settled: readonly PersistedRecord[] = [
   terminal,
   boundary,
 ];
+const enrichmentTerminal = {
+  type: "context_enrichment" as const,
+  schema_version: 1 as const,
+  run_id: "run-1",
+  source_transition_key: "c".repeat(64),
+  input_sha256: "d".repeat(64),
+  recipient_role: "worker",
+  recipient_visit: 1,
+  status: "unavailable" as const,
+  provider: "typesafe_jev" as const,
+  requested_model: "jev-latest",
+  strategy: "recipient_relevance_rank" as const,
+  candidate_count: 0,
+  failure: { code: "missing_api_key" as const, attempts: 0 },
+  ts: 6,
+} satisfies PersistedRecord;
 
 describe("orchestrator context query", () => {
   it("returns the current epoch and committed boundary after a settled invocation", () => {
@@ -202,6 +218,16 @@ describe("orchestrator context query", () => {
     );
     expect(state.boundary?.leaf_id).toBe("leaf-1");
     expect(state.pendingInvocation).toBeNull();
+  });
+
+  it("ignores context enrichment terminals from the retained-context namespace", () => {
+    const state = queryOrchestratorContext(
+      [...settled, enrichmentTerminal],
+      "run-1",
+      "orchestrator",
+    );
+    expect(state.boundary?.leaf_id).toBe("leaf-1");
+    expect(state.compactions).toHaveLength(1);
   });
 
   it("supports a second invocation from the first committed boundary", () => {

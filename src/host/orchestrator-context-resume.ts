@@ -1,6 +1,7 @@
 import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
 import type { Manifest } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { isOrchestratorContextRecord } from "../persistence/orchestrator-context.js";
 import {
   assertRestorableOrchestratorContext,
   queryOrchestratorContext,
@@ -59,8 +60,7 @@ export async function admitOrchestratorContextResume(
   }
 
   const contextRecords = options.records.filter(
-    (record) =>
-      record.type.startsWith("context_") && "run_id" in record && record.run_id === options.runId,
+    (record) => isOrchestratorContextRecord(record) && record.run_id === options.runId,
   );
   const state = queryOrchestratorContext(options.records, options.runId, role);
   if (state.epoch === null) {

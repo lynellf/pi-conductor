@@ -174,6 +174,22 @@ export const orchestratorContextRecordSchema = Type.Union([
 ]);
 export type OrchestratorContextRecord = Static<typeof orchestratorContextRecordSchema>;
 
+const ORCHESTRATOR_CONTEXT_RECORD_TYPES = new Set<string>([
+  "context_epoch_started",
+  "context_invocation_started",
+  "context_delivery_committed",
+  "context_boundary_committed",
+  "context_compaction_started",
+  "context_compaction",
+]);
+
+/** Identify only the six retained-context record kinds, excluding other `context_*` records. */
+export function isOrchestratorContextRecord(value: unknown): value is OrchestratorContextRecord {
+  if (typeof value !== "object" || value === null || !("type" in value)) return false;
+  const type = (value as { readonly type?: unknown }).type;
+  return typeof type === "string" && ORCHESTRATOR_CONTEXT_RECORD_TYPES.has(type);
+}
+
 /** Typed rejection at the append/materialization boundary for malformed context records. */
 export class OrchestratorContextRecordError extends Error {
   constructor(record: unknown) {

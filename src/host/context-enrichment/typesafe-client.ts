@@ -13,6 +13,11 @@
  * aggregates usage. Persistence, ranking, seed rendering, and
  * transport selection remain host-owned.
  *
+ * The adapter intentionally keeps request construction, fixed-origin
+ * transport, bounded retry/timeout handling, and wire validation together:
+ * splitting those boundary invariants would make the credential and response
+ * checks harder to audit. It remains below the permitted 500-line exception.
+ *
  * Wire contract (official TypeSafe `docs.typesafe.ai`):
  *   request body:
  *     {

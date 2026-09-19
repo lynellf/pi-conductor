@@ -19,12 +19,9 @@
  * sole writer and renderer.
  */
 
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 
 const sha256Hex = Type.String({ pattern: "^[a-f0-9]{64}$" });
-
-const SCORE_BUCKETS = ["0", "1", "2", "3"] as const;
-type ScoreBucket = (typeof SCORE_BUCKETS)[number];
 
 // ─── Score answer (spec §7) ─────────────────────────────────────────────
 
@@ -69,13 +66,7 @@ export const contextRelevanceScoreAnswerSchema = Type.Object(
 );
 
 /** Strict closed Score answer type. Host-side typed view. */
-export type ContextRelevanceScoreAnswer = {
-  readonly type: "score";
-  readonly score: number;
-  readonly confidence: number;
-  readonly probabilities: Readonly<Record<ScoreBucket, number>>;
-  readonly legend: Readonly<Record<ScoreBucket, string>>;
-};
+export type ContextRelevanceScoreAnswer = Static<typeof contextRelevanceScoreAnswerSchema>;
 
 /**
  * Strict closed probability distribution. Used both inside the Score
@@ -93,7 +84,7 @@ export const contextRelevanceProbabilitiesSchema = Type.Object(
 );
 
 /** Typed view of one ordered probability distribution. */
-export type ContextRelevanceProbabilities = Readonly<Record<ScoreBucket, number>>;
+export type ContextRelevanceProbabilities = Static<typeof contextRelevanceProbabilitiesSchema>;
 
 // ─── Failure codes (spec §11) ───────────────────────────────────────────
 
@@ -111,11 +102,20 @@ export const CONTEXT_ENRICHMENT_FAILURE_CODES = [
   "input_mismatch",
 ] as const;
 
-export type ContextEnrichmentFailureCode = (typeof CONTEXT_ENRICHMENT_FAILURE_CODES)[number];
+export const contextEnrichmentFailureCodeSchema = Type.Union([
+  Type.Literal("missing_api_key"),
+  Type.Literal("request_timeout"),
+  Type.Literal("network_error"),
+  Type.Literal("rate_limited"),
+  Type.Literal("provider_overloaded"),
+  Type.Literal("authentication_failed"),
+  Type.Literal("request_rejected"),
+  Type.Literal("provider_http_error"),
+  Type.Literal("response_invalid"),
+  Type.Literal("input_mismatch"),
+]);
 
-export const contextEnrichmentFailureCodeSchema = Type.Union(
-  CONTEXT_ENRICHMENT_FAILURE_CODES.map((code) => Type.Literal(code)),
-);
+export type ContextEnrichmentFailureCode = (typeof CONTEXT_ENRICHMENT_FAILURE_CODES)[number];
 
 // ─── Durable record (spec §10.3) ────────────────────────────────────────
 
@@ -132,13 +132,7 @@ export const contextRelevanceJudgmentSchema = Type.Object(
 );
 
 /** Typed view of one persisted judgment. */
-export type ContextRelevanceJudgment = {
-  readonly candidate_key: string;
-  readonly baseline_ordinal: number;
-  readonly score: number;
-  readonly ranking_certainty: number;
-  readonly probabilities: ContextRelevanceProbabilities;
-};
+export type ContextRelevanceJudgment = Static<typeof contextRelevanceJudgmentSchema>;
 
 /** Token usage reported by the provider across one successful attempt. */
 export const contextEnrichmentUsageSchema = Type.Object(
@@ -150,10 +144,7 @@ export const contextEnrichmentUsageSchema = Type.Object(
 );
 
 /** Typed view of one provider token usage. */
-export type ContextEnrichmentUsage = {
-  readonly input_tokens: number;
-  readonly output_tokens: number;
-};
+export type ContextEnrichmentUsage = Static<typeof contextEnrichmentUsageSchema>;
 
 /** Terminal `context_enrichment` record. Strict additive union member. */
 export const contextEnrichmentRecordSchema = Type.Object(
@@ -193,26 +184,7 @@ export const contextEnrichmentRecordSchema = Type.Object(
 );
 
 /** Typed view of one durable terminal record. */
-export type ContextEnrichmentRecord = {
-  readonly type: "context_enrichment";
-  readonly schema_version: 1;
-  readonly run_id: string;
-  readonly source_transition_key: string;
-  readonly input_sha256: string;
-  readonly recipient_role: string;
-  readonly recipient_visit: number;
-  readonly status: "completed" | "unavailable";
-  readonly provider: "typesafe_jev";
-  readonly requested_model: string;
-  /** Present for completed records; omitted for unavailable records. */
-  readonly actual_model?: string;
-  readonly strategy: "recipient_relevance_rank";
-  readonly candidate_count: number;
-  readonly judgments?: readonly ContextRelevanceJudgment[];
-  readonly usage?: ContextEnrichmentUsage;
-  readonly failure?: { readonly code: ContextEnrichmentFailureCode; readonly attempts: number };
-  readonly ts: number;
-};
+export type ContextEnrichmentRecord = Static<typeof contextEnrichmentRecordSchema>;
 
 // ─── Provider-neutral outcome (spec §12) ────────────────────────────────
 
@@ -239,20 +211,7 @@ export const contextEnrichmentOutcomeSchema = Type.Union([
 ]);
 
 /** Typed view of one provider-neutral outcome. */
-export type ContextEnrichmentOutcome =
-  | {
-      readonly kind: "completed";
-      readonly actual_model: string;
-      readonly judgments: readonly ContextRelevanceJudgment[];
-      readonly usage: ContextEnrichmentUsage;
-      /** Provider attempts for this candidate; omitted by legacy adapters. */
-      readonly attempts?: number;
-    }
-  | {
-      readonly kind: "unavailable";
-      readonly code: ContextEnrichmentFailureCode;
-      readonly attempts: number;
-    };
+export type ContextEnrichmentOutcome = Static<typeof contextEnrichmentOutcomeSchema>;
 
 // ─── Persistence union guard ───────────────────────────────────────────
 

@@ -287,6 +287,78 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     expect(ranked.used_bytes).toBeLessThanOrEqual(32_768);
   });
 
+  it("bounds concurrent candidates and persists ordinals independent of completion order", async () => {
+    const log = new InMemoryRecordLog();
+    const runId = "run-concurrency";
+    const packet = makePacket("test", [
+      { id: "f-1", kind: "fact" },
+      { id: "f-2", kind: "risk" },
+    ]);
+    const accepted = makeTransitionAccepted("concurrency", runId, 1000, packet);
+    log.append({
+      type: "session_started",
+      run_id: runId,
+      role: accepted.role,
+      visit_index: 1,
+      state: accepted.role,
+      model: "test",
+      session_file: accepted.session_file,
+      parent_session: null,
+      ts: 999,
+    });
+    log.append(accepted);
+
+    let active = 0;
+    let peak = 0;
+    const completionOrder: number[] = [];
+    const record = await prepareFreshContinuityEnrichment({
+      loadedManifest: loadedManifest(),
+      log,
+      runId,
+      recipient: "implementer",
+      recipientObjective: "ship it",
+      recipientRequestedAction: "implement",
+      from: "orchestrator",
+      transitionTs: 1000,
+      sourceRoleSessionId: "source-session",
+      sourceSessionFile: accepted.session_file,
+      targetVisitIndex: 1,
+      enricher: {
+        enrich: async (request) => {
+          active += 1;
+          peak = Math.max(peak, active);
+          const ordinal = request.candidate.baseline_ordinal;
+          await new Promise<void>((resolve) => setTimeout(resolve, ordinal === 0 ? 15 : 0));
+          completionOrder.push(ordinal);
+          active -= 1;
+          return {
+            kind: "completed" as const,
+            actual_model: "test-model",
+            judgments: [
+              {
+                candidate_key: request.candidate.candidate_key,
+                baseline_ordinal: ordinal,
+                score: ordinal === 0 ? 0 : 3,
+                ranking_certainty: 0.9,
+                probabilities: { "0": 0.1, "1": 0.1, "2": 0.1, "3": 0.7 },
+              },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+        },
+      },
+    });
+
+    expect(peak).toBe(2);
+    expect(completionOrder[0]).toBeGreaterThan(0);
+    expect(completionOrder.at(-1)).toBe(0);
+    expect(record).not.toBeNull();
+    if (record?.status !== "completed") throw new Error("expected completed terminal");
+    expect(record.judgments?.map((judgment) => judgment.baseline_ordinal)).toEqual(
+      Array.from({ length: record.candidate_count }, (_, index) => index),
+    );
+  });
+
   it("produces an unavailable record on one candidate failure and falls back to baseline", async () => {
     const log = new InMemoryRecordLog();
     const runId = "run-1";

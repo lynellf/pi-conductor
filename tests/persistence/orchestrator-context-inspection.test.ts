@@ -77,6 +77,22 @@ const compacted = {
 };
 
 const settled: readonly PersistedRecord[] = [epoch, invocation, started, delivery, ended, boundary];
+const enrichmentTerminal = {
+  type: "context_enrichment" as const,
+  schema_version: 1 as const,
+  run_id: "run-1",
+  source_transition_key: "c".repeat(64),
+  input_sha256: "d".repeat(64),
+  recipient_role: "worker",
+  recipient_visit: 1,
+  status: "unavailable" as const,
+  provider: "typesafe_jev" as const,
+  requested_model: "jev-latest",
+  strategy: "recipient_relevance_rank" as const,
+  candidate_count: 0,
+  failure: { code: "missing_api_key" as const, attempts: 0 },
+  ts: 8,
+} satisfies PersistedRecord;
 
 function requireInspection(
   result: OrchestratorContextInspection | null,
@@ -131,6 +147,14 @@ describe("inspectOrchestratorContext", () => {
       historySha256: "b".repeat(64),
     });
     expect(result.lastCompaction).toMatchObject({ outcome: "completed", afterTipId: "tip-2" });
+  });
+
+  it("ignores enrichment terminals while inspecting retained context", () => {
+    const result = requireInspection(
+      inspectOrchestratorContext([...settled, enrichmentTerminal], "run-1", "orchestrator"),
+    );
+    expect(result.status).toBe("committed");
+    expect(result.committedBoundary?.tipId).toBe("tip-1");
   });
 
   it("reports reset as a new empty epoch", () => {

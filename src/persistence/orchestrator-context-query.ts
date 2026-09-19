@@ -6,8 +6,12 @@ import type {
   ContextDeliveryCommittedRecord,
   ContextEpochStartedRecord,
   ContextInvocationStartedRecord,
+  OrchestratorContextRecord,
 } from "./orchestrator-context.js";
-import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
+import {
+  assertOrchestratorContextRecord,
+  isOrchestratorContextRecord,
+} from "./orchestrator-context.js";
 
 /** Current pure view of one run's orchestrator context provenance. */
 export interface OrchestratorContextState {
@@ -246,10 +250,8 @@ export function assertRestorableOrchestratorContext(
   return state;
 }
 
-function isContextRecord(
-  record: PersistedRecord,
-): record is Extract<PersistedRecord, { readonly type: `context_${string}` }> {
-  return record.type.startsWith("context_");
+function isContextRecord(record: PersistedRecord): record is OrchestratorContextRecord {
+  return isOrchestratorContextRecord(record);
 }
 
 function isSyntheticLifecycleRecord(record: PersistedRecord): boolean {

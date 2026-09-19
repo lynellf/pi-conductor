@@ -11,7 +11,10 @@
  *    byte-identical baseline when enrichment is disabled or unavailable.
  *
  * Projection internals live in `continuity-ranking-projection.ts` to keep
- * this module at the AGENTS.md ~400 LOC ceiling.
+ * this module at the AGENTS.md ~400 LOC ceiling. Projection, ordering, and
+ * byte-accounted rendering stay together because each stage shares the exact
+ * candidate/omission domain; splitting them would obscure atomic admission.
+ * At 412 lines it remains below the permitted 500-line exception.
  *
  * This module is host-agnostic — it imports no pi SDK, no provider, and
  * performs no network I/O. It is the pure counterpart to the host

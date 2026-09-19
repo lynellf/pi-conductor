@@ -3,8 +3,12 @@ import type {
   ContextCompactionRecord,
   ContextCompactionStartedRecord,
   ContextUsage,
+  OrchestratorContextRecord,
 } from "./orchestrator-context.js";
-import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
+import {
+  assertOrchestratorContextRecord,
+  isOrchestratorContextRecord,
+} from "./orchestrator-context.js";
 import { queryOrchestratorContext } from "./orchestrator-context-query.js";
 
 /** Bounded operator state for one retained orchestrator context epoch. */
@@ -280,8 +284,6 @@ function boundedDiagnostic(error: unknown): string {
   return message.length > 240 ? `${message.slice(0, 237)}...` : message;
 }
 
-function isContextRecord(
-  record: PersistedRecord,
-): record is Extract<PersistedRecord, { readonly type: `context_${string}` }> {
-  return record.type.startsWith("context_");
+function isContextRecord(record: PersistedRecord): record is OrchestratorContextRecord {
+  return isOrchestratorContextRecord(record);
 }

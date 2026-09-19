@@ -13,6 +13,7 @@ import type {
   ContextEpochStartedRecord,
   ContextInvocationStartedRecord,
 } from "../persistence/orchestrator-context.js";
+import { isOrchestratorContextRecord } from "../persistence/orchestrator-context.js";
 import {
   assertRestorableOrchestratorContext,
   queryOrchestratorContext,
@@ -67,7 +68,7 @@ export class OrchestratorContextCoordinator {
     if (epoch === null) {
       const executed = records.some(
         (record) =>
-          record.type.startsWith("context_") ||
+          isOrchestratorContextRecord(record) ||
           record.type === "session_started" ||
           record.type === "session_ended" ||
           record.type === "session_failed",

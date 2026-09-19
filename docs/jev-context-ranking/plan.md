@@ -251,9 +251,9 @@ read-only and checks:
 
 > **Corrective cycle review note.** The original Phase 4 cycle returned
 > `request_changes` (six P0/P1/P2 findings). The parent-owned corrective
-> cycle addresses the code findings; the non-fabricating child-lane waiver
-> was explicitly recorded and accepted. A reviewer must re-validate the
-> revised HEAD before approval.
+> cycle addresses those code findings; the non-fabricating child-lane waiver
+> was explicitly recorded and accepted. A fresh review of the next HEAD also
+> returned bounded request changes, recorded below; approval remains pending.
 
 ### Final corrective follow-up (parent-owned, post-review findings)
 
@@ -264,6 +264,18 @@ read-only and checks:
 - [x] Sanitize replay mismatch diagnostics without exposing hashes, candidate keys, provider bodies, or paths.
 - [x] Re-run focused tests, typecheck, build, lint, format, full test suite, diff check, and high-severity audit.
 - [ ] Obtain a fresh independent reviewer approval transition.
+
+### Second independent review cycle (post-`ce1f047` review)
+
+The isolated read-only reviewer accepted the process waiver but identified a
+retained-context namespace collision plus three bounded compliance/test gaps.
+No reviewer edits were accepted.
+
+- [x] Replace broad `context_*` classification with an explicit six-record allowlist across query, inspection, resume, and coordinator paths.
+- [x] Derive enrichment seam types from TypeBox schemas with `Static<>` (retaining the literal-code tuple as the runtime code source).
+- [x] Add a delayed out-of-order completion test asserting `max_parallel` peak and ordinal persistence.
+- [x] Document cohesive under-500-line exceptions for the three reviewed modules.
+- [ ] Obtain a fresh independent reviewer approval transition on this repaired HEAD.
 
 ## Phase 5 — complete repository gates
 

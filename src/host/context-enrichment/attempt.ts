@@ -263,7 +263,7 @@ function buildCompletedRecord(input: {
     actual_model: input.outcome.actual_model,
     strategy: "recipient_relevance_rank",
     candidate_count: sorted.length,
-    judgments: sorted,
+    judgments: [...sorted],
     usage: input.outcome.usage,
     ts: input.ts,
   };
