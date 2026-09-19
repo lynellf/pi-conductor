@@ -1,31 +1,7 @@
 /**
- * `ProductionHost` — Phase 7A production `Host` (Tasks 7A.1–7A.4).
- *
- * Production `Host` implementation that resolves the normalized
- * `role.models[modelIndex]` entry (`model` + `effort`) against a real
- * `ModelRegistry`, loads `role.system_prompt` from disk, wires
- * a real `DefaultResourceLoader` + file-backed `SessionManager`
- * for each role session, and matches `StubHost`'s event-handling
- * semantics (usage capture, terminal reason, model fallback,
- * visit index, abort, seal, persistence, run-memory seeding).
- *
- * **Status (Phase 7A):** 7A.1 — constructor + `Host` interface
- * conformance + three boundary errors. 7A.2 — pure resolution
- * pieces (`selectModelEntry`, `resolveModel`, `loadSystemPrompt`).
- * 7A.3 — `DefaultResourceLoader` + `SessionManager` wiring +
- * `buildToolsAllowlist`. 7A.4 — full `Host` method parity with
- * `StubHost` (every method now implemented; the event-handler
- * logic is shared via `session-event-handler.ts`).
- *
- * Isolated RPC spawning, shared SDK spawning, and run-scoped state live in
- * dedicated helpers. The remaining class stays below the 500-LOC exception
- * ceiling because it owns the Host policy and lifecycle API as one seam.
- *
- * **Host-agnosticism:** this module imports from
- * `@earendil-works/pi-coding-agent` (it's in `src/host/` — the
- * grep-guard test allows pi imports here). The pure core
- * (`src/core`, `src/manifest`, `src/seam`, `src/cost`) is
- * untouched and remains host-agnostic.
+ * Production SDK host that owns role-session lifecycle and delegates
+ * spawning, state, transport, artifact, and control concerns to focused
+ * host modules. Pi imports are allowed here; pure layers remain isolated.
  */
 
 import type { RunMemory } from "../core/run-memory.js";

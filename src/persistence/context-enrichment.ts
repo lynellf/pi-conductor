@@ -463,15 +463,17 @@ function assertFailure(
       ? options.expectedCandidateCount * options.maxAttemptsPerCandidate
       : 320;
   const attemptsMustBeZero = record.failure.code === "missing_api_key";
+  const attemptsMustBePositive = !attemptsMustBeZero;
   if (
     !Number.isInteger(record.failure.attempts) ||
     record.failure.attempts < 0 ||
     record.failure.attempts > maxAttempts ||
-    (attemptsMustBeZero && record.failure.attempts !== 0)
+    (attemptsMustBeZero && record.failure.attempts !== 0) ||
+    (attemptsMustBePositive && record.failure.attempts < 1)
   ) {
     throw new ContextEnrichmentMaterializationError(
       "context_enrichment_invalid_failure_attempts",
-      `context_enrichment failure attempts must be an integer in [0, 320] (received ${record.failure.attempts})`,
+      `context_enrichment failure attempts do not match the failure code (received ${record.failure.attempts})`,
     );
   }
 }

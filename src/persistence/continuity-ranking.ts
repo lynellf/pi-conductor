@@ -34,6 +34,7 @@ const encoder = new TextEncoder();
 
 // ─── Section key constants (spec §6.1) ─────────────────────────────────
 
+/** Stable rendering sections in their required priority order. */
 export const SECTION_KEYS = [
   "blocking_questions",
   "recipient_next_steps",
@@ -43,6 +44,7 @@ export const SECTION_KEYS = [
   "packet_summaries",
 ] as const;
 
+/** A stable section identifier used by ranking and rendering. */
 export type SectionKey = (typeof SECTION_KEYS)[number];
 
 // ─── Input contracts ───────────────────────────────────────────────────
@@ -51,6 +53,7 @@ export type SectionKey = (typeof SECTION_KEYS)[number];
  * Pinned policy snapshot the host passes to the ranker. Only the fields
  * the ranker needs are required; transport limits belong to the adapter.
  */
+/** Pinned provider policy required to construct an enrichment request. */
 export interface RankedCandidatePolicy {
   readonly provider: "typesafe_jev";
   readonly model: string;
@@ -58,18 +61,21 @@ export interface RankedCandidatePolicy {
   readonly candidate_limit: number;
 }
 
+/** Minimal recipient objective used for context ranking. */
 export interface RankedRecipient {
   readonly role: string;
   readonly objective: string;
   readonly requested_action: string;
 }
 
+/** Identity and policy inputs for one candidate-ranking request. */
 export interface RankedCandidateInput {
   readonly recipient: RankedRecipient;
   readonly policy: RankedCandidatePolicy;
   readonly source_transition_key: string;
 }
 
+/** Provider-neutral judgment retained for deterministic projection. */
 export interface RankedCandidateProjectionJudgment {
   readonly candidate_key: string;
   readonly baseline_ordinal: number;
@@ -78,6 +84,7 @@ export interface RankedCandidateProjectionJudgment {
   readonly probabilities: Readonly<Record<"0" | "1" | "2" | "3", number>>;
 }
 
+/** Scored prefix and stable unscored suffix produced by projection. */
 export interface RankedCandidateProjection {
   readonly scored_prefix: readonly RankedCandidateProjectionEntry[];
   readonly unscored_suffix: readonly RankedCandidateProjectionEntry[];
@@ -86,6 +93,7 @@ export interface RankedCandidateProjection {
   readonly input_fingerprint: string | null;
 }
 
+/** One projected continuity candidate with renderer-safe metadata. */
 export interface RankedCandidateProjectionEntry {
   readonly section: SectionKey;
   readonly candidate_key: string;

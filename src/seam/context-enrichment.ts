@@ -122,7 +122,7 @@ export type ContextEnrichmentFailureCode = (typeof CONTEXT_ENRICHMENT_FAILURE_CO
 /** One ordered judgment persisted in a completed record. */
 export const contextRelevanceJudgmentSchema = Type.Object(
   {
-    candidate_key: Type.String({ minLength: 1, maxLength: 256 }),
+    candidate_key: Type.String({ minLength: 1 }),
     baseline_ordinal: Type.Integer({ minimum: 0 }),
     score: Type.Number({ minimum: 0, maximum: 3 }),
     ranking_certainty: Type.Number({ minimum: 0, maximum: 1 }),

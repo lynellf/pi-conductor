@@ -227,7 +227,7 @@ function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] 
 
 describe("continuity-materialization-order", () => {
   describe("canonical record order", () => {
-    it("ignores repeated host-only synthetic lifecycle placeholders", () => {
+    it("retains continuity from repeated host-only synthetic lifecycle placeholders", () => {
       const synthetic = {
         ...makeTransitionAccepted("synthetic", "run-1", 1000, makePacket("synthetic")),
         session_file: "<operator-routing:orchestrator>",
@@ -250,7 +250,10 @@ describe("continuity-materialization-order", () => {
         { run_id: "run-1" },
       );
 
-      expect(ledger.envelopes.map((envelope) => envelope.packet.summary)).toEqual(["normal"]);
+      expect(ledger.envelopes.map((envelope) => envelope.packet.summary)).toEqual([
+        "synthetic",
+        "normal",
+      ]);
     });
 
     it("produces identical ledger from same records in same order", () => {

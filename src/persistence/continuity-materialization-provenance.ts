@@ -27,8 +27,19 @@ export class ContinuityLifecycleIndex {
 
   observe(record: PersistedRecord, fail: MaterializationFail): void {
     if (record.type === "session_started") {
-      if (this.roles.has(record.session_file))
+      const prior = this.roles.get(record.session_file);
+      if (prior !== undefined) {
+        if (
+          isSyntheticSessionFile(record.session_file) &&
+          prior.role === record.role &&
+          prior.visit === record.visit_index
+        ) {
+          // Synthetic routing/recovery placeholders may be appended again by
+          // a host retry. They do not establish a second role lifecycle.
+          return;
+        }
         fail(recordId(record), "duplicate role session lifecycle");
+      }
       this.roles.set(record.session_file, { role: record.role, visit: record.visit_index });
       return;
     }
@@ -285,6 +296,10 @@ export function timestamp(record: PersistedRecord): number {
 export function recordRunId(record: PersistedRecord): string {
   return record.type === "checkpoint_snapshot" ? record.checkpoint.run_id : record.run_id;
 }
+function isSyntheticSessionFile(sessionFile: string): boolean {
+  return sessionFile.startsWith("<operator-routing:") || sessionFile.startsWith("<synthesized:");
+}
+
 function childKey(childId: string, taskId: string): string {
   return `${childId}\u0000${taskId}`;
 }

@@ -285,6 +285,24 @@ describe("assertContextEnrichmentRecord (spec §10.3)", () => {
     };
   }
 
+  it("accepts a valid judgment with a long candidate key", () => {
+    expect(() =>
+      assertContextEnrichmentRecord(
+        makeCompleted({
+          judgments: [
+            {
+              candidate_key: `candidate:${"x".repeat(300)}`,
+              baseline_ordinal: 0,
+              score: 2,
+              ranking_certainty: 0.81,
+              probabilities: { "0": 0.05, "1": 0.1, "2": 0.7, "3": 0.15 },
+            },
+          ],
+        }),
+      ),
+    ).not.toThrow();
+  });
+
   it("accepts a structurally valid completed record", () => {
     expect(() => assertContextEnrichmentRecord(makeCompleted())).not.toThrow();
   });
@@ -406,6 +424,15 @@ describe("assertContextEnrichmentRecord (spec §10.3)", () => {
         makeUnavailable({ failure: { code: "missing_api_key", attempts: 320 } }),
       ),
     ).toThrow(ContextEnrichmentMaterializationError);
+  });
+
+  it("rejects zero attempts for every provider failure", () => {
+    for (const code of CONTEXT_ENRICHMENT_FAILURE_CODES) {
+      if (code === "missing_api_key") continue;
+      expect(() =>
+        assertContextEnrichmentRecord(makeUnavailable({ failure: { code, attempts: 0 } })),
+      ).toThrow(ContextEnrichmentMaterializationError);
+    }
   });
 
   it("rejects failure totals above the pinned per-candidate budget", () => {
