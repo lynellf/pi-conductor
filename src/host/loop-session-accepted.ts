@@ -210,6 +210,33 @@ export async function persistAcceptedTransition(
       ? (payload.suggests_next as Role)
       : null;
   ctx.handoffContextRef = acceptedContextRef;
+  // Spec §9 + §11: hosts that opt in to `context_enrichment` await
+  // their async preparation seam before the synchronous seed
+  // materialization. The preparation persists exactly one terminal
+  // `context_enrichment` record (completed or unavailable) before the
+  // recipient prompt can consume the result, and resume reuses the
+  // matching record without an extra API call.
+  const nextVisitIndex = ctx.visitIndexByRole.get(nextRole) ?? 1;
+  if (typeof host.prepareFreshContinuityEnrichment === "function") {
+    await host.prepareFreshContinuityEnrichment({
+      role: nextRole,
+      visitIndex: nextVisitIndex,
+      recipientObjective:
+        typeof payload === "object" && payload !== null && typeof payload.objective === "string"
+          ? payload.objective
+          : "",
+      recipientRequestedAction:
+        typeof payload === "object" &&
+        payload !== null &&
+        typeof payload.requested_action === "string"
+          ? payload.requested_action
+          : "",
+      from: role,
+      transitionTs: Date.now(),
+      sourceRoleSessionId: sessionId,
+      sourceSessionFile: sessionFile,
+    });
+  }
   // Spec §11: when the manifest pins a continuity policy, the host must
   // inject the deterministic bounded seed the materializer/renderer
   // produced over the append-only log into the fresh worker seed.
@@ -222,7 +249,21 @@ export async function persistAcceptedTransition(
     typeof host.materializeFreshContinuitySeed === "function"
       ? host.materializeFreshContinuitySeed({
           role: nextRole,
-          visitIndex: ctx.visitIndexByRole.get(nextRole) ?? 1,
+          visitIndex: nextVisitIndex,
+          recipientObjective:
+            typeof payload === "object" && payload !== null && typeof payload.objective === "string"
+              ? payload.objective
+              : "",
+          recipientRequestedAction:
+            typeof payload === "object" &&
+            payload !== null &&
+            typeof payload.requested_action === "string"
+              ? payload.requested_action
+              : "",
+          from: role,
+          transitionTs: Date.now(),
+          sourceRoleSessionId: sessionId,
+          sourceSessionFile: sessionFile,
         })
       : null;
   ctx.nextSeed = formatHandoffSeed(

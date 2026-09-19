@@ -234,11 +234,44 @@ export interface Host {
    * The seed section carries the exact omission counts the renderer
    * produced so the receiving role sees a stable byte budget and an
    * honest "this many items/packets were truncated" line.
+   *
+   * When the manifest opts in to `context_enrichment` and a matching
+   * terminal record exists, the seed is composed from the durable
+   * record; otherwise the host materializes the legacy baseline.
    */
   materializeFreshContinuitySeed?(args: {
     readonly role: Role;
     readonly visitIndex: number;
+    readonly recipientObjective?: string;
+    readonly recipientRequestedAction?: string;
+    readonly from?: Role;
+    readonly transitionTs?: number;
+    readonly sourceRoleSessionId?: string | null;
+    readonly sourceSessionFile?: string;
   }): import("./loop-format.js").ContinuitySeedSection | null;
+
+  /**
+   * Optional asynchronous pre-seed preparation seam (spec §9). Hosts
+   * that opt in to `context_enrichment` run the bounded attempt here,
+   * persist exactly one terminal `context_enrichment` record, and
+   * return its identity. Hosts that omit this hook keep their existing
+   * legacy behavior byte-identically.
+   *
+   * The loop awaits this call before `materializeFreshContinuitySeed`
+   * so the materializer reads a durable terminal record. A crash before
+   * the terminal record persists permits a fresh attempt on resume;
+   * a crash after persistence reuses the matching record.
+   */
+  prepareFreshContinuityEnrichment?(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly recipientObjective: string;
+    readonly recipientRequestedAction: string;
+    readonly from: Role;
+    readonly transitionTs: number;
+    readonly sourceRoleSessionId: string | null;
+    readonly sourceSessionFile: string;
+  }): Promise<import("../persistence/context-enrichment.js").ContextEnrichmentRecord | null>;
 
   /**
    * Signal the session to stop its current operation (Task 18 / §11.7

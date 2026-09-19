@@ -70,6 +70,7 @@ import {
   materializeFreshContinuitySeed as materializeFreshContinuitySeedInModule,
   nextVisitIndex as nextVisitIndexInModule,
   persistRecord as persistRecordInModule,
+  prepareFreshContinuityEnrichment as prepareFreshContinuityEnrichmentInModule,
   runCostSoFar as runCostSoFarInModule,
   type StateHostContext,
   seedRunMemory as seedRunMemoryInModule,
@@ -347,8 +348,27 @@ export class ProductionHost extends ProductionHostContext implements Host {
   materializeFreshContinuitySeed(args: {
     readonly role: Role;
     readonly visitIndex: number;
+    readonly recipientObjective?: string;
+    readonly recipientRequestedAction?: string;
+    readonly from?: Role;
+    readonly transitionTs?: number;
+    readonly sourceRoleSessionId?: string | null;
+    readonly sourceSessionFile?: string;
   }): import("./loop-format.js").ContinuitySeedSection | null {
     return materializeFreshContinuitySeedInModule(this.stateContext(), args);
+  }
+
+  prepareFreshContinuityEnrichment(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly recipientObjective: string;
+    readonly recipientRequestedAction: string;
+    readonly from: Role;
+    readonly transitionTs: number;
+    readonly sourceRoleSessionId: string | null;
+    readonly sourceSessionFile: string;
+  }): Promise<import("../persistence/context-enrichment.js").ContextEnrichmentRecord | null> {
+    return prepareFreshContinuityEnrichmentInModule(this.stateContext(), args);
   }
 
   nextVisitIndex(role: Role): number {

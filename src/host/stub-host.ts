@@ -516,6 +516,21 @@ export class StubHost implements Host {
     };
   }
 
+  async prepareFreshContinuityEnrichment(_args: {
+    readonly role: import("../core/types.js").Role;
+    readonly visitIndex: number;
+    readonly recipientObjective: string;
+    readonly recipientRequestedAction: string;
+    readonly from: import("../core/types.js").Role;
+    readonly transitionTs: number;
+    readonly sourceRoleSessionId: string | null;
+    readonly sourceSessionFile: string;
+  }): Promise<import("../persistence/context-enrichment.js").ContextEnrichmentRecord | null> {
+    // Stub host: never run an enrichment attempt; the legacy stub-host
+    // tests observe the baseline seed unchanged.
+    return null;
+  }
+
   runCostSoFar(): number {
     // Sum `usage.cost` across all terminal records in the run:
     // - Parent lifecycle terminals: session_ended + session_failed (§11.4).
