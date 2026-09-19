@@ -300,7 +300,7 @@ verified before this documentation-only evidence update.
 - [x] Reject zero-attempt unavailable records for every provider failure code except `missing_api_key`.
 - [x] Bring `src/host/production-host.ts` below 500 LOC and add JSDoc to new ranking exports.
 - [x] Focused enrichment/replay suite: 8 files, 157 tests.
-- [x] Exact source revision gates: typecheck, build, lint, format check, diff check, full `pnpm test` (364 files, 3819 tests), high-severity audit, and pure-layer import guard passed; general audit remains 1 low and 2 moderate advisories.
+- [x] Exact source revision gates: typecheck, build, lint, format check, diff check, full `pnpm test` (364 files, 3819 tests), high-severity audit, and pure-layer import guard passed; general audit remains 1 low and 2 moderate advisories. Durable transcript: `docs/jev-context-ranking/verification.md`.
 - [ ] Obtain a fresh independent reviewer approval transition on the final integrated revision.
 
 ## Phase 5 — complete repository gates
