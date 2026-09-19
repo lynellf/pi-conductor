@@ -184,6 +184,26 @@ describe("orchestrator context query", () => {
     ).toBe(2);
   });
 
+  it("ignores host-only synthetic lifecycle placeholders", () => {
+    const syntheticStarted = {
+      ...started,
+      role_session_id: "operator-routing-session",
+      session_file: "<operator-routing:orchestrator>",
+    };
+    const syntheticEnded = {
+      ...terminal,
+      role_session_id: "operator-routing-session",
+      session_file: "<operator-routing:orchestrator>",
+    };
+    const state = queryOrchestratorContext(
+      [...settled, syntheticStarted, syntheticEnded],
+      "run-1",
+      "orchestrator",
+    );
+    expect(state.boundary?.leaf_id).toBe("leaf-1");
+    expect(state.pendingInvocation).toBeNull();
+  });
+
   it("supports a second invocation from the first committed boundary", () => {
     const invocation2 = {
       ...invocation,

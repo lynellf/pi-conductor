@@ -51,6 +51,7 @@ export function queryOrchestratorContext(
   const sessionFiles = new Set<string>();
 
   for (const record of records) {
+    if (isSyntheticLifecycleRecord(record)) continue;
     if (isLifecycleRecord(record) && record.run_id === runId && record.role === role) {
       if (pendingInvocation === null) {
         throw new ContextQueryError("terminal lifecycle record precedes its context invocation");
@@ -249,6 +250,14 @@ function isContextRecord(
   record: PersistedRecord,
 ): record is Extract<PersistedRecord, { readonly type: `context_${string}` }> {
   return record.type.startsWith("context_");
+}
+
+function isSyntheticLifecycleRecord(record: PersistedRecord): boolean {
+  return (
+    isLifecycleRecord(record) &&
+    (record.session_file.startsWith("<operator-routing:") ||
+      record.session_file.startsWith("<synthesized:"))
+  );
 }
 
 function isLifecycleRecord(
