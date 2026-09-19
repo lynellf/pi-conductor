@@ -1,7 +1,7 @@
 /**
  * Pure recipient-context ranking primitives — jev-context-ranking spec §6, §8.
  *
- * Three small surfaces live here:
+ * Public API surface:
  *  - `projectRankedCandidates`: derive a deterministic scored prefix +
  *    unscored suffix from the canonical ledger (no model calls, no ambient state).
  *  - `rankCandidatesForSection`: stable within-section ordering (descending
@@ -10,21 +10,17 @@
  *    seed with optional host annotation wrapper while preserving the
  *    byte-identical baseline when enrichment is disabled or unavailable.
  *
+ * Projection internals live in `continuity-ranking-projection.ts` to keep
+ * this module at the AGENTS.md ~400 LOC ceiling.
+ *
  * This module is host-agnostic — it imports no pi SDK, no provider, and
  * performs no network I/O. It is the pure counterpart to the host
  * TypeSafe adapter (`src/host/context-enrichment/typesafe-client.ts`).
  */
 
-import type {
-  ContinuityFinding,
-  ContinuityNextStep,
-  ContinuityQuestion,
-} from "../seam/continuity.js";
 import { renderContinuitySeed as renderLegacyContinuitySeed } from "./continuity-seed.js";
 import { stableJsonStringify } from "./continuity-semantics.js";
 import type {
-  ContinuityActiveOrSupersededItem,
-  ContinuityEnvelopeV1,
   ContinuityLedger,
   ContinuityResolvedEvaluation,
   ContinuitySeed,
@@ -98,324 +94,13 @@ export interface RankedCandidateProjectionEntry {
   readonly attributes: Readonly<Record<string, string | boolean>>;
 }
 
-// ─── Candidate projection (spec §6) ─────────────────────────────────────
+// ─── Re-export projection helper ────────────────────────────────────────
 
-function attributesForFinding(
-  finding: ContinuityFinding,
-): Readonly<Record<string, string | boolean>> {
-  return Object.freeze({ kind: finding.kind, confidence: finding.confidence });
-}
+import { projectRankedCandidates } from "./continuity-ranking-projection.js";
 
-function attributesForQuestion(
-  question: ContinuityQuestion,
-): Readonly<Record<string, string | boolean>> {
-  return Object.freeze({ blocking: question.blocking });
-}
+export { projectRankedCandidates };
 
-function attributesForNextStep(
-  nextStep: ContinuityNextStep,
-): Readonly<Record<string, string | boolean>> {
-  return Object.freeze({ owner: nextStep.owner });
-}
-
-function attributesForEvaluation(
-  evaluation: ContinuityResolvedEvaluation,
-): Readonly<Record<string, string | boolean>> {
-  return Object.freeze({
-    status: evaluation.status,
-    cleanup_disposition: evaluation.cleanup_disposition,
-    command_digest_present: evaluation.command_digest !== null,
-  });
-}
-
-function attributesForEnvelope(
-  envelope: ContinuityEnvelopeV1,
-): Readonly<Record<string, string | boolean>> {
-  return Object.freeze({ source: envelope.source });
-}
-
-function buildOutbound(
-  recipient: RankedRecipient,
-  section: SectionKey,
-  kind: string,
-  text: string,
-  attributes: Readonly<Record<string, string | boolean>>,
-): Readonly<Record<string, unknown>> {
-  return Object.freeze({
-    recipient: Object.freeze({
-      role: recipient.role,
-      objective: recipient.objective,
-      requested_action: recipient.requested_action,
-    }),
-    candidate: Object.freeze({
-      section,
-      kind,
-      text,
-      attributes: Object.freeze({ ...attributes }),
-    }),
-  });
-}
-
-interface SectionProjection {
-  readonly section: SectionKey;
-  readonly entries: readonly RankedCandidateProjectionEntry[];
-}
-
-function sectionFromBlockingQuestions(
-  ledger: ContinuityLedger,
-): readonly ContinuityActiveOrSupersededItem<ContinuityQuestion>[] {
-  return ledger.open_questions
-    .filter((entry) => entry.item.blocking && entry.superseded_by.length === 0)
-    .reverse();
-}
-
-function sectionFromRecipientNextSteps(
-  ledger: ContinuityLedger,
-): readonly ContinuityActiveOrSupersededItem<ContinuityNextStep>[] {
-  return ledger.next_steps
-    .filter(
-      (entry) =>
-        (entry.item.owner === "recipient" || entry.item.owner === "parent") &&
-        entry.superseded_by.length === 0,
-    )
-    .reverse();
-}
-
-function sectionFromRisksAndDecisions(
-  ledger: ContinuityLedger,
-): readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[] {
-  return ledger.findings
-    .filter(
-      (entry) =>
-        (entry.item.kind === "risk" || entry.item.kind === "decision") &&
-        entry.superseded_by.length === 0,
-    )
-    .reverse();
-}
-
-function sectionFromOtherActiveFindings(
-  ledger: ContinuityLedger,
-): readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[] {
-  return ledger.findings
-    .filter(
-      (entry) =>
-        entry.item.kind !== "risk" &&
-        entry.item.kind !== "decision" &&
-        entry.superseded_by.length === 0,
-    )
-    .reverse();
-}
-
-function sectionFromEvaluations(ledger: ContinuityLedger): readonly SectionProjection[] {
-  return [
-    {
-      section: "evaluations",
-      entries: ledger.evaluations.map((evaluation) => {
-        const attributes = attributesForEvaluation(evaluation);
-        const text = `${evaluation.label} (${evaluation.status})`;
-        return {
-          section: "evaluations" as const,
-          candidate_key: `evaluations:${evaluation.record_id}:${evaluation.id}`,
-          baseline_ordinal: 0,
-          item: evaluation,
-          // Spec §6.3: outbound state is the minimal semantic shape;
-          // host-derived evaluations do not score against the
-          // recipient, so they remain unscored in the prefix and
-          // retain their baseline order (spec §8).
-          outbound: buildCandidateOutbound("evaluations", "evaluation", text, attributes),
-          attributes,
-        } satisfies RankedCandidateProjectionEntry;
-      }),
-    },
-  ];
-}
-
-function sectionFromPacketSummaries(ledger: ContinuityLedger): readonly SectionProjection[] {
-  const reversed = [...ledger.envelopes].reverse();
-  return [
-    {
-      section: "packet_summaries",
-      entries: reversed.map((envelope) => {
-        const attributes = attributesForEnvelope(envelope);
-        return {
-          section: "packet_summaries" as const,
-          candidate_key: `packet_summary:${envelope.record_id}`,
-          baseline_ordinal: 0,
-          item: {
-            source: envelope.source,
-            role: envelope.role,
-            record_id: envelope.record_id,
-            summary: envelope.packet.summary,
-          },
-          // Spec §6.3: outbound state excludes the recipient block
-          // for unscored items (host-derived packet summaries retain
-          // their baseline order; never nested blank recipient state).
-          outbound: buildCandidateOutbound(
-            "packet_summaries",
-            "packet_summary",
-            envelope.packet.summary,
-            attributes,
-          ),
-          attributes,
-        } satisfies RankedCandidateProjectionEntry;
-      }),
-    },
-  ];
-}
-
-/**
- * Minimal semantic shape for unscored candidates (evaluations, packet
- * summaries). The recipient block is intentionally omitted because
- * these candidates never score against the recipient (spec §6.3) and
- * the persisted outbound state stays scoped to the candidate itself.
- */
-function buildCandidateOutbound(
-  section: SectionKey,
-  kind: string,
-  text: string,
-  attributes: Readonly<Record<string, string | boolean>>,
-): Readonly<Record<string, unknown>> {
-  return Object.freeze({
-    candidate: Object.freeze({
-      section,
-      kind,
-      text,
-      attributes: Object.freeze({ ...attributes }),
-    }),
-  });
-}
-
-function buildSectionEntries(
-  ledger: ContinuityLedger,
-  recipient: RankedRecipient,
-): readonly SectionProjection[] {
-  const sections: SectionProjection[] = [
-    {
-      section: "blocking_questions",
-      entries: sectionFromBlockingQuestions(ledger).map((entry) => {
-        const attributes = attributesForQuestion(entry.item);
-        return {
-          section: "blocking_questions" as const,
-          candidate_key: `blocking_questions:${entry.record_id}:${entry.item.id}`,
-          baseline_ordinal: 0,
-          item: entry.item,
-          outbound: buildOutbound(
-            recipient,
-            "blocking_questions",
-            "question",
-            entry.item.question,
-            attributes,
-          ),
-          attributes,
-        } satisfies RankedCandidateProjectionEntry;
-      }),
-    },
-    {
-      section: "recipient_next_steps",
-      entries: sectionFromRecipientNextSteps(ledger).map((entry) => {
-        const attributes = attributesForNextStep(entry.item);
-        return {
-          section: "recipient_next_steps" as const,
-          candidate_key: `recipient_next_steps:${entry.record_id}:${entry.item.id}`,
-          baseline_ordinal: 0,
-          item: entry.item,
-          outbound: buildOutbound(
-            recipient,
-            "recipient_next_steps",
-            "next_step",
-            entry.item.action,
-            attributes,
-          ),
-          attributes,
-        } satisfies RankedCandidateProjectionEntry;
-      }),
-    },
-    {
-      section: "risks_and_decisions",
-      entries: sectionFromRisksAndDecisions(ledger).map((entry) => {
-        const attributes = attributesForFinding(entry.item);
-        return {
-          section: "risks_and_decisions" as const,
-          candidate_key: `risks_and_decisions:${entry.record_id}:${entry.item.id}`,
-          baseline_ordinal: 0,
-          item: entry.item,
-          outbound: buildOutbound(
-            recipient,
-            "risks_and_decisions",
-            entry.item.kind,
-            entry.item.statement,
-            attributes,
-          ),
-          attributes,
-        } satisfies RankedCandidateProjectionEntry;
-      }),
-    },
-    {
-      section: "other_active_findings",
-      entries: sectionFromOtherActiveFindings(ledger).map((entry) => {
-        const attributes = attributesForFinding(entry.item);
-        return {
-          section: "other_active_findings" as const,
-          candidate_key: `other_active_findings:${entry.record_id}:${entry.item.id}`,
-          baseline_ordinal: 0,
-          item: entry.item,
-          outbound: buildOutbound(
-            recipient,
-            "other_active_findings",
-            entry.item.kind,
-            entry.item.statement,
-            attributes,
-          ),
-          attributes,
-        } satisfies RankedCandidateProjectionEntry;
-      }),
-    },
-    ...sectionFromEvaluations(ledger),
-    ...sectionFromPacketSummaries(ledger),
-  ];
-  return sections;
-}
-
-/**
- * Derive the deterministic prefix + unscored suffix from the canonical
- * ledger for one accepted transition. The returned entries are pure
- * data; the caller passes them to the TypeSafe adapter and back to
- * `buildRankedSeed` for rendering.
- *
- * `candidate_limit` bounds the scored prefix globally — across all six
- * sections in §6.1 priority order. Unscored entries retain baseline
- * ordinals so the unscored suffix remains in canonical order.
- */
-export function projectRankedCandidates(
-  ledger: ContinuityLedger,
-  input: RankedCandidateInput,
-): RankedCandidateProjection {
-  const sections = buildSectionEntries(ledger, input.recipient);
-  const flat: RankedCandidateProjectionEntry[] = [];
-  for (const projection of sections) {
-    for (const entry of projection.entries) flat.push(entry);
-  }
-  const totalCount = flat.length;
-  const limit = Math.min(input.policy.candidate_limit, totalCount);
-  const scoredPrefix: RankedCandidateProjectionEntry[] = [];
-  let consumed = 0;
-  for (const entry of flat) {
-    if (consumed >= limit) break;
-    scoredPrefix.push({ ...entry, baseline_ordinal: consumed });
-    consumed += 1;
-  }
-  const unscoredSuffix = flat.slice(consumed).map((entry, offset) => ({
-    ...entry,
-    baseline_ordinal: consumed + offset,
-  }));
-  return Object.freeze({
-    scored_prefix: Object.freeze(scoredPrefix),
-    unscored_suffix: Object.freeze(unscoredSuffix),
-    scored_count: scoredPrefix.length,
-    total_count: totalCount,
-    input_fingerprint: null,
-  });
-}
+// ─── Within-section ranking (spec §8) ───────────────────────────────────
 
 /**
  * Order a single section's scored prefix by descending score, breaking

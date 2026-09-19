@@ -258,7 +258,6 @@ async function runCandidates(
 ): Promise<ContextEnrichmentOutcome> {
   let totalAttempts = 0;
   let firstFailureCode: ContextEnrichmentFailureCode | null = null;
-  let firstFailureAttempts = 0;
   const aggregateJudgments: Array<NonNullable<ContextEnrichmentRecord["judgments"]>[number]> = [];
   const aggregateUsage = { input_tokens: 0, output_tokens: 0 };
   let actualModel: string | undefined;
@@ -333,7 +332,6 @@ async function runCandidates(
       // unavailable and break out (atomic per spec §11).
       if (firstFailureCode === null) {
         firstFailureCode = "network_error";
-        firstFailureAttempts = args.policy.max_attempts;
       }
       break;
     }
@@ -341,7 +339,6 @@ async function runCandidates(
       totalAttempts += outcome.attempts;
       if (firstFailureCode === null) {
         firstFailureCode = outcome.code;
-        firstFailureAttempts = outcome.attempts;
       }
       aborted = true;
       break;
@@ -466,10 +463,7 @@ function findMatchingRecord(
   recipient: Role,
   recipientVisit: number,
 ): ContextEnrichmentRecord | null {
-  const terminals = findContextEnrichmentTerminals(
-    log.records(runId) as readonly unknown[],
-    runId,
-  );
+  const terminals = findContextEnrichmentTerminals(log.records(runId) as readonly unknown[], runId);
   const match = selectUniqueTerminalForTransition(terminals, transitionKey);
   if (match === null) return null;
   if (match.recipient_role !== recipient || match.recipient_visit !== recipientVisit) {

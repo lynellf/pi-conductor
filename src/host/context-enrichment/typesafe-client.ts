@@ -224,7 +224,11 @@ function validateResponseShape(
   ) {
     throw new TypesafeAdapterRejection("response_invalid");
   }
-  if (typeof candidate.answers !== "object" || candidate.answers === null || Array.isArray(candidate.answers)) {
+  if (
+    typeof candidate.answers !== "object" ||
+    candidate.answers === null ||
+    Array.isArray(candidate.answers)
+  ) {
     throw new TypesafeAdapterRejection("response_invalid");
   }
   const answers = candidate.answers as Record<string, unknown>;

@@ -308,9 +308,7 @@ export function selectUniqueTerminalForTransition(
   terminals: readonly ContextEnrichmentRecord[],
   transitionKey: string,
 ): ContextEnrichmentRecord | null {
-  const matches = terminals.filter(
-    (record) => record.source_transition_key === transitionKey,
-  );
+  const matches = terminals.filter((record) => record.source_transition_key === transitionKey);
   if (matches.length > 1) {
     throw new ContextEnrichmentMaterializationError(
       "context_enrichment_duplicate_terminal",

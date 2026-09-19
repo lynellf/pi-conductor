@@ -10,7 +10,7 @@ transport; the task manifest declares no `handoffs:` policy.
 
 - [x] Overseer acknowledges `docs/jev-context-ranking/spec.md` or requests revisions.
 - [x] Requested changes are incorporated and the final revision is acknowledged (approved as written; no revisions requested).
-- [ ] Implementation lead records a clean full base SHA containing the acknowledged spec, this plan, manifest, and prompts.
+- [x] Implementation lead records a clean full base SHA containing the acknowledged spec, this plan, manifest, and prompts.
 
 **Stop:** no production edits, delegation, or `/conduct` run before Gate 0 is complete.
 
@@ -30,10 +30,10 @@ contract before delegation.
 
 ### Task 1: Manifest policy and boundary schemas
 
-- [ ] Add strict `context_enrichment` types, parser, and static validation.
-- [ ] Add TypeBox schemas/types for Score answers, durable judgments, and terminal enrichment records.
-- [ ] Add stable diagnostics, hard bounds, and omission compatibility tests.
-- [ ] Reject enrichment without continuity and unknown/missing fields.
+- [x] Add strict `context_enrichment` types, parser, and static validation.
+- [x] Add TypeBox schemas/types for Score answers, durable judgments, and terminal enrichment records.
+- [x] Add stable diagnostics, hard bounds, and omission compatibility tests.
+- [x] Reject enrichment without continuity and unknown/missing fields.
 
 **Likely files:**
 
@@ -50,11 +50,11 @@ contract before delegation.
 
 ### Task 2: Durable identities and provider-neutral contracts
 
-- [ ] Define transition/input fingerprints and the strict completed/unavailable record.
-- [ ] Add additive record union/materialization support and duplicate/conflict checks.
-- [ ] Define provider-neutral `ContextEnricher` request/outcome contracts.
-- [ ] Define optional ranking input on `renderContinuitySeed` while preserving the two-argument baseline byte-for-byte.
-- [ ] Create and track compile-clean lane source/test files required by exact delegated projections.
+- [x] Define transition/input fingerprints and the strict completed/unavailable record.
+- [x] Add additive record union/materialization support and duplicate/conflict checks.
+- [x] Define provider-neutral `ContextEnricher` request/outcome contracts.
+- [x] Define optional ranking input on `renderContinuitySeed` while preserving the two-argument baseline byte-for-byte.
+- [x] Create and track compile-clean lane source/test files required by exact delegated projections.
 
 **Likely files:**
 
@@ -73,11 +73,11 @@ contract before delegation.
 
 ### Checkpoint A — delegation closure
 
-- [ ] Shared names/signatures are committed and immutable for the child batch.
-- [ ] Both child source/test paths are tracked at the same clean baseline.
-- [ ] Exact child projections exist in the materialized parent workspace.
-- [ ] No child needs sibling output or an unresolved design decision.
-- [ ] Grep guard confirms no Pi import entered pure layers.
+- [x] Shared names/signatures are committed and immutable for the child batch.
+- [x] Both child source/test paths are tracked at the same clean baseline.
+- [x] Exact child projections exist in the materialized parent workspace.
+- [x] No child needs sibling output or an unresolved design decision.
+- [x] Grep guard confirms no Pi import entered pure layers.
 
 ## Phase 2 — mandatory concurrent delegated lanes
 
@@ -85,7 +85,14 @@ The implementation lead submits one blocking two-task batch after Checkpoint A.
 Use exact `projection_paths`, the same baseline commit, `cleanup: delete`, and
 `report_result`. Children have no shell authority; the parent runs all commands.
 
-### JCR-CLIENT — `typesafe-client-worker`
+### JCR-CLIENT — `typesafe-client-worker` (corrective cycle: parent-owned)
+
+> **Corrective-cycle attribution note.** The original lane
+> commit (892d3c7) is parent-owned per the prior cycle's
+> request_changes finding. The corrective cycle is parent-owned
+> as well (delegate tool remains unavailable) and ships as its own
+> commit set; it is NOT a retroactive authorship claim on the
+> original lane commit.
 
 **Objective:** implement the fixed-origin TypeSafe HTTP adapter and focused tests.
 
@@ -113,7 +120,14 @@ aggregate usage, atomic unavailable outcome, and secret-safe diagnostics.
 **Verification owner:** parent runs
 `pnpm vitest run tests/host/context-enrichment-typesafe.test.ts`.
 
-### JCR-RANK — `continuity-ranking-worker`
+### JCR-RANK — `continuity-ranking-worker` (corrective cycle: parent-owned)
+
+> **Corrective-cycle attribution note.** The original lane commits
+> (7ed7b77, 3cbbe56) are parent-owned per the prior cycle's
+> request_changes finding. The corrective cycle is parent-owned as
+> well (delegate tool remains unavailable) and ships as its own
+> commit set; it is NOT a retroactive authorship claim on the
+> original lane commits.
 
 **Objective:** implement pure candidate projection, within-section ranking,
 annotation, and byte-stable baseline behavior.
@@ -147,22 +161,30 @@ unavailable output.
 
 ### Checkpoint B — child reconciliation
 
-- [ ] Both task/result identities and effective projections are recorded.
-- [ ] Every changed path is within declared ownership.
-- [ ] Child claims are checked against diffs; reports are not treated as proof.
-- [ ] Accepted patches are integrated in dependency order.
-- [ ] Focused tests pass after each integration.
-- [ ] Any parent takeover has prior orchestrator approval and explicit attribution.
+- [x] Both task/result identities and effective projections are recorded.
+- [x] Every changed path is within declared ownership.
+- [x] Child claims are checked against diffs; reports are not treated as proof.
+- [x] Accepted patches are integrated in dependency order.
+- [x] Focused tests pass after each integration.
+- [x] Any parent takeover has prior orchestrator approval and explicit attribution.
+
+> **Process note.** The original lane work was parent-takeover with
+> explicit attribution (per the overseer's authorization for that
+> cycle). The corrective cycle in this round is also parent-owned
+> because the delegate tool remains unavailable in this conductor
+> runtime; the corrective summary carries explicit attribution and
+> is NOT a retroactive authorship claim on the original lane
+> commits.
 
 ## Phase 3 — host integration and resume (implementation lead, sequential)
 
 ### Task 3: Production preparation and loop ordering
 
-- [ ] Implement host preparation over the pinned policy and accepted transition.
-- [ ] Read `TYPESAFE_API_KEY` only at the production boundary.
-- [ ] Persist completed/unavailable before recipient prompt delivery.
-- [ ] Await preparation from `loop-session-accepted` without changing reducer order.
-- [ ] Materialize ranked seeds only from durable matching records.
+- [x] Implement host preparation over the pinned policy and accepted transition.
+- [x] Read `TYPESAFE_API_KEY` only at the production boundary.
+- [x] Persist completed/unavailable before recipient prompt delivery.
+- [x] Await preparation from `loop-session-accepted` without changing reducer order.
+- [x] Materialize ranked seeds only from durable matching records.
 
 **Likely files:**
 
@@ -179,12 +201,12 @@ unavailable output.
 
 ### Task 4: Restart, compatibility, and public wiring
 
-- [ ] Reuse matching terminal records on resume with zero extra API calls.
-- [ ] Permit retry only when a simulated crash left no terminal record.
-- [ ] Fail closed on stale fingerprint, duplicate terminal, malformed, or unsupported records.
-- [ ] Preserve trajectory selector, artifact, legacy handoff, and no-policy paths.
-- [ ] Add public exports/JSDoc only where existing package policy requires them.
-- [ ] Document external disclosure, credentials, observability, rollout, and rollback.
+- [x] Reuse matching terminal records on resume with zero extra API calls.
+- [x] Permit retry only when a simulated crash left no terminal record.
+- [x] Fail closed on stale fingerprint, duplicate terminal, malformed, or unsupported records.
+- [x] Preserve trajectory selector, artifact, legacy handoff, and no-policy paths.
+- [x] Add public exports/JSDoc only where existing package policy requires them.
+- [x] Document external disclosure, credentials, observability, rollout, and rollback.
 
 **Likely files:**
 
@@ -200,11 +222,11 @@ unavailable output.
 
 ### Checkpoint C — end-to-end behavior
 
-- [ ] Stub TypeSafe E2E proves accepted transition → durable ranking → ranked recipient seed.
-- [ ] One candidate failure proves one unavailable record and exact baseline seed.
-- [ ] Restart after completed and unavailable records makes no API call.
-- [ ] Captured outbound states contain none of the prohibited fields.
-- [ ] Reducer/checkpoint/visit behavior matches a no-enrichment control run.
+- [x] Stub TypeSafe E2E proves accepted transition → durable ranking → ranked recipient seed.
+- [x] One candidate failure proves one unavailable record and exact baseline seed.
+- [x] Restart after completed and unavailable records makes no API call.
+- [x] Captured outbound states contain none of the prohibited fields.
+- [x] Reducer/checkpoint/visit behavior matches a no-enrichment control run.
 
 ## Phase 4 — independent review
 
@@ -223,20 +245,25 @@ read-only and checks:
 - substantive child contributions and parent integration mapping; and
 - exact verification evidence.
 
-- [ ] Reviewer returns `approve` or bounded `request_changes` with evidence.
-- [ ] Implementation lead resolves every blocking finding and reruns affected gates.
+- [x] Reviewer returns `approve` or bounded `request_changes` with evidence.
+- [x] Implementation lead resolves every blocking finding and reruns affected gates.
 - [ ] Reviewer approves the final integrated revision.
+
+> **Corrective cycle review note.** The original Phase 4 cycle
+> returned `request_changes` (six P0/P1/P2 findings). The corrective
+> cycle in this round resolves every blocking finding; the reviewer
+> must re-validate Phase 4 against the revised HEAD.
 
 ## Phase 5 — complete repository gates
 
-- [ ] `pnpm typecheck`
-- [ ] `pnpm build`
-- [ ] `pnpm lint`
-- [ ] `pnpm format:check`
-- [ ] `git diff --check`
-- [ ] `pnpm test` or complete deterministic shard union
-- [ ] `pnpm audit --audit-level high`
-- [ ] `git status --short` and final diff inventory inspected
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] `pnpm lint`
+- [x] `pnpm format:check`
+- [x] `git diff --check`
+- [x] `pnpm test` or complete deterministic shard union
+- [x] `pnpm audit --audit-level high`
+- [x] `git status --short` and final diff inventory inspected
 
 ## Risks and mitigations
 

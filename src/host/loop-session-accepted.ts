@@ -231,9 +231,7 @@ export async function persistAcceptedTransition(
       ? payload.objective
       : "";
   const recipientRequestedAction =
-    typeof payload === "object" &&
-    payload !== null &&
-    typeof payload.requested_action === "string"
+    typeof payload === "object" && payload !== null && typeof payload.requested_action === "string"
       ? payload.requested_action
       : "";
   if (typeof host.prepareFreshContinuityEnrichment === "function") {

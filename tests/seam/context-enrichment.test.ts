@@ -98,9 +98,9 @@ describe("contextRelevanceScoreAnswerSchema (spec §7)", () => {
   it("rejects an empty model string at the response level", () => {
     // model is response-level, not answer-level; answers must not
     // carry their own model/usage (official contract).
-    expect(
-      Value.Check(contextRelevanceScoreAnswerSchema, { ...validResponse(), model: "" }),
-    ).toBe(false);
+    expect(Value.Check(contextRelevanceScoreAnswerSchema, { ...validResponse(), model: "" })).toBe(
+      false,
+    );
   });
 
   it("rejects a legend with an unknown key (must be exactly {0,1,2,3})", () => {

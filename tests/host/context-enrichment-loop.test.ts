@@ -35,7 +35,7 @@ import { buildRankedSeed } from "../../src/persistence/continuity-ranking.js";
 import { InMemoryRecordLog } from "../../src/persistence/in-memory-log.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 
-const VALID_ANSWER = (model: string, score: number, certainty: number) => ({
+const VALID_ANSWER = (_model: string, score: number, certainty: number) => ({
   type: "score",
   score,
   confidence: certainty,
@@ -143,7 +143,7 @@ function makePacket(summary: string, findings: Array<{ id: string; kind?: string
   };
 }
 
-function withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] {
+function _withLifecycles(records: readonly PersistedRecord[]): PersistedRecord[] {
   const seen = new Set<string>();
   const out: PersistedRecord[] = [];
   for (const record of records) {
