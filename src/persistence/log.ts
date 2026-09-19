@@ -17,6 +17,7 @@ import type {
   ChildProjectionFingerprint,
 } from "./child-completion.js";
 import type { ChildOutputCapture, ChildOutputRecord } from "./child-output-records.js";
+import type { ContextEnrichmentRecord } from "./context-enrichment.js";
 import type { ChildContinuitySibling } from "./continuity.js";
 import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
@@ -471,7 +472,8 @@ export type PersistedRecord =
   | ControllerRecord
   | SourceWorkspaceRecord
   | ChildOutputRecord
-  | ControllerEffectRecord;
+  | ControllerEffectRecord
+  | ContextEnrichmentRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

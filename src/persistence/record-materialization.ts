@@ -6,6 +6,7 @@ import {
   assertChildOutputRecord,
   isChildOutputRecord,
 } from "./child-output-records.js";
+import { assertContextEnrichmentRecord } from "./context-enrichment.js";
 import {
   assertControllerEffectRecord,
   isControllerEffectRecord,
@@ -132,6 +133,9 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
     record.type === "tool_execution_sandbox_ready"
   ) {
     assertToolExecutionRecord(record);
+  }
+  if (record.type === "context_enrichment") {
+    assertContextEnrichmentRecord(record);
   }
   if (
     record.type === "end_guard_started" ||

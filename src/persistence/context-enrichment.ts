@@ -1,0 +1,307 @@
+/**
+ * Durable `context_enrichment` identity + record contract —
+ * jev-context-ranking spec §10.
+ *
+ * Defines the additive union member for terminal enrichment records,
+ * the deterministic transition/input fingerprints, and the strict
+ * validation used by the persistence layer. This module is host-agnostic
+ * — it imports no pi SDK and persists no provider bodies, headers, or
+ * raw response text. Diagnostics are bounded to stable failure codes
+ * (spec §11) and never include API keys, transcripts, or paths.
+ */
+
+import { createHash } from "node:crypto";
+import { Value } from "typebox/value";
+import type { Role } from "../core/types.js";
+import {
+  CONTEXT_ENRICHMENT_FAILURE_CODES,
+  type ContextEnrichmentFailureCode,
+  type ContextEnrichmentRecord,
+  type ContextRelevanceJudgment,
+  contextEnrichmentRecordSchema,
+} from "../seam/context-enrichment.js";
+import { stableJsonStringify } from "./continuity-semantics.js";
+
+// Re-export the seam record type so persistence layers can refer to it
+// without importing the seam module directly.
+export type { ContextEnrichmentRecord } from "../seam/context-enrichment.js";
+
+// ─── Stable identity contracts ──────────────────────────────────────────
+
+/** Schema domain for the `source_transition_key` fingerprint (spec §10.1). */
+export const TRANSITION_KEY_DOMAIN = "pi-conductor/context-enrichment-transition/v1";
+/** Schema domain for the `input_sha256` fingerprint (spec §10.2). */
+export const INPUT_FINGERPRINT_DOMAIN = "pi-conductor/context-enrichment-input/v1";
+
+/**
+ * Inputs for `computeContextEnrichmentTransitionKey` (spec §10.1).
+ * Every field is host-derived; the function does not trust model output.
+ */
+export interface ContextEnrichmentAcceptedTransition {
+  readonly run_id: string;
+  readonly from: Role;
+  readonly to: Role;
+  /** Stable accepted-transition timestamp (e.g. transition record `ts`). */
+  readonly transition_ts: number;
+  /** Source logical role session id; absent → empty string (stable). */
+  readonly source_role_session_id?: string;
+  /** Source physical session file path (host-owned). */
+  readonly source_session_file: string;
+  /** Recipient visit index for this transition (1-based). */
+  readonly target_visit_index: number;
+}
+
+/**
+ * Snapshot of the policy block the host pins at run start.
+ * Only the three fields the fingerprint needs are required; transport
+ * limits (timeouts, concurrency) belong to the adapter, not the record.
+ */
+export interface ContextEnrichmentPolicySnapshot {
+  readonly provider: "typesafe_jev";
+  readonly model: string;
+  readonly strategy: "recipient_relevance_rank";
+  /** Optional transport limits — included in the fingerprint when present. */
+  readonly candidate_limit?: number;
+}
+
+/**
+ * One scored-candidate outbound shape the fingerprint must hash (spec §10.2).
+ * The full outbound state is reconstructed from the accepted handoff and
+ * continuity ledger on replay — only the stable identity is hashed here.
+ */
+export interface ContextEnrichmentInputCandidate {
+  readonly key: string;
+  readonly outbound: unknown;
+}
+
+/** Inputs for `computeContextEnrichmentInputFingerprint` (spec §10.2). */
+export interface ContextEnrichmentInputFingerprintArgs {
+  readonly policy: ContextEnrichmentPolicySnapshot;
+  readonly recipient: {
+    readonly role: Role;
+    readonly objective: string;
+    readonly requested_action: string;
+  };
+  readonly candidates: readonly ContextEnrichmentInputCandidate[];
+  readonly instructions: string;
+  readonly criteria: readonly string[];
+}
+
+// ─── Hashing primitives ───────────────────────────────────────────────
+
+function stableSha256(value: unknown): string {
+  return createHash("sha256").update(stableJsonStringify(value)).digest("hex");
+}
+
+/**
+ * Lowercase sha256 over stable JSON for the accepted-transition identity
+ * (spec §10.1). Recomputable from the accepted transition + lifecycle log
+ * without trusting model output. Absent `source_role_session_id` is
+ * normalized to the empty string so the key remains stable.
+ */
+export function computeContextEnrichmentTransitionKey(
+  args: ContextEnrichmentAcceptedTransition,
+): string {
+  const payload = {
+    domain: TRANSITION_KEY_DOMAIN,
+    run_id: args.run_id,
+    from: args.from,
+    to: args.to,
+    transition_ts: args.transition_ts,
+    source_role_session_id: args.source_role_session_id ?? "",
+    source_session_file: args.source_session_file,
+    target_visit_index: args.target_visit_index,
+  };
+  return stableSha256(payload);
+}
+
+/**
+ * Lowercase sha256 over stable JSON for the recipient-relevance input
+ * (spec §10.2). Candidate keys are sorted before hashing so order changes
+ * in caller code do not change the fingerprint. The full outbound state is
+ * retained via `outbound` — the host re-hashes the same shape on replay
+ * and fails closed when the fingerprints disagree.
+ */
+export function computeContextEnrichmentInputFingerprint(
+  args: ContextEnrichmentInputFingerprintArgs,
+): string {
+  const sortedCandidates = [...args.candidates].sort((left, right) =>
+    left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+  );
+  const payload = {
+    domain: INPUT_FINGERPRINT_DOMAIN,
+    policy: {
+      provider: args.policy.provider,
+      model: args.policy.model,
+      strategy: args.policy.strategy,
+      ...(args.policy.candidate_limit === undefined
+        ? {}
+        : { candidate_limit: args.policy.candidate_limit }),
+    },
+    recipient: {
+      role: args.recipient.role,
+      objective: args.recipient.objective,
+      requested_action: args.recipient.requested_action,
+    },
+    candidates: sortedCandidates.map((candidate) => ({
+      key: candidate.key,
+      outbound: candidate.outbound,
+    })),
+    instructions: args.instructions,
+    criteria: [...args.criteria],
+  };
+  return stableSha256(payload);
+}
+
+// ─── Record validation (spec §10.3) ─────────────────────────────────────
+
+/** Stable error code surface for materialization rejections. */
+export type ContextEnrichmentMaterializationCode =
+  | "context_enrichment_invalid_schema"
+  | "context_enrichment_duplicate_candidate_key"
+  | "context_enrichment_missing_candidate"
+  | "context_enrichment_out_of_order_ordinal"
+  | "context_enrichment_non_finite_value"
+  | "context_enrichment_unavailable_with_judgments"
+  | "context_enrichment_unavailable_with_usage"
+  | "context_enrichment_completed_missing_usage"
+  | "context_enrichment_unavailable_missing_failure"
+  | "context_enrichment_unknown_failure_code"
+  | "context_enrichment_invalid_failure_attempts"
+  | "context_enrichment_input_mismatch";
+
+/** Typed materialization rejection. Carries the bounded record identity. */
+export class ContextEnrichmentMaterializationError extends Error {
+  constructor(
+    readonly code: ContextEnrichmentMaterializationCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ContextEnrichmentMaterializationError";
+  }
+}
+
+/**
+ * Strict materialization guard for one durable terminal record. Performs
+ * TypeBox structural validation, then semantic checks (duplicate keys,
+ * out-of-order ordinals, status/field consistency, finite values, exact
+ * judgment count, failure code set membership, attempts bound).
+ *
+ * The function throws `ContextEnrichmentMaterializationError` on every
+ * rejection. Callers persist a fresh record only after it returns.
+ */
+export function assertContextEnrichmentRecord(
+  record: unknown,
+): asserts record is ContextEnrichmentRecord {
+  if (!Value.Check(contextEnrichmentRecordSchema, record)) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_invalid_schema",
+      "context_enrichment record fails TypeBox schema validation",
+    );
+  }
+  const checked = record as ContextEnrichmentRecord;
+  if (checked.status === "completed") {
+    if (checked.judgments === undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_completed_missing_usage",
+        "completed context_enrichment record is missing judgments",
+      );
+    }
+    if (checked.usage === undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_completed_missing_usage",
+        "completed context_enrichment record is missing usage",
+      );
+    }
+    assertJudgments(checked.judgments, checked.candidate_count);
+  } else {
+    if (checked.judgments !== undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_unavailable_with_judgments",
+        "unavailable context_enrichment record must not carry judgments",
+      );
+    }
+    if (checked.usage !== undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_unavailable_with_usage",
+        "unavailable context_enrichment record must not carry usage",
+      );
+    }
+    assertFailure(checked);
+  }
+}
+
+function assertJudgments(
+  judgments: readonly ContextRelevanceJudgment[],
+  candidateCount: number,
+): void {
+  if (judgments.length !== candidateCount) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_missing_candidate",
+      `completed record declares ${candidateCount} candidates but carries ${judgments.length} judgments`,
+    );
+  }
+  const seen = new Set<string>();
+  for (let index = 0; index < judgments.length; index += 1) {
+    const judgment = judgments[index];
+    if (judgment === undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_missing_candidate",
+        `judgment at ordinal ${index} is undefined`,
+      );
+    }
+    if (seen.has(judgment.candidate_key)) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_duplicate_candidate_key",
+        `duplicate candidate key '${judgment.candidate_key}' in context_enrichment record`,
+      );
+    }
+    seen.add(judgment.candidate_key);
+    if (judgment.baseline_ordinal !== index) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_out_of_order_ordinal",
+        `judgment at ordinal ${index} carries baseline_ordinal ${judgment.baseline_ordinal}`,
+      );
+    }
+    if (!Number.isFinite(judgment.score) || !Number.isFinite(judgment.ranking_certainty)) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_non_finite_value",
+        `judgment '${judgment.candidate_key}' carries a non-finite score or certainty`,
+      );
+    }
+    for (const key of ["0", "1", "2", "3"] as const) {
+      if (!Number.isFinite(judgment.probabilities[key])) {
+        throw new ContextEnrichmentMaterializationError(
+          "context_enrichment_non_finite_value",
+          `judgment '${judgment.candidate_key}' carries a non-finite probability for bucket ${key}`,
+        );
+      }
+    }
+  }
+}
+
+function assertFailure(record: ContextEnrichmentRecord): void {
+  if (record.failure === undefined) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_unavailable_missing_failure",
+      "unavailable context_enrichment record is missing failure metadata",
+    );
+  }
+  const codes: readonly ContextEnrichmentFailureCode[] = CONTEXT_ENRICHMENT_FAILURE_CODES;
+  if (!codes.includes(record.failure.code)) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_unknown_failure_code",
+      `unknown context_enrichment failure code '${record.failure.code}'`,
+    );
+  }
+  if (
+    !Number.isInteger(record.failure.attempts) ||
+    record.failure.attempts < 0 ||
+    record.failure.attempts > 5
+  ) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_invalid_failure_attempts",
+      `context_enrichment failure attempts must be an integer in [0, 5] (received ${record.failure.attempts})`,
+    );
+  }
+}
