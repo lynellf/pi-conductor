@@ -50,6 +50,8 @@ export class ProductionHostContext {
   protected readonly loadControllerHostApproval:
     | (() => Promise<ControllerHostApproval>)
     | undefined;
+  /** Cached TYPESAFE_API_KEY read once at the production boundary (spec §5). */
+  protected readonly typesafeApiKey: string | null;
 
   constructor(opts: ProductionHostOptions) {
     // Fail before the orchestration loop admits a role session. The worker
@@ -100,5 +102,14 @@ export class ProductionHostContext {
     this.sessionState = new ProductionSessionState(this.sessionStates, this.agentsBySessionId);
     // SessionManager writes JSONL directly and does not create its parent.
     mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });
+    // Spec §5: the production boundary reads TYPESAFE_API_KEY exactly
+    // once. Storing it here keeps it off the manifest, off persisted
+    // records, and off diagnostic surfaces; downstream code reaches it
+    // only through this host-owned seam.
+    const env = opts.env ?? process.env;
+    this.typesafeApiKey =
+      typeof env.TYPESAFE_API_KEY === "string" && env.TYPESAFE_API_KEY.length > 0
+        ? env.TYPESAFE_API_KEY
+        : null;
   }
 }

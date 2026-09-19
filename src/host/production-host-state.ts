@@ -31,6 +31,8 @@ export interface StateHostContext {
   readonly lookupRoleConfig: (role: Role) => import("../manifest/types.js").RoleConfig | undefined;
   /** Live role-session usage state, used to exclude in-memory compaction charges. */
   readonly sessionStates?: ReadonlyMap<string, SessionState>;
+  /** Cached TYPESAFE_API_KEY read once at the production boundary (spec §5). */
+  readonly typesafeApiKey?: string | null;
 }
 /** Capture the latest usage record from a role session. */
 export function captureUsage(host: StateHostContext, session: RoleSession): UsageRecord {
@@ -345,6 +347,7 @@ async function prepareEnrichmentImpl(
     sourceRoleSessionId: args.sourceRoleSessionId ?? null,
     sourceSessionFile: args.sourceSessionFile,
     targetVisitIndex: args.visitIndex,
+    ...(host.typesafeApiKey !== undefined ? { apiKey: host.typesafeApiKey } : {}),
   });
 }
 

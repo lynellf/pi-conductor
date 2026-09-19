@@ -240,7 +240,7 @@ function validateResponseShape(
         input_tokens: usage.input_tokens as number,
         output_tokens: usage.output_tokens as number,
       },
-      answers,
+      answers: answers as Readonly<Record<string, TypesafeAnswer>>,
     },
     answer,
   };

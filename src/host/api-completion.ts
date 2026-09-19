@@ -205,6 +205,13 @@ function continuityItemIds(
  * Returns `null` when no continuity policy is pinned — the
  * `formatIncomingHandoffSeed` then omits the section entirely and the
  * legacy fresh-role seed format is preserved.
+ *
+ * When the manifest opts in to `context_enrichment`, the restart path
+ * reuses any persisted terminal `context_enrichment` record (rather
+ * than reconstructing the baseline) so resume consumes the same
+ * ranking the prior attempt produced. The ranked-seed builder needs
+ * the recipient's `objective`/`requested_action`; absent those, the
+ * helper falls back to the baseline path so resume never blocks.
  */
 function buildRestartContinuitySeed(args: {
   readonly policy: import("../manifest/types.js").ContinuityPolicy | undefined;

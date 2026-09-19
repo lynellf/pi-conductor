@@ -216,23 +216,34 @@ export async function persistAcceptedTransition(
   // `context_enrichment` record (completed or unavailable) before the
   // recipient prompt can consume the result, and resume reuses the
   // matching record without an extra API call.
+  //
+  // The transition timestamp is captured once at the accepted
+  // transition boundary and reused by both prepare and materialization
+  // so the deterministic transition key (and therefore the ranked
+  // seed) is identical between the async preparation seam and the
+  // synchronous materialization. Without this, a long network wait
+  // between the two calls would produce different transition keys and
+  // the completed ranking would never be rendered.
   const nextVisitIndex = ctx.visitIndexByRole.get(nextRole) ?? 1;
+  const transitionTs = Date.now();
+  const recipientObjective =
+    typeof payload === "object" && payload !== null && typeof payload.objective === "string"
+      ? payload.objective
+      : "";
+  const recipientRequestedAction =
+    typeof payload === "object" &&
+    payload !== null &&
+    typeof payload.requested_action === "string"
+      ? payload.requested_action
+      : "";
   if (typeof host.prepareFreshContinuityEnrichment === "function") {
     await host.prepareFreshContinuityEnrichment({
       role: nextRole,
       visitIndex: nextVisitIndex,
-      recipientObjective:
-        typeof payload === "object" && payload !== null && typeof payload.objective === "string"
-          ? payload.objective
-          : "",
-      recipientRequestedAction:
-        typeof payload === "object" &&
-        payload !== null &&
-        typeof payload.requested_action === "string"
-          ? payload.requested_action
-          : "",
+      recipientObjective,
+      recipientRequestedAction,
       from: role,
-      transitionTs: Date.now(),
+      transitionTs,
       sourceRoleSessionId: sessionId,
       sourceSessionFile: sessionFile,
     });
@@ -250,18 +261,10 @@ export async function persistAcceptedTransition(
       ? host.materializeFreshContinuitySeed({
           role: nextRole,
           visitIndex: nextVisitIndex,
-          recipientObjective:
-            typeof payload === "object" && payload !== null && typeof payload.objective === "string"
-              ? payload.objective
-              : "",
-          recipientRequestedAction:
-            typeof payload === "object" &&
-            payload !== null &&
-            typeof payload.requested_action === "string"
-              ? payload.requested_action
-              : "",
+          recipientObjective,
+          recipientRequestedAction,
           from: role,
-          transitionTs: Date.now(),
+          transitionTs,
           sourceRoleSessionId: sessionId,
           sourceSessionFile: sessionFile,
         })

@@ -317,6 +317,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
       },
       lookupRoleConfig: (role) => this.lookupRoleConfig(role),
       sessionStates: this.sessionStates,
+      typesafeApiKey: this.typesafeApiKey,
     };
   }
 

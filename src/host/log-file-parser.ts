@@ -97,5 +97,6 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "context_boundary_committed",
   "context_compaction_started",
   "context_compaction",
+  "context_enrichment",
   "run_finalization_failed",
 ]);

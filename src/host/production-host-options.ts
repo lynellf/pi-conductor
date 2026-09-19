@@ -70,4 +70,11 @@ export interface ProductionHostOptions {
    * host subscribes to each role session.
    */
   readonly roleTurnTelemetry?: RoleTurnTelemetryOptions;
+  /**
+   * Optional environment source for the production boundary's one-shot
+   * `TYPESAFE_API_KEY` read (spec §5). Defaults to `process.env`.
+   * The host reads the key exactly once at the boundary; it is never
+   * propagated through the manifest, persisted record, or diagnostics.
+   */
+  readonly env?: Record<string, string | undefined>;
 }
