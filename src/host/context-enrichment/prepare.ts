@@ -263,42 +263,93 @@ async function runCandidates(
   const aggregateUsage = { input_tokens: 0, output_tokens: 0 };
   let actualModel: string | undefined;
 
-  for (const candidate of candidates) {
-    const outcome = await enricher.enrich({
-      identity: {
-        run_id: args.runId,
-        source_transition_key: args.transitionKey,
-        input_sha256: args.inputFingerprint,
-      },
-      recipient: {
-        role: args.recipient,
-        objective: args.recipientObjective,
-        requested_action: args.recipientRequestedAction,
-      },
-      candidate: {
-        candidate_key: candidate.candidate_key,
-        baseline_ordinal: candidate.baseline_ordinal,
-        outbound: candidate.outbound,
-      },
-      instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
-      criteria: [...TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA],
-      policy: {
-        model: args.policy.model,
-        strategy: "recipient_relevance_rank",
-        provider: "typesafe_jev",
-      },
-      request_timeout_ms: args.policy.request_timeout_ms,
-      max_attempts: args.policy.max_attempts,
-    });
+  // Spec §11: every request obeys max_parallel; completion order
+  // never affects output ordering. We bound concurrent requests and
+  // dispatch them in baseline order so the persisted record's
+  // `baseline_ordinal` field matches the candidate prefix.
+  const maxParallel = Math.max(1, Math.min(args.policy.max_parallel, candidates.length));
+  const results: Array<ContextEnrichmentOutcome | null> = new Array(candidates.length).fill(null);
+  let nextIndex = 0;
+  let aborted = false;
+
+  const workers: Array<Promise<void>> = [];
+  for (let worker = 0; worker < maxParallel; worker += 1) {
+    workers.push(
+      (async () => {
+        while (!aborted) {
+          const index = nextIndex;
+          nextIndex += 1;
+          if (index >= candidates.length) return;
+          const candidate = candidates[index];
+          if (candidate === undefined) return;
+          try {
+            const outcome = await enricher.enrich({
+              identity: {
+                run_id: args.runId,
+                source_transition_key: args.transitionKey,
+                input_sha256: args.inputFingerprint,
+              },
+              recipient: {
+                role: args.recipient,
+                objective: args.recipientObjective,
+                requested_action: args.recipientRequestedAction,
+              },
+              candidate: {
+                candidate_key: candidate.candidate_key,
+                baseline_ordinal: candidate.baseline_ordinal,
+                outbound: candidate.outbound,
+              },
+              instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
+              criteria: [...TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA],
+              policy: {
+                model: args.policy.model,
+                strategy: "recipient_relevance_rank",
+                provider: "typesafe_jev",
+              },
+              request_timeout_ms: args.policy.request_timeout_ms,
+              max_attempts: args.policy.max_attempts,
+            });
+            results[index] = outcome;
+          } catch (error) {
+            // Atomic exception conversion (spec §11): a provider
+            // throw becomes one unavailable record; the host never
+            // observes raw exceptions from the adapter boundary.
+            results[index] = {
+              kind: "unavailable",
+              code: "network_error",
+              attempts: args.policy.max_attempts,
+            };
+            void error;
+          }
+        }
+      })(),
+    );
+  }
+  await Promise.all(workers);
+
+  for (const outcome of results) {
+    if (outcome === null) {
+      // Worker exited without producing an outcome: treat as
+      // unavailable and break out (atomic per spec §11).
+      if (firstFailureCode === null) {
+        firstFailureCode = "network_error";
+        firstFailureAttempts = args.policy.max_attempts;
+      }
+      break;
+    }
     if (outcome.kind === "unavailable") {
+      totalAttempts += outcome.attempts;
       if (firstFailureCode === null) {
         firstFailureCode = outcome.code;
         firstFailureAttempts = outcome.attempts;
       }
-      totalAttempts += outcome.attempts;
+      aborted = true;
       break;
     }
-    totalAttempts += 1; // a completed attempt is one attempt; failed retries are bounded per adapter
+    // Completed outcome: adapter made at least one attempt (the
+    // successful one). The bounded retry policy is owned by the
+    // adapter; the host records one attempt per successful request.
+    totalAttempts += 1;
     if (actualModel === undefined) actualModel = outcome.actual_model;
     aggregateUsage.input_tokens += outcome.usage.input_tokens;
     aggregateUsage.output_tokens += outcome.usage.output_tokens;
@@ -310,7 +361,9 @@ async function runCandidates(
     return {
       kind: "unavailable",
       code: firstFailureCode,
-      attempts: firstFailureAttempts,
+      // Spec §10.3: `failure.attempts` is the bounded total number
+      // of HTTP attempts made across all candidate requests.
+      attempts: totalAttempts,
     };
   }
   return {
