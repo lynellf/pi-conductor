@@ -108,6 +108,7 @@ export function materializeWorkObservations(
         assertAcceptedControlV2(
           record.accepted_control,
           record.to === "done" ? undefined : record.to,
+          record.role === inferOrchestrator(records, index, record.role) ? "dispatch" : "return",
         );
       }
       observations.push(

@@ -249,7 +249,11 @@ async function prepareRestartHandoffSeed(
     accepted.event === "handoff" &&
     accepted.accepted_control !== undefined
   ) {
-    assertAcceptedControlV2(accepted.accepted_control, recipientRole);
+    assertAcceptedControlV2(
+      accepted.accepted_control,
+      recipientRole,
+      accepted.from === args.def.orchestrator ? "dispatch" : "return",
+    );
   }
   if (
     args.host.controlProtocol === "v2" &&

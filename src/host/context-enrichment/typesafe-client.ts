@@ -36,6 +36,7 @@
  */
 
 import { Value } from "typebox/value";
+import { redactOutboundText } from "../../persistence/context-enrichment-v2.js";
 import {
   type ContextEnrichmentOutcome,
   type ContextRelevanceJudgment,
@@ -287,10 +288,13 @@ export function buildScoreRequestBody(request: ContextEnrichmentRequest): unknow
             }
           : {
               role: request.recipient.role,
-              run_goal: request.recipient.run_goal,
+              run_goal: redactOutboundText(request.recipient.run_goal),
               task: outboundTask(request.recipient.task),
             },
-      candidate: request.candidate.outbound,
+      candidate:
+        request.recipient.task === undefined
+          ? request.candidate.outbound
+          : redactRankingOutbound(request.candidate.outbound),
     },
     questions: {
       [TYPESAFE_RECIPIENT_RELEVANCE_QUESTION]: {
@@ -431,15 +435,54 @@ function outboundTask(
   task: NonNullable<ContextEnrichmentRequest["recipient"]["task"]>,
 ): Record<string, unknown> {
   return {
-    host_directive: task.host_directive,
+    host_directive: redactOutboundText(task.host_directive),
     ...(task.reported_objective === undefined
       ? {}
-      : { reported_objective: task.reported_objective }),
-    ...(task.reported_action === undefined ? {} : { reported_action: task.reported_action }),
+      : { reported_objective: redactOutboundText(task.reported_objective) }),
+    ...(task.reported_action === undefined
+      ? {}
+      : { reported_action: redactOutboundText(task.reported_action) }),
     ...(task.reported_context === undefined
       ? {}
-      : { reported_context: task.reported_context.text }),
+      : { reported_context: redactOutboundText(task.reported_context.text) }),
   };
+}
+
+function redactRankingOutbound(value: unknown): unknown {
+  if (!isRecord(value)) return {};
+  const task = value.task;
+  const projected: Record<string, unknown> = {};
+  if (typeof value.source_role === "string")
+    projected.source_role = redactOutboundText(value.source_role);
+  if (typeof value.source_kind === "string") projected.source_kind = value.source_kind;
+  if (isRecord(task)) projected.task = outboundTaskRecord(task);
+  if (typeof value.terminal === "string") projected.terminal = value.terminal;
+  for (const field of ["changed_paths", "execution_statuses", "artifact_labels"] as const) {
+    const values = value[field];
+    if (Array.isArray(values)) {
+      projected[field] = values
+        .filter((item): item is string => typeof item === "string")
+        .map(redactOutboundText);
+    }
+  }
+  return projected;
+}
+
+function outboundTaskRecord(task: Record<string, unknown>): Record<string, unknown> {
+  const projected: Record<string, unknown> = {};
+  for (const field of [
+    "host_directive",
+    "reported_objective",
+    "reported_action",
+    "reported_context",
+  ] as const) {
+    if (typeof task[field] === "string") projected[field] = redactOutboundText(task[field]);
+  }
+  return projected;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function composeCompleted(

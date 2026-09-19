@@ -484,4 +484,54 @@ describe("buildScoreRequestBody (spec §7)", () => {
     expect(body.model).toBe("jev-latest");
     expect(body.model).not.toMatch(/^[a-f0-9]{64}$/);
   });
+
+  it("redacts obvious external URL, path, and hash disclosures from v2 state", () => {
+    const body = buildScoreRequestBody(
+      makeRequest({
+        recipient: {
+          role: "implementer",
+          objective: "inspect https://example.test/object",
+          requested_action: "read /tmp/private.txt",
+          run_goal: `ship commit ${"a".repeat(40)}`,
+          task: {
+            host_directive: "continue",
+            reported_objective: "open https://example.test/object",
+            reported_action: "read C:\\private\\secret.txt and use api_key=super-secret-token",
+            reported_context: {
+              text: "see ftp://example.test/item",
+              utf8_bytes: 23,
+              truncated: false,
+            },
+          },
+        },
+        candidate: {
+          candidate_key: "candidate-key",
+          baseline_ordinal: 0,
+          outbound: {
+            source_role: "worker",
+            source_kind: "role_return",
+            task: { host_directive: "inspect https://example.test" },
+            terminal: "returned_control",
+            changed_paths: ["src/service.ts"],
+            execution_statuses: [],
+            artifact_labels: ["declared: https://example.test/file"],
+          },
+        },
+        policy: {
+          model: "jev-latest",
+          strategy: "work_observation_relevance_rank",
+          provider: "typesafe_jev",
+        },
+      }),
+    );
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("https://example.test");
+    expect(serialized).not.toContain("/tmp/private.txt");
+    expect(serialized).not.toContain("a".repeat(40));
+    expect(serialized).toContain("<url omitted>");
+    expect(serialized).toContain("<path omitted>");
+    expect(serialized).toContain("<hash omitted>");
+    expect(serialized).toContain("<credential omitted>");
+    expect(serialized).not.toContain("super-secret-token");
+  });
 });

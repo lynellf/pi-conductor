@@ -50,6 +50,7 @@ type AcceptedControlShape = Static<typeof acceptedControlV2Schema>;
 export function assertAcceptedControlV2(
   value: unknown,
   expectedRecipient?: Role,
+  expectedDirection?: AcceptedControlV2["direction"],
 ): asserts value is AcceptedControlV2 {
   if (!Value.Check(acceptedControlV2Schema, value)) {
     throw new AcceptedControlV2RecordError("accepted_control_v2_invalid_schema");
@@ -57,6 +58,9 @@ export function assertAcceptedControlV2(
   const control = value as AcceptedControlShape;
   if (expectedRecipient !== undefined && control.recipient_role !== expectedRecipient) {
     throw new AcceptedControlV2RecordError("accepted_control_v2_recipient_mismatch");
+  }
+  if (expectedDirection !== undefined && control.direction !== expectedDirection) {
+    throw new AcceptedControlV2RecordError("accepted_control_v2_direction_mismatch");
   }
   if (
     !withinUtf8Bytes(control.recipient_role, 128) ||
@@ -93,6 +97,7 @@ export class AcceptedControlV2RecordError extends Error {
 export type AcceptedControlV2RecordErrorCode =
   | "accepted_control_v2_invalid_schema"
   | "accepted_control_v2_recipient_mismatch"
+  | "accepted_control_v2_direction_mismatch"
   | "accepted_control_v2_invalid_context"
   | "accepted_control_v2_invalid_size";
 

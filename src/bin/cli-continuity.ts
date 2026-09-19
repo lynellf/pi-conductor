@@ -121,7 +121,16 @@ export async function runContinuityReport(
 
   log.close();
 
-  const manifestSnapshot = latestManifestSnapshot(records, runId);
+  let manifestSnapshot: ReturnType<typeof latestManifestSnapshot>;
+  try {
+    manifestSnapshot = latestManifestSnapshot(records, runId);
+  } catch (error) {
+    return {
+      output: "",
+      exitCode: 1,
+      errorMessage: `malformed manifest snapshot for run '${runId}': ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   const continuity = manifestSnapshot?.normalized_manifest.continuity;
   if (isHostGeneratedContinuityPolicy(continuity)) {
     try {

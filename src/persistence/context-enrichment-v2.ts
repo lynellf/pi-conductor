@@ -36,7 +36,6 @@ export interface WorkObservationRankingOutbound {
     readonly reported_context?: string;
   };
   readonly terminal: WorkObservationV2["observed"]["terminal"];
-  readonly workspace_state?: WorkObservationV2["observed"]["workspace_state"];
   readonly changed_paths: readonly string[];
   readonly execution_statuses: readonly string[];
   readonly artifact_labels: readonly string[];
@@ -141,28 +140,39 @@ function projectRankingOutbound(
   observation: RecipientObservationV2,
 ): WorkObservationRankingOutbound {
   return {
-    source_role: observation.source_role,
+    source_role: redactOutboundText(observation.source_role),
     source_kind: observation.source_kind,
     task: {
-      host_directive: observation.task.host_directive,
+      host_directive: redactOutboundText(observation.task.host_directive),
       ...(observation.task.reported_objective === undefined
         ? {}
-        : { reported_objective: observation.task.reported_objective }),
+        : { reported_objective: redactOutboundText(observation.task.reported_objective) }),
       ...(observation.task.reported_action === undefined
         ? {}
-        : { reported_action: observation.task.reported_action }),
+        : { reported_action: redactOutboundText(observation.task.reported_action) }),
       ...(observation.task.reported_context === undefined
         ? {}
-        : { reported_context: observation.task.reported_context.text }),
+        : { reported_context: redactOutboundText(observation.task.reported_context.text) }),
     },
     terminal: observation.terminal,
-    ...(observation.workspace_state === undefined
-      ? {}
-      : { workspace_state: observation.workspace_state }),
-    changed_paths: [...observation.changed_paths],
+    changed_paths: observation.changed_paths.map(redactOutboundText),
     execution_statuses: [...observation.execution_statuses],
-    artifact_labels: [...observation.artifact_labels],
+    artifact_labels: observation.artifact_labels.map(redactOutboundText),
   };
+}
+
+/** Remove obvious URL, path, hash, and credential disclosures from Jev text (§13.3). */
+export function redactOutboundText(value: string): string {
+  return value
+    .replace(/\b[a-z][a-z0-9+.-]{1,31}:\/\/[^\s<>"'`]+/gi, "<url omitted>")
+    .replace(/(^|[\s([{])((?:\/|~\/|\\\\|[A-Za-z]:[\\/])[^\s<>"'`,;:!?)}\]]*)/g, "$1<path omitted>")
+    .replace(
+      /\b(?:api[_-]?key|access[_-]?token|auth(?:orization)?|password|passwd|secret)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+/gi,
+      "<credential omitted>",
+    )
+    .replace(/\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "<credential omitted>")
+    .replace(/\bAKIA[0-9A-Z]{16}\b/gi, "<credential omitted>")
+    .replace(/\b[a-f0-9]{40,64}\b/gi, "<hash omitted>");
 }
 
 function newestFirstHistory(args: {

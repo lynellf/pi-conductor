@@ -1,5 +1,6 @@
 /** Canonical JSON materialization and workspace-guarantee checks for persisted records. */
 
+import { Value } from "typebox/value";
 import type { WorkspaceGuarantee } from "../core/types.js";
 import { assertAcceptedControlV2 } from "./accepted-control-v2.js";
 import {
@@ -14,6 +15,7 @@ import {
   isControllerEffectRecord,
 } from "./controller-effect-records.js";
 import { assertControllerRecord, isControllerRecord } from "./controller-records.js";
+import { terminalObservationV2Schema } from "./delegation-lifecycle-schema.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
@@ -75,6 +77,18 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
     return;
   }
   if (record.type === "subagent_completed" || record.type === "subagent_failed") {
+    if (record.terminal_observation !== undefined) {
+      if (!Value.Check(terminalObservationV2Schema, record.terminal_observation))
+        throw new Error("invalid v2 child terminal observation");
+      const outcome = record.terminal_observation.outcome;
+      if (
+        (record.type === "subagent_completed" && outcome !== "returned") ||
+        (record.type === "subagent_failed" &&
+          ((record.status === "cancelled" && outcome !== "cancelled") ||
+            (record.status !== "cancelled" && outcome !== "failed")))
+      )
+        throw new Error("v2 child terminal outcome contradicts the durable child record");
+    }
     if (record.output_capture !== undefined) assertChildOutputCapture(record.output_capture);
     if (
       record.output_capture_failure !== undefined &&

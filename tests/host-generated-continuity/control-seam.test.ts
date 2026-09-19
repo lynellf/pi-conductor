@@ -133,6 +133,21 @@ describe("persisted v2 control bounds", () => {
       new AcceptedControlV2RecordError("accepted_control_v2_invalid_schema"),
     );
   });
+
+  it("rejects a persisted control direction that does not match the source role", () => {
+    const candidate = {
+      schema_version: 2 as const,
+      direction: "dispatch" as const,
+      recipient_role: "worker",
+      task: { host_directive: "continue" },
+      reported_hints: {},
+      ignored_hint_fields: [],
+      utf8_bytes: 100,
+    };
+    expect(() => assertAcceptedControlV2(candidate, "worker", "return")).toThrow(
+      new AcceptedControlV2RecordError("accepted_control_v2_direction_mismatch"),
+    );
+  });
 });
 
 describe("raw control argument boundary", () => {
