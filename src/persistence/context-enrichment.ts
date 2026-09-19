@@ -206,6 +206,7 @@ export function assertContextEnrichmentRecord(
   options: {
     readonly expectedKeys?: ReadonlySet<string>;
     readonly expectedFingerprint?: string;
+    readonly expectedCandidateCount?: number;
   } = {},
 ): asserts record is ContextEnrichmentRecord {
   if (!isObject(record)) {
@@ -228,6 +229,15 @@ export function assertContextEnrichmentRecord(
     );
   }
   const checked = record as ContextEnrichmentRecord;
+  if (
+    options.expectedCandidateCount !== undefined &&
+    checked.candidate_count !== options.expectedCandidateCount
+  ) {
+    throw new ContextEnrichmentMaterializationError(
+      "context_enrichment_missing_candidate",
+      `context_enrichment candidate_count mismatch: expected ${options.expectedCandidateCount}, got ${checked.candidate_count}`,
+    );
+  }
   if (options.expectedFingerprint !== undefined) {
     if (checked.input_sha256 !== options.expectedFingerprint) {
       throw new ContextEnrichmentMaterializationError(
@@ -237,6 +247,12 @@ export function assertContextEnrichmentRecord(
     }
   }
   if (checked.status === "completed") {
+    if (checked.failure !== undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_invalid_schema",
+        "completed context_enrichment record must not carry failure metadata",
+      );
+    }
     if (checked.judgments === undefined) {
       throw new ContextEnrichmentMaterializationError(
         "context_enrichment_completed_missing_usage",
@@ -251,6 +267,12 @@ export function assertContextEnrichmentRecord(
     }
     assertJudgments(checked.judgments, checked.candidate_count, options.expectedKeys);
   } else {
+    if (checked.actual_model !== undefined) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_invalid_schema",
+        "unavailable context_enrichment record must not carry actual_model",
+      );
+    }
     if (checked.judgments !== undefined) {
       throw new ContextEnrichmentMaterializationError(
         "context_enrichment_unavailable_with_judgments",
@@ -283,6 +305,7 @@ export function findContextEnrichmentTerminals(
   runId: string,
 ): readonly ContextEnrichmentRecord[] {
   const terminals: ContextEnrichmentRecord[] = [];
+  const seenTransitionKeys = new Set<string>();
   for (const record of records) {
     if (!isObject(record)) continue;
     if (record.type !== "context_enrichment") continue;
@@ -294,7 +317,15 @@ export function findContextEnrichmentTerminals(
       );
     }
     assertContextEnrichmentRecord(record);
-    terminals.push(record as ContextEnrichmentRecord);
+    const terminal = record as ContextEnrichmentRecord;
+    if (seenTransitionKeys.has(terminal.source_transition_key)) {
+      throw new ContextEnrichmentMaterializationError(
+        "context_enrichment_duplicate_terminal",
+        `context_enrichment has multiple terminals for transition ${terminal.source_transition_key}`,
+      );
+    }
+    seenTransitionKeys.add(terminal.source_transition_key);
+    terminals.push(terminal);
   }
   return Object.freeze(terminals);
 }
@@ -401,11 +432,11 @@ function assertFailure(record: ContextEnrichmentRecord): void {
   if (
     !Number.isInteger(record.failure.attempts) ||
     record.failure.attempts < 0 ||
-    record.failure.attempts > 5
+    record.failure.attempts > 320
   ) {
     throw new ContextEnrichmentMaterializationError(
       "context_enrichment_invalid_failure_attempts",
-      `context_enrichment failure attempts must be an integer in [0, 5] (received ${record.failure.attempts})`,
+      `context_enrichment failure attempts must be an integer in [0, 320] (received ${record.failure.attempts})`,
     );
   }
 }

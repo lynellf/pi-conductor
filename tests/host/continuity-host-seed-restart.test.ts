@@ -8,14 +8,26 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type { MachineDefinition, TransitionAccepted } from "../../src/core/types.js";
+import { buildRestartContinuitySeed, runWithCompletion } from "../../src/host/api-completion.js";
+import { prepareFreshContinuityEnrichment } from "../../src/host/context-enrichment/prepare.js";
+import {
+  TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA,
+  TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
+} from "../../src/host/context-enrichment/typesafe-client.js";
 import { FileRecordLog } from "../../src/host/log-file.js";
 import { runLoop } from "../../src/host/loop.js";
 import { formatIncomingHandoffSeed } from "../../src/host/loop-format.js";
 import { loadManifestFromString } from "../../src/host/manifest.js";
 import { StubHost } from "../../src/host/stub-host.js";
+import {
+  computeContextEnrichmentInputFingerprint,
+  computeContextEnrichmentTransitionKey,
+} from "../../src/persistence/context-enrichment.js";
 import { materializeContinuity } from "../../src/persistence/continuity-materialization.js";
+import { projectRankedCandidates } from "../../src/persistence/continuity-ranking.js";
 import { renderContinuitySeed } from "../../src/persistence/continuity-seed.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
+import type { ContextEnrichmentRecord } from "../../src/seam/context-enrichment.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 let directory: string | undefined;
@@ -30,6 +42,17 @@ const POLICY = {
   require_handoff: true,
   require_delegated_result: false,
   seed_max_utf8_bytes: 32_768,
+};
+
+const ENRICHMENT_POLICY = {
+  schema_version: 1 as const,
+  provider: "typesafe_jev" as const,
+  model: "jev-latest",
+  strategy: "recipient_relevance_rank" as const,
+  candidate_limit: 32,
+  max_parallel: 2,
+  request_timeout_ms: 5_000,
+  max_attempts: 2,
 };
 
 const packet = {
@@ -65,6 +88,8 @@ function transitionAccepted(
 ): TransitionAccepted {
   const payload = {
     target_role: "implementer",
+    objective: "Continue the implementer work.",
+    requested_action: "Acknowledge the continuity and continue.",
     summary: "continue",
     continuity: packet,
   };
@@ -176,6 +201,233 @@ describe("host seed restart reconstruction", () => {
     // The rendered ledger JSON is injected verbatim so the receiver can
     // re-parse it deterministically.
     expect(text).toContain(seedSection.rendered);
+  });
+
+  it("reuses a completed enrichment terminal when rebuilding a ranked seed after restart", async () => {
+    directory = await mkdtemp(join(tmpdir(), "continuity-host-seed-restart-ranked-"));
+    const writer = new FileRecordLog({ baseDir: directory });
+    writer.append({
+      type: "session_started",
+      run_id: "run-host-seed",
+      role: "orchestrator",
+      visit_index: 1,
+      state: "orchestrator",
+      model: "test",
+      session_file: "parent.jsonl",
+      role_session_id: "source-role-session",
+      parent_session: null,
+      ts: 1,
+    });
+    writer.append(transitionAccepted(2));
+    writer.append(sessionStarted(3));
+
+    const records = writer.records("run-host-seed");
+    const ledger = materializeContinuity(records, {
+      run_id: "run-host-seed",
+      schema_version: POLICY.schema_version,
+      require_handoff: POLICY.require_handoff,
+      require_delegated_result: POLICY.require_delegated_result,
+      seed_max_utf8_bytes: POLICY.seed_max_utf8_bytes,
+    });
+    const transitionKey = computeContextEnrichmentTransitionKey({
+      run_id: "run-host-seed",
+      from: "orchestrator",
+      to: "implementer",
+      transition_ts: 2,
+      source_role_session_id: "source-role-session",
+      source_session_file: "parent.jsonl",
+      target_visit_index: 1,
+    });
+    const projection = projectRankedCandidates(ledger, {
+      recipient: {
+        role: "implementer",
+        objective: "Continue the implementer work.",
+        requested_action: "Acknowledge the continuity and continue.",
+      },
+      policy: ENRICHMENT_POLICY,
+      source_transition_key: transitionKey,
+    });
+    const inputFingerprint = computeContextEnrichmentInputFingerprint({
+      policy: ENRICHMENT_POLICY,
+      recipient: {
+        role: "implementer",
+        objective: "Continue the implementer work.",
+        requested_action: "Acknowledge the continuity and continue.",
+      },
+      candidates: projection.scored_prefix.map((entry) => ({
+        key: entry.candidate_key,
+        outbound: entry.outbound,
+      })),
+      instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
+      criteria: [...TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA],
+    });
+    const enrichment: ContextEnrichmentRecord = {
+      type: "context_enrichment",
+      schema_version: 1,
+      run_id: "run-host-seed",
+      source_transition_key: transitionKey,
+      input_sha256: inputFingerprint,
+      recipient_role: "implementer",
+      recipient_visit: 1,
+      status: "completed",
+      provider: "typesafe_jev",
+      requested_model: ENRICHMENT_POLICY.model,
+      actual_model: "jev-latest",
+      strategy: "recipient_relevance_rank",
+      candidate_count: projection.scored_prefix.length,
+      judgments: projection.scored_prefix.map((entry, index) => ({
+        candidate_key: entry.candidate_key,
+        baseline_ordinal: entry.baseline_ordinal,
+        score: index === 0 ? 0 : 3,
+        ranking_certainty: 0.9,
+        probabilities: { "0": 0.05, "1": 0.05, "2": 0.1, "3": 0.8 },
+      })),
+      usage: { input_tokens: 10, output_tokens: 5 },
+      ts: 4,
+    };
+    writer.append(enrichment);
+    writer.close();
+
+    const reopened = new FileRecordLog({ baseDir: directory });
+    const restartedSeed = buildRestartContinuitySeed({
+      policy: POLICY,
+      contextEnrichmentPolicy: ENRICHMENT_POLICY,
+      records: reopened.records("run-host-seed"),
+      runId: "run-host-seed",
+      recipientRole: "implementer",
+    });
+
+    expect(restartedSeed).not.toBeNull();
+    expect(restartedSeed?.rendered).toContain("host_relevance");
+  });
+
+  it("retries enrichment before the first resumed prompt when no terminal exists", async () => {
+    const workdir = await mkdtemp(join(tmpdir(), "continuity-host-seed-retry-"));
+    directory = workdir;
+    const runId = "run-host-seed";
+    const log = new InMemoryRecordLog();
+    log.append({
+      type: "session_started",
+      run_id: runId,
+      role: "orchestrator",
+      visit_index: 1,
+      state: "orchestrator",
+      model: "test",
+      session_file: "parent.jsonl",
+      role_session_id: "source-role-session",
+      parent_session: null,
+      ts: 1,
+    });
+    log.append(transitionAccepted(2));
+
+    const loadedManifest = loadManifestFromString(
+      `
+version: 1
+continuity:
+  schema_version: 1
+  require_handoff: true
+  require_delegated_result: false
+  seed_max_utf8_bytes: ${POLICY.seed_max_utf8_bytes}
+context_enrichment:
+  schema_version: 1
+  provider: typesafe_jev
+  model: jev-latest
+  strategy: recipient_relevance_rank
+  candidate_limit: 32
+  max_parallel: 2
+  request_timeout_ms: 5000
+  max_attempts: 2
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [{ model: stub:stub-model, effort: off }]
+    tools: [handoff, end]
+  - name: implementer
+    max_visits: 3
+    models: [{ model: stub:stub-model, effort: off }]
+    tools: [handoff, end]
+`,
+      workdir,
+    );
+    const initial = createInitialCheckpoint(makeDef());
+    const checkpoint = {
+      ...initial,
+      run_id: runId,
+      current_role: "implementer" as const,
+      visit_count: { orchestrator: 1, implementer: 1 },
+      active_role_session: null,
+    };
+    const host = new StubHost({
+      runId,
+      log,
+      loadedManifest,
+      steps: [{ kind: "emit_end", reason: "done" }],
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-host-seed-retry-"),
+    });
+    let preparationCalls = 0;
+    host.prepareFreshContinuityEnrichment = async (input) => {
+      preparationCalls += 1;
+      return prepareFreshContinuityEnrichment({
+        loadedManifest,
+        log,
+        runId,
+        recipient: input.role,
+        recipientObjective: input.recipientObjective,
+        recipientRequestedAction: input.recipientRequestedAction,
+        from: input.from,
+        transitionTs: input.transitionTs,
+        sourceRoleSessionId: input.sourceRoleSessionId,
+        sourceSessionFile: input.sourceSessionFile,
+        targetVisitIndex: input.visitIndex,
+        enricher: {
+          enrich: async (request) => ({
+            kind: "completed",
+            actual_model: "test-model",
+            judgments: [
+              {
+                candidate_key: request.candidate.candidate_key,
+                baseline_ordinal: request.candidate.baseline_ordinal,
+                score: 3,
+                ranking_certainty: 0.9,
+                probabilities: { "0": 0, "1": 0, "2": 0.1, "3": 0.9 },
+              },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+        },
+      });
+    };
+
+    const prompts: string[] = [];
+    const originalSpawn = host.spawnRole.bind(host);
+    host.spawnRole = async (role, options) => {
+      const session = await originalSpawn(role, options);
+      const originalPrompt = session.prompt.bind(session);
+      session.prompt = async (text) => {
+        prompts.push(text);
+        await originalPrompt(text);
+      };
+      return session;
+    };
+
+    const handle = await runWithCompletion({
+      runId,
+      def: makeDef(),
+      log,
+      host,
+      initialCheckpoint: checkpoint,
+      goal: "resume",
+      loadedManifest,
+      lease: { release: async () => {} },
+      initialVisitIndexByRole: { implementer: 1 },
+    });
+    await handle.completion();
+
+    expect(preparationCalls).toBe(1);
+    expect(
+      log.records(runId).filter((record) => record.type === "context_enrichment"),
+    ).toHaveLength(1);
+    expect(prompts[0]).toContain("host_relevance");
   });
 
   it("produces byte-identical seeds across two FileRecordLog reopens", async () => {

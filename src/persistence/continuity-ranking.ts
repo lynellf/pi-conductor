@@ -179,7 +179,23 @@ function composeRankedSections(
   // Build a per-section ranked list (scored prefix first, then unscored suffix
   // in baseline order). Then assemble `ContinuitySeedSections` from those.
   const judgmentsByKey = new Map<string, RankedCandidateProjectionJudgment>();
-  for (const judgment of judgments) judgmentsByKey.set(judgment.candidate_key, judgment);
+  const expectedKeys = new Set(projection.scored_prefix.map((entry) => entry.candidate_key));
+  for (const judgment of judgments) {
+    if (!expectedKeys.has(judgment.candidate_key)) {
+      throw new Error(
+        `ranked seed judgment '${judgment.candidate_key}' is not in the scored candidate prefix`,
+      );
+    }
+    if (judgmentsByKey.has(judgment.candidate_key)) {
+      throw new Error(`ranked seed has duplicate judgment '${judgment.candidate_key}'`);
+    }
+    judgmentsByKey.set(judgment.candidate_key, judgment);
+  }
+  for (const key of expectedKeys) {
+    if (!judgmentsByKey.has(key)) {
+      throw new Error(`ranked seed is missing judgment '${key}'`);
+    }
+  }
 
   const bySection = new Map<
     SectionKey,
@@ -217,7 +233,9 @@ function composeRankedSections(
     rebuilt[sectionKey] = [];
     for (const entry of orderedScored) {
       const judgment = judgmentsByKey.get(entry.candidate_key);
-      if (judgment === undefined) continue;
+      if (judgment === undefined) {
+        throw new Error(`ranked seed is missing judgment '${entry.candidate_key}'`);
+      }
       rebuilt[sectionKey].push({
         host_relevance: Object.freeze({
           score: judgment.score,

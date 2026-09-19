@@ -43,17 +43,10 @@ function makeRequest(overrides: Partial<ContextEnrichmentRequest> = {}): Context
       candidate_key: "blocking_questions:rec-1:f-1",
       baseline_ordinal: 0,
       outbound: {
-        recipient: {
-          role: "implementer",
-          objective: "ship the wire contract",
-          requested_action: "implement the documented types",
-        },
-        candidate: {
-          section: "blocking_questions",
-          kind: "question",
-          text: "Are retries enabled?",
-          attributes: { blocking: true },
-        },
+        section: "blocking_questions",
+        kind: "question",
+        text: "Are retries enabled?",
+        attributes: { blocking: true },
       },
     },
     instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
@@ -140,6 +133,7 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
     expect(call?.headers["content-type"]).toBe("application/json");
     const body = call?.body as {
       model: string;
+      state: { candidate: Record<string, unknown> };
       questions: Record<
         string,
         { type: string; instructions: string; criteria: readonly string[] }
@@ -153,6 +147,14 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
     expect(question?.type).toBe("score");
     expect(question?.instructions).toBe(TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS);
     expect(question?.criteria).toEqual(TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA);
+    const state = body.state as { candidate: Record<string, unknown> };
+    expect(state.candidate).toEqual({
+      section: "blocking_questions",
+      kind: "question",
+      text: "Are retries enabled?",
+      attributes: { blocking: true },
+    });
+    expect(state.candidate).not.toHaveProperty("recipient");
   });
 
   it("returns missing_api_key without making any network call", async () => {
@@ -194,6 +196,7 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
     expect(outcome.usage).toEqual({ input_tokens: 123, output_tokens: 17 });
     expect(outcome.judgments).toHaveLength(1);
     expect(outcome.actual_model).toBe("jev-1.13");
+    expect(outcome.attempts).toBe(1);
   });
 
   it("does not retry on 401 authentication failures", async () => {
@@ -354,6 +357,35 @@ describe("createTypesafeContextEnricher (spec §4, §7, §11)", () => {
           reject(error);
         });
       });
+    };
+    const adapter = createTypesafeContextEnricher({
+      apiKey: "test-key",
+      requestTimeoutMs: 100,
+      maxAttempts: 2,
+      fetchImpl,
+      sleep: async () => {},
+    });
+    const outcome = await adapter.enrich(makeRequest());
+    expect(outcome).toEqual({ kind: "unavailable", code: "request_timeout", attempts: 2 });
+    expect(calls).toBe(2);
+  });
+
+  it("classifies a timeout while decoding the response body as request_timeout", async () => {
+    let calls = 0;
+    const fetchImpl: FetchLike = async (_input, init) => {
+      calls += 1;
+      return {
+        status: 200,
+        statusText: "OK",
+        json: async () =>
+          await new Promise<unknown>((_, reject) => {
+            init.signal.addEventListener("abort", () => {
+              const error = new Error("aborted while decoding");
+              (error as { name?: string }).name = "AbortError";
+              reject(error);
+            });
+          }),
+      };
     };
     const adapter = createTypesafeContextEnricher({
       apiKey: "test-key",

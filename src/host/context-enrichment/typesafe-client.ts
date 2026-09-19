@@ -206,14 +206,26 @@ function validateResponseShape(
     throw new TypesafeAdapterRejection("response_invalid");
   }
   const candidate = response as Record<string, unknown>;
+  const responseKeys = Object.keys(candidate).sort();
+  if (responseKeys.join("\u0000") !== "answers\u0000model\u0000usage") {
+    throw new TypesafeAdapterRejection("response_invalid");
+  }
   // Response-level model and usage (official contract).
-  if (typeof candidate.model !== "string" || candidate.model.length === 0) {
+  if (
+    typeof candidate.model !== "string" ||
+    candidate.model.length === 0 ||
+    candidate.model.length > 128
+  ) {
     throw new TypesafeAdapterRejection("response_invalid");
   }
   if (typeof candidate.usage !== "object" || candidate.usage === null) {
     throw new TypesafeAdapterRejection("response_invalid");
   }
   const usage = candidate.usage as Record<string, unknown>;
+  const usageKeys = Object.keys(usage).sort();
+  if (usageKeys.join("\u0000") !== "input_tokens\u0000output_tokens") {
+    throw new TypesafeAdapterRejection("response_invalid");
+  }
   if (
     !isFiniteNumber(usage.input_tokens) ||
     !isFiniteNumber(usage.output_tokens) ||
@@ -370,8 +382,12 @@ export function createTypesafeContextEnricher(
           let payload: unknown;
           try {
             payload = await response.json();
-          } catch {
+          } catch (error) {
             clearTimeout(timeout);
+            // A provider can reject body decoding after the abort signal
+            // fires. Preserve the timeout classification so JSON parsing
+            // remains inside the documented per-attempt deadline.
+            if (isAbortError(error)) throw error;
             return { kind: "unavailable", code: "response_invalid", attempts };
           }
           clearTimeout(timeout);
@@ -380,7 +396,7 @@ export function createTypesafeContextEnricher(
               payload,
               request.criteria,
             );
-            return composeCompleted(request, answer, parsedResponse);
+            return composeCompleted(request, answer, parsedResponse, attempts);
           } catch (error) {
             if (error instanceof TypesafeAdapterRejection) {
               return { kind: "unavailable", code: error.code, attempts };
@@ -412,6 +428,7 @@ function composeCompleted(
   request: ContextEnrichmentRequest,
   answer: TypesafeAnswer,
   parsedResponse: TypesafeResponse,
+  attempts: number,
 ): ContextEnrichmentOutcome {
   const judgment: ContextRelevanceJudgment = {
     candidate_key: request.candidate.candidate_key,
@@ -425,6 +442,7 @@ function composeCompleted(
     actual_model: parsedResponse.model,
     judgments: [judgment],
     usage: parsedResponse.usage,
+    attempts,
   };
 }
 

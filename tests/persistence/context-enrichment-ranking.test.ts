@@ -305,17 +305,13 @@ describe("buildRankedSeed (spec §8 byte accounting)", () => {
       ledger: ledgerValue,
       max_bytes: 65536,
       ranking_input: SCORED_RANK_INPUT,
-      judgments: [
-        {
-          candidate_key:
-            projection.scored_prefix.find((c) => c.section === "other_active_findings")
-              ?.candidate_key ?? "missing",
-          baseline_ordinal: 0,
-          score: 2,
-          ranking_certainty: 0.81,
-          probabilities: { "0": 0.05, "1": 0.1, "2": 0.7, "3": 0.15 },
-        },
-      ],
+      judgments: projection.scored_prefix.map((candidate) => ({
+        candidate_key: candidate.candidate_key,
+        baseline_ordinal: candidate.baseline_ordinal,
+        score: candidate.section === "other_active_findings" ? 2 : 1,
+        ranking_certainty: 0.81,
+        probabilities: { "0": 0.05, "1": 0.1, "2": 0.7, "3": 0.15 },
+      })),
     });
     const json = JSON.parse(result.rendered) as {
       sections: { other_active_findings: Array<Record<string, unknown>> };

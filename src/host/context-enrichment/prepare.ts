@@ -128,7 +128,6 @@ export async function prepareFreshContinuityEnrichment(
     args.recipient,
     args.targetVisitIndex,
   );
-  if (existing !== null) return existing;
   const ledger = buildRecipientLedger(args);
   const projection = projectRankedCandidates(ledger, {
     recipient: {
@@ -153,6 +152,14 @@ export async function prepareFreshContinuityEnrichment(
     instructions: TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
     criteria: [...TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA],
   });
+  if (existing !== null) {
+    assertContextEnrichmentRecord(existing, {
+      expectedFingerprint: inputFingerprint,
+      expectedKeys: new Set(projection.scored_prefix.map((entry) => entry.candidate_key)),
+      expectedCandidateCount: projection.scored_count,
+    });
+    return existing;
+  }
   const enricher = args.enricher ?? defaultEnricher(args.apiKey, policy);
   const record = await executeAttempt({
     enricher,
@@ -235,6 +242,8 @@ async function executeAttempt(args: AttemptArgs): Promise<ContextEnrichmentRecor
       recipientVisit: args.recipientVisit,
       policy: args.policy,
       outcome: aggregate,
+      expectedKeys: new Set(candidates.map((candidate) => candidate.candidate_key)),
+      expectedCandidateCount: args.projection.scored_count,
       ts,
     });
   }
@@ -247,6 +256,7 @@ async function executeAttempt(args: AttemptArgs): Promise<ContextEnrichmentRecor
     policy: args.policy,
     code: aggregate.code,
     attempts: aggregate.attempts,
+    candidateCount: args.projection.scored_count,
     ts,
   });
 }
@@ -269,13 +279,12 @@ async function runCandidates(
   const maxParallel = Math.max(1, Math.min(args.policy.max_parallel, candidates.length));
   const results: Array<ContextEnrichmentOutcome | null> = new Array(candidates.length).fill(null);
   let nextIndex = 0;
-  let aborted = false;
 
   const workers: Array<Promise<void>> = [];
   for (let worker = 0; worker < maxParallel; worker += 1) {
     workers.push(
       (async () => {
-        while (!aborted) {
+        while (true) {
           const index = nextIndex;
           nextIndex += 1;
           if (index >= candidates.length) return;
@@ -328,31 +337,49 @@ async function runCandidates(
 
   for (const outcome of results) {
     if (outcome === null) {
-      // Worker exited without producing an outcome: treat as
-      // unavailable and break out (atomic per spec §11).
-      if (firstFailureCode === null) {
-        firstFailureCode = "network_error";
-      }
-      break;
+      // Every worker should produce one result. Treat an absent result
+      // as a bounded provider failure and still account for the full
+      // set of candidate workers already dispatched.
+      totalAttempts += args.policy.max_attempts;
+      if (firstFailureCode === null) firstFailureCode = "network_error";
+      continue;
     }
     if (outcome.kind === "unavailable") {
-      totalAttempts += outcome.attempts;
-      if (firstFailureCode === null) {
-        firstFailureCode = outcome.code;
+      if (
+        !Number.isInteger(outcome.attempts) ||
+        outcome.attempts < 0 ||
+        outcome.attempts > args.policy.max_attempts
+      ) {
+        totalAttempts += args.policy.max_attempts;
+        if (firstFailureCode === null) firstFailureCode = "response_invalid";
+        continue;
       }
-      aborted = true;
-      break;
+      totalAttempts += outcome.attempts;
+      if (firstFailureCode === null) firstFailureCode = outcome.code;
+      continue;
     }
-    // Completed outcome: adapter made at least one attempt (the
-    // successful one). The bounded retry policy is owned by the
-    // adapter; the host records one attempt per successful request.
-    totalAttempts += 1;
-    if (actualModel === undefined) actualModel = outcome.actual_model;
+    // Aggregate every result before deciding whether an unavailable
+    // result makes the attempt atomic. Older provider adapters may omit
+    // `attempts`; their successful request counts as one.
+    const completedAttempts = outcome.attempts ?? 1;
+    if (
+      !Number.isInteger(completedAttempts) ||
+      completedAttempts < 1 ||
+      completedAttempts > args.policy.max_attempts
+    ) {
+      totalAttempts += args.policy.max_attempts;
+      if (firstFailureCode === null) firstFailureCode = "response_invalid";
+      continue;
+    }
+    totalAttempts += completedAttempts;
+    if (actualModel === undefined) {
+      actualModel = outcome.actual_model;
+    } else if (actualModel !== outcome.actual_model && firstFailureCode === null) {
+      firstFailureCode = "response_invalid";
+    }
     aggregateUsage.input_tokens += outcome.usage.input_tokens;
     aggregateUsage.output_tokens += outcome.usage.output_tokens;
-    for (const judgment of outcome.judgments) {
-      aggregateJudgments.push(judgment);
-    }
+    for (const judgment of outcome.judgments) aggregateJudgments.push(judgment);
   }
   if (firstFailureCode !== null) {
     return {
@@ -379,6 +406,8 @@ function buildCompletedRecord(input: {
   recipientVisit: number;
   policy: PinnedEnrichmentPolicy;
   outcome: ContextEnrichmentOutcome & { attempts?: number };
+  expectedKeys: ReadonlySet<string>;
+  expectedCandidateCount: number;
   ts: number;
 }): ContextEnrichmentRecord {
   if (input.outcome.kind !== "completed") {
@@ -403,7 +432,10 @@ function buildCompletedRecord(input: {
     usage: input.outcome.usage,
     ts: input.ts,
   };
-  assertContextEnrichmentRecord(record);
+  assertContextEnrichmentRecord(record, {
+    expectedKeys: input.expectedKeys,
+    expectedCandidateCount: input.expectedCandidateCount,
+  });
   return record;
 }
 
@@ -416,6 +448,7 @@ function buildUnavailableRecord(input: {
   policy: PinnedEnrichmentPolicy;
   code: ContextEnrichmentFailureCode;
   attempts: number;
+  candidateCount: number;
   ts: number;
 }): ContextEnrichmentRecord {
   const record: ContextEnrichmentRecord = {
@@ -430,7 +463,7 @@ function buildUnavailableRecord(input: {
     provider: "typesafe_jev",
     requested_model: input.policy.model,
     strategy: "recipient_relevance_rank",
-    candidate_count: 0,
+    candidate_count: input.candidateCount,
     failure: {
       code: input.code,
       attempts: input.attempts,

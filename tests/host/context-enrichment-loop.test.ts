@@ -226,7 +226,7 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
       counter += 1;
       return {
         status: 200,
-        body: VALID_RESPONSE(`jev-${counter}`, 2 - counter * 0.1, 0.5 + counter * 0.1),
+        body: VALID_RESPONSE("jev-1", 2 - counter * 0.1, 0.5 + counter * 0.1),
       };
     });
 

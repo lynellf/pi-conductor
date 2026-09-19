@@ -177,7 +177,10 @@ export const contextEnrichmentRecordSchema = Type.Object(
       Type.Object(
         {
           code: contextEnrichmentFailureCodeSchema,
-          attempts: Type.Integer({ minimum: 0, maximum: 5 }),
+          // The attempt count aggregates every candidate request. With
+          // the v1 hard maxima (64 candidates × 5 attempts), the
+          // durable upper bound is 320 rather than the per-candidate 5.
+          attempts: Type.Integer({ minimum: 0, maximum: 320 }),
         },
         { additionalProperties: false },
       ),
@@ -218,6 +221,7 @@ export const contextEnrichmentOutcomeSchema = Type.Union([
       actual_model: Type.String({ minLength: 1, maxLength: 128 }),
       judgments: Type.Array(contextRelevanceJudgmentSchema, { maxItems: 64 }),
       usage: contextEnrichmentUsageSchema,
+      attempts: Type.Optional(Type.Integer({ minimum: 1, maximum: 5 })),
     },
     { additionalProperties: false },
   ),
@@ -238,6 +242,8 @@ export type ContextEnrichmentOutcome =
       readonly actual_model: string;
       readonly judgments: readonly ContextRelevanceJudgment[];
       readonly usage: ContextEnrichmentUsage;
+      /** Provider attempts for this candidate; omitted by legacy adapters. */
+      readonly attempts?: number;
     }
   | {
       readonly kind: "unavailable";

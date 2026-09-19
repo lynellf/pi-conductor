@@ -1,11 +1,20 @@
 /** Own run-handle completion wiring and lease release (spec §11.1). */
+import { incomingAcceptedHandoff, recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
 import { continuityItemIndexFromRecords } from "../persistence/continuity.js";
 import { materializeContinuity } from "../persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../persistence/continuity-seed.js";
 import { type EndGuardRecord, endGuardRequestId } from "../persistence/end-guard.js";
 import type { ArtifactDeliveryRecord, RecordLog } from "../persistence/log.js";
-import { latestHandoffContextRef } from "./api-resume-state.js";
+import {
+  findIncomingAcceptedHandoff,
+  latestHandoffContextRef,
+  sourceConversationForAcceptedHandoff,
+} from "./api-resume-state.js";
+import {
+  findRestartContextEnrichment,
+  renderPersistedContextEnrichmentSeed,
+} from "./context-enrichment/replay.js";
 import { recordBackedContinuityAuthority } from "./continuity-record-authority.js";
 import type { Host } from "./host.js";
 import type { RunExecutionLease } from "./log-file.js";
@@ -97,77 +106,69 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
     });
   };
 
-  const completionPromise = runLoop({
-    def,
-    initialCheckpoint,
-    host,
-    initialGoal: goal,
-    initialHandoffContextRef: controllerMode
-      ? null
-      : latestHandoffContextRef(log.records(runId), runId),
-    ...(initialCheckpoint.current_role === "done" || controllerMode
-      ? {}
-      : {
-          initialHandoffSeed: formatIncomingHandoffSeed(
-            log.records(runId),
-            runId,
-            initialCheckpoint.current_role,
-            buildRestartContinuitySeed({
-              policy: loadedManifest.manifest.continuity,
-              records: log.records(runId),
-              runId,
-            }),
-          ),
-        }),
-    initialArtifactDelivery: args.initialArtifactDelivery ?? null,
-    ...(args.initialParentSessionId !== undefined && {
-      initialParentSessionId: args.initialParentSessionId,
-    }),
-    ...(args.initialTrajectorySeed !== undefined && {
-      initialTrajectorySeed: args.initialTrajectorySeed,
-    }),
-    ...(args.initialVisitIndexByRole !== undefined && {
-      initialVisitIndexByRole: args.initialVisitIndexByRole,
-    }),
-    ...(args.initialExecutionVisitIndexByRole !== undefined && {
-      initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,
-    }),
-    getRunCostCap,
-    ...(loadedManifest.manifest.continuity === undefined
-      ? {}
-      : {
-          continuityPolicy: { require_handoff: loadedManifest.manifest.continuity.require_handoff },
-          continuityAuthority: ({
-            role,
-            visit,
-          }: {
-            readonly role: string;
-            readonly visit: number;
-          }) =>
-            recordBackedContinuityAuthority(
-              log.records(runId),
-              {
-                run_id: runId,
-                role: role as import("../core/types.js").Role,
-                visit_index: visit,
-              },
-              host.continuityRepositoryPath === undefined
-                ? {}
-                : { repositoryPath: host.continuityRepositoryPath },
-            ),
-          knownContinuityItemIds: () => continuityItemIds(log.records(runId), runId),
-        }),
-    runControl,
-    ...(endGuard === undefined
-      ? {}
-      : {
-          endGuard: {
-            config: endGuard,
-            records: endGuardRecords,
-            requestId: endGuardRequest,
-          },
-        }),
-  }).finally(async () => {
+  const completionPromise = (async () => {
+    const initialHandoffSeed = await prepareRestartHandoffSeed(args, controllerMode);
+    return runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: goal,
+      initialHandoffContextRef: controllerMode
+        ? null
+        : latestHandoffContextRef(log.records(runId), runId),
+      ...(initialHandoffSeed === undefined ? {} : { initialHandoffSeed }),
+      initialArtifactDelivery: args.initialArtifactDelivery ?? null,
+      ...(args.initialParentSessionId !== undefined && {
+        initialParentSessionId: args.initialParentSessionId,
+      }),
+      ...(args.initialTrajectorySeed !== undefined && {
+        initialTrajectorySeed: args.initialTrajectorySeed,
+      }),
+      ...(args.initialVisitIndexByRole !== undefined && {
+        initialVisitIndexByRole: args.initialVisitIndexByRole,
+      }),
+      ...(args.initialExecutionVisitIndexByRole !== undefined && {
+        initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,
+      }),
+      getRunCostCap,
+      ...(loadedManifest.manifest.continuity === undefined
+        ? {}
+        : {
+            continuityPolicy: {
+              require_handoff: loadedManifest.manifest.continuity.require_handoff,
+            },
+            continuityAuthority: ({
+              role,
+              visit,
+            }: {
+              readonly role: string;
+              readonly visit: number;
+            }) =>
+              recordBackedContinuityAuthority(
+                log.records(runId),
+                {
+                  run_id: runId,
+                  role: role as import("../core/types.js").Role,
+                  visit_index: visit,
+                },
+                host.continuityRepositoryPath === undefined
+                  ? {}
+                  : { repositoryPath: host.continuityRepositoryPath },
+              ),
+            knownContinuityItemIds: () => continuityItemIds(log.records(runId), runId),
+          }),
+      runControl,
+      ...(endGuard === undefined
+        ? {}
+        : {
+            endGuard: {
+              config: endGuard,
+              records: endGuardRecords,
+              requestId: endGuardRequest,
+            },
+          }),
+    });
+  })().finally(async () => {
     try {
       runControl.close();
     } finally {
@@ -197,6 +198,71 @@ function continuityItemIds(
   return continuityItemIndexFromRecords(records, runId).ids;
 }
 
+/** Prepare a resumed receiver's enrichment before reconstructing its prompt seed. */
+async function prepareRestartHandoffSeed(
+  args: RunWithCompletionArgs,
+  controllerMode: boolean,
+): Promise<string | null | undefined> {
+  const recipientRole = args.initialCheckpoint.current_role;
+  if (recipientRole === "done" || controllerMode || args.initialTrajectorySeed !== undefined) {
+    return undefined;
+  }
+
+  let records = args.log.records(args.runId);
+  const policy = args.loadedManifest.manifest.context_enrichment;
+  const acceptedIndex = findIncomingAcceptedHandoff(records, args.runId, recipientRole);
+  const accepted = acceptedIndex === null ? undefined : records[acceptedIndex];
+  const incoming = incomingAcceptedHandoff(records, args.runId, recipientRole);
+  const envelope = incoming?.envelope;
+  if (
+    policy !== undefined &&
+    typeof args.host.prepareFreshContinuityEnrichment === "function" &&
+    acceptedIndex !== null &&
+    accepted?.type === "transition_accepted" &&
+    envelope !== null &&
+    envelope !== undefined
+  ) {
+    const source = sourceConversationForAcceptedHandoff(records, acceptedIndex, accepted);
+    const baseIdentity = {
+      runId: args.runId,
+      from: accepted.from,
+      to: recipientRole,
+      transitionTs: accepted.ts,
+      sourceRoleSessionId: source.roleSessionId,
+      sourceSessionFile: accepted.session_file,
+    };
+    const persisted = findRestartContextEnrichment(records, baseIdentity);
+    if (persisted === null) {
+      const payload = recipientHandoffPayload(envelope);
+      await args.host.prepareFreshContinuityEnrichment({
+        role: recipientRole,
+        visitIndex: args.initialVisitIndexByRole?.[recipientRole] ?? 1,
+        recipientObjective: typeof payload.objective === "string" ? payload.objective : "",
+        recipientRequestedAction:
+          typeof payload.requested_action === "string" ? payload.requested_action : "",
+        from: accepted.from,
+        transitionTs: accepted.ts,
+        sourceRoleSessionId: source.roleSessionId,
+        sourceSessionFile: accepted.session_file,
+      });
+      records = args.log.records(args.runId);
+    }
+  }
+
+  return formatIncomingHandoffSeed(
+    records,
+    args.runId,
+    recipientRole,
+    buildRestartContinuitySeed({
+      policy: args.loadedManifest.manifest.continuity,
+      records,
+      runId: args.runId,
+      recipientRole,
+      ...(policy === undefined ? {} : { contextEnrichmentPolicy: policy }),
+    }),
+  );
+}
+
 /**
  * Build the bounded continuity seed section for the restart path
  * (spec §11). The host owns the run-id-keyed log here (unlike the
@@ -213,13 +279,16 @@ function continuityItemIds(
  * the recipient's `objective`/`requested_action`; absent those, the
  * helper falls back to the baseline path so resume never blocks.
  */
-function buildRestartContinuitySeed(args: {
+export function buildRestartContinuitySeed(args: {
   readonly policy: import("../manifest/types.js").ContinuityPolicy | undefined;
+  readonly contextEnrichmentPolicy?: import("../manifest/types.js").ContextEnrichmentPolicy;
   readonly records: readonly import("../persistence/log.js").PersistedRecord[];
   readonly runId: string;
+  readonly recipientRole?: import("../core/types.js").Role;
 }): ContinuitySeedSection | null {
   if (args.policy === undefined) return null;
-  const ledger = materializeContinuity(args.records, {
+  const records = args.records;
+  const ledger = materializeContinuity(records, {
     run_id: args.runId,
     schema_version: args.policy.schema_version,
     require_handoff: args.policy.require_handoff,
@@ -227,11 +296,51 @@ function buildRestartContinuitySeed(args: {
     seed_max_utf8_bytes: args.policy.seed_max_utf8_bytes,
   });
   const seed = renderContinuitySeed(ledger, args.policy.seed_max_utf8_bytes);
-  return {
+  const baseline: ContinuitySeedSection = {
     rendered: seed.rendered,
     omitted_items: seed.omitted.items,
     omitted_packets: seed.omitted.packets,
     used_bytes: seed.budget.used_bytes,
     max_bytes: seed.budget.max_bytes,
   };
+
+  const contextPolicy = args.contextEnrichmentPolicy;
+  const recipientRole = args.recipientRole;
+  if (contextPolicy === undefined || recipientRole === undefined) return baseline;
+
+  const acceptedIndex = findIncomingAcceptedHandoff(records, args.runId, recipientRole);
+  if (acceptedIndex === null) return baseline;
+  const accepted = records[acceptedIndex];
+  if (accepted?.type !== "transition_accepted") return baseline;
+  const incoming = incomingAcceptedHandoff(records, args.runId, recipientRole);
+  const envelope = incoming?.envelope;
+  if (envelope === null || envelope === undefined) return baseline;
+
+  const source = sourceConversationForAcceptedHandoff(records, acceptedIndex, accepted);
+  const payload = recipientHandoffPayload(envelope);
+  const recipient = {
+    role: recipientRole,
+    objective: typeof payload.objective === "string" ? payload.objective : "",
+    requested_action: typeof payload.requested_action === "string" ? payload.requested_action : "",
+  };
+  const replay = findRestartContextEnrichment(records, {
+    runId: args.runId,
+    from: accepted.from,
+    to: recipientRole,
+    transitionTs: accepted.ts,
+    sourceRoleSessionId: source.roleSessionId,
+    sourceSessionFile: accepted.session_file,
+  });
+  if (replay === null) return baseline;
+  return (
+    renderPersistedContextEnrichmentSeed({
+      records,
+      ledger,
+      policy: contextPolicy,
+      identity: replay.identity,
+      recipient,
+      maxBytes: args.policy.seed_max_utf8_bytes,
+      terminal: replay.record,
+    }) ?? baseline
+  );
 }

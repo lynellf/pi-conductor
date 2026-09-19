@@ -1,6 +1,5 @@
 /** Usage, persistence, memory, and visit-state operations for ProductionHost. */
 
-import { createHash } from "node:crypto";
 import type { RunMemory } from "../core/run-memory.js";
 import { buildRunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
@@ -11,8 +10,8 @@ import {
   materializeContinuity,
   renderContinuitySeed,
 } from "../persistence/continuity-materialization.js";
-import { buildRankedSeed } from "../persistence/continuity-ranking.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
+import { renderPersistedContextEnrichmentSeed } from "./context-enrichment/replay.js";
 import type { SessionState } from "./cost.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { RoleSession, SessionTerminalReason } from "./host.js";
@@ -156,141 +155,55 @@ export function materializeFreshContinuitySeed(
   };
 }
 
-interface RankedRenderArgs {
-  host: StateHostContext;
-  ledger: import("../persistence/continuity-types.js").ContinuityLedger;
-  args: {
-    role: Role;
-    visitIndex: number;
-    recipientObjective?: string;
-    recipientRequestedAction?: string;
-    from?: Role;
-    transitionTs?: number;
-    sourceRoleSessionId?: string | null;
-    sourceSessionFile?: string;
+function renderRankedSeedIfMatching(input: {
+  readonly host: StateHostContext;
+  readonly ledger: import("../persistence/continuity-types.js").ContinuityLedger;
+  readonly args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly recipientObjective?: string;
+    readonly recipientRequestedAction?: string;
+    readonly from?: Role;
+    readonly transitionTs?: number;
+    readonly sourceRoleSessionId?: string | null;
+    readonly sourceSessionFile?: string;
   };
-  runId: string;
-}
-
-function renderRankedSeedIfMatching(
-  input: RankedRenderArgs,
-): import("./loop-format.js").ContinuitySeedSection | null {
+  readonly runId: string;
+}): import("./loop-format.js").ContinuitySeedSection | null {
   const enrichmentPolicy = input.host.loadedManifest.manifest.context_enrichment;
-  if (enrichmentPolicy === undefined) return null;
-  const from = input.args.from;
-  const transitionTs = input.args.transitionTs;
-  const sourceSessionFile = input.args.sourceSessionFile;
-  if (from === undefined || transitionTs === undefined || sourceSessionFile === undefined) {
-    return null;
-  }
-  const transitionKey = computeTransitionKey({
-    run_id: input.runId,
-    from,
-    to: input.args.role,
-    transition_ts: transitionTs,
-    source_role_session_id: input.args.sourceRoleSessionId ?? "",
-    source_session_file: sourceSessionFile,
-    target_visit_index: input.args.visitIndex,
-  });
-  const record = findContextEnrichmentRecord(
-    input.host,
-    input.runId,
-    transitionKey,
-    input.args.role,
-    input.args.visitIndex,
-  );
-  if (record === null) return null;
-  if (record.status !== "completed") {
-    // Unavailable: baseline path. We still return the baseline seed.
-    return renderBaselineSeed(input);
-  }
+  const { from, transitionTs, sourceSessionFile } = input.args;
   if (
+    enrichmentPolicy === undefined ||
+    from === undefined ||
+    transitionTs === undefined ||
+    sourceSessionFile === undefined ||
     input.args.recipientObjective === undefined ||
     input.args.recipientRequestedAction === undefined
   ) {
-    // We lack the recipient inputs to recompute the projection. Stay
-    // safe and fall back to baseline.
-    return renderBaselineSeed(input);
+    return null;
   }
-  const ranked = buildRankedSeed({
+  return renderPersistedContextEnrichmentSeed({
+    records: input.host.log.records(input.runId),
     ledger: input.ledger,
-    max_bytes: input.host.loadedManifest.manifest.continuity?.seed_max_utf8_bytes ?? 32_768,
-    ranking_input: {
-      recipient: {
-        role: input.args.role,
-        objective: input.args.recipientObjective,
-        requested_action: input.args.recipientRequestedAction,
-      },
-      policy: enrichmentPolicy,
-      source_transition_key: transitionKey,
+    policy: enrichmentPolicy,
+    identity: {
+      runId: input.runId,
+      from,
+      to: input.args.role,
+      transitionTs,
+      ...(input.args.sourceRoleSessionId === null || input.args.sourceRoleSessionId === undefined
+        ? {}
+        : { sourceRoleSessionId: input.args.sourceRoleSessionId }),
+      sourceSessionFile,
+      targetVisitIndex: input.args.visitIndex,
     },
-    judgments: record.judgments ?? [],
+    recipient: {
+      role: input.args.role,
+      objective: input.args.recipientObjective,
+      requested_action: input.args.recipientRequestedAction,
+    },
+    maxBytes: input.host.loadedManifest.manifest.continuity?.seed_max_utf8_bytes ?? 32_768,
   });
-  return {
-    rendered: ranked.rendered,
-    omitted_items: ranked.omitted_items,
-    omitted_packets: ranked.omitted_packets,
-    used_bytes: ranked.used_bytes,
-    max_bytes: ranked.max_bytes,
-  };
-}
-
-function renderBaselineSeed(
-  input: RankedRenderArgs,
-): import("./loop-format.js").ContinuitySeedSection {
-  const policy = input.host.loadedManifest.manifest.continuity;
-  const maxBytes = policy?.seed_max_utf8_bytes ?? 32_768;
-  const seed = renderContinuitySeed(input.ledger, maxBytes);
-  return {
-    rendered: seed.rendered,
-    omitted_items: seed.omitted.items,
-    omitted_packets: seed.omitted.packets,
-    used_bytes: seed.budget.used_bytes,
-    max_bytes: seed.budget.max_bytes,
-  };
-}
-
-function findContextEnrichmentRecord(
-  host: StateHostContext,
-  runId: string,
-  transitionKey: string,
-  recipient: Role,
-  recipientVisit: number,
-): ContextEnrichmentRecord | null {
-  for (const record of host.log.records(runId)) {
-    if (record.type !== "context_enrichment") continue;
-    if (record.source_transition_key !== transitionKey) continue;
-    if (record.recipient_role !== recipient || record.recipient_visit !== recipientVisit) {
-      throw new Error(`mismatched context_enrichment recipient for transition ${transitionKey}`);
-    }
-    return record as ContextEnrichmentRecord;
-  }
-  return null;
-}
-
-function computeTransitionKey(args: {
-  run_id: string;
-  from: Role;
-  to: Role;
-  transition_ts: number;
-  source_role_session_id: string;
-  source_session_file: string;
-  target_visit_index: number;
-}): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        domain: "pi-conductor/context-enrichment-transition/v1",
-        run_id: args.run_id,
-        from: args.from,
-        to: args.to,
-        transition_ts: args.transition_ts,
-        source_role_session_id: args.source_role_session_id,
-        source_session_file: args.source_session_file,
-        target_visit_index: args.target_visit_index,
-      }),
-    )
-    .digest("hex");
 }
 
 /**

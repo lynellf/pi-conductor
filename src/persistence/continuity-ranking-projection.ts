@@ -66,25 +66,17 @@ function attributesForEnvelope(
   return Object.freeze({ source: envelope.source });
 }
 
-function buildOutbound(
-  recipient: RankedRecipient,
+function buildCandidateOutbound(
   section: SectionKey,
   kind: string,
   text: string,
   attributes: Readonly<Record<string, string | boolean>>,
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
-    recipient: Object.freeze({
-      role: recipient.role,
-      objective: recipient.objective,
-      requested_action: recipient.requested_action,
-    }),
-    candidate: Object.freeze({
-      section,
-      kind,
-      text,
-      attributes: Object.freeze({ ...attributes }),
-    }),
+    section,
+    kind,
+    text,
+    attributes: Object.freeze({ ...attributes }),
   });
 }
 
@@ -142,7 +134,7 @@ function sectionFromEvaluations(ledger: ContinuityLedger): readonly SectionProje
   return [
     {
       section: "evaluations",
-      entries: ledger.evaluations.map((evaluation) => {
+      entries: [...ledger.evaluations].reverse().map((evaluation) => {
         const attributes = attributesForEvaluation(evaluation);
         const text = `${evaluation.label} (${evaluation.status})`;
         return {
@@ -188,26 +180,7 @@ function sectionFromPacketSummaries(ledger: ContinuityLedger): readonly SectionP
   ];
 }
 
-function buildCandidateOutbound(
-  section: SectionKey,
-  kind: string,
-  text: string,
-  attributes: Readonly<Record<string, string | boolean>>,
-): Readonly<Record<string, unknown>> {
-  return Object.freeze({
-    candidate: Object.freeze({
-      section,
-      kind,
-      text,
-      attributes: Object.freeze({ ...attributes }),
-    }),
-  });
-}
-
-function buildSectionEntries(
-  ledger: ContinuityLedger,
-  recipient: RankedRecipient,
-): readonly SectionProjection[] {
+function buildSectionEntries(ledger: ContinuityLedger): readonly SectionProjection[] {
   const sections: SectionProjection[] = [
     {
       section: "blocking_questions",
@@ -218,8 +191,7 @@ function buildSectionEntries(
           candidate_key: `blocking_questions:${entry.record_id}:${entry.item.id}`,
           baseline_ordinal: 0,
           item: entry.item,
-          outbound: buildOutbound(
-            recipient,
+          outbound: buildCandidateOutbound(
             "blocking_questions",
             "question",
             entry.item.question,
@@ -238,8 +210,7 @@ function buildSectionEntries(
           candidate_key: `recipient_next_steps:${entry.record_id}:${entry.item.id}`,
           baseline_ordinal: 0,
           item: entry.item,
-          outbound: buildOutbound(
-            recipient,
+          outbound: buildCandidateOutbound(
             "recipient_next_steps",
             "next_step",
             entry.item.action,
@@ -258,8 +229,7 @@ function buildSectionEntries(
           candidate_key: `risks_and_decisions:${entry.record_id}:${entry.item.id}`,
           baseline_ordinal: 0,
           item: entry.item,
-          outbound: buildOutbound(
-            recipient,
+          outbound: buildCandidateOutbound(
             "risks_and_decisions",
             entry.item.kind,
             entry.item.statement,
@@ -278,8 +248,7 @@ function buildSectionEntries(
           candidate_key: `other_active_findings:${entry.record_id}:${entry.item.id}`,
           baseline_ordinal: 0,
           item: entry.item,
-          outbound: buildOutbound(
-            recipient,
+          outbound: buildCandidateOutbound(
             "other_active_findings",
             entry.item.kind,
             entry.item.statement,
@@ -309,7 +278,7 @@ export function projectRankedCandidates(
   ledger: ContinuityLedger,
   input: RankedCandidateInputInternal,
 ): RankedCandidateProjection {
-  const sections = buildSectionEntries(ledger, input.recipient);
+  const sections = buildSectionEntries(ledger);
   const flat: RankedCandidateProjectionEntry[] = [];
   for (const projection of sections) {
     for (const entry of projection.entries) flat.push(entry);

@@ -225,7 +225,12 @@ export async function persistAcceptedTransition(
   // between the two calls would produce different transition keys and
   // the completed ranking would never be rendered.
   const nextVisitIndex = ctx.visitIndexByRole.get(nextRole) ?? 1;
-  const transitionTs = Date.now();
+  if (args.enrichedRecord.type !== "transition_accepted") {
+    throw new Error("runLoop: accepted handoff record is not a transition_accepted record");
+  }
+  // The accepted record timestamp is durable and therefore is the only
+  // transition identity component that a later restart can recompute.
+  const transitionTs = args.enrichedRecord.ts;
   const recipientObjective =
     typeof payload === "object" && payload !== null && typeof payload.objective === "string"
       ? payload.objective
