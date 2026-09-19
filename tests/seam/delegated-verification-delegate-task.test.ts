@@ -138,9 +138,24 @@ describe("delegated-verification schema contracts (P1 RED)", () => {
       ["non-string (array)", []],
       ["non-string (object)", { recipe: "default" }],
       ["string exceeding maxLength 64", "a".repeat(65)],
+      // Reviewer F8: enforce the recipe identifier grammar, not just length.
+      ["starts with digit", "9starts"],
+      ["contains space", "has space"],
+      ["contains slash", "has/slash"],
     ])("rejects malformed verification_recipe: %s", (_label, verification_recipe) => {
       const task = { ...baselineTask, verification_recipe };
       expect(Value.Check(delegateTaskSchema, task)).toBe(false);
+    });
+
+    it.each([
+      "a",
+      "A1",
+      "recipe.test",
+      "a-b_c",
+      "x".repeat(64),
+    ])("(F8) accepts verification_recipe matching the identifier grammar: %s", (recipe) => {
+      const task = { ...baselineTask, verification_recipe: recipe };
+      expect(Value.Check(delegateTaskSchema, task)).toBe(true);
     });
   });
 });

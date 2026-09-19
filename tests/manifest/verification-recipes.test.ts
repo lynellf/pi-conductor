@@ -348,4 +348,77 @@ describe("delegated-verification §3.1 top-level verification_recipes", () => {
     }
     expectRejected(minimalYaml(recipes));
   });
+
+  // ---- Reviewer remediation regressions (commit c35e3a6) ----------------
+
+  describe("(F1 CRITICAL) rejects executable with .. or non-canonical forms", () => {
+    // Spec §3.1 says command.executable must be a trusted absolute path under
+    // /bin|/sbin|/usr|/opt; literal-prefix matching is bypassable by path
+    // traversal, redundant separators, or non-canonical dot segments. Each
+    // literal starts with /usr/ yet must be rejected.
+    it.each([
+      ["dotdot sibling", "/usr/../../etc/passwd"],
+      ["dotdot child", "/usr/../bin/x"],
+      ["redundant separator", "/usr//foo"],
+      ["dot segment", "/usr/./bin/x"],
+      ["traversal via dotdot", "/usr/x/../y"],
+    ])("rejects executable: %s", (_label, executable) => {
+      expectRejected(minimalYaml([recipe({ commands: [{ executable, args: [] }] })]));
+    });
+  });
+
+  describe("(F9 MEDIUM) inventory canonical JSON size is the OBJECT-array form, not an escaped string-array", () => {
+    // 17 individually valid recipes each with ~61,500-byte canonical JSON
+    // (~17 × 61,500 ≈ 1,045,500 bytes aggregate) must be ACCEPTED because the
+    // object-array canonical form is under the 1,048,596 cap. Adding one more
+    // ~61,500-byte recipe (~1,107,000 bytes aggregate) must be REJECTED.
+    function paddedRecipe(name: string, padLen: number) {
+      return {
+        name,
+        commands: [{ executable: "/usr/bin/git", args: ["x".repeat(padLen)] }],
+        evaluation: "report_only",
+        required_paths: ["src/foo.ts"],
+        timeout_seconds: 30,
+        max_calls: 1,
+      };
+    }
+
+    it("accepts 17 padded recipes whose aggregate object-array canonical form is under the cap", () => {
+      const recipes: AnyObj[] = [];
+      for (let i = 0; i < 17; i++) {
+        recipes.push(paddedRecipe(`pad-${String(i).padStart(2, "0")}`, 61_000));
+      }
+      expectAccepted(minimalYaml(recipes), 17);
+    });
+
+    it("rejects 18 padded recipes whose aggregate object-array canonical form exceeds the cap", () => {
+      const recipes: AnyObj[] = [];
+      for (let i = 0; i < 18; i++) {
+        recipes.push(paddedRecipe(`pad-${String(i).padStart(2, "0")}`, 61_000));
+      }
+      expectRejected(minimalYaml(recipes));
+    });
+  });
+
+  describe("(F6/F7 HIGH) command.args is structurally required and empty-string args are allowed", () => {
+    it("(F6) rejects a command missing the `args` field", () => {
+      // Parse throws on unknown keys / wrong types; expectRejected accepts
+      // either parse-throw or validate-error.
+      expectRejected(minimalYaml([recipe({ commands: [{ executable: "/usr/bin/git" }] })]));
+    });
+
+    it("(F7) accepts a command with empty array args", () => {
+      expectAccepted(
+        minimalYaml([recipe({ commands: [{ executable: "/usr/bin/git", args: [] }] })]),
+        1,
+      );
+    });
+
+    it("(F7) accepts a command with a single empty-string arg", () => {
+      expectAccepted(
+        minimalYaml([recipe({ commands: [{ executable: "/usr/bin/git", args: [""] }] })]),
+        1,
+      );
+    });
+  });
 });

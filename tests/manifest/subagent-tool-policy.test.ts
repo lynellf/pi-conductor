@@ -376,28 +376,35 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
   });
 
   // (15) EFFECTIVE TOOL SET (PARSED) IS SORTED, DEDUPE, NON-EMPTY, SUBSET OF PROFILE CEILING
-  it("(15) effective tool list is sorted, dedupe, non-empty, subset of `allowed`", () => {
-    const { m } = parseAndValidate(
-      buildYaml(
-        bubblewrap({
-          tools: {
-            required: false,
-            allowed: ["write", "read", "grep"],
-            default: ["read", "write"],
-          },
-        }),
-      ),
+  // (15) removed under reviewer remediation F11: effective_tools materialization
+  // is P2 admission work; defer to P2. Removed to avoid asserting P2 behavior
+  // in P1 RED.
+
+  // ---- Reviewer remediation regressions (commit c35e3a6) -----------------
+
+  it("(F2 HIGH) rejects profile with NO tools policy but with profile.verification_recipes declared", () => {
+    const { errors } = parseAndValidate(
+      buildYaml(bubblewrap({ verification_recipes: ["lint"] }), { recipes: [lintRecipe] }),
     );
-    const subagents = (m as unknown as { subagents?: { effective_tools?: string[] }[] }).subagents;
-    const profile = subagents?.[0];
-    const effective = profile?.effective_tools ?? [];
-    expect(Array.isArray(effective)).toBe(true);
-    expect(effective.length).toBeGreaterThan(0);
-    const sorted = [...effective].sort();
-    expect(effective).toEqual(sorted);
-    expect(new Set(effective).size).toBe(effective.length);
-    const allowed = ["write", "read", "grep"];
-    expect(effective.every((t) => allowed.includes(t))).toBe(true);
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    {
+      label: "required=false default contains duplicate entries",
+      subagent: bubblewrap({
+        tools: { required: false, allowed: ["read", "write"], default: ["read", "read"] },
+      }),
+    },
+    {
+      label: "required=true allowed contains duplicate entries",
+      subagent: bubblewrap({
+        tools: { required: true, allowed: ["read", "read"] },
+      }),
+    },
+  ])("(F4 HIGH) rejects duplicate names in tool-policy arrays: %s", ({ subagent }) => {
+    const { errors } = parseAndValidate(buildYaml(subagent));
+    expect(errors.length).toBeGreaterThan(0);
   });
 });
 
