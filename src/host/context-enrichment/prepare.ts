@@ -116,7 +116,9 @@ export async function prepareFreshContinuityEnrichment(
     from: args.from,
     to: args.recipient,
     transition_ts: args.transitionTs,
-    source_role_session_id: args.sourceRoleSessionId ?? "",
+    ...(args.sourceRoleSessionId === null
+      ? {}
+      : { source_role_session_id: args.sourceRoleSessionId }),
     source_session_file: args.sourceSessionFile,
     target_visit_index: args.targetVisitIndex,
   });
@@ -230,9 +232,7 @@ function findMatchingRecord(
   const match = selectUniqueTerminalForTransition(terminals, transitionKey);
   if (match === null) return null;
   if (match.recipient_role !== recipient || match.recipient_visit !== recipientVisit) {
-    throw new Error(
-      `mismatched recipient for context_enrichment transition ${transitionKey}: expected ${recipient}@${recipientVisit}, got ${match.recipient_role}@${match.recipient_visit}`,
-    );
+    throw new Error("context_enrichment terminal recipient identity mismatch");
   }
   return match;
 }

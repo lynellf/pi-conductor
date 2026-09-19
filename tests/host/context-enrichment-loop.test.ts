@@ -342,6 +342,56 @@ describe("Checkpoint C — accepted transition → durable ranking → ranked se
     expect(record.usage).toBeUndefined();
   });
 
+  it("persists one response_invalid terminal for a malformed provider outcome", async () => {
+    const log = new InMemoryRecordLog();
+    const runId = "run-malformed-outcome";
+    const packet = makePacket("test", [{ id: "f-1", kind: "fact" }]);
+    const accepted = makeTransitionAccepted("malformed", runId, 1000, packet);
+    log.append({
+      type: "session_started",
+      run_id: runId,
+      role: accepted.role,
+      visit_index: 1,
+      state: accepted.role,
+      model: "test",
+      session_file: accepted.session_file,
+      parent_session: null,
+      ts: 999,
+    });
+    log.append(accepted);
+
+    const record = await prepareFreshContinuityEnrichment({
+      loadedManifest: loadedManifest(),
+      log,
+      runId,
+      recipient: "implementer",
+      recipientObjective: "ship it",
+      recipientRequestedAction: "implement",
+      from: "orchestrator",
+      transitionTs: 1000,
+      sourceRoleSessionId: null,
+      sourceSessionFile: accepted.session_file,
+      targetVisitIndex: 1,
+      enricher: {
+        enrich: async () => ({
+          kind: "completed" as const,
+          actual_model: "jev-1",
+          judgments: [],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      },
+      apiKey: "test-key",
+    });
+
+    expect(record).toMatchObject({
+      status: "unavailable",
+      failure: { code: "response_invalid", attempts: 4 },
+    });
+    expect(log.records(runId).filter((entry) => entry.type === "context_enrichment")).toHaveLength(
+      1,
+    );
+  });
+
   it("reuses the matching terminal record on restart without making more API calls", async () => {
     const log = new InMemoryRecordLog();
     const runId = "run-1";

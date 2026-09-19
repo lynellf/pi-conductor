@@ -68,7 +68,7 @@ import type { PersistedRecord } from "../persistence/log.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import type { Host, RoleSession, SeedRunMemoryArgs } from "./host.js";
 import { runRoleVisit } from "./loop-fallback.js";
-import { formatRoleUnavailableSeed } from "./loop-format.js";
+import { type ContinuitySeedSection, formatRoleUnavailableSeed } from "./loop-format.js";
 import { forceRunCostCapEnd } from "./loop-run-cost-cap.js";
 import type { PendingArtifactRoute, RunLoopOptions, RunLoopResult } from "./loop-types.js";
 import { formatRunMemorySeed } from "./run-memory.js";
@@ -121,6 +121,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // session. It bypasses only the next fresh spawn; every other loop path is
   // unchanged.
   let pendingTrajectorySession: RoleSession | null = null;
+  let pendingOrchestratorContinuitySeed: ContinuitySeedSection | undefined =
+    opts.initialOrchestratorContinuitySeed ?? undefined;
   // Task 18: visit_index tracking. A role's visit_index is the same
   // across all model retries within that visit (the role didn't
   // transition, it re-ran). The index is captured BEFORE the fallback
@@ -200,9 +202,15 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
         // through). Falls back to the static `runCostCap` option
         // for tests that don't provide a dynamic reader.
         runCostCap: opts.getRunCostCap?.() ?? opts.runCostCap ?? null,
+        ...(pendingOrchestratorContinuitySeed === undefined
+          ? {}
+          : { continuitySeed: pendingOrchestratorContinuitySeed }),
       });
-      seed = formatRunMemorySeed(runMemory);
+      seed = formatRunMemorySeed(runMemory, pendingOrchestratorContinuitySeed);
+      pendingOrchestratorContinuitySeed = undefined;
       handoffContextRef = runMemory.last_message?.context_ref ?? null;
+    } else if (role === def.orchestrator) {
+      pendingOrchestratorContinuitySeed = undefined;
     }
     useInitialTrajectorySeed = false;
 
@@ -255,6 +263,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     pendingForcedEnd = visitResult.pendingForcedEnd;
     artifactSeedForVisit = visitResult.artifactSeedForVisit;
     const { roleOutcome } = visitResult;
+    pendingOrchestratorContinuitySeed =
+      roleOutcome.kind === "advance" ? roleOutcome.nextContinuitySeed : undefined;
 
     // Handle role outcome (after fallback loop)
     if (roleOutcome.kind === "done") {

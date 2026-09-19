@@ -342,6 +342,13 @@ export class ProductionHost extends ProductionHostContext implements Host {
     readonly def: MachineDefinition;
     readonly goal: string;
     readonly runCostCap: number | null;
+    readonly continuitySeed?: {
+      readonly rendered: string;
+      readonly omitted_items: number;
+      readonly omitted_packets: number;
+      readonly used_bytes: number;
+      readonly max_bytes: number;
+    } | null;
   }): RunMemory {
     return seedRunMemoryInModule(this.stateContext(), args);
   }

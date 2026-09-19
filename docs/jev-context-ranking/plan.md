@@ -249,11 +249,21 @@ read-only and checks:
 - [x] Implementation lead resolves every blocking finding and reruns affected gates.
 - [ ] Reviewer approves the final integrated revision.
 
-> **Corrective cycle review note.** The original Phase 4 cycle
-> returned `request_changes` (six P0/P1/P2 findings). The parent-owned
-> corrective cycle addresses the code findings, but Checkpoint B and the
-> missing child-lane evidence remain open; a reviewer must re-validate
-> the revised HEAD before approval.
+> **Corrective cycle review note.** The original Phase 4 cycle returned
+> `request_changes` (six P0/P1/P2 findings). The parent-owned corrective
+> cycle addresses the code findings; the non-fabricating child-lane waiver
+> was explicitly recorded and accepted. A reviewer must re-validate the
+> revised HEAD before approval.
+
+### Final corrective follow-up (parent-owned, post-review findings)
+
+- [x] Preserve the ranked continuity section for fresh, trajectory, and resumed orchestrator recipients.
+- [x] Derive the restart recipient visit independently from accepted-transition and lifecycle history.
+- [x] Convert malformed provider-neutral completed outcomes into one durable `response_invalid` terminal.
+- [x] Keep absent source-session identity omitted from the transition hash and transport limits out of the input fingerprint.
+- [x] Sanitize replay mismatch diagnostics without exposing hashes, candidate keys, provider bodies, or paths.
+- [x] Re-run focused tests, typecheck, build, lint, format, full test suite, diff check, and high-severity audit.
+- [ ] Obtain a fresh independent reviewer approval transition.
 
 ## Phase 5 — complete repository gates
 

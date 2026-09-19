@@ -43,7 +43,7 @@ export interface ContextEnrichmentAcceptedTransition {
   readonly to: Role;
   /** Stable accepted-transition timestamp (e.g. transition record `ts`). */
   readonly transition_ts: number;
-  /** Source logical role session id; absent → empty string (stable). */
+  /** Source logical role session id; absent from the exact hash domain. */
   readonly source_role_session_id?: string;
   /** Source physical session file path (host-owned). */
   readonly source_session_file: string;
@@ -53,15 +53,13 @@ export interface ContextEnrichmentAcceptedTransition {
 
 /**
  * Snapshot of the policy block the host pins at run start.
- * Only the three fields the fingerprint needs are required; transport
- * limits (timeouts, concurrency) belong to the adapter, not the record.
+ * The policy domain is exactly provider, model, and strategy; transport
+ * limits (candidate count, timeouts, concurrency) belong outside the hash.
  */
 export interface ContextEnrichmentPolicySnapshot {
   readonly provider: "typesafe_jev";
   readonly model: string;
   readonly strategy: "recipient_relevance_rank";
-  /** Optional transport limits — included in the fingerprint when present. */
-  readonly candidate_limit?: number;
 }
 
 /**
@@ -96,8 +94,8 @@ function stableSha256(value: unknown): string {
 /**
  * Lowercase sha256 over stable JSON for the accepted-transition identity
  * (spec §10.1). Recomputable from the accepted transition + lifecycle log
- * without trusting model output. Absent `source_role_session_id` is
- * normalized to the empty string so the key remains stable.
+ * without trusting model output. Absent `source_role_session_id` is omitted
+ * from the exact hash domain.
  */
 export function computeContextEnrichmentTransitionKey(
   args: ContextEnrichmentAcceptedTransition,
@@ -108,7 +106,9 @@ export function computeContextEnrichmentTransitionKey(
     from: args.from,
     to: args.to,
     transition_ts: args.transition_ts,
-    source_role_session_id: args.source_role_session_id ?? "",
+    ...(args.source_role_session_id === undefined
+      ? {}
+      : { source_role_session_id: args.source_role_session_id }),
     source_session_file: args.source_session_file,
     target_visit_index: args.target_visit_index,
   };
@@ -137,9 +137,6 @@ export function computeContextEnrichmentInputFingerprint(
       provider: args.policy.provider,
       model: args.policy.model,
       strategy: args.policy.strategy,
-      ...(args.policy.candidate_limit === undefined
-        ? {}
-        : { candidate_limit: args.policy.candidate_limit }),
     },
     recipient: {
       role: args.recipient.role,

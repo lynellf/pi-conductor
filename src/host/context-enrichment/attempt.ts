@@ -1,3 +1,4 @@
+import { Value } from "typebox/value";
 import type { Role } from "../../core/types.js";
 import {
   assertContextEnrichmentRecord,
@@ -7,9 +8,10 @@ import type {
   projectRankedCandidates,
   RankedCandidateProjectionJudgment,
 } from "../../persistence/continuity-ranking.js";
-import type {
-  ContextEnrichmentFailureCode,
-  ContextEnrichmentOutcome,
+import {
+  type ContextEnrichmentFailureCode,
+  type ContextEnrichmentOutcome,
+  contextEnrichmentOutcomeSchema,
 } from "../../seam/context-enrichment.js";
 import type { ContextEnricher } from "./contracts.js";
 import type { PinnedEnrichmentPolicy } from "./prepare.js";
@@ -96,7 +98,7 @@ async function runCandidates(
           const candidate = candidates[index];
           if (candidate === undefined) return;
           try {
-            results[index] = await enricher.enrich({
+            const outcome = await enricher.enrich({
               identity: {
                 run_id: args.runId,
                 source_transition_key: args.transitionKey,
@@ -122,6 +124,7 @@ async function runCandidates(
               request_timeout_ms: args.policy.request_timeout_ms,
               max_attempts: args.policy.max_attempts,
             });
+            results[index] = validateCandidateOutcome(outcome, candidate, args.policy.max_attempts);
           } catch (error) {
             // Provider exceptions are converted to the same atomic degraded
             // outcome as a network failure; raw errors never escape the host.
@@ -191,6 +194,43 @@ async function runCandidates(
     judgments: aggregateJudgments,
     usage: aggregateUsage,
   };
+}
+
+function validateCandidateOutcome(
+  outcome: unknown,
+  candidate: ReturnType<typeof projectRankedCandidates>["scored_prefix"][number],
+  maxAttempts: number,
+): ContextEnrichmentOutcome {
+  if (!Value.Check(contextEnrichmentOutcomeSchema, outcome)) {
+    return { kind: "unavailable", code: "response_invalid", attempts: maxAttempts };
+  }
+  const checked = outcome as ContextEnrichmentOutcome;
+  if (checked.kind === "unavailable") {
+    return checked;
+  }
+  if (checked.judgments.length !== 1) {
+    return { kind: "unavailable", code: "response_invalid", attempts: maxAttempts };
+  }
+  const judgment = checked.judgments[0];
+  if (
+    judgment === undefined ||
+    judgment.candidate_key !== candidate.candidate_key ||
+    judgment.baseline_ordinal !== candidate.baseline_ordinal ||
+    !validProbabilityDistribution(judgment.probabilities)
+  ) {
+    return { kind: "unavailable", code: "response_invalid", attempts: maxAttempts };
+  }
+  return checked;
+}
+
+function validProbabilityDistribution(
+  probabilities: Readonly<Record<"0" | "1" | "2" | "3", number>>,
+): boolean {
+  const values = [probabilities["0"], probabilities["1"], probabilities["2"], probabilities["3"]];
+  return (
+    values.every(Number.isFinite) &&
+    Math.abs(values.reduce((sum, value) => sum + value, 0) - 1) <= 1e-6
+  );
 }
 
 function buildCompletedRecord(input: {

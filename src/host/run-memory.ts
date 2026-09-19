@@ -38,12 +38,16 @@
 
 import { recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { RunMemory } from "../core/run-memory.js";
+import type { ContinuitySeedSection } from "./loop-format.js";
 
 /**
  * Format a `RunMemory` artifact as a structured prompt for the next
  * orchestrator session. Pure over `memory` — no I/O.
  */
-export function formatRunMemorySeed(memory: RunMemory): string {
+export function formatRunMemorySeed(
+  memory: RunMemory,
+  continuitySeedOverride?: ContinuitySeedSection | null,
+): string {
   const remaining =
     memory.remaining_budget === null
       ? "uncapped"
@@ -72,7 +76,7 @@ export function formatRunMemorySeed(memory: RunMemory): string {
     memory.end_request === null ? "(none)" : `role: ${memory.end_request.role}`;
   const terminalLine = formatTerminalGuidance(memory);
   const delegationGuidance = formatDelegationGuidance(memory);
-  const continuitySection = formatContinuitySection(memory);
+  const continuitySection = formatContinuitySection(memory, continuitySeedOverride);
 
   const lastMessageText =
     memory.last_message === null
@@ -194,10 +198,22 @@ function formatTerminalGuidance(memory: RunMemory): string {
  * When the host has not wired the seed pipeline (legacy preservation),
  * the field is absent and the section is omitted entirely.
  */
-function formatContinuitySection(memory: RunMemory): string | null {
-  if (memory.continuity_seed === undefined) return null;
-  if (memory.continuity_seed === null) return null;
-  const seed = memory.continuity_seed;
+function formatContinuitySection(
+  memory: RunMemory,
+  override: ContinuitySeedSection | null | undefined,
+): string | null {
+  if (override === null) return null;
+  const seed =
+    override === undefined
+      ? memory.continuity_seed
+      : {
+          schema_version: memory.continuity_seed?.schema_version ?? 1,
+          run_id: memory.continuity_seed?.run_id ?? memory.run_id,
+          budget: { used_bytes: override.used_bytes, max_bytes: override.max_bytes },
+          omitted: { items: override.omitted_items, packets: override.omitted_packets },
+          rendered: override.rendered,
+        };
+  if (seed === undefined || seed === null) return null;
   const budgetText = `budget: ${seed.budget.used_bytes}/${seed.budget.max_bytes} UTF-8 bytes`;
   const omittedText =
     seed.omitted.items > 0 || seed.omitted.packets > 0

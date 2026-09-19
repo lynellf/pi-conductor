@@ -10,6 +10,7 @@ import type { ArtifactDeliveryRecord, EndGuardRecord } from "../persistence/log.
 import type { ContinuityEvidenceAuthority } from "./continuity-evidence.js";
 import type { EndGuardConfig } from "./end-guard-runner.js";
 import type { ArtifactRouteSource, Host, RoleSession, SpawnRoleOptions } from "./host.js";
+import type { ContinuitySeedSection } from "./loop-format.js";
 import type { RunControl } from "./run-control.js";
 
 /** Abort bridge for the active role session. */
@@ -49,6 +50,8 @@ export interface RunLoopOptions {
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Fresh executable invocation index per role for operator resume. */
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
+  /** Ranked continuity to preserve when a resumed target is the orchestrator. */
+  readonly initialOrchestratorContinuitySeed?: ContinuitySeedSection | null;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
    *  that lets the host derive model + system prompt + tools from the
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
@@ -109,13 +112,22 @@ export interface RunLoopResult {
 export type InnerOutcome =
   | { readonly kind: "failed" }
   | { readonly kind: "done" }
-  | { readonly kind: "advance"; readonly nextSeed: string };
+  | {
+      readonly kind: "advance";
+      readonly nextSeed: string;
+      /** Ranked continuity to preserve when the next role is the orchestrator. */
+      readonly nextContinuitySeed?: ContinuitySeedSection;
+    };
 
 /** Task 18: outcome of a role visit's fallback loop. */
 export type RoleOutcome =
   | { readonly kind: "failed" }
   | { readonly kind: "done" }
-  | { readonly kind: "advance"; readonly nextSeed: string }
+  | {
+      readonly kind: "advance";
+      readonly nextSeed: string;
+      readonly nextContinuitySeed?: ContinuitySeedSection;
+    }
   | { readonly kind: "exhausted" };
 
 /** Durable artifact handoff route carried into the next receiver visit. */

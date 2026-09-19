@@ -10,6 +10,7 @@ import { createInitialCheckpoint } from "../../src/core/reduce.js";
 import type { MachineDefinition, TransitionAccepted } from "../../src/core/types.js";
 import { buildRestartContinuitySeed, runWithCompletion } from "../../src/host/api-completion.js";
 import { prepareFreshContinuityEnrichment } from "../../src/host/context-enrichment/prepare.js";
+import { findRestartContextEnrichment } from "../../src/host/context-enrichment/replay.js";
 import {
   TYPESAFE_RECIPIENT_RELEVANCE_CRITERIA,
   TYPESAFE_RECIPIENT_RELEVANCE_INSTRUCTIONS,
@@ -299,6 +300,54 @@ describe("host seed restart reconstruction", () => {
 
     expect(restartedSeed).not.toBeNull();
     expect(restartedSeed?.rendered).toContain("host_relevance");
+  });
+
+  it("rejects a terminal keyed to a stale recipient visit on restart", () => {
+    const runId = "run-stale-visit";
+    const accepted = { ...transitionAccepted(2), run_id: runId };
+    const staleVisit = 2;
+    const staleKey = computeContextEnrichmentTransitionKey({
+      run_id: runId,
+      from: "orchestrator",
+      to: "implementer",
+      transition_ts: accepted.ts,
+      source_role_session_id: "source-role-session",
+      source_session_file: accepted.session_file,
+      target_visit_index: staleVisit,
+    });
+    const terminal: ContextEnrichmentRecord = {
+      type: "context_enrichment",
+      schema_version: 1,
+      run_id: runId,
+      source_transition_key: staleKey,
+      input_sha256: "a".repeat(64),
+      recipient_role: "implementer",
+      recipient_visit: staleVisit,
+      status: "completed",
+      provider: "typesafe_jev",
+      requested_model: ENRICHMENT_POLICY.model,
+      actual_model: "test-model",
+      strategy: "recipient_relevance_rank",
+      candidate_count: 0,
+      judgments: [],
+      usage: { input_tokens: 1, output_tokens: 1 },
+      ts: 3,
+    };
+
+    expect(() =>
+      findRestartContextEnrichment(
+        [accepted, terminal],
+        {
+          runId,
+          from: "orchestrator",
+          to: "implementer",
+          transitionTs: accepted.ts,
+          sourceRoleSessionId: "source-role-session",
+          sourceSessionFile: accepted.session_file,
+        },
+        1,
+      ),
+    ).toThrow(/visit|transition/i);
   });
 
   it("retries enrichment before the first resumed prompt when no terminal exists", async () => {

@@ -12,6 +12,7 @@ import {
   sourceConversationForAcceptedHandoff,
 } from "./api-resume-state.js";
 import {
+  expectedContextEnrichmentVisitIndex,
   findRestartContextEnrichment,
   renderPersistedContextEnrichmentSeed,
 } from "./context-enrichment/replay.js";
@@ -107,7 +108,7 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
   };
 
   const completionPromise = (async () => {
-    const initialHandoffSeed = await prepareRestartHandoffSeed(args, controllerMode);
+    const preparedRestartSeed = await prepareRestartHandoffSeed(args, controllerMode);
     return runLoop({
       def,
       initialCheckpoint,
@@ -116,7 +117,12 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       initialHandoffContextRef: controllerMode
         ? null
         : latestHandoffContextRef(log.records(runId), runId),
-      ...(initialHandoffSeed === undefined ? {} : { initialHandoffSeed }),
+      ...(preparedRestartSeed.seed === undefined
+        ? {}
+        : { initialHandoffSeed: preparedRestartSeed.seed }),
+      ...(preparedRestartSeed.orchestratorContinuitySeed === undefined
+        ? {}
+        : { initialOrchestratorContinuitySeed: preparedRestartSeed.orchestratorContinuitySeed }),
       initialArtifactDelivery: args.initialArtifactDelivery ?? null,
       ...(args.initialParentSessionId !== undefined && {
         initialParentSessionId: args.initialParentSessionId,
@@ -202,10 +208,13 @@ function continuityItemIds(
 async function prepareRestartHandoffSeed(
   args: RunWithCompletionArgs,
   controllerMode: boolean,
-): Promise<string | null | undefined> {
+): Promise<{
+  readonly seed: string | null | undefined;
+  readonly orchestratorContinuitySeed?: ContinuitySeedSection | null;
+}> {
   const recipientRole = args.initialCheckpoint.current_role;
   if (recipientRole === "done" || controllerMode || args.initialTrajectorySeed !== undefined) {
-    return undefined;
+    return { seed: undefined };
   }
 
   let records = args.log.records(args.runId);
@@ -223,6 +232,11 @@ async function prepareRestartHandoffSeed(
     envelope !== undefined
   ) {
     const source = sourceConversationForAcceptedHandoff(records, acceptedIndex, accepted);
+    const targetVisitIndex = expectedContextEnrichmentVisitIndex(
+      records,
+      acceptedIndex,
+      recipientRole,
+    );
     const baseIdentity = {
       runId: args.runId,
       from: accepted.from,
@@ -231,12 +245,12 @@ async function prepareRestartHandoffSeed(
       sourceRoleSessionId: source.roleSessionId,
       sourceSessionFile: accepted.session_file,
     };
-    const persisted = findRestartContextEnrichment(records, baseIdentity);
+    const persisted = findRestartContextEnrichment(records, baseIdentity, targetVisitIndex);
     if (persisted === null) {
       const payload = recipientHandoffPayload(envelope);
       await args.host.prepareFreshContinuityEnrichment({
         role: recipientRole,
-        visitIndex: args.initialVisitIndexByRole?.[recipientRole] ?? 1,
+        visitIndex: targetVisitIndex,
         recipientObjective: typeof payload.objective === "string" ? payload.objective : "",
         recipientRequestedAction:
           typeof payload.requested_action === "string" ? payload.requested_action : "",
@@ -249,18 +263,20 @@ async function prepareRestartHandoffSeed(
     }
   }
 
-  return formatIncomingHandoffSeed(
+  const continuitySeed = buildRestartContinuitySeed({
+    policy: args.loadedManifest.manifest.continuity,
     records,
-    args.runId,
+    runId: args.runId,
     recipientRole,
-    buildRestartContinuitySeed({
-      policy: args.loadedManifest.manifest.continuity,
-      records,
-      runId: args.runId,
-      recipientRole,
-      ...(policy === undefined ? {} : { contextEnrichmentPolicy: policy }),
+    ...(policy === undefined ? {} : { contextEnrichmentPolicy: policy }),
+  });
+  const seed = formatIncomingHandoffSeed(records, args.runId, recipientRole, continuitySeed);
+  return {
+    seed,
+    ...(recipientRole === args.def.orchestrator && {
+      orchestratorContinuitySeed: continuitySeed,
     }),
-  );
+  };
 }
 
 /**
@@ -323,14 +339,23 @@ export function buildRestartContinuitySeed(args: {
     objective: typeof payload.objective === "string" ? payload.objective : "",
     requested_action: typeof payload.requested_action === "string" ? payload.requested_action : "",
   };
-  const replay = findRestartContextEnrichment(records, {
-    runId: args.runId,
-    from: accepted.from,
-    to: recipientRole,
-    transitionTs: accepted.ts,
-    sourceRoleSessionId: source.roleSessionId,
-    sourceSessionFile: accepted.session_file,
-  });
+  const targetVisitIndex = expectedContextEnrichmentVisitIndex(
+    records,
+    acceptedIndex,
+    recipientRole,
+  );
+  const replay = findRestartContextEnrichment(
+    records,
+    {
+      runId: args.runId,
+      from: accepted.from,
+      to: recipientRole,
+      transitionTs: accepted.ts,
+      sourceRoleSessionId: source.roleSessionId,
+      sourceSessionFile: accepted.session_file,
+    },
+    targetVisitIndex,
+  );
   if (replay === null) return baseline;
   return (
     renderPersistedContextEnrichmentSeed({

@@ -232,7 +232,13 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
         ? { kind: "done" }
         : inner.kind === "failed"
           ? { kind: "failed" }
-          : { kind: "advance", nextSeed: inner.nextSeed };
+          : {
+              kind: "advance",
+              nextSeed: inner.nextSeed,
+              ...(inner.nextContinuitySeed === undefined
+                ? {}
+                : { nextContinuitySeed: inner.nextContinuitySeed }),
+            };
     break;
   }
 

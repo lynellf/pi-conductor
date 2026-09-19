@@ -107,7 +107,7 @@ describe("computeContextEnrichmentTransitionKey (spec §10.1)", () => {
     expect(a).not.toBe(b);
   });
 
-  it("treats absent source_role_session_id as empty (stable)", () => {
+  it("omits an absent source_role_session_id from the transition domain", () => {
     const base = makeTransition();
     const omitRoleSession: ContextEnrichmentAcceptedTransition = {
       run_id: base.run_id,
@@ -117,10 +117,13 @@ describe("computeContextEnrichmentTransitionKey (spec §10.1)", () => {
       source_session_file: base.source_session_file,
       target_visit_index: base.target_visit_index,
     };
-    const a = computeContextEnrichmentTransitionKey(omitRoleSession);
-    const b = computeContextEnrichmentTransitionKey(omitRoleSession);
-    expect(a).toBe(b);
-    expect(a).toMatch(/^[a-f0-9]{64}$/);
+    const omitted = computeContextEnrichmentTransitionKey(omitRoleSession);
+    const explicitEmpty = computeContextEnrichmentTransitionKey({
+      ...omitRoleSession,
+      source_role_session_id: "",
+    });
+    expect(omitted).not.toBe(explicitEmpty);
+    expect(omitted).toMatch(/^[a-f0-9]{64}$/);
   });
 });
 
@@ -205,6 +208,16 @@ describe("computeContextEnrichmentInputFingerprint (spec §10.2)", () => {
       makeInput({ policy: { ...makePolicy(), model: "jev-other" } }),
     );
     expect(a).not.toBe(b);
+  });
+
+  it("does not hash transport candidate_limit into the input domain", () => {
+    const a = computeContextEnrichmentInputFingerprint(
+      makeInput({ policy: { ...makePolicy(), candidate_limit: 4 } }),
+    );
+    const b = computeContextEnrichmentInputFingerprint(
+      makeInput({ policy: { ...makePolicy(), candidate_limit: 64 } }),
+    );
+    expect(a).toBe(b);
   });
 
   it("changes when the candidate outbound state changes", () => {

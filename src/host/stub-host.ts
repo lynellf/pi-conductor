@@ -473,6 +473,13 @@ export class StubHost implements Host {
     def: MachineDefinition;
     goal: string;
     runCostCap: number | null;
+    continuitySeed?: {
+      readonly rendered: string;
+      readonly omitted_items: number;
+      readonly omitted_packets: number;
+      readonly used_bytes: number;
+      readonly max_bytes: number;
+    } | null;
   }): RunMemory {
     // Real call into the core's buildRunMemory so the orchestrator's
     // run-memory seed reflects the actual persisted record history
@@ -481,6 +488,7 @@ export class StubHost implements Host {
     // orchestrator-seed injection (Task 16.5, §8.4 single-writer
     // rule).
     const records = this.log.records(this.runId);
+    void args.continuitySeed;
     return buildRunMemory(args.checkpoint, records, args.def, {
       goal: args.goal,
       runCostCap: args.runCostCap,

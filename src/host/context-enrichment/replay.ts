@@ -43,47 +43,68 @@ export function findContextEnrichmentForTransition(
   const terminals = findContextEnrichmentTerminals(records, identity.runId);
   const record = selectUniqueTerminalForTransition(terminals, transitionKey);
   if (record === null) return null;
-  assertRecordTarget(record, identity.to, identity.targetVisitIndex, transitionKey);
+  assertRecordTarget(record, identity.to, identity.targetVisitIndex);
   return { transitionKey, record };
 }
 
 /**
  * Recover an enrichment identity from a resumed receiver and its persisted
- * terminal. The terminal's visit is used only to discover the key; all other
- * key fields come from the accepted transition and lifecycle log.
+ * terminal. The expected target visit is reconstructed independently from the
+ * accepted transition and lifecycle history; a terminal cannot choose its own
+ * visit/key domain during replay (spec §10).
  */
 export function findRestartContextEnrichment(
   records: readonly PersistedRecord[],
   baseIdentity: Omit<ContextEnrichmentTransitionIdentity, "targetVisitIndex">,
+  targetVisitIndex: number,
 ): {
   readonly identity: ContextEnrichmentTransitionIdentity;
   readonly record: ContextEnrichmentRecord;
 } | null {
   const terminals = findContextEnrichmentTerminals(records, baseIdentity.runId);
-  const matches = terminals.filter((record) => {
-    if (record.recipient_role !== baseIdentity.to) return false;
-    const identity: ContextEnrichmentTransitionIdentity = {
-      ...baseIdentity,
-      targetVisitIndex: record.recipient_visit,
-    };
-    return record.source_transition_key === computeTransitionKey(identity);
-  });
-  if (matches.length === 0) return null;
-  const first = matches[0];
-  if (first === undefined) return null;
-  if (matches.length > 1) {
-    throw new Error(
-      `context_enrichment has ${matches.length} terminals for resumed transition ${first.source_transition_key}`,
-    );
-  }
   const identity: ContextEnrichmentTransitionIdentity = {
     ...baseIdentity,
-    targetVisitIndex: first.recipient_visit,
+    targetVisitIndex,
   };
-  const selected = selectUniqueTerminalForTransition(terminals, first.source_transition_key);
-  if (selected === null) return null;
-  assertRecordTarget(selected, identity.to, identity.targetVisitIndex, first.source_transition_key);
+  const expectedKey = computeTransitionKey(identity);
+  const matches = terminals.filter(
+    (record) =>
+      record.recipient_role === baseIdentity.to && record.source_transition_key === expectedKey,
+  );
+  const staleMatch = terminals.find((record) => {
+    if (record.recipient_role !== baseIdentity.to || record.recipient_visit === targetVisitIndex)
+      return false;
+    return (
+      record.source_transition_key ===
+      computeTransitionKey({ ...baseIdentity, targetVisitIndex: record.recipient_visit })
+    );
+  });
+  if (staleMatch !== undefined) {
+    throw new Error("context_enrichment terminal does not match the expected recipient visit");
+  }
+  if (matches.length === 0) return null;
+  if (matches.length > 1) {
+    throw new Error("context_enrichment has multiple terminals for the resumed transition");
+  }
+  const selected = matches[0];
+  if (selected === undefined) return null;
+  assertRecordTarget(selected, identity.to, identity.targetVisitIndex);
   return { identity, record: selected };
+}
+
+/** Reconstruct the target visit assigned by an accepted handoff, before its receiver starts. */
+export function expectedContextEnrichmentVisitIndex(
+  records: readonly PersistedRecord[],
+  acceptedTransitionIndex: number,
+  recipientRole: Role,
+): number {
+  let highestVisit = 0;
+  for (let index = 0; index < acceptedTransitionIndex; index += 1) {
+    const record = records[index];
+    if (record?.type !== "session_started" || record.role !== recipientRole) continue;
+    highestVisit = Math.max(highestVisit, record.visit_index);
+  }
+  return highestVisit + 1;
 }
 
 /**
@@ -107,17 +128,12 @@ export function renderPersistedContextEnrichmentSeed(args: {
     match = findContextEnrichmentForTransition(args.records, args.identity);
   } else {
     if (args.terminal.source_transition_key !== transitionKey) {
-      throw new Error(`context_enrichment terminal does not match transition ${transitionKey}`);
+      throw new Error("context_enrichment terminal does not match the recomputed identity");
     }
     match = { transitionKey, record: args.terminal };
   }
   if (match === null) return null;
-  assertRecordTarget(
-    match.record,
-    args.identity.to,
-    args.identity.targetVisitIndex,
-    match.transitionKey,
-  );
+  assertRecordTarget(match.record, args.identity.to, args.identity.targetVisitIndex);
 
   const projection = projectRankedCandidates(args.ledger, {
     recipient: args.recipient,
@@ -179,15 +195,8 @@ function computeTransitionKey(identity: ContextEnrichmentTransitionIdentity): st
   });
 }
 
-function assertRecordTarget(
-  record: ContextEnrichmentRecord,
-  role: Role,
-  visitIndex: number,
-  transitionKey: string,
-): void {
+function assertRecordTarget(record: ContextEnrichmentRecord, role: Role, visitIndex: number): void {
   if (record.recipient_role !== role || record.recipient_visit !== visitIndex) {
-    throw new Error(
-      `mismatched context_enrichment recipient for transition ${transitionKey}: expected ${role}@${visitIndex}, got ${record.recipient_role}@${record.recipient_visit}`,
-    );
+    throw new Error("context_enrichment terminal recipient identity mismatch");
   }
 }

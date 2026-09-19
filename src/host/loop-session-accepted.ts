@@ -279,6 +279,8 @@ export async function persistAcceptedTransition(
     acceptedContextRef,
     continuitySeedSection,
   );
+  const nextContinuitySeed =
+    nextRole === def.orchestrator ? (continuitySeedSection ?? undefined) : undefined;
   ctx.pendingArtifactRoute = acceptedArtifactRoute;
   try {
     const trajectoryTargetSeed =
@@ -289,7 +291,9 @@ export async function persistAcceptedTransition(
               def,
               goal: opts.initialGoal,
               runCostCap: opts.getRunCostCap?.() ?? opts.runCostCap ?? null,
+              ...(nextContinuitySeed === undefined ? {} : { continuitySeed: nextContinuitySeed }),
             }),
+            nextContinuitySeed,
           )
         : ctx.nextSeed;
     const selected =
@@ -311,6 +315,10 @@ export async function persistAcceptedTransition(
     }
     throw error;
   }
-  state.inner = { kind: "advance", nextSeed: ctx.nextSeed };
+  state.inner = {
+    kind: "advance",
+    nextSeed: ctx.nextSeed,
+    ...(nextContinuitySeed === undefined ? {} : { nextContinuitySeed }),
+  };
   return { acceptedArtifactRoute, inner: state.inner };
 }

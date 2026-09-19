@@ -241,6 +241,26 @@ class FakeHost implements Host {
   sealed: string[] = [];
   // Captures for assertions about what was called.
   seedRunMemoryCalls: number = 0;
+  seedRunMemoryContinuity: Array<
+    | {
+        readonly rendered: string;
+        readonly omitted_items: number;
+        readonly omitted_packets: number;
+        readonly used_bytes: number;
+        readonly max_bytes: number;
+      }
+    | null
+    | undefined
+  > = [];
+  continuitySeedForNextRole: {
+    readonly rendered: string;
+    readonly omitted_items: number;
+    readonly omitted_packets: number;
+    readonly used_bytes: number;
+    readonly max_bytes: number;
+  } | null = null;
+  trajectoryTarget: FakeSession | null = null;
+  trajectoryTargetSeeds: string[] = [];
 
   constructor(runId: string, log: InMemoryRecordLog) {
     this.log = log;
@@ -277,8 +297,16 @@ class FakeHost implements Host {
     def: MachineDefinition;
     goal: string;
     runCostCap: number | null;
+    continuitySeed?: {
+      readonly rendered: string;
+      readonly omitted_items: number;
+      readonly omitted_packets: number;
+      readonly used_bytes: number;
+      readonly max_bytes: number;
+    } | null;
   }): RunMemory {
     this.seedRunMemoryCalls += 1;
+    this.seedRunMemoryContinuity.push(args.continuitySeed);
     return {
       run_id: "fake-run",
       goal: args.goal,
@@ -297,6 +325,37 @@ class FakeHost implements Host {
       per_role_cost: {},
       next_candidates: [],
     };
+  }
+
+  materializeFreshContinuitySeed(_args: { readonly role: Role; readonly visitIndex: number }): {
+    readonly rendered: string;
+    readonly omitted_items: number;
+    readonly omitted_packets: number;
+    readonly used_bytes: number;
+    readonly max_bytes: number;
+  } | null {
+    return this.continuitySeedForNextRole;
+  }
+
+  async selectAcceptedHandoffTransport(args: {
+    readonly from: Role;
+    readonly to: Role;
+    readonly source: RoleSession;
+    readonly targetSeed: string;
+    readonly targetVisitIndex: number;
+    readonly targetExecutionVisitIndex?: number;
+  }): Promise<
+    { readonly mode: "fresh" } | { readonly mode: "trajectory"; readonly session: RoleSession }
+  > {
+    void args.from;
+    void args.source;
+    void args.targetVisitIndex;
+    void args.targetExecutionVisitIndex;
+    if (this.trajectoryTarget === null || args.to !== "orchestrator") {
+      return { mode: "fresh" };
+    }
+    this.trajectoryTargetSeeds.push(args.targetSeed);
+    return { mode: "trajectory", session: this.trajectoryTarget.toRoleSession() };
   }
 
   async abortSession(session: RoleSession, reason: string): Promise<void> {
@@ -399,6 +458,104 @@ function makeRun(
 // ─── Happy path: orchestrator → worker → orchestrator → end ───────────
 
 describe("runLoop — happy path", () => {
+  it("delivers a durable ranked seed when the next recipient is the orchestrator", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    host.continuitySeedForNextRole = {
+      rendered: "ranked-orchestrator-seed",
+      omitted_items: 0,
+      omitted_packets: 0,
+      used_bytes: 24,
+      max_bytes: 32_768,
+    };
+    const orchestrator = new FakeSession("orchestrator", "sess-1", [
+      { kind: "emit_handoff", target_role: "worker" },
+    ]);
+    const worker = new FakeSession("worker", "sess-2", [
+      { kind: "emit_handoff", target_role: "orchestrator" },
+    ]);
+    const final = new FakeSession("orchestrator", "sess-3", [{ kind: "emit_end" }]);
+    host.enqueue(orchestrator);
+    host.enqueue(worker);
+    host.enqueue(final);
+
+    await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    expect(final.prompts[0]).toContain("ranked-orchestrator-seed");
+    expect(host.seedRunMemoryContinuity.at(-1)).toMatchObject({
+      rendered: "ranked-orchestrator-seed",
+    });
+  });
+
+  it("passes ranked continuity to a trajectory orchestrator target", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    host.continuitySeedForNextRole = {
+      rendered: "ranked-trajectory-seed",
+      omitted_items: 0,
+      omitted_packets: 0,
+      used_bytes: 25,
+      max_bytes: 32_768,
+    };
+    const orchestrator = new FakeSession("orchestrator", "sess-traj-1", [
+      { kind: "emit_handoff", target_role: "worker" },
+    ]);
+    const worker = new FakeSession("worker", "sess-traj-2", [
+      { kind: "emit_handoff", target_role: "orchestrator" },
+    ]);
+    const final = new FakeSession("orchestrator", "sess-traj-3", [{ kind: "emit_end" }]);
+    host.trajectoryTarget = final;
+    host.enqueue(orchestrator);
+    host.enqueue(worker);
+
+    await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+    });
+
+    expect(host.trajectoryTargetSeeds[0]).toContain("ranked-trajectory-seed");
+    expect(final.prompts[0]).toContain("ranked-trajectory-seed");
+  });
+
+  it("preserves ranked continuity when an orchestrator visit is resumed", async () => {
+    const def = makeDef();
+    const log = new InMemoryRecordLog();
+    const initialCheckpoint = createInitialCheckpoint(def);
+    const host = new FakeHost(initialCheckpoint.run_id, log);
+    const orchestrator = new FakeSession("orchestrator", "sess-resumed", [{ kind: "emit_end" }]);
+    host.enqueue(orchestrator);
+
+    await runLoop({
+      def,
+      initialCheckpoint,
+      host,
+      initialGoal: "do the thing",
+      initialOrchestratorContinuitySeed: {
+        rendered: "ranked-restart-seed",
+        omitted_items: 1,
+        omitted_packets: 0,
+        used_bytes: 20,
+        max_bytes: 32_768,
+      },
+    });
+
+    expect(orchestrator.prompts[0]).toContain("ranked-restart-seed");
+    expect(host.seedRunMemoryContinuity[0]).toMatchObject({
+      rendered: "ranked-restart-seed",
+    });
+  });
+
   it("appends pending operator guidance to the next role prompt exactly once", async () => {
     const def = makeDef();
     const log = new InMemoryRecordLog();

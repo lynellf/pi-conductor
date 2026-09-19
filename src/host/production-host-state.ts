@@ -75,6 +75,13 @@ export function seedRunMemory(
     readonly def: MachineDefinition;
     readonly goal: string;
     readonly runCostCap: number | null;
+    readonly continuitySeed?: {
+      readonly rendered: string;
+      readonly omitted_items: number;
+      readonly omitted_packets: number;
+      readonly used_bytes: number;
+      readonly max_bytes: number;
+    } | null;
   },
 ): RunMemory {
   // Delegate to the core's `buildRunMemory` so the
@@ -85,7 +92,7 @@ export function seedRunMemory(
   // single-writer rule).
   const records = host.log.records(host.runId);
   const continuity = host.loadedManifest.manifest.continuity;
-  return buildRunMemory(args.checkpoint, records, args.def, {
+  const memory = buildRunMemory(args.checkpoint, records, args.def, {
     goal: args.goal,
     runCostCap: args.runCostCap,
     ...(continuity === undefined
@@ -96,6 +103,29 @@ export function seedRunMemory(
           renderContinuitySeed,
         }),
   });
+  if (args.continuitySeed === undefined || memory.continuity_seed === undefined) {
+    return memory;
+  }
+  if (args.continuitySeed === null) {
+    return { ...memory, continuity_seed: null };
+  }
+  const baseline = memory.continuity_seed;
+  if (baseline === null) return memory;
+  return {
+    ...memory,
+    continuity_seed: {
+      ...baseline,
+      rendered: args.continuitySeed.rendered,
+      budget: {
+        used_bytes: args.continuitySeed.used_bytes,
+        max_bytes: args.continuitySeed.max_bytes,
+      },
+      omitted: {
+        items: args.continuitySeed.omitted_items,
+        packets: args.continuitySeed.omitted_packets,
+      },
+    },
+  };
 }
 
 /**
