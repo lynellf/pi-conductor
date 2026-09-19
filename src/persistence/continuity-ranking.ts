@@ -164,14 +164,20 @@ interface SectionProjection {
 function sectionFromBlockingQuestions(
   ledger: ContinuityLedger,
 ): readonly ContinuityActiveOrSupersededItem<ContinuityQuestion>[] {
-  return ledger.open_questions.filter((entry) => entry.item.blocking).reverse();
+  return ledger.open_questions
+    .filter((entry) => entry.item.blocking && entry.superseded_by.length === 0)
+    .reverse();
 }
 
 function sectionFromRecipientNextSteps(
   ledger: ContinuityLedger,
 ): readonly ContinuityActiveOrSupersededItem<ContinuityNextStep>[] {
   return ledger.next_steps
-    .filter((entry) => entry.item.owner === "recipient" || entry.item.owner === "parent")
+    .filter(
+      (entry) =>
+        (entry.item.owner === "recipient" || entry.item.owner === "parent") &&
+        entry.superseded_by.length === 0,
+    )
     .reverse();
 }
 
@@ -179,7 +185,11 @@ function sectionFromRisksAndDecisions(
   ledger: ContinuityLedger,
 ): readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[] {
   return ledger.findings
-    .filter((entry) => entry.item.kind === "risk" || entry.item.kind === "decision")
+    .filter(
+      (entry) =>
+        (entry.item.kind === "risk" || entry.item.kind === "decision") &&
+        entry.superseded_by.length === 0,
+    )
     .reverse();
 }
 
@@ -187,7 +197,12 @@ function sectionFromOtherActiveFindings(
   ledger: ContinuityLedger,
 ): readonly ContinuityActiveOrSupersededItem<ContinuityFinding>[] {
   return ledger.findings
-    .filter((entry) => entry.item.kind !== "risk" && entry.item.kind !== "decision")
+    .filter(
+      (entry) =>
+        entry.item.kind !== "risk" &&
+        entry.item.kind !== "decision" &&
+        entry.superseded_by.length === 0,
+    )
     .reverse();
 }
 
@@ -203,13 +218,11 @@ function sectionFromEvaluations(ledger: ContinuityLedger): readonly SectionProje
           candidate_key: `evaluations:${evaluation.record_id}:${evaluation.id}`,
           baseline_ordinal: 0,
           item: evaluation,
-          outbound: buildOutbound(
-            { role: "", objective: "", requested_action: "" },
-            "evaluations",
-            "evaluation",
-            text,
-            attributes,
-          ),
+          // Spec §6.3: outbound state is the minimal semantic shape;
+          // host-derived evaluations do not score against the
+          // recipient, so they remain unscored in the prefix and
+          // retain their baseline order (spec §8).
+          outbound: buildCandidateOutbound("evaluations", "evaluation", text, attributes),
           attributes,
         } satisfies RankedCandidateProjectionEntry;
       }),
@@ -234,8 +247,10 @@ function sectionFromPacketSummaries(ledger: ContinuityLedger): readonly SectionP
             record_id: envelope.record_id,
             summary: envelope.packet.summary,
           },
-          outbound: buildOutbound(
-            { role: "", objective: "", requested_action: "" },
+          // Spec §6.3: outbound state excludes the recipient block
+          // for unscored items (host-derived packet summaries retain
+          // their baseline order; never nested blank recipient state).
+          outbound: buildCandidateOutbound(
             "packet_summaries",
             "packet_summary",
             envelope.packet.summary,
@@ -246,6 +261,28 @@ function sectionFromPacketSummaries(ledger: ContinuityLedger): readonly SectionP
       }),
     },
   ];
+}
+
+/**
+ * Minimal semantic shape for unscored candidates (evaluations, packet
+ * summaries). The recipient block is intentionally omitted because
+ * these candidates never score against the recipient (spec §6.3) and
+ * the persisted outbound state stays scoped to the candidate itself.
+ */
+function buildCandidateOutbound(
+  section: SectionKey,
+  kind: string,
+  text: string,
+  attributes: Readonly<Record<string, string | boolean>>,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    candidate: Object.freeze({
+      section,
+      kind,
+      text,
+      attributes: Object.freeze({ ...attributes }),
+    }),
+  });
 }
 
 function buildSectionEntries(
@@ -551,23 +588,30 @@ function renderRanked(args: RenderArgs): RankedSeedResult {
   let admitted = 0;
   for (const candidate of ordered) {
     accepted[candidate.key].push(candidate.value);
-    const serialized = serialize(args.ledger.run_id, args.max_bytes, accepted);
+    const serialized = serialize(args.ledger.run_id, args.max_bytes, accepted, {
+      items: 0,
+      packets: 0,
+    });
     if (encoder.encode(serialized).byteLength > args.max_bytes) {
       accepted[candidate.key].pop();
       break;
     }
     admitted += 1;
   }
-  const serialized = serialize(args.ledger.run_id, args.max_bytes, accepted);
-  const usedBytes = encoder.encode(serialized).byteLength;
-  if (usedBytes > args.max_bytes) {
-    throw new Error(`continuity seed fixed metadata exceeds max_bytes cap (${args.max_bytes})`);
-  }
+  // Compute truthful omission counts from the items we did NOT admit.
   let omittedItems = 0;
   let omittedPackets = 0;
   for (const candidate of ordered.slice(admitted)) {
     if (candidate.packet) omittedPackets += 1;
     else omittedItems += 1;
+  }
+  const serialized = serialize(args.ledger.run_id, args.max_bytes, accepted, {
+    items: omittedItems,
+    packets: omittedPackets,
+  });
+  const usedBytes = encoder.encode(serialized).byteLength;
+  if (usedBytes > args.max_bytes) {
+    throw new Error(`continuity seed fixed metadata exceeds max_bytes cap (${args.max_bytes})`);
   }
   return Object.freeze({
     rendered: serialized,
@@ -592,6 +636,7 @@ function serialize(
   runId: string,
   maxBytes: number,
   sections: Record<SectionKey, unknown[]>,
+  omission: { readonly items: number; readonly packets: number },
 ): string {
   let used = 0;
   for (let attempt = 0; attempt < 16; attempt += 1) {
@@ -599,7 +644,7 @@ function serialize(
       schema_version: 1,
       run_id: runId,
       budget: { max_bytes: maxBytes, used_bytes: used },
-      omitted: { items: 0, packets: 0 },
+      omitted: { items: omission.items, packets: omission.packets },
       sections,
       packet_summaries: sections.packet_summaries,
     });
