@@ -110,8 +110,22 @@ export const handoffArgsSchema = Type.Object(
   { additionalProperties: true },
 );
 
-/** Typed view of a validated handoff args object. Host-side use. */
+/** Typed view of a validated legacy/actionable handoff args object. */
 export type HandoffArgs = Static<typeof handoffArgsSchema>;
+
+/** v2 orchestrator handoff: routing is the only required model field. */
+export const orchestratorHandoffArgsSchema = Type.Object(
+  {
+    target_role: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: true },
+);
+
+/** v2 worker handoff: the host supplies the hub target. */
+export const workerHandoffArgsSchema = Type.Object({}, { additionalProperties: true });
+
+/** v2 end schema: all model-authored fields are optional hints. */
+export const endArgsSchemaV2 = Type.Object({}, { additionalProperties: true });
 
 /** Field names required by every model-emitted actionable handoff. */
 export const ACTIONABLE_HANDOFF_FIELDS = [
@@ -377,22 +391,19 @@ export const childResultStatusSchema = Type.Union([
 /** Typed view of a child result status. */
 export type ChildResultStatus = Static<typeof childResultStatusSchema>;
 
-/**
- * §6: `report_result` tool arguments schema.
- *
- * A child calls this to report its terminal result. The host terminates
- * the child session after a valid call.
- */
-export const reportResultArgsSchema = Type.Object({
+/** Historical v1 `report_result` contract retained for pinned runs. */
+export const legacyReportResultArgsSchema = Type.Object({
   status: childResultStatusSchema,
   summary: Type.String({ minLength: 1, maxLength: 4096 }),
   verification: Type.Optional(Type.Array(Type.String({ maxLength: 256 }), { maxItems: 16 })),
-  // Spec §6: reserved optional `continuity` field on report_result. Required
-  // only when the parent's manifest pins `continuity.require_delegated_result`
-  // AND the profile is not `minimal`. Child-authored provenance fields are
-  // never trusted; provenance is host-derived on the persisted record.
   continuity: Type.Optional(continuityPacketV1Schema),
 });
 
-/** Typed view of validated report_result args. */
+/** v2 delegated-result schema: terminal intent is the only required fact. */
+export const reportResultArgsSchema = Type.Object({}, { additionalProperties: true });
+
+/** Typed view of v2 report_result arguments. */
 export type ReportResultArgs = Static<typeof reportResultArgsSchema>;
+
+/** Typed view of the historical v1 report_result arguments. */
+export type LegacyReportResultArgs = Static<typeof legacyReportResultArgsSchema>;

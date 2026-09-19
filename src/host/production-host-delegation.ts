@@ -2,6 +2,10 @@
 import { join } from "node:path";
 import type { ExtensionContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Role } from "../core/types.js";
+import {
+  isHostGeneratedContinuityPolicy,
+  isLegacyContinuityPolicy,
+} from "../manifest/continuity.js";
 import type { ControllerConfig } from "../manifest/controller.js";
 import type { RoleConfig, WorkspaceSource } from "../manifest/types.js";
 import {
@@ -231,6 +235,9 @@ export async function createDelegateTool(
   const manifest = ctx.loadedManifest.manifest;
   const factoryOptions = {
     role: roleConfig,
+    controlProtocol: isHostGeneratedContinuityPolicy(manifest.continuity)
+      ? ("v2" as const)
+      : ("v1" as const),
     subagents: manifest.subagents ?? [],
     remainingChildren: roleConfig.delegation.max_children_per_session,
     runId: ctx.runId,
@@ -250,7 +257,9 @@ export async function createDelegateTool(
         ctx.log.records(ctx.runId),
         ctx.runId,
         childId,
-        continuityPolicyContext(manifest.continuity ?? null),
+        continuityPolicyContext(
+          isLegacyContinuityPolicy(manifest.continuity) ? manifest.continuity : null,
+        ),
         ctx.cwd,
       ),
     isBudgetExhausted: () => {

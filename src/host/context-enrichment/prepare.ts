@@ -25,6 +25,7 @@
 
 import { createHash } from "node:crypto";
 import type { Role } from "../../core/types.js";
+import { isLegacyContinuityPolicy } from "../../manifest/continuity.js";
 import {
   assertContextEnrichmentRecord,
   type ContextEnrichmentAcceptedTransition,
@@ -111,7 +112,8 @@ export async function prepareFreshContinuityEnrichment(
   args: PrepareFreshContinuityEnrichmentArgs,
 ): Promise<ContextEnrichmentRecord | null> {
   const policy = args.loadedManifest.manifest.context_enrichment;
-  if (policy === undefined) return null;
+  if (policy === undefined || !isLegacyContinuityPolicy(args.loadedManifest.manifest.continuity))
+    return null;
   const transitionKey = computeContextEnrichmentTransitionKey({
     run_id: args.runId,
     from: args.from,
@@ -185,6 +187,9 @@ export async function prepareFreshContinuityEnrichment(
 function buildRecipientLedger(args: PrepareFreshContinuityEnrichmentArgs): ContinuityLedger {
   const records = args.log.records(args.runId);
   const policy = args.loadedManifest.manifest.continuity;
+  if (policy !== undefined && !isLegacyContinuityPolicy(policy)) {
+    throw new Error("v2 continuity requires the host-generated observation materializer");
+  }
   return materializeContinuity(records, {
     run_id: args.runId,
     ...(policy === undefined

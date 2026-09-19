@@ -38,6 +38,8 @@ import type { DelegationScheduler } from "./scheduler.js";
 
 /** Shared child-runtime dependencies for SDK-tool and controller-native admission. */
 export interface DelegateChildFactoryOptions {
+  /** Pinned v2 host-generated child-result protocol for new runs. */
+  readonly controlProtocol?: "v1" | "v2";
   readonly subagents: readonly SubagentProfile[];
   readonly remainingChildren: number;
   readonly runId: string;
@@ -205,6 +207,7 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           parentRole: opts.parentRole,
           primaryCheckout: opts.primaryCheckout,
           systemPromptRoot: opts.systemPromptRoot,
+          ...(opts.controlProtocol === undefined ? {} : { controlProtocol: opts.controlProtocol }),
           spawnAndRunChild: buildSpawnCallback(opts),
           ...(opts.getHostRejection === undefined
             ? {}

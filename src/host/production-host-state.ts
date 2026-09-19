@@ -5,6 +5,7 @@ import { buildRunMemory } from "../core/run-memory.js";
 import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
 import { assertKnownCompactionUsage } from "../cost/context-compaction.js";
 import { rollup } from "../cost/rollup.js";
+import { isLegacyContinuityPolicy } from "../manifest/continuity.js";
 import type { ContextEnrichmentRecord } from "../persistence/context-enrichment.js";
 import {
   materializeContinuity,
@@ -95,7 +96,7 @@ export function seedRunMemory(
   const memory = buildRunMemory(args.checkpoint, records, args.def, {
     goal: args.goal,
     runCostCap: args.runCostCap,
-    ...(continuity === undefined
+    ...(!isLegacyContinuityPolicy(continuity)
       ? {}
       : {
           continuityPolicy: continuity,
@@ -156,7 +157,7 @@ export function materializeFreshContinuitySeed(
   },
 ): import("./loop-format.js").ContinuitySeedSection | null {
   const policy = host.loadedManifest.manifest.continuity;
-  if (policy === undefined) return null;
+  if (!isLegacyContinuityPolicy(policy)) return null;
   const records = host.log.records(host.runId);
   const ledger = materializeContinuity(records, {
     run_id: host.runId,

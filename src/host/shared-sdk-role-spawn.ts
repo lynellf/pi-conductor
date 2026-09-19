@@ -82,6 +82,8 @@ export async function spawnSharedSdkRoleSession(options: {
   /** Exact persisted physical conversation identity required for a resumed target. */
   readonly expectedTrajectoryConversation?: { readonly id: string; readonly file: string };
   readonly machineDefinition: MachineDefinition;
+  /** Pinned run control protocol; absent keeps direct legacy callers on v1. */
+  readonly controlProtocol?: "v1" | "v2";
   readonly handoffContextRef?: HandoffContextRef;
   readonly delegateTool: ToolDefinition | null;
   readonly uiContext?: ExtensionUIContext;
@@ -145,7 +147,8 @@ export async function spawnSharedSdkRoleSession(options: {
   let activeHandoffContext = {
     role: options.role,
     def: options.machineDefinition,
-  };
+    protocol: options.controlProtocol ?? "v1",
+  } as const;
   const rejector = createCaptureRejector();
   const handoff = createHandoffTool(
     () => activeSeam,
@@ -153,7 +156,11 @@ export async function spawnSharedSdkRoleSession(options: {
     () => activeHandoffContext,
     options.disableAutoCompaction === true || options.isTrajectory === true,
   );
-  const end = createEndTool(() => activeSeam, rejector.getRejection);
+  const end = createEndTool(
+    () => activeSeam,
+    rejector.getRejection,
+    options.controlProtocol ?? "v1",
+  );
   const askUser = createAskUserTool() as ToolDefinition;
   const guardTool = (tool: ToolDefinition): ToolDefinition =>
     wrapToolWithSeal(tool, () => activeSeam.isSealed, rejector.getRejection);
@@ -347,7 +354,11 @@ export async function spawnSharedSdkRoleSession(options: {
     nativeRetained = true;
     activeSystemPrompt = target.systemPrompt;
     activeSeam = new SessionSeam();
-    activeHandoffContext = { role: target.role, def: options.machineDefinition };
+    activeHandoffContext = {
+      role: target.role,
+      def: options.machineDefinition,
+      protocol: options.controlProtocol ?? "v1",
+    };
     const targetSessionId = randomUUID();
     const targetState = new SessionState({
       cap: target.maxSessionCostUsd,

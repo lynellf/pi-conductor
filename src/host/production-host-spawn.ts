@@ -3,6 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
+import { isHostGeneratedContinuityPolicy } from "../manifest/continuity.js";
 import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
 import type { PersistedRecord, RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
 import { isToolExecutionRecord } from "../persistence/tool-execution.js";
@@ -224,6 +225,10 @@ export async function spawnRole(
     };
     const isolatedSession = await spawnIsolatedRoleSession({
       role,
+      orchestratorRole: host.loadedManifest.def.orchestrator,
+      controlProtocol: isHostGeneratedContinuityPolicy(host.loadedManifest.manifest.continuity)
+        ? "v2"
+        : "v1",
       roleConfig,
       workspaceConfig: roleWorkspaceConfig,
       backend: workspaceBackend,
@@ -355,6 +360,9 @@ export async function spawnRole(
     executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
     priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
     machineDefinition: host.loadedManifest.def,
+    controlProtocol: isHostGeneratedContinuityPolicy(host.loadedManifest.manifest.continuity)
+      ? "v2"
+      : "v1",
     disableAutoCompaction:
       host.loadedManifest.manifest.handoffs?.some(
         (policy) => policy.from === role && policy.mode === "trajectory",

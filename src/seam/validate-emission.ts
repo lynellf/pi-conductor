@@ -30,7 +30,15 @@
 
 import { Value } from "typebox/value";
 import type { MachineEvent } from "../core/types.js";
-import { type EndArgs, endArgsSchema, type HandoffArgs, handoffArgsSchema } from "./schema.js";
+import {
+  type EndArgs,
+  endArgsSchema,
+  endArgsSchemaV2,
+  type HandoffArgs,
+  handoffArgsSchema,
+  orchestratorHandoffArgsSchema,
+  workerHandoffArgsSchema,
+} from "./schema.js";
 
 /**
  * A single capture from the role session's machine-event capture buffer.
@@ -54,11 +62,23 @@ export type ValidatedEmission =
   | { readonly kind: "ok"; readonly event: MachineEvent }
   | { readonly kind: "breach"; readonly reason: BreachFailureReason };
 
+/** Role-aware schema selection for the v2 host-generated control contract. */
+export interface ValidateEmissionOptions {
+  readonly protocol?: "v1" | "v2" | "v2-orchestrator" | "v2-worker";
+  /** Pinned hub target used when a worker returns control without a target. */
+  readonly workerTargetRole?: string;
+  /** Host authorization for optional worker end requests. */
+  readonly workerRequestEndAuthorized?: boolean;
+}
+
 /**
  * Validate a role session's machine-event capture buffer against the §3
  * boundary contract.
  */
-export function validateEmission(emissions: readonly EmissionCapture[]): ValidatedEmission {
+export function validateEmission(
+  emissions: readonly EmissionCapture[],
+  options: ValidateEmissionOptions = {},
+): ValidatedEmission {
   // §3 rule 1: empty buffer → no_emission.
   if (emissions.length === 0) {
     return { kind: "breach", reason: "no_emission" };
@@ -77,25 +97,40 @@ export function validateEmission(emissions: readonly EmissionCapture[]): Validat
   const capture: EmissionCapture = emissions[0] as EmissionCapture;
 
   if (capture.toolName === "handoff") {
-    if (!Value.Check(handoffArgsSchema, capture.args)) {
+    const schema =
+      options.protocol === "v2-orchestrator"
+        ? orchestratorHandoffArgsSchema
+        : options.protocol === "v2-worker"
+          ? workerHandoffArgsSchema
+          : handoffArgsSchema;
+    if (!Value.Check(schema, capture.args)) {
       return { kind: "breach", reason: "schema_invalid" };
     }
-    // The schema check guarantees the shape; the cast is the seam's
-    // typed view landing on the reducer's unknown-typed payload.
-    const args = capture.args as HandoffArgs;
+    if (options.protocol === "v2-worker" && options.workerTargetRole === undefined) {
+      return { kind: "breach", reason: "schema_invalid" };
+    }
+    const args = capture.args as HandoffArgs & { readonly target_role?: string };
+    const target_role =
+      options.protocol === "v2-worker" ? (options.workerTargetRole as string) : args.target_role;
     return {
       kind: "ok",
       event: {
         type: "handoff",
-        request_end: args.request_end ?? false,
-        target_role: args.target_role,
+        request_end:
+          options.protocol === "v2-orchestrator"
+            ? false
+            : options.protocol === "v2-worker"
+              ? options.workerRequestEndAuthorized === true && args.request_end === true
+              : args.request_end === true,
+        target_role,
         payload: args,
       },
     };
   }
 
   if (capture.toolName === "end") {
-    if (!Value.Check(endArgsSchema, capture.args)) {
+    const schema = options.protocol?.startsWith("v2") === true ? endArgsSchemaV2 : endArgsSchema;
+    if (!Value.Check(schema, capture.args)) {
       return { kind: "breach", reason: "schema_invalid" };
     }
     const args = capture.args as EndArgs;

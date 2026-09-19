@@ -136,6 +136,8 @@ export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
 export type {
   ContextRetention,
   ContinuityPolicy,
+  ContinuityPolicyV1,
+  ContinuityPolicyV2,
   DelegationMode,
   DelegationPolicy,
   Manifest,
@@ -206,6 +208,13 @@ export {
 // throws on hard errors and produces the frozen MachineDefinition snapshot
 // the reducer (Phase 2) consumes as `def`.
 
+export {
+  ContinuityMigrationError,
+  DEFAULT_HOST_CONTINUITY_POLICY,
+  isHostGeneratedContinuityPolicy,
+  isLegacyContinuityPolicy,
+  normalizeContinuityPolicyForNewRun,
+} from "./manifest/continuity.js";
 export { toMachineDefinition } from "./manifest/definition.js";
 export type {
   ManifestError,
@@ -224,6 +233,18 @@ export { validateManifest } from "./manifest/validate.js";
 // validated payload (for seeding the next session); the reducer never
 // sees them (§3/§12: payload is `unknown`).
 
+export type {
+  RawControlArgumentRejection,
+  RawControlArguments,
+  ReportedHintsV2,
+  ReportedTaskContextV2,
+  SanitizedReportedHintsV2,
+} from "./seam/control-arguments.js";
+export {
+  RAW_CONTROL_ARGUMENT_MAX_UTF8_BYTES,
+  readRawControlArguments,
+  sanitizeReportedHintsV2,
+} from "./seam/control-arguments.js";
 export { summarizePayload } from "./seam/payload-summary.js";
 export type {
   DelegateArgs,
@@ -231,6 +252,8 @@ export type {
   DelegateSubmissionArgs,
   EndArgs,
   HandoffArgs,
+  LegacyReportResultArgs,
+  ReportResultArgs,
 } from "./seam/schema.js";
 export {
   delegateArgsSchema,
@@ -238,7 +261,11 @@ export {
   delegateControlArgsSchema,
   delegateSubmissionArgsSchema,
   endArgsSchema,
+  endArgsSchemaV2,
   handoffArgsSchema,
+  orchestratorHandoffArgsSchema,
+  reportResultArgsSchema,
+  workerHandoffArgsSchema,
 } from "./seam/schema.js";
 export type {
   BreachFailureReason,

@@ -13,7 +13,11 @@ import type {
   SessionWorkspaceDescriptor,
   UsageRecord,
 } from "../../core/types.js";
-import { type EmissionCapture, validateEmission } from "../../seam/validate-emission.js";
+import {
+  type EmissionCapture,
+  type ValidateEmissionOptions,
+  validateEmission,
+} from "../../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
 import type { RoleSession } from "../host.js";
 import type { DelegateBridgeHost } from "./delegate-bridge.js";
@@ -93,6 +97,7 @@ export class NodeRoleSession implements RoleSession {
   private readonly executionBridgeCloseTimeoutMs: number | undefined;
   private readonly onDispose: (() => Promise<void> | void) | undefined;
   private readonly contextRetention: NodeRoleSessionOptions["contextRetention"];
+  private readonly emissionValidationOptions: ValidateEmissionOptions;
   private readonly optionsRoleSessionId: string | undefined;
   private readonly captures: EmissionCapture[] = [];
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
@@ -144,6 +149,17 @@ export class NodeRoleSession implements RoleSession {
     this.executionBridgeCloseTimeoutMs = options.executionBridge?.closeTimeoutMs;
     this.onDispose = options.onDispose;
     this.contextRetention = options.contextRetention;
+    this.emissionValidationOptions =
+      options.controlProtocol === "v2"
+        ? options.role === options.orchestratorRole
+          ? { protocol: "v2-orchestrator" }
+          : {
+              protocol: "v2-worker",
+              ...(options.orchestratorRole === undefined
+                ? {}
+                : { workerTargetRole: options.orchestratorRole }),
+            }
+        : {};
     this.optionsRoleSessionId = options.roleSessionId;
     this.transport = new RpcChildTransport(child, {
       onEvent: (value) => this.acceptEvent(value),
@@ -344,7 +360,10 @@ export class NodeRoleSession implements RoleSession {
         this.captures.push(capture);
         // Shared seam parity: only a first, schema-valid capture seals.
         // A subsequent call remains unsealed because it is extra_emission.
-        if (this.captures.length === 1 && validateEmission([capture]).kind === "ok") {
+        if (
+          this.captures.length === 1 &&
+          validateEmission([capture], this.emissionValidationOptions).kind === "ok"
+        ) {
           this.seal();
         }
       }

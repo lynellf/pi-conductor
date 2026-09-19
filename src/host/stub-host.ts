@@ -62,6 +62,10 @@ import type {
   RunMemory,
   UsageRecord,
 } from "../index.js";
+import {
+  isHostGeneratedContinuityPolicy,
+  isLegacyContinuityPolicy,
+} from "../manifest/continuity.js";
 import { materializeContinuity } from "../persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../persistence/continuity-seed.js";
 import { SessionState } from "./cost.js";
@@ -120,6 +124,7 @@ export interface StubHostOptions {
  */
 export class StubHost implements Host {
   readonly log: StubHostOptions["log"];
+  readonly controlProtocol: "v1" | "v2";
   private readonly modelRegistry: ModelRegistry;
   private readonly sessionManager: SessionManager;
   private readonly model = makeStubModel();
@@ -147,6 +152,9 @@ export class StubHost implements Host {
     this.log = opts.log;
     this.runId = opts.runId;
     this.loadedManifestValue = opts.loadedManifest;
+    this.controlProtocol = isHostGeneratedContinuityPolicy(opts.loadedManifest?.manifest.continuity)
+      ? "v2"
+      : "v1";
 
     // AuthStorage belongs to the pinned test SDK; newer Pi versions omit its
     // public export. A namespace access keeps the shared barrel importable
@@ -257,9 +265,13 @@ export class StubHost implements Host {
     const handoffContractContext =
       this.loadedManifestValue === undefined
         ? undefined
-        : { role, def: this.loadedManifestValue.def };
+        : {
+            role,
+            def: this.loadedManifestValue.def,
+            protocol: this.controlProtocol,
+          };
     const handoff = createHandoffTool(seam, rejector.getRejection, handoffContractContext);
-    const end = createEndTool(seam, rejector.getRejection);
+    const end = createEndTool(seam, rejector.getRejection, this.controlProtocol);
     const handoffContext =
       opts.handoffContextRef === undefined
         ? null
@@ -285,6 +297,7 @@ export class StubHost implements Host {
       const { createDelegateTool } = await import("./delegation/delegate-tool-factory.js");
       delegateTool = createDelegateTool({
         role: roleConfig,
+        controlProtocol: this.controlProtocol,
         subagents: manifest.subagents ?? [],
         remainingChildren: remaining,
         runId: this.runId,
@@ -504,7 +517,7 @@ export class StubHost implements Host {
     // `null` when no continuity policy is pinned (the legacy
     // stub-host behavior for manifests without `continuity`).
     const policy = this.loadedManifestValue?.manifest.continuity;
-    if (policy === undefined) return null;
+    if (!isLegacyContinuityPolicy(policy)) return null;
     const records = this.log.records(this.runId);
     const ledger = materializeContinuity(records, {
       run_id: this.runId,

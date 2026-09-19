@@ -35,6 +35,10 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 
 import { createInitialCheckpoint } from "../core/reduce.js";
 import type { MachineDefinition, Role } from "../core/types.js";
+import {
+  ContinuityMigrationError,
+  normalizeContinuityPolicyForNewRun,
+} from "../manifest/continuity.js";
 import { pinExecutionPolicies } from "../manifest/pin-execution-policy.js";
 import {
   type EndGuardRecord,
@@ -149,10 +153,20 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     opts.modelRegistry !== undefined ? { modelRegistry: opts.modelRegistry } : undefined,
   );
   assertManifestWorkspaceBackendsSupported(loaded);
+  let newRunManifest: LoadedManifest["manifest"];
+  try {
+    newRunManifest = Object.freeze({
+      ...loaded.manifest,
+      continuity: normalizeContinuityPolicyForNewRun(loaded.manifest.continuity),
+    });
+  } catch (error) {
+    if (error instanceof ContinuityMigrationError) throw error;
+    throw error;
+  }
   // The live host and restart snapshot must share the same resolved policy (#106 §3).
   const pinnedLoaded: LoadedManifest = Object.freeze({
     ...loaded,
-    manifest: pinExecutionPolicies(loaded.manifest),
+    manifest: pinExecutionPolicies(newRunManifest),
   });
   const baseDir = await resolveBaseDir(opts.baseDir);
   const log = new FileRecordLog({ baseDir });

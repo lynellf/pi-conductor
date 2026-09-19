@@ -9,10 +9,16 @@ import {
   tryValidateContinuityPacket,
 } from "../../persistence/continuity.js";
 import type { ContinuityPacketV1 } from "../../seam/continuity.js";
-import { reportResultArgsSchema } from "../../seam/schema.js";
+import { readRawControlArguments, sanitizeReportedHintsV2 } from "../../seam/control-arguments.js";
+import { legacyReportResultArgsSchema, reportResultArgsSchema } from "../../seam/schema.js";
 import type { ReportCapture } from "./child-observation.js";
 import { capChildText } from "./child-result.js";
 import type { SpawnChildConfig } from "./delegate-tool.js";
+
+type ReportResultToolDetails = {
+  readonly ok: boolean;
+  readonly reason?: string;
+};
 
 export function childTaskSeed(config: SpawnChildConfig): string {
   const workspace = config.sandbox === undefined ? config.worktreePath : "/workspace";
@@ -27,48 +33,96 @@ export function childTaskSeed(config: SpawnChildConfig): string {
   ].join("\n");
 }
 
-export function buildReportResultTool(capture: ReportCapture): ToolDefinition {
+export function buildReportResultTool(
+  capture: ReportCapture,
+  protocol: "v1" | "v2" = "v1",
+): ToolDefinition {
   return defineTool({
     name: "report_result",
     label: "report_result",
-    description: "Report the child result and terminate this child session.",
-    parameters: reportResultArgsSchema,
-    async execute(_toolCallId, args: Static<typeof reportResultArgsSchema>) {
+    description:
+      protocol === "v2"
+        ? "Signal terminal intent to the conductor host. Optional fields are untrusted hints."
+        : "Report the child result and terminate this child session.",
+    parameters: protocol === "v2" ? reportResultArgsSchema : legacyReportResultArgsSchema,
+    async execute(_toolCallId, args: unknown) {
+      const raw = readRawControlArguments(args);
+      if (raw.kind === "rejected") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                raw.reason === "tool_arguments_too_large"
+                  ? "tool arguments exceed the 65536-byte UTF-8 transport limit"
+                  : "tool arguments are not exactly JSON-representable",
+            },
+          ],
+          details: { ok: false, reason: raw.reason } as ReportResultToolDetails,
+          isError: true,
+          terminate: false,
+        };
+      }
       if (capture.isClosed())
         return {
           content: [{ type: "text", text: "child session is closed" }],
-          details: {},
+          details: { ok: false } as ReportResultToolDetails,
           isError: true,
           terminate: true,
         };
-      const continuity = await captureContinuity(args, capture);
+      if (protocol === "v2") {
+        const hints = sanitizeReportedHintsV2(raw.value);
+        const summary = hints.hints.summary ?? "child returned terminal control to the host";
+        capture.capture(
+          {
+            status: "failed",
+            summary,
+          },
+          false,
+        );
+        return {
+          content: [{ type: "text", text: "result recorded" }],
+          details: { ok: true } as ReportResultToolDetails,
+          terminate: true,
+        };
+      }
+      const legacyArgs = raw.value as Static<typeof legacyReportResultArgsSchema>;
+      const continuity = await captureContinuity(legacyArgs, capture);
       if (continuity.kind === "rejected") {
         return {
           content: [{ type: "text", text: continuity.message }],
-          details: {},
+          details: { ok: false } as ReportResultToolDetails,
           isError: true,
           terminate: true,
         };
       }
-      const capped = capChildText(args.summary);
+      const capped = capChildText(legacyArgs.summary);
       capture.capture(
         {
-          status: args.status,
+          status: legacyArgs.status,
           summary: capped.text,
-          ...(args.verification === undefined
+          ...(legacyArgs.verification === undefined
             ? {}
-            : { verification: args.verification.slice(0, 16).map((line) => line.slice(0, 256)) }),
+            : {
+                verification: legacyArgs.verification
+                  .slice(0, 16)
+                  .map((line) => line.slice(0, 256)),
+              }),
         },
         capped.truncated,
         continuity.sibling,
       );
-      return { content: [{ type: "text", text: "result recorded" }], details: {}, terminate: true };
+      return {
+        content: [{ type: "text", text: "result recorded" }],
+        details: { ok: true } as ReportResultToolDetails,
+        terminate: true,
+      };
     },
-  });
+  }) as unknown as ToolDefinition;
 }
 
 async function captureContinuity(
-  args: Static<typeof reportResultArgsSchema>,
+  args: Static<typeof legacyReportResultArgsSchema>,
   capture: ReportCapture,
 ): Promise<
   | { readonly kind: "ok"; readonly sibling: ChildContinuitySibling | null }

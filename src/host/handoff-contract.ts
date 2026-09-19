@@ -10,6 +10,8 @@ import {
 export interface HandoffContractContext {
   readonly role: Role;
   readonly def: MachineDefinition;
+  /** New runs use host-generated v2 control; omitted preserves v1 callers. */
+  readonly protocol?: "v1" | "v2";
 }
 
 /** Validate the actionable envelope and role-specific end-request mechanics. */
@@ -17,6 +19,7 @@ export function validateRoleHandoff(
   args: HandoffCandidate,
   context: HandoffContractContext | undefined,
 ): HandoffActionabilityFailure | null {
+  if (context?.protocol === "v2") return null;
   const actionable = validateActionableHandoff(args);
   if (actionable !== null) return actionable;
   if (args.request_end !== true) return null;
@@ -33,6 +36,12 @@ export function validateRoleHandoff(
 
 /** Model-facing role-specific handoff tool description. */
 export function formatHandoffDescription(context: HandoffContractContext | undefined): string {
+  if (context?.protocol === "v2") {
+    if (context.role === context.def.orchestrator) {
+      return `Current role: ${context.role}. Call handoff with exactly one legal worker target_role. All other fields are optional untrusted hints. The complete argument object must be exact JSON within ${ACCEPTED_HANDOFF_MAX_UTF8_BYTES} UTF-8 bytes.`;
+    }
+    return `Current role: ${context.role}. Call handoff({}) to return control to the orchestrator (${context.def.orchestrator}). All supplied fields are optional untrusted hints; the host chooses the target. The complete argument object must be exact JSON within ${ACCEPTED_HANDOFF_MAX_UTF8_BYTES} UTF-8 bytes.`;
+  }
   const required = `Required fields: target_role, status: ready | blocked | complete, objective, summary, requested_action. The complete payload must be exact JSON within ${ACCEPTED_HANDOFF_MAX_UTF8_BYTES} UTF-8 bytes. Use concise artifact locators and hashes for larger evidence.`;
   if (context === undefined) {
     return `Terminate this role session by routing control. ${required} Workers route only to the orchestrator; the orchestrator routes to a declared worker. request_end defaults to false and is valid only for an authorized end-request role returning complete work to the orchestrator.`;
@@ -55,6 +64,9 @@ export function formatHandoffCorrection(
   failure: HandoffActionabilityFailure,
   context: HandoffContractContext | undefined,
 ): string {
+  if (context?.protocol === "v2") {
+    return `Invalid orchestrator routing target. Call handoff with one declared worker target_role; optional fields cannot repair routing. Correct the call now in this same session.`;
+  }
   const fields = [
     ...failure.missingFields.map((field) => `missing '${field}'`),
     ...failure.invalidFields.map((field) => `invalid '${field}'`),
@@ -80,12 +92,20 @@ export function formatHandoffCorrection(
 }
 
 /** Recovery instruction when a role returned without a conductor emission. */
-export function formatNoEmissionRecovery(role: Role, def: MachineDefinition): string {
-  const context = { role, def };
+export function formatNoEmissionRecovery(
+  role: Role,
+  def: MachineDefinition,
+  protocol: "v1" | "v2" = "v1",
+): string {
+  const context = { role, def, ...(protocol === "v2" ? { protocol } : {}) };
   const action =
-    role === def.orchestrator
-      ? "Call exactly one conductor tool now: handoff using the contract below, or end when legally authorized."
-      : "Call exactly one conductor tool now: handoff using the contract below. Do not call end; workers return control to the orchestrator.";
+    protocol === "v2"
+      ? role === def.orchestrator
+        ? "Call exactly one conductor tool now: handoff with a declared worker target, or end when legally authorized."
+        : "Call exactly one conductor tool now: handoff({}) to return control to the orchestrator. Do not call end."
+      : role === def.orchestrator
+        ? "Call exactly one conductor tool now: handoff using the contract below, or end when legally authorized."
+        : "Call exactly one conductor tool now: handoff using the contract below. Do not call end; workers return control to the orchestrator.";
   return [
     "Your previous response did not call `handoff` or `end`, so the conductor cannot advance.",
     "Do not do more investigation or call any non-conductor tools.",

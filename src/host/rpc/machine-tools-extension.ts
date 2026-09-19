@@ -13,15 +13,19 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import { delegateModeDescription } from "../../manifest/delegation-mode.js";
+import { readRawControlArguments } from "../../seam/control-arguments.js";
 
 import {
   type DelegateArgs,
   delegateArgsSchema,
   delegateArgsSchemaForMode,
   endArgsSchema,
+  endArgsSchemaV2,
   handoffArgsSchema,
+  orchestratorHandoffArgsSchema,
   type RequestFilesArgs,
   requestFilesArgsSchema,
+  workerHandoffArgsSchema,
 } from "../../seam/schema.js";
 import { buildConfinedTools } from "../workspace/confine-tools.js";
 import { requestDelegateBridge, requestFilesBridge } from "./delegate-bridge.js";
@@ -31,8 +35,18 @@ import { loadMachineToolsConfig, type MachineToolsConfig } from "./machine-tools
 /** Register the static, config-gated tool surface for one isolated RPC role process. */
 export default function machineToolsExtension(pi: ExtensionAPI): void {
   const config = loadMachineToolsConfig();
-  pi.registerTool(createTerminatingMachineTool("handoff", "Handoff", handoffArgsSchema));
-  pi.registerTool(createTerminatingMachineTool("end", "End", endArgsSchema));
+  const v2 = config.controlProtocol === "v2";
+  const orchestrator =
+    config.role !== undefined &&
+    config.orchestratorRole !== undefined &&
+    config.role === config.orchestratorRole;
+  const handoffSchema = v2
+    ? orchestrator
+      ? orchestratorHandoffArgsSchema
+      : workerHandoffArgsSchema
+    : handoffArgsSchema;
+  pi.registerTool(createTerminatingMachineTool("handoff", "Handoff", handoffSchema));
+  pi.registerTool(createTerminatingMachineTool("end", "End", v2 ? endArgsSchemaV2 : endArgsSchema));
 
   const confined = buildConfinedTools(
     { workspaceRoot: config.workspaceRoot, mounts: config.mounts },
@@ -184,7 +198,23 @@ function createTerminatingMachineTool(
         ? "Record a machine handoff and terminate this role session."
         : "Record run completion and terminate this role session.",
     parameters,
-    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const raw = readRawControlArguments(params);
+      if (raw.kind === "rejected") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                raw.reason === "tool_arguments_too_large"
+                  ? "tool arguments exceed the 65536-byte UTF-8 transport limit"
+                  : "tool arguments are not exactly JSON-representable",
+            },
+          ],
+          details: { ok: false, reason: raw.reason },
+          terminate: false,
+        };
+      }
       // RPC mode performs the requested shutdown after this tool execution ends.
       // The adapter sends its final statistics command at that boundary, which
       // makes the shutdown observable and drops the child's native guidance queues.

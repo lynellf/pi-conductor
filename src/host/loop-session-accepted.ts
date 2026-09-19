@@ -8,6 +8,7 @@ import type { HandoffArgs } from "../seam/schema.js";
 import {
   artifactCollectionFailureReason,
   collectSessionArtifacts,
+  formatAcceptedControlSeed,
   formatArtifactsUnavailableSeedSection,
   formatHandoffSeed,
   withRoleSessionIdentity,
@@ -69,10 +70,18 @@ export async function persistAcceptedTransition(
     args.enrichedRecord.type === "transition_accepted"
       ? (args.enrichedRecord.accepted_handoff ?? null)
       : null;
+  const acceptedControl =
+    args.enrichedRecord.type === "transition_accepted"
+      ? (args.enrichedRecord.accepted_control ?? null)
+      : null;
   const handoffPayload =
     acceptedHandoff === null ? validated.event.payload : acceptedHandoff.payload;
   const recipientPayload =
-    acceptedHandoff === null ? handoffPayload : recipientHandoffPayload(acceptedHandoff);
+    acceptedControl === null
+      ? acceptedHandoff === null
+        ? handoffPayload
+        : recipientHandoffPayload(acceptedHandoff)
+      : acceptedControl.task;
   // A valid machine event remains accepted even if the host cannot
   // collect its optional artifacts. Persist the accepted transition
   // first; artifact failure is a semantic deficiency for the receiver
@@ -232,13 +241,15 @@ export async function persistAcceptedTransition(
   // transition identity component that a later restart can recompute.
   const transitionTs = args.enrichedRecord.ts;
   const recipientObjective =
-    typeof payload === "object" && payload !== null && typeof payload.objective === "string"
+    acceptedControl?.task.reported_objective ??
+    (typeof payload === "object" && payload !== null && typeof payload.objective === "string"
       ? payload.objective
-      : "";
+      : "");
   const recipientRequestedAction =
-    typeof payload === "object" && payload !== null && typeof payload.requested_action === "string"
+    acceptedControl?.task.reported_action ??
+    (typeof payload === "object" && payload !== null && typeof payload.requested_action === "string"
       ? payload.requested_action
-      : "";
+      : "");
   if (typeof host.prepareFreshContinuityEnrichment === "function") {
     await host.prepareFreshContinuityEnrichment({
       role: nextRole,
@@ -272,13 +283,16 @@ export async function persistAcceptedTransition(
           sourceSessionFile: sessionFile,
         })
       : null;
-  ctx.nextSeed = formatHandoffSeed(
-    payload,
-    nextRole,
-    suggestsNext,
-    acceptedContextRef,
-    continuitySeedSection,
-  );
+  ctx.nextSeed =
+    acceptedControl === null
+      ? formatHandoffSeed(
+          payload,
+          nextRole,
+          suggestsNext,
+          acceptedContextRef,
+          continuitySeedSection,
+        )
+      : formatAcceptedControlSeed(acceptedControl, continuitySeedSection);
   const nextContinuitySeed =
     nextRole === def.orchestrator ? (continuitySeedSection ?? undefined) : undefined;
   ctx.pendingArtifactRoute = acceptedArtifactRoute;

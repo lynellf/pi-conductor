@@ -76,15 +76,9 @@ export type DelegationMode = "blocking" | "nonblocking";
 
 // ─── Durable continuity policy (docs/durable-continuity/spec.md §5) ────
 
-/**
- * Spec §5 manifest policy for the opt-in durable continuity ledger.
- *
- * When absent, the manifest behaves exactly as before. When present,
- * all four keys are required, schema_version must be `1`, and the
- * `seed_max_utf8_bytes` is bounded 8,192–65,536 inclusive.
- */
-export interface ContinuityPolicy {
-  /** Spec §5: schema version; must be `1`. */
+/** Durable continuity policy from the v1 reader or v2 host-generated contract. */
+export interface ContinuityPolicyV1 {
+  /** Durable continuity ledger schema version. */
   readonly schema_version: 1;
   /** Require a valid packet on every accepted `handoff`. */
   readonly require_handoff: boolean;
@@ -93,6 +87,18 @@ export interface ContinuityPolicy {
   /** UTF-8 byte cap on the materialized fresh-session seed (8,192–65,536). */
   readonly seed_max_utf8_bytes: number;
 }
+
+/** Host-generated continuity policy pinned for newly started runs. */
+export interface ContinuityPolicyV2 {
+  /** Host-generated continuity schema version. */
+  readonly schema_version: 2;
+  /** UTF-8 byte cap for the bounded recipient seed (16,384–65,536). */
+  readonly seed_max_utf8_bytes: number;
+  /** Maximum number of optional historical observations admitted to a seed. */
+  readonly max_observations: number;
+}
+
+export type ContinuityPolicy = ContinuityPolicyV1 | ContinuityPolicyV2;
 
 /** Issue #87: whether the orchestrator conversation survives role turns. */
 export type ContextRetention = "none" | "run";

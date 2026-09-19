@@ -15,6 +15,9 @@ export const MACHINE_TOOLS_CONFIG_ENV = "PI_CONDUCTOR_MACHINE_TOOLS_CONFIG";
 /** TypeBox shape serialized by the host for one isolated role process. */
 export const machineToolsConfigSchema = Type.Object(
   {
+    role: Type.Optional(Type.String({ minLength: 1 })),
+    orchestratorRole: Type.Optional(Type.String({ minLength: 1 })),
+    controlProtocol: Type.Optional(Type.Union([Type.Literal("v1"), Type.Literal("v2")])),
     workspaceRoot: Type.String({ minLength: 1 }),
     mounts: Type.Array(
       Type.Object(
@@ -76,6 +79,10 @@ export interface WriteMachineToolsConfigOptions {
   readonly sessionDir: string;
   /** The role and visit make the final path deterministic within the run. */
   readonly role: Role;
+  /** Pinned orchestrator role used by the v2 RPC handoff schema. */
+  readonly orchestratorRole?: Role;
+  /** Pinned role-control protocol for this run. */
+  readonly controlProtocol?: "v1" | "v2";
   /** The role's 1-based visit index. */
   readonly visitIndex: number;
   /** Actual provisioned workspace root, never synthesized from cwd or a commit. */
@@ -128,6 +135,15 @@ export async function writeMachineToolsConfig(
     throw new MachineToolsConfigError("execution bridge timeout must fit a Node timer");
   }
   const config: MachineToolsConfig = {
+    ...(options.controlProtocol === "v2" &&
+    options.role !== undefined &&
+    options.orchestratorRole !== undefined
+      ? {
+          role: options.role,
+          orchestratorRole: options.orchestratorRole,
+          controlProtocol: "v2" as const,
+        }
+      : {}),
     workspaceRoot,
     mounts,
     declaredToolNames: [...options.declaredToolNames],
@@ -192,6 +208,9 @@ export function loadMachineToolsConfig(env: NodeJS.ProcessEnv = process.env): Ma
   }
 
   return Object.freeze({
+    ...(parsed.role === undefined ? {} : { role: parsed.role }),
+    ...(parsed.orchestratorRole === undefined ? {} : { orchestratorRole: parsed.orchestratorRole }),
+    ...(parsed.controlProtocol === undefined ? {} : { controlProtocol: parsed.controlProtocol }),
     workspaceRoot: requireDirectory(parsed.workspaceRoot, "workspaceRoot"),
     mounts: Object.freeze(
       parsed.mounts.map((mount) =>

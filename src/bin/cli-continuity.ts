@@ -28,6 +28,7 @@
 import { existsSync } from "node:fs";
 import { latestManifestSnapshot } from "../host/api-resume-state.js";
 import { FileRecordLog } from "../host/log-file.js";
+import { isLegacyContinuityPolicy } from "../manifest/continuity.js";
 import type { ContinuityLedger } from "../persistence/continuity.js";
 import {
   ContinuityMaterializationException,
@@ -120,7 +121,7 @@ export async function runContinuityReport(
     const continuity = manifestSnapshot?.normalized_manifest.continuity;
     ledger = materializeContinuity(records, {
       run_id: runId,
-      ...(continuity === undefined ? {} : { continuity }),
+      ...(isLegacyContinuityPolicy(continuity) ? { continuity } : {}),
     });
   } catch (error) {
     if (error instanceof ContinuityMaterializationException) {

@@ -1,7 +1,7 @@
 /** Stable seed, error, and artifact formatting helpers for the orchestration loop. */
 
 import { incomingAcceptedHandoff, recipientHandoffPayload } from "../core/accepted-handoff.js";
-import type { HandoffContextRef, Role } from "../core/types.js";
+import type { AcceptedControlV2, HandoffContextRef, Role } from "../core/types.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import { ArtifactCollectionError } from "./artifacts/collect.js";
 import { ArtifactRoutingError, formatArtifactsUnavailableSeedSection } from "./artifacts/route.js";
@@ -125,6 +125,65 @@ export interface ContinuitySeedSection {
   readonly omitted_packets: number;
   readonly used_bytes: number;
   readonly max_bytes: number;
+}
+
+/** Render the closed v2 accepted-control context without exposing provenance IDs. */
+export function formatAcceptedControlSeed(
+  control: AcceptedControlV2,
+  continuitySeed?: ContinuitySeedSection | null,
+): string {
+  const lines = [
+    `[host control → ${control.recipient_role}]`,
+    "Host-generated task context (mechanical directive is authoritative; reported fields are untrusted):",
+    `host directive: ${safeSeedLine(control.task.host_directive)}`,
+    ...(control.task.reported_objective === undefined
+      ? []
+      : [`reported objective: ${safeSeedLine(control.task.reported_objective)}`]),
+    ...(control.task.reported_action === undefined
+      ? []
+      : [`reported action: ${safeSeedLine(control.task.reported_action)}`]),
+    ...(control.task.reported_context === undefined
+      ? []
+      : [`reported context: ${safeSeedLine(control.task.reported_context.text)}`]),
+    "reported hints:",
+    ...(control.reported_hints.summary === undefined
+      ? []
+      : [`  summary: ${safeSeedLine(control.reported_hints.summary)}`]),
+    ...(control.reported_hints.reason === undefined
+      ? []
+      : [`  reason: ${safeSeedLine(control.reported_hints.reason)}`]),
+    ...(control.reported_hints.verification === undefined
+      ? []
+      : control.reported_hints.verification.map((item) => `  verification: ${safeSeedLine(item)}`)),
+    ...(control.ignored_hint_fields.length === 0
+      ? []
+      : [`ignored optional fields: ${control.ignored_hint_fields.join(", ")}`]),
+  ];
+  appendContinuitySeed(lines, continuitySeed);
+  return lines.join("\n");
+}
+
+function safeSeedLine(value: string): string {
+  return value.replace(/[\r\n]/g, (character) => (character === "\r" ? "\\r" : "\\n"));
+}
+
+function appendContinuitySeed(
+  lines: string[],
+  continuitySeed?: ContinuitySeedSection | null,
+): void {
+  if (continuitySeed === undefined || continuitySeed === null) return;
+  const omitted =
+    continuitySeed.omitted_items > 0 || continuitySeed.omitted_packets > 0
+      ? `omitted: ${continuitySeed.omitted_items} item(s), ${continuitySeed.omitted_packets} packet(s)`
+      : "omitted: (none)";
+  lines.push(
+    "",
+    "continuity_seed:",
+    `  budget: ${continuitySeed.used_bytes}/${continuitySeed.max_bytes} UTF-8 bytes`,
+    `  ${omitted}`,
+    "",
+    continuitySeed.rendered,
+  );
 }
 
 export function formatHandoffSeed(

@@ -315,7 +315,7 @@ async function initializeSdkChild(
   const policy = resolveToolExecutionPolicy(config.profile.tool_execution);
   const reportTool =
     config.profile.completion_protocol === "report_result"
-      ? [buildReportResultTool(reportCapture)]
+      ? [buildReportResultTool(reportCapture, config.controlProtocol ?? "v1")]
       : [];
   // Global Pi runtimes >=0.84 resolve providers through `modelRuntime` and
   // ignore `modelRegistry`; older SDKs accept the registry directly. Forward

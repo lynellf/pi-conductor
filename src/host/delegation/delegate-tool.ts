@@ -96,6 +96,7 @@ export interface DelegateResult {
 /** Dependencies for one delegate tool invocation. */
 export interface DelegateToolOptions {
   readonly args: import("../../seam/schema.js").DelegateSubmissionArgs;
+  readonly controlProtocol?: "v1" | "v2";
   readonly policy: DelegationPolicy;
   readonly profiles: readonly SubagentProfile[];
   readonly remainingChildren: number;
@@ -146,6 +147,8 @@ export interface SandboxAdmissionAdapter {
 
 /** Immutable inputs for a single child SDK session. */
 export interface SpawnChildConfig {
+  /** Pinned parent run control protocol for the normal child result tool. */
+  readonly controlProtocol?: "v1" | "v2";
   readonly childId: string;
   readonly taskId: string;
   readonly profile: SubagentProfile;
@@ -248,6 +251,9 @@ export async function executeDelegate(options: DelegateToolOptions): Promise<Del
         primaryCheckout: options.primaryCheckout,
         parentMaterializedPaths: prepared.materializedParentPaths,
         systemPromptRoot: options.systemPromptRoot,
+        ...(options.controlProtocol === undefined
+          ? {}
+          : { controlProtocol: options.controlProtocol }),
         spawnAndRunChild: options.spawnAndRunChild,
         ...(options.isAdmissionClosed === undefined
           ? {}
@@ -274,6 +280,7 @@ interface RunSingleChildOptions {
   readonly primaryCheckout: string;
   readonly parentMaterializedPaths: readonly string[];
   readonly systemPromptRoot: string;
+  readonly controlProtocol?: "v1" | "v2";
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
   readonly isAdmissionClosed?: () => boolean;
   readonly signal?: AbortSignal;
@@ -344,6 +351,9 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       taskFingerprint: childTaskFingerprint,
       projectionFingerprint: childProjectionFingerprint,
       systemPrompt: prompt.systemPrompt,
+      ...(options.controlProtocol === undefined
+        ? {}
+        : { controlProtocol: options.controlProtocol }),
       ...(options.prepared.sandbox === undefined ? {} : { sandbox: options.prepared.sandbox }),
       ...(options.prepared.resolvedSourceWorkspace === undefined
         ? {}
@@ -460,6 +470,7 @@ export async function runPreparedChild(options: {
   readonly primaryCheckout: string;
   readonly parentMaterializedPaths: readonly string[];
   readonly systemPromptRoot: string;
+  readonly controlProtocol?: "v1" | "v2";
   readonly spawnAndRunChild: (opts: SpawnChildConfig) => Promise<ChildTerminal>;
   readonly isAdmissionClosed?: () => boolean;
   readonly signal?: AbortSignal;
@@ -486,6 +497,7 @@ export async function runPreparedChild(options: {
     primaryCheckout: options.primaryCheckout,
     parentMaterializedPaths: options.parentMaterializedPaths,
     systemPromptRoot: options.systemPromptRoot,
+    ...(options.controlProtocol === undefined ? {} : { controlProtocol: options.controlProtocol }),
     spawnAndRunChild: options.spawnAndRunChild,
     ...(options.isAdmissionClosed === undefined
       ? {}

@@ -141,6 +141,36 @@ export interface HandoffContextRef {
   readonly source_session_file: string;
 }
 
+/** Exactly bound visible prose retained by the v2 host control envelope. */
+export interface ReportedContextV2 {
+  readonly text: string;
+  readonly utf8_bytes: number;
+  readonly truncated: boolean;
+}
+
+/** Host-owned mechanical and model-reported task context for a v2 recipient. */
+export interface RecipientTaskContextV2 {
+  readonly host_directive: string;
+  readonly reported_objective?: string;
+  readonly reported_action?: string;
+  readonly reported_context?: ReportedContextV2;
+}
+
+/** Durable host-generated control envelope for a v2 accepted handoff. */
+export interface AcceptedControlV2 {
+  readonly schema_version: 2;
+  readonly direction: "dispatch" | "return";
+  readonly recipient_role: string;
+  readonly task: RecipientTaskContextV2;
+  readonly reported_hints: {
+    readonly summary?: string;
+    readonly reason?: string;
+    readonly verification?: readonly string[];
+  };
+  readonly ignored_hint_fields: readonly string[];
+  readonly utf8_bytes: number;
+}
+
 /** Host-owned durable copy of a recipient-bound accepted handoff (issue #110). */
 export interface AcceptedHandoffEnvelope {
   readonly schema_version: 1;
@@ -216,6 +246,8 @@ export interface TransitionAccepted {
   readonly context_ref?: HandoffContextRef | null;
   /** Additive recipient-bound handoff transport; absent is legacy-compatible. */
   readonly accepted_handoff?: AcceptedHandoffEnvelope;
+  /** Host-generated v2 recipient control envelope; absent on v1 records. */
+  readonly accepted_control?: AcceptedControlV2;
   readonly ts: number;
 }
 

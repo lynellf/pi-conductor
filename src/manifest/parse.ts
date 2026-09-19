@@ -37,6 +37,7 @@ import type {
   ArtifactConfig,
   ContextRetention,
   ContinuityPolicy,
+  ContinuityPolicyV2,
   DelegationPolicy,
   HandoffMode,
   HandoffPolicy,
@@ -679,28 +680,35 @@ function toModelEffort(value: unknown, path: string): ModelEffort {
 
 // ─── Durable continuity policy (spec §5) ────────────────────────────────
 
-const CONTINUITY_KEYS = new Set([
+const CONTINUITY_V1_KEYS = new Set([
   "schema_version",
   "require_handoff",
   "require_delegated_result",
   "seed_max_utf8_bytes",
 ]);
+const CONTINUITY_V2_KEYS = new Set(["schema_version", "seed_max_utf8_bytes", "max_observations"]);
 
-const CONTINUITY_SEED_MIN_BYTES = 8_192;
+const CONTINUITY_V1_SEED_MIN_BYTES = 8_192;
+const CONTINUITY_SEED_MIN_BYTES = 16_384;
 const CONTINUITY_SEED_MAX_BYTES = 65_536;
+const CONTINUITY_OBSERVATIONS_MIN = 1;
+const CONTINUITY_OBSERVATIONS_MAX = 128;
 
 function parseContinuityPolicy(raw: unknown): ContinuityPolicy {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new ManifestParseError("`continuity:` must be a YAML mapping (object)");
   }
   const entry = raw as Record<string, unknown>;
+  if (entry.schema_version === 1) return parseContinuityPolicyV1(entry);
+  if (entry.schema_version === 2) return parseContinuityPolicyV2(entry);
+  throw new ManifestParseError("`continuity.schema_version` must be 1 or 2");
+}
+
+function parseContinuityPolicyV1(entry: Record<string, unknown>): ContinuityPolicy {
   for (const key of Object.keys(entry)) {
-    if (!CONTINUITY_KEYS.has(key)) {
+    if (!CONTINUITY_V1_KEYS.has(key)) {
       throw new ManifestParseError(`continuity has unknown key '${key}'`);
     }
-  }
-  if (entry.schema_version !== 1) {
-    throw new ManifestParseError("`continuity.schema_version` must be 1");
   }
   const requireHandoff = entry.require_handoff;
   if (typeof requireHandoff !== "boolean") {
@@ -714,11 +722,11 @@ function parseContinuityPolicy(raw: unknown): ContinuityPolicy {
   if (
     typeof seedMax !== "number" ||
     !Number.isInteger(seedMax) ||
-    seedMax < CONTINUITY_SEED_MIN_BYTES ||
+    seedMax < CONTINUITY_V1_SEED_MIN_BYTES ||
     seedMax > CONTINUITY_SEED_MAX_BYTES
   ) {
     throw new ManifestParseError(
-      `\`continuity.seed_max_utf8_bytes\` must be an integer between ${CONTINUITY_SEED_MIN_BYTES} and ${CONTINUITY_SEED_MAX_BYTES} inclusive`,
+      `\`continuity.seed_max_utf8_bytes\` must be an integer between ${CONTINUITY_V1_SEED_MIN_BYTES} and ${CONTINUITY_SEED_MAX_BYTES} inclusive`,
     );
   }
   return Object.freeze({
@@ -726,5 +734,40 @@ function parseContinuityPolicy(raw: unknown): ContinuityPolicy {
     require_handoff: requireHandoff,
     require_delegated_result: requireDelegated,
     seed_max_utf8_bytes: seedMax,
-  }) as ContinuityPolicy;
+  });
+}
+
+function parseContinuityPolicyV2(entry: Record<string, unknown>): ContinuityPolicyV2 {
+  for (const key of Object.keys(entry)) {
+    if (!CONTINUITY_V2_KEYS.has(key)) {
+      throw new ManifestParseError(`continuity has unknown key '${key}'`);
+    }
+  }
+  const seedMax = entry.seed_max_utf8_bytes;
+  if (
+    typeof seedMax !== "number" ||
+    !Number.isSafeInteger(seedMax) ||
+    seedMax < CONTINUITY_SEED_MIN_BYTES ||
+    seedMax > CONTINUITY_SEED_MAX_BYTES
+  ) {
+    throw new ManifestParseError(
+      `\`continuity.seed_max_utf8_bytes\` must be a safe integer between ${CONTINUITY_SEED_MIN_BYTES} and ${CONTINUITY_SEED_MAX_BYTES} inclusive`,
+    );
+  }
+  const maxObservations = entry.max_observations;
+  if (
+    typeof maxObservations !== "number" ||
+    !Number.isSafeInteger(maxObservations) ||
+    maxObservations < CONTINUITY_OBSERVATIONS_MIN ||
+    maxObservations > CONTINUITY_OBSERVATIONS_MAX
+  ) {
+    throw new ManifestParseError(
+      `\`continuity.max_observations\` must be a safe integer between ${CONTINUITY_OBSERVATIONS_MIN} and ${CONTINUITY_OBSERVATIONS_MAX} inclusive`,
+    );
+  }
+  return Object.freeze({
+    schema_version: 2,
+    seed_max_utf8_bytes: seedMax,
+    max_observations: maxObservations,
+  });
 }

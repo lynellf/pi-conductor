@@ -59,6 +59,7 @@ import type { PersistedRecord } from "../persistence/log.js";
 import { incomingAcceptedHandoff } from "./accepted-handoff.js";
 import { availableTargets } from "./targets.js";
 import type {
+  AcceptedControlV2,
   AcceptedHandoffEnvelope,
   Checkpoint,
   HandoffContextRef,
@@ -103,6 +104,8 @@ export interface LastMessage {
   readonly context_ref: HandoffContextRef | null;
   /** Present only when the preceding accepted transition durably carried one. */
   readonly accepted_handoff?: AcceptedHandoffEnvelope;
+  /** Present only for a v2 host-generated accepted control. */
+  readonly accepted_control?: AcceptedControlV2;
 }
 
 /**
@@ -295,12 +298,20 @@ function buildLastMessage(
       : incomingAcceptedHandoff(records, runId, recipientRole);
   const reason = latest.payload_summary.reason;
   const acceptedHandoff = incoming?.envelope ?? undefined;
+  const acceptedControl = incoming?.record.accepted_control;
+  const controlSummary = acceptedControl?.reported_hints.summary;
   return {
     from: latest.role,
-    text: typeof reason === "string" ? reason : null,
+    text:
+      typeof controlSummary === "string"
+        ? controlSummary
+        : typeof reason === "string"
+          ? reason
+          : null,
     suggests_next: latest.suggests_next,
     context_ref: resolveContextRef(latest, runId),
     ...(acceptedHandoff !== undefined && { accepted_handoff: acceptedHandoff }),
+    ...(acceptedControl !== undefined && { accepted_control: acceptedControl }),
   };
 }
 

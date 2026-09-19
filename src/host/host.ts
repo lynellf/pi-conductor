@@ -178,6 +178,8 @@ export interface SeedRunMemoryArgs {
  * is the only place that touches SDK I/O.
  */
 export interface Host {
+  /** Pinned control schema selected at run start; absent preserves legacy test hosts. */
+  readonly controlProtocol?: "v1" | "v2";
   /** Canonical checkout used for host-side repository evidence, when available. */
   readonly continuityRepositoryPath?: string;
 

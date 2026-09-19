@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { isHostGeneratedContinuityPolicy } from "../manifest/continuity.js";
 import type { RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
 import type { ControllerHostApproval } from "./controller/host-approval.js";
 import type { SessionState } from "./cost.js";
@@ -28,6 +29,7 @@ export class ProductionHostContext {
   readonly continuityRepositoryPath: string;
   readonly log: RecordLog;
   readonly loadedManifest: LoadedManifest;
+  readonly controlProtocol: "v1" | "v2";
   readonly runId: string;
   readonly uiContext: ExtensionUIContext | undefined;
   readonly isUiContextCurrent: (() => boolean) | undefined;
@@ -71,6 +73,9 @@ export class ProductionHostContext {
     this.continuityRepositoryPath = this.cwd;
     this.log = opts.log;
     this.loadedManifest = opts.loadedManifest;
+    this.controlProtocol = isHostGeneratedContinuityPolicy(opts.loadedManifest.manifest.continuity)
+      ? "v2"
+      : "v1";
     this.runId = opts.runId;
     this.sandboxHostApproval =
       opts.sandboxHostApproval === undefined

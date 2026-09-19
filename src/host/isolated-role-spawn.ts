@@ -50,6 +50,8 @@ import { captureProgressiveProjectionGitAuthority } from "./workspace/progressiv
 /** Spawn one isolated role process in its provisioned worktree or copy. */
 export async function spawnIsolatedRoleSession(options: {
   readonly role: Role;
+  readonly orchestratorRole?: Role;
+  readonly controlProtocol?: "v1" | "v2";
   readonly roleConfig: RoleConfig | undefined;
   readonly workspaceConfig: WorkspaceConfig;
   readonly backend: "worktree" | "copy";
@@ -175,6 +177,10 @@ export async function spawnIsolatedRoleSession(options: {
   const machineToolsConfigPath = await writeMachineToolsConfig({
     sessionDir: options.sessionDir,
     role: options.role,
+    ...(options.orchestratorRole === undefined
+      ? {}
+      : { orchestratorRole: options.orchestratorRole }),
+    ...(options.controlProtocol === undefined ? {} : { controlProtocol: options.controlProtocol }),
     visitIndex,
     workspaceRoot: guarantee.projection.workspaceRoot,
     mounts: guarantee.projection.mounts,
@@ -291,6 +297,12 @@ export async function spawnIsolatedRoleSession(options: {
   try {
     session = await options.nodeRoleSessionFactory({
       role: options.role,
+      ...(options.orchestratorRole === undefined
+        ? {}
+        : { orchestratorRole: options.orchestratorRole }),
+      ...(options.controlProtocol === undefined
+        ? {}
+        : { controlProtocol: options.controlProtocol }),
       model: options.model,
       effort: options.effort,
       cwd: workspaceResult.workspacePath,

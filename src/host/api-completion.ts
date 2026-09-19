@@ -1,6 +1,7 @@
 /** Own run-handle completion wiring and lease release (spec §11.1). */
 import { incomingAcceptedHandoff, recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
+import { isLegacyContinuityPolicy } from "../manifest/continuity.js";
 import { continuityItemIndexFromRecords } from "../persistence/continuity.js";
 import { materializeContinuity } from "../persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../persistence/continuity-seed.js";
@@ -137,7 +138,7 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
         initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,
       }),
       getRunCostCap,
-      ...(loadedManifest.manifest.continuity === undefined
+      ...(isLegacyContinuityPolicy(loadedManifest.manifest.continuity) === false
         ? {}
         : {
             continuityPolicy: {
@@ -302,7 +303,7 @@ export function buildRestartContinuitySeed(args: {
   readonly runId: string;
   readonly recipientRole?: import("../core/types.js").Role;
 }): ContinuitySeedSection | null {
-  if (args.policy === undefined) return null;
+  if (args.policy === undefined || !isLegacyContinuityPolicy(args.policy)) return null;
   const records = args.records;
   const ledger = materializeContinuity(records, {
     run_id: args.runId,

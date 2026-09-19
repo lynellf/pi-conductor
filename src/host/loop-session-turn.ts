@@ -5,6 +5,7 @@ import type { HandoffContextRef, UsageRecord } from "../core/types.js";
 import { sha256Canonical } from "../persistence/trajectory-records.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import { validateEmission } from "../seam/validate-emission.js";
+import { createAcceptedControlV2 } from "./accepted-control-v2.js";
 import { persistHandoffValidationFailures } from "./accepted-handoff-rejection.js";
 import { prepareAcceptedHandoffAtLoopBoundary } from "./accepted-handoff-validation.js";
 import { formatControllerFailure } from "./controller/failure-diagnostic.js";
@@ -161,7 +162,20 @@ export async function runSessionTurn(
     });
 
     const captures = session.readCaptureBuffer();
-    const validated = validateEmission(captures);
+    const validated = validateEmission(
+      captures,
+      host.controlProtocol === "v2"
+        ? {
+            protocol: role === def.orchestrator ? "v2-orchestrator" : "v2-worker",
+            ...(role === def.orchestrator
+              ? {}
+              : {
+                  workerTargetRole: def.orchestrator,
+                  workerRequestEndAuthorized: def.end_request_roles?.includes(role) === true,
+                }),
+          }
+        : {},
+    );
 
     if (validated.kind === "breach") {
       // The host may also have terminated the session (e.g., the
@@ -180,7 +194,7 @@ export async function runSessionTurn(
         state.noEmissionRecoveryPrompts < MAX_NO_EMISSION_RECOVERY_PROMPTS
       ) {
         state.noEmissionRecoveryPrompts += 1;
-        ctx.nextSeed = formatNoEmissionRecovery(role, def);
+        ctx.nextSeed = formatNoEmissionRecovery(role, def, host.controlProtocol ?? "v1");
         continue;
       }
       const failureReason: string = hostReason ?? promptFailureReason ?? validated.reason;
@@ -341,8 +355,9 @@ export async function runSessionTurn(
       continue;
     }
 
+    const useV2Control = host.controlProtocol === "v2";
     const acceptedEnvelope =
-      validated.event.type === "handoff"
+      !useV2Control && validated.event.type === "handoff"
         ? await prepareAcceptedHandoffAtLoopBoundary({
             event: validated.event,
             host,
@@ -360,7 +375,7 @@ export async function runSessionTurn(
             },
           })
         : null;
-    if (validated.event.type === "handoff" && acceptedEnvelope === null) continue;
+    if (!useV2Control && validated.event.type === "handoff" && acceptedEnvelope === null) continue;
 
     // ── Single valid emission — call reduce (§12) ──────────────
     let reduceResult = reduce(ctx.checkpoint, validated.event, def, {
@@ -376,14 +391,26 @@ export async function runSessionTurn(
             source_session_file: sessionFile,
           }
         : null;
+    const acceptedControl =
+      useV2Control && reduceResult.kind === "accepted" && validated.event.type === "handoff"
+        ? createAcceptedControlV2({
+            sourceRole: role,
+            orchestratorRole: def.orchestrator,
+            recipientRole: reduceResult.state,
+            reportedArguments: validated.event.payload,
+          })
+        : undefined;
     let enrichedRecord: typeof reduceResult.record =
       reduceResult.kind === "accepted"
         ? {
             ...reduceResult.record,
-            payload_summary: summarizePayload(validated.event.payload),
+            payload_summary: useV2Control
+              ? { field_names: [] }
+              : summarizePayload(validated.event.payload),
             context_ref: acceptedContextRef,
             ...(reduceResult.record.event === "handoff" &&
               acceptedEnvelope !== null && { accepted_handoff: acceptedEnvelope }),
+            ...(acceptedControl === undefined ? {} : { accepted_control: acceptedControl }),
           }
         : reduceResult.record;
     if (reduceResult.kind === "rejected") {

@@ -68,6 +68,8 @@ export type RpcChildSpawner = (options: RpcSpawnOptions) => RpcChildProcess;
 /** Options for starting a Node RPC role session. */
 export interface NodeRoleSessionOptions {
   readonly role: Role;
+  readonly orchestratorRole?: Role;
+  readonly controlProtocol?: "v1" | "v2";
   readonly model: string | null;
   readonly effort: ModelEffort;
   /** Provisioned isolated role workspace. */

@@ -26,18 +26,18 @@ v2 policy + schemas + bounded hint/argument helpers
 
 ## Slice A — minimal control seam
 
-- [ ] A1. Add strict v2 continuity policy types, default normalization, and pinned-run migration handling.
-- [ ] A2. Add role-aware handoff/end/report-result TypeBox schemas, raw JSON/UTF-8 boundary validation, and pure best-effort hint sanitation.
-- [ ] A3. Promote orchestrator targets, pinned worker returns, authorized `request_end`, and parameterless child results without changing reducer ownership.
-- [ ] A4. Update shared SDK, RPC, stub, and child tool surfaces plus role-specific no-emission guidance.
-- [ ] A5. Add Slice A tests for boundary behavior, malformed optional values, raw limit ordering, and existing reducer/lifecycle regressions.
+- [x] A1. Add strict v2 continuity policy types, default normalization, and pinned-run migration handling.
+- [x] A2. Add role-aware handoff/end/report-result TypeBox schemas, raw JSON/UTF-8 boundary validation, and pure best-effort hint sanitation.
+- [x] A3. Promote orchestrator targets, pinned worker returns, authorized `request_end`, and parameterless child results without changing reducer ownership.
+- [x] A4. Update shared SDK, RPC, stub, and child tool surfaces plus role-specific no-emission guidance.
+- [x] A5. Add Slice A tests for boundary behavior, malformed optional values, raw limit ordering, and existing reducer/lifecycle regressions.
 
 ### Gate A
 
-- [ ] Focused seam/host/core/delegation tests pass.
-- [ ] `pnpm typecheck` passes.
-- [ ] `pnpm build` passes.
-- [ ] `pnpm lint` and `pnpm format:check` pass.
+- [x] Focused seam/host/core/delegation tests pass.
+- [x] `pnpm typecheck` passes.
+- [x] `pnpm build` passes.
+- [x] `pnpm lint` and `pnpm format:check` pass.
 
 ## Slice B — deterministic observation substrate
 
