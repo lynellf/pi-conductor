@@ -278,11 +278,18 @@ export function buildScoreRequestBody(request: ContextEnrichmentRequest): unknow
   return {
     model: request.policy.model,
     state: {
-      recipient: {
-        role: request.recipient.role,
-        objective: request.recipient.objective,
-        requested_action: request.recipient.requested_action,
-      },
+      recipient:
+        request.recipient.task === undefined || request.recipient.run_goal === undefined
+          ? {
+              role: request.recipient.role,
+              objective: request.recipient.objective,
+              requested_action: request.recipient.requested_action,
+            }
+          : {
+              role: request.recipient.role,
+              run_goal: request.recipient.run_goal,
+              task: outboundTask(request.recipient.task),
+            },
       candidate: request.candidate.outbound,
     },
     questions: {
@@ -417,6 +424,21 @@ export function createTypesafeContextEnricher(
       }
       return { kind: "unavailable", code: "network_error", attempts };
     },
+  };
+}
+
+function outboundTask(
+  task: NonNullable<ContextEnrichmentRequest["recipient"]["task"]>,
+): Record<string, unknown> {
+  return {
+    host_directive: task.host_directive,
+    ...(task.reported_objective === undefined
+      ? {}
+      : { reported_objective: task.reported_objective }),
+    ...(task.reported_action === undefined ? {} : { reported_action: task.reported_action }),
+    ...(task.reported_context === undefined
+      ? {}
+      : { reported_context: task.reported_context.text }),
   };
 }
 

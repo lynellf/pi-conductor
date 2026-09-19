@@ -238,6 +238,9 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
               ...(inner.nextContinuitySeed === undefined
                 ? {}
                 : { nextContinuitySeed: inner.nextContinuitySeed }),
+              ...(inner.nextHostGeneratedSeed === undefined
+                ? {}
+                : { nextHostGeneratedSeed: inner.nextHostGeneratedSeed }),
             };
     break;
   }

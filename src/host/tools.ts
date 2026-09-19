@@ -165,7 +165,7 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
     label,
     description,
     parameters: schema,
-    execute: async (_toolCallId, params, signal, _onUpdate, _ctx) => {
+    execute: async (toolCallId, params, signal, _onUpdate, _ctx) => {
       // ── Host rejection and abort-signal checks (issue #112) ──
       // The host calls `session.abort()` from its message_end
       // listener when the per-session cap trips. The SDK
@@ -224,7 +224,7 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // capture (Task 15.5 reads it to short-circuit side-effecting
       // tools).
       if (activeSeam().read().length > 0) {
-        activeSeam().push({ toolName, args: raw.value });
+        activeSeam().push({ toolName, args: raw.value }, toolCallId);
         return {
           content: [
             {
@@ -301,7 +301,11 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // ── First machine-event call: validate at the seam ───────────
       const validated = validateEmission(
         [{ toolName, args: raw.value }],
-        protocol === undefined ? {} : { protocol },
+        protocol === undefined
+          ? {}
+          : protocol === "v2-worker" || protocol === "v2-orchestrator"
+            ? { protocol: "v2" }
+            : { protocol },
       );
 
       // A durable envelope must be snapshotted before capture and sealing.
@@ -344,7 +348,7 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
       // `validateEmission` re-derives the breach reason from the
       // single-element buffer, so the schema-invalid path stays
       // observable at the loop level.
-      activeSeam().push({ toolName, args: captureArgs });
+      activeSeam().push({ toolName, args: captureArgs }, toolCallId);
 
       if (validated.kind === "ok") {
         // ── Valid capture. Set the sealed flag (§12.1). ───────────
@@ -353,7 +357,9 @@ function createEmissionTool(opts: EmissionToolFactoryOptions): ToolDefinition {
         // LAST chance to execute side-effecting tools.
         activeSeam().seal();
         const targetText =
-          validated.event.type === "handoff" ? ` → ${validated.event.target_role}` : "";
+          validated.event.type === "handoff" && validated.event.target_role.length > 0
+            ? ` → ${validated.event.target_role}`
+            : "";
         return {
           content: [
             {

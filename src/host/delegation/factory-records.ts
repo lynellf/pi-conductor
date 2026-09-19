@@ -38,6 +38,9 @@ export function appendCompleted(
     ...(child.outputCaptureFailure === undefined
       ? {}
       : { output_capture_failure: child.outputCaptureFailure }),
+    ...(child.terminalObservation === undefined
+      ? {}
+      : { terminal_observation: child.terminalObservation }),
     ts: Date.now(),
   } satisfies SubagentCompletedRecord);
 }
@@ -74,6 +77,9 @@ export function appendFailed(
     ...(child.outputCaptureFailure === undefined
       ? {}
       : { output_capture_failure: child.outputCaptureFailure }),
+    ...(child.terminalObservation === undefined
+      ? {}
+      : { terminal_observation: child.terminalObservation }),
     ts: Date.now(),
   } satisfies SubagentFailedRecord);
 }

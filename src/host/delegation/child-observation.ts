@@ -22,7 +22,9 @@ export interface ReportCapture {
   readonly protocolDiagnostic: () => ChildProtocolDiagnostic | null;
   readonly continuityValidation: () => PacketValidationContext | null;
   readonly summaryTruncated: () => boolean;
+  readonly terminalIntent: () => boolean;
   readonly isClosed: () => boolean;
+  signalTerminalIntent(): void;
   capture(
     report: LegacyChildReport,
     truncated: boolean,
@@ -40,6 +42,7 @@ export function createReportCapture(options?: {
   let capturedContinuity: ChildContinuitySibling | null = null;
   let protocolDiagnostic: ChildProtocolDiagnostic | null = null;
   let truncated = false;
+  let terminalIntent = false;
   let closed = false;
   return {
     report: () => value,
@@ -47,7 +50,11 @@ export function createReportCapture(options?: {
     protocolDiagnostic: () => protocolDiagnostic,
     continuityValidation: () => options?.continuityValidation?.() ?? null,
     summaryTruncated: () => truncated,
+    terminalIntent: () => terminalIntent,
     isClosed: () => closed,
+    signalTerminalIntent() {
+      if (!closed && value === null) terminalIntent = true;
+    },
     capture(report, didTruncate, continuity = null) {
       if (closed || value !== null) return;
       value = report;
@@ -127,6 +134,7 @@ export function observeChildTerminal(args: {
     complete({
       started: true,
       model: args.model,
+      ...(args.reportCapture.terminalIntent() ? { v2TerminalIntent: true } : {}),
       report: args.reportCapture.report(),
       ...(continuity === null ? {} : { continuity }),
       ...(protocolDiagnostic === null ? {} : { protocolDiagnostic }),
@@ -149,6 +157,7 @@ export function observeChildTerminal(args: {
       complete({
         started: true,
         model: args.model,
+        ...(args.reportCapture.terminalIntent() ? { v2TerminalIntent: true } : {}),
         report: args.reportCapture.report(),
         ...(continuity === null ? {} : { continuity }),
         ...(protocolDiagnostic === null ? {} : { protocolDiagnostic }),

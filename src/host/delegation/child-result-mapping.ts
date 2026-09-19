@@ -31,7 +31,7 @@ export function completionEvidence(
     ...(raw.protocolDiagnostic === undefined
       ? {}
       : { protocol_diagnostic: raw.protocolDiagnostic }),
-    report_result_called: raw.report !== null,
+    report_result_called: raw.report !== null || raw.v2_terminal_intent === true,
     ...(raw.report === null ? {} : { reported_status: raw.report.status }),
     final_response_present: raw.protocol === "minimal" && raw.finalResponse !== null,
     summary_truncated: summaryTruncated,

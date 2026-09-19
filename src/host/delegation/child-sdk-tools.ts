@@ -71,15 +71,8 @@ export function buildReportResultTool(
           terminate: true,
         };
       if (protocol === "v2") {
-        const hints = sanitizeReportedHintsV2(raw.value);
-        const summary = hints.hints.summary ?? "child returned terminal control to the host";
-        capture.capture(
-          {
-            status: "failed",
-            summary,
-          },
-          false,
-        );
+        sanitizeReportedHintsV2(raw.value);
+        capture.signalTerminalIntent();
         return {
           content: [{ type: "text", text: "result recorded" }],
           details: { ok: true } as ReportResultToolDetails,

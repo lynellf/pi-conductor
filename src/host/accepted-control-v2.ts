@@ -78,8 +78,13 @@ function fitEnvelope(base: Omit<AcceptedControlV2, "utf8_bytes">): AcceptedContr
 }
 
 function measure(value: Omit<AcceptedControlV2, "utf8_bytes">): AcceptedControlV2 {
-  const json = JSON.stringify(value);
-  const utf8_bytes = new TextEncoder().encode(json).byteLength;
+  let utf8_bytes = 0;
+  for (let iteration = 0; iteration < 4; iteration += 1) {
+    const json = JSON.stringify({ ...value, utf8_bytes });
+    const measured = new TextEncoder().encode(json).byteLength;
+    if (measured === utf8_bytes) return { ...value, utf8_bytes: measured };
+    utf8_bytes = measured;
+  }
   return { ...value, utf8_bytes };
 }
 

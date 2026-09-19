@@ -103,30 +103,31 @@ export type ContinuityPolicy = ContinuityPolicyV1 | ContinuityPolicyV2;
 /** Issue #87: whether the orchestrator conversation survives role turns. */
 export type ContextRetention = "none" | "run";
 
-/**
- * Spec §5: opt-in host feature that uses TypeSafe Jev to rank already-
- * validated durable-continuity candidates by their relevance to the next
- * recipient's work. When absent, the host retains its legacy behavior —
- * the block is never read from mutable ambient configuration.
- */
-export interface ContextEnrichmentPolicy {
-  /** Spec §5: schema version; must be `1`. */
+/** Historical v1 Jev recipient-relevance policy. */
+export interface ContextEnrichmentPolicyV1 {
   readonly schema_version: 1;
-  /** Spec §5: only `typesafe_jev` in v1. */
   readonly provider: "typesafe_jev";
-  /** Spec §5: non-empty string, 1–128 characters. */
   readonly model: string;
-  /** Spec §5: only `recipient_relevance_rank` in v1. */
   readonly strategy: "recipient_relevance_rank";
-  /** Spec §5: deterministic prefix bound, 1–64 inclusive. */
   readonly candidate_limit: number;
-  /** Spec §5: bounded HTTP concurrency, 1–16 inclusive. */
   readonly max_parallel: number;
-  /** Spec §5: per-attempt timeout, 100–30,000 milliseconds inclusive. */
   readonly request_timeout_ms: number;
-  /** Spec §5: bounded attempts including the initial one, 1–5 inclusive. */
   readonly max_attempts: number;
 }
+
+/** V2 Jev policy for ranking host-generated work observations. */
+export interface ContextEnrichmentPolicyV2 {
+  readonly schema_version: 2;
+  readonly provider: "typesafe_jev";
+  readonly model: string;
+  readonly strategy: "work_observation_relevance_rank";
+  readonly candidate_limit: number;
+  readonly max_parallel: number;
+  readonly request_timeout_ms: number;
+  readonly max_attempts: number;
+}
+
+export type ContextEnrichmentPolicy = ContextEnrichmentPolicyV1 | ContextEnrichmentPolicyV2;
 
 /**
  * §3: the delegation policy attached to a parent role.

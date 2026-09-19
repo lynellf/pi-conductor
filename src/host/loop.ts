@@ -65,6 +65,7 @@
 import { createInitialCheckpoint, reduce } from "../core/reduce.js";
 import type { Checkpoint, HandoffContextRef, MachineEvent, Role } from "../core/types.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import type { ContinuitySeedV2 } from "../persistence/work-observation-seed.js";
 import { summarizePayload } from "../seam/payload-summary.js";
 import type { Host, RoleSession, SeedRunMemoryArgs } from "./host.js";
 import { runRoleVisit } from "./loop-fallback.js";
@@ -86,7 +87,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   // the snapshot's active_role_session id (resume case) or null (fresh).
   let parentSessionId: string | null =
     checkpoint.active_role_session?.id ?? opts.initialParentSessionId ?? null;
-  let seed = opts.initialTrajectorySeed ?? opts.initialHandoffSeed ?? initialGoal;
+  let seed =
+    opts.initialTrajectorySeed ??
+    opts.initialHandoffSeed ??
+    opts.initialHostGeneratedSeed?.rendered ??
+    initialGoal;
   // A resumed trajectory target must receive its durable, admission-checked
   // user prompt byte-for-byte, including when that target is the orchestrator.
   let useInitialTrajectorySeed = opts.initialTrajectorySeed !== undefined;
@@ -123,6 +128,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   let pendingTrajectorySession: RoleSession | null = null;
   let pendingOrchestratorContinuitySeed: ContinuitySeedSection | undefined =
     opts.initialOrchestratorContinuitySeed ?? undefined;
+  let pendingHostGeneratedSeed: ContinuitySeedV2 | undefined =
+    opts.initialHostGeneratedSeed ?? undefined;
   // Task 18: visit_index tracking. A role's visit_index is the same
   // across all model retries within that visit (the role didn't
   // transition, it re-ran). The index is captured BEFORE the fallback
@@ -207,6 +214,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           : { continuitySeed: pendingOrchestratorContinuitySeed }),
       });
       seed = formatRunMemorySeed(runMemory, pendingOrchestratorContinuitySeed);
+      if (pendingHostGeneratedSeed !== undefined) {
+        seed = `${seed}\n\n${pendingHostGeneratedSeed.rendered}`;
+        pendingHostGeneratedSeed = undefined;
+      }
       pendingOrchestratorContinuitySeed = undefined;
       handoffContextRef = runMemory.last_message?.context_ref ?? null;
     } else if (role === def.orchestrator) {
@@ -265,6 +276,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     const { roleOutcome } = visitResult;
     pendingOrchestratorContinuitySeed =
       roleOutcome.kind === "advance" ? roleOutcome.nextContinuitySeed : undefined;
+    pendingHostGeneratedSeed =
+      roleOutcome.kind === "advance" ? roleOutcome.nextHostGeneratedSeed : undefined;
 
     // Handle role outcome (after fallback loop)
     if (roleOutcome.kind === "done") {

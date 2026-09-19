@@ -250,7 +250,14 @@ export async function persistAcceptedTransition(
     (typeof payload === "object" && payload !== null && typeof payload.requested_action === "string"
       ? payload.requested_action
       : "");
-  if (typeof host.prepareFreshContinuityEnrichment === "function") {
+  if (acceptedControl !== null && typeof host.prepareFreshHostContinuityEnrichment === "function") {
+    await host.prepareFreshHostContinuityEnrichment({
+      role: nextRole,
+      visitIndex: nextVisitIndex,
+      runGoal: opts.initialGoal,
+      task: acceptedControl.task,
+    });
+  } else if (typeof host.prepareFreshContinuityEnrichment === "function") {
     await host.prepareFreshContinuityEnrichment({
       role: nextRole,
       visitIndex: nextVisitIndex,
@@ -283,8 +290,18 @@ export async function persistAcceptedTransition(
           sourceSessionFile: sessionFile,
         })
       : null;
+  const hostGeneratedSeed =
+    acceptedControl !== null && typeof host.materializeFreshHostContinuitySeed === "function"
+      ? host.materializeFreshHostContinuitySeed({
+          role: nextRole,
+          visitIndex: nextVisitIndex,
+          runGoal: opts.initialGoal,
+          task: acceptedControl.task,
+        })
+      : null;
   ctx.nextSeed =
-    acceptedControl === null
+    hostGeneratedSeed?.rendered ??
+    (acceptedControl === null
       ? formatHandoffSeed(
           payload,
           nextRole,
@@ -292,12 +309,12 @@ export async function persistAcceptedTransition(
           acceptedContextRef,
           continuitySeedSection,
         )
-      : formatAcceptedControlSeed(acceptedControl, continuitySeedSection);
+      : formatAcceptedControlSeed(acceptedControl, continuitySeedSection));
   const nextContinuitySeed =
     nextRole === def.orchestrator ? (continuitySeedSection ?? undefined) : undefined;
   ctx.pendingArtifactRoute = acceptedArtifactRoute;
   try {
-    const trajectoryTargetSeed =
+    const trajectoryTargetSeedBase =
       nextRole === def.orchestrator
         ? formatRunMemorySeed(
             host.seedRunMemory({
@@ -310,6 +327,10 @@ export async function persistAcceptedTransition(
             nextContinuitySeed,
           )
         : ctx.nextSeed;
+    const trajectoryTargetSeed =
+      nextRole === def.orchestrator && hostGeneratedSeed !== null
+        ? `${trajectoryTargetSeedBase}\n\n${hostGeneratedSeed.rendered}`
+        : trajectoryTargetSeedBase;
     const selected =
       session.sessionOrigin?.kind === "controller"
         ? undefined
@@ -333,6 +354,7 @@ export async function persistAcceptedTransition(
     kind: "advance",
     nextSeed: ctx.nextSeed,
     ...(nextContinuitySeed === undefined ? {} : { nextContinuitySeed }),
+    ...(hostGeneratedSeed === null ? {} : { nextHostGeneratedSeed: hostGeneratedSeed }),
   };
   return { acceptedArtifactRoute, inner: state.inner };
 }

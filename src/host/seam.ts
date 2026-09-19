@@ -60,6 +60,7 @@ export class SessionSeam {
   private readonly _captures: EmissionCapture[] = [];
   private readonly _handoffValidationFailures: HandoffValidationFailure[] = [];
   private readonly _sealedListeners = new Set<() => void>();
+  private _lastToolCallId: string | undefined;
   private _sealed = false;
 
   /**
@@ -72,8 +73,14 @@ export class SessionSeam {
    * Order is preserved; the loop relies on captures[0] being the
    * first machine-event call when the buffer has exactly one entry.
    */
-  push(capture: EmissionCapture): void {
+  push(capture: EmissionCapture, toolCallId?: string): void {
     this._captures.push(capture);
+    this._lastToolCallId = toolCallId;
+  }
+
+  /** Read the call ID for the first captured machine event, when transport exposed it. */
+  get lastToolCallId(): string | undefined {
+    return this._lastToolCallId;
   }
 
   /**
@@ -133,6 +140,7 @@ export class SessionSeam {
   reset(): void {
     this._captures.length = 0;
     this._handoffValidationFailures.length = 0;
+    this._lastToolCallId = undefined;
     this._sealed = false;
   }
 }

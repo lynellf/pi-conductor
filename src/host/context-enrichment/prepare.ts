@@ -25,6 +25,7 @@
 
 import { createHash } from "node:crypto";
 import type { Role } from "../../core/types.js";
+import { isLegacyContextEnrichmentPolicy } from "../../manifest/context-enrichment.js";
 import { isLegacyContinuityPolicy } from "../../manifest/continuity.js";
 import {
   assertContextEnrichmentRecord,
@@ -112,7 +113,11 @@ export async function prepareFreshContinuityEnrichment(
   args: PrepareFreshContinuityEnrichmentArgs,
 ): Promise<ContextEnrichmentRecord | null> {
   const policy = args.loadedManifest.manifest.context_enrichment;
-  if (policy === undefined || !isLegacyContinuityPolicy(args.loadedManifest.manifest.continuity))
+  if (
+    policy === undefined ||
+    !isLegacyContextEnrichmentPolicy(policy) ||
+    !isLegacyContinuityPolicy(args.loadedManifest.manifest.continuity)
+  )
     return null;
   const transitionKey = computeContextEnrichmentTransitionKey({
     run_id: args.runId,

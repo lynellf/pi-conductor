@@ -34,6 +34,8 @@ export interface RawChildTerminal {
   readonly cancelled: boolean;
   readonly sessionError: string | null;
   readonly report: LegacyChildReport | null;
+  /** v2 report_result terminal intent; status remains host-derived. */
+  readonly v2_terminal_intent?: boolean;
   readonly protocolDiagnostic?: ChildProtocolDiagnostic;
   /** Text-only final assistant response, already bounded; null means absent. */
   readonly finalResponse: string | null;
@@ -79,6 +81,11 @@ export function normalizeChildTerminal(raw: RawChildTerminal): NormalizedChildTe
   if (raw.sessionError !== null) return normalized("failed", "host", "model_or_session_error");
   if (raw.worktree.state !== "changed" && raw.worktree.state !== "clean") {
     return normalized("failed", "host", "invalid_git_state");
+  }
+  if (raw.v2_terminal_intent === true) {
+    return raw.worktree.state === "changed"
+      ? normalized("completed", "host", "report_result_completed_changed")
+      : normalized("no_changes", "host", "report_result_no_changes_clean");
   }
 
   const blocker =

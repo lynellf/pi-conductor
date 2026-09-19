@@ -20,6 +20,7 @@ import {
 } from "../../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
 import type { RoleSession } from "../host.js";
+import { createReportedContextCapture } from "../reported-context.js";
 import type { DelegateBridgeHost } from "./delegate-bridge.js";
 import type { ExecutionBridgeHost } from "./execution-bridge.js";
 import { createDelegateBridge, createExecutionBridge } from "./node-role-bridges.js";
@@ -100,6 +101,8 @@ export class NodeRoleSession implements RoleSession {
   private readonly emissionValidationOptions: ValidateEmissionOptions;
   private readonly optionsRoleSessionId: string | undefined;
   private readonly captures: EmissionCapture[] = [];
+  private lastToolCallId: string | undefined;
+  private readonly reportedContext = createReportedContextCapture();
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
   private readonly sealedListeners = new Set<() => void>();
   private steeringQueue: string[] = [];
@@ -215,7 +218,18 @@ export class NodeRoleSession implements RoleSession {
 
   resetCaptureBuffer(): void {
     this.captures.length = 0;
+    this.lastToolCallId = undefined;
     this.sealed = false;
+  }
+
+  takeReportedContextV2(
+    toolCallId?: string,
+  ): import("../../core/types.js").ReportedContextV2 | null {
+    return this.reportedContext.read(toolCallId);
+  }
+
+  takeControlToolCallId(): string | undefined {
+    return this.lastToolCallId;
   }
 
   /** Return the latest child queue snapshot; terminal tool completion then shuts down the child queue. */
@@ -336,6 +350,7 @@ export class NodeRoleSession implements RoleSession {
   }
 
   private acceptEvent(value: Record<string, unknown>): void {
+    this.reportedContext.observe(value as unknown as AgentSessionEvent);
     if (value.type === "queue_update") {
       const steering = stringArray(value.steering);
       const followUp = stringArray(value.followUp);
@@ -355,8 +370,9 @@ export class NodeRoleSession implements RoleSession {
         return;
       }
       if (toolName === "handoff" || toolName === "end") {
-        const capture: EmissionCapture =
-          toolName === "handoff" ? { toolName, args: value.args } : { toolName, args: value.args };
+        const toolCallId = optionalString(value.toolCallId) ?? optionalString(value.tool_call_id);
+        const capture: EmissionCapture = { toolName, args: value.args };
+        this.lastToolCallId = toolCallId === null ? undefined : toolCallId;
         this.captures.push(capture);
         // Shared seam parity: only a first, schema-valid capture seals.
         // A subsequent call remains unsealed because it is extra_emission.

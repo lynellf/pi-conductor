@@ -129,20 +129,9 @@ export function seedRunMemory(
   };
 }
 
-/**
- * Build the bounded continuity seed section for a fresh FSM role visit.
- * The host owns the append-only record log and the manifest snapshot;
- * this is the canonical seam for the loop's fresh-worker seed wiring
- * (spec §11). Returns `null` when no continuity policy is configured —
- * the loop must then omit the seed section and keep the legacy
- * fresh-role seed format exactly as before.
- *
- * When the manifest opts in to `context_enrichment`, the host looks up
- * the matching terminal record and renders the ranked seed (or the
- * baseline fallback when the record is `unavailable`). The transition
- * key is recomputed from the accepted transition so resume reuses
- * the byte-identical result.
- */
+/** Build and replay the v2 host-generated seed from the pinned run log. */
+export { materializeFreshHostContinuitySeed } from "./context-enrichment/materialize-v2.js";
+
 export function materializeFreshContinuitySeed(
   host: StateHostContext,
   args: {
@@ -249,6 +238,31 @@ function renderRankedSeedIfMatching(input: {
  * override `apiKey` and a custom `enricher` so tests can capture
  * outbound state.
  */
+/** Prepare or replay a v2 Jev terminal over host-generated observations. */
+export async function prepareFreshHostContinuityEnrichment(
+  host: StateHostContext,
+  args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+  },
+): Promise<import("../persistence/context-enrichment-v2.js").ContextEnrichmentRecordV2 | null> {
+  const { prepareFreshHostContinuityEnrichment } = await import(
+    "./context-enrichment/prepare-v2.js"
+  );
+  return prepareFreshHostContinuityEnrichment({
+    loadedManifest: host.loadedManifest,
+    log: host.log,
+    runId: host.runId,
+    recipient: args.role,
+    recipientVisit: args.visitIndex,
+    runGoal: args.runGoal,
+    task: args.task,
+    ...(host.typesafeApiKey !== undefined ? { apiKey: host.typesafeApiKey } : {}),
+  });
+}
+
 export async function prepareFreshContinuityEnrichment(
   host: StateHostContext,
   args: {

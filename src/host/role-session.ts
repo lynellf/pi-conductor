@@ -1,6 +1,7 @@
 import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
+import { createReportedContextCapture } from "./reported-context.js";
 import type { SessionSeam } from "./seam.js";
 
 /** RoleSession plus production-only inspection fields used by wiring tests. */
@@ -34,6 +35,12 @@ export function createRoleSessionAdapter(opts: {
   readonly prompt?: (text: string) => Promise<void>;
 }): RoleSessionAdapter {
   const { session, seam } = opts;
+  const reportedContext = createReportedContextCapture();
+  const optionalSubscription = session as AgentSession & {
+    readonly subscribe?: (listener: (event: AgentSessionEvent) => void) => () => void;
+  };
+  const reportedContextUnsubscribe =
+    optionalSubscription.subscribe?.((event) => reportedContext.observe(event)) ?? (() => {});
   const workspace =
     opts.workspace === undefined
       ? undefined
@@ -50,9 +57,12 @@ export function createRoleSessionAdapter(opts: {
     retryDelayMs: opts.retryDelayMs,
     ...(opts.isTrajectory === true && { isTrajectory: true }),
     readCaptureBuffer: () => seam.read(),
+    takeReportedContextV2: (toolCallId?: string) => reportedContext.read(toolCallId),
+    takeControlToolCallId: () => seam.lastToolCallId,
     resetCaptureBuffer: () => seam.reset(),
     takeHandoffValidationFailures: () => seam.takeHandoffValidationFailures(),
-    subscribe: (listener: (event: AgentSessionEvent) => void) => session.subscribe(listener),
+    subscribe: (listener: (event: AgentSessionEvent) => void) =>
+      optionalSubscription.subscribe?.(listener) ?? (() => {}),
     steer: (text: string) => session.steer(text),
     clearQueue: () => session.clearQueue(),
     isSealed: () => seam.isSealed,
@@ -76,6 +86,7 @@ export function createRoleSessionAdapter(opts: {
       continueTrajectory: opts.continueTrajectory,
     }),
     dispose: async () => {
+      reportedContextUnsubscribe();
       if (opts.disposeNative?.() !== false) session.dispose();
       await opts.onDispose();
     },

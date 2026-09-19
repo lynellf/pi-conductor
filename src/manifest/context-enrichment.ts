@@ -3,6 +3,13 @@
 import type { ContextEnrichmentPolicy } from "./types.js";
 import { ManifestParseError } from "./types.js";
 
+/** Narrow the historical recipient-relevance implementation. */
+export function isLegacyContextEnrichmentPolicy(
+  policy: ContextEnrichmentPolicy | undefined,
+): policy is Extract<ContextEnrichmentPolicy, { readonly schema_version: 1 }> {
+  return policy?.schema_version === 1;
+}
+
 const CONTEXT_ENRICHMENT_KEYS = new Set([
   "schema_version",
   "provider",
@@ -35,15 +42,17 @@ export function parseContextEnrichmentPolicy(raw: unknown): ContextEnrichmentPol
       throw new ManifestParseError(`context_enrichment has unknown key '${key}'`);
     }
   }
-  if (entry.schema_version !== 1) {
-    throw new ManifestParseError("`context_enrichment.schema_version` must be 1");
+  if (entry.schema_version !== 1 && entry.schema_version !== 2) {
+    throw new ManifestParseError("`context_enrichment.schema_version` must be 1 or 2");
   }
   if (entry.provider !== "typesafe_jev") {
-    throw new ManifestParseError('`context_enrichment.provider` must be "typesafe_jev" in v1');
+    throw new ManifestParseError('`context_enrichment.provider` must be "typesafe_jev"');
   }
-  if (entry.strategy !== "recipient_relevance_rank") {
+  const expectedStrategy =
+    entry.schema_version === 2 ? "work_observation_relevance_rank" : "recipient_relevance_rank";
+  if (entry.strategy !== expectedStrategy) {
     throw new ManifestParseError(
-      '`context_enrichment.strategy` must be "recipient_relevance_rank" in v1',
+      `\`context_enrichment.strategy\` must be "${expectedStrategy}" in v${entry.schema_version}`,
     );
   }
   const model = entry.model;
@@ -102,10 +111,10 @@ export function parseContextEnrichmentPolicy(raw: unknown): ContextEnrichmentPol
     );
   }
   return Object.freeze({
-    schema_version: 1,
+    schema_version: entry.schema_version,
     provider: "typesafe_jev",
     model,
-    strategy: "recipient_relevance_rank",
+    strategy: expectedStrategy,
     candidate_limit: candidateLimit,
     max_parallel: maxParallel,
     request_timeout_ms: requestTimeoutMs,

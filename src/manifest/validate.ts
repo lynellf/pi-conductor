@@ -112,7 +112,9 @@ export type ManifestErrorCode =
   /** Durable continuity policy exposes a reachable minimal child (§5). */
   | "continuity-reachable-minimal-subagent"
   /** Opt-in context enrichment requires a valid continuity policy (§5). */
-  | "context-enrichment-requires-continuity";
+  | "context-enrichment-requires-continuity"
+  /** V1 and v2 continuity/enrichment policies cannot be mixed. */
+  | "context-enrichment-continuity-version-mismatch";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -249,6 +251,16 @@ export function validateManifest(m: Manifest): ManifestReport {
       code: "context-enrichment-requires-continuity",
       message:
         "`context_enrichment` requires a valid `continuity` policy; enrichment operates only on the durable continuity ledger",
+    });
+  } else if (
+    m.context_enrichment !== undefined &&
+    m.continuity !== undefined &&
+    m.context_enrichment.schema_version !== m.continuity.schema_version
+  ) {
+    errors.push({
+      code: "context-enrichment-continuity-version-mismatch",
+      message:
+        "`context_enrichment.schema_version` must match `continuity.schema_version`; v2 ranking requires host-generated v2 continuity",
     });
   }
 

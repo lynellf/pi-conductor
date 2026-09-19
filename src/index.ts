@@ -20,6 +20,8 @@ export const PACKAGE_NAME = "pi-conductor";
 // runtime JS bundle while giving consumers a single import surface.
 
 export type {
+  AcceptedControlV2,
+  AcceptedHandoffEnvelope,
   ActiveRoleSession,
   Checkpoint,
   Effect,
@@ -32,8 +34,10 @@ export type {
   ModelFallback,
   ModelRetry,
   PayloadSummary,
+  RecipientTaskContextV2,
   ReduceLifecycleMeta,
   RejectReason,
+  ReportedContextV2,
   Role,
   SessionLifecycleEvent,
   State,
@@ -134,6 +138,9 @@ export { parseManifest } from "./manifest/parse.js";
 export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
 // Durable continuity policy (spec §5): optional opt-in manifest policy.
 export type {
+  ContextEnrichmentPolicy,
+  ContextEnrichmentPolicyV1,
+  ContextEnrichmentPolicyV2,
   ContextRetention,
   ContinuityPolicy,
   ContinuityPolicyV1,
@@ -300,6 +307,12 @@ export { rollup, SYSTEM_DEFAULT_MODEL_KEY } from "./cost/rollup.js";
 // reads the last snapshot — never replays records. The host's resume
 // path (§11.9) reconstructs from this single read.
 
+export type { AcceptedControlV2RecordErrorCode } from "./persistence/accepted-control-v2.js";
+export {
+  AcceptedControlV2RecordError,
+  acceptedControlV2Schema,
+  assertAcceptedControlV2,
+} from "./persistence/accepted-control-v2.js";
 export type {
   ChildCompletionEvidence,
   ChildCompletionProtocol,
@@ -311,6 +324,21 @@ export type {
   ChildWorktreeState,
   DelegateResultStatus,
 } from "./persistence/child-completion.js";
+export type {
+  ContextEnrichmentRecordV2,
+  V2Judgment,
+  WorkObservationRankingCandidate,
+  WorkObservationRankingOutbound,
+  WorkObservationRankingRecipient,
+} from "./persistence/context-enrichment-v2.js";
+export {
+  assertContextEnrichmentRecordV2,
+  buildWorkObservationRankingCandidates,
+  ContextEnrichmentV2Error,
+  computeWorkObservationEnrichmentInputFingerprint,
+  contextEnrichmentRecordV2Schema,
+  orderWorkObservationHistory,
+} from "./persistence/context-enrichment-v2.js";
 export type {
   DelegationAcceptedChild,
   DelegationSubmissionAcceptedRecord,
@@ -414,6 +442,29 @@ export {
   toolExecutionFinishedSchema,
   toolExecutionStartedSchema,
 } from "./persistence/tool-execution.js";
+export type {
+  ChildTerminalObservationV2,
+  HostArtifactObservation,
+  HostExecutionObservation,
+  RecipientObservationV2,
+  WorkObservationV2,
+} from "./persistence/work-observation.js";
+export {
+  materializeWorkObservations,
+  projectRecipientObservation,
+  WorkObservationSizeError,
+} from "./persistence/work-observation.js";
+export type { WorkObservationEnrichmentReport } from "./persistence/work-observation-report.js";
+export {
+  renderWorkObservationJson,
+  renderWorkObservationMarkdown,
+  renderWorkObservationOkfCandidates,
+} from "./persistence/work-observation-report.js";
+export type { ContinuitySeedV2 } from "./persistence/work-observation-seed.js";
+export {
+  ContinuitySeedV2SizeError,
+  renderWorkObservationSeed,
+} from "./persistence/work-observation-seed.js";
 
 // ─── Run memory artifact (§8.4) ───────────────────────────────────────
 // Phase 3 Task 12. The orchestrator's externalized memory: a single

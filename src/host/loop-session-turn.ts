@@ -391,6 +391,10 @@ export async function runSessionTurn(
             source_session_file: sessionFile,
           }
         : null;
+    const reportedContextV2 =
+      useV2Control && validated.event.type === "handoff"
+        ? (session.takeReportedContextV2?.(session.takeControlToolCallId?.()) ?? null)
+        : null;
     const acceptedControl =
       useV2Control && reduceResult.kind === "accepted" && validated.event.type === "handoff"
         ? createAcceptedControlV2({
@@ -398,6 +402,7 @@ export async function runSessionTurn(
             orchestratorRole: def.orchestrator,
             recipientRole: reduceResult.state,
             reportedArguments: validated.event.payload,
+            ...(reportedContextV2 === null ? {} : { reportedContext: reportedContextV2 }),
           })
         : undefined;
     let enrichedRecord: typeof reduceResult.record =

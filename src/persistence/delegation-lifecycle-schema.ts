@@ -10,6 +10,23 @@ import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
 const id = Type.String({ minLength: 1 });
 const nonNegative = Type.Number({ minimum: 0 });
 const nonNegativeInteger = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const terminalObservationV2 = Type.Object(
+  {
+    outcome: Type.Union([
+      Type.Literal("returned"),
+      Type.Literal("failed"),
+      Type.Literal("cancelled"),
+    ]),
+    workspace_state: Type.Union([
+      Type.Literal("changed"),
+      Type.Literal("clean"),
+      Type.Literal("invalid"),
+      Type.Literal("uninspected"),
+    ]),
+    reported_status: Type.Optional(Type.String({ maxLength: 128 })),
+  },
+  { additionalProperties: false },
+);
 /**
  * Spec §9: additive host-authored continuity sibling persisted on
  * successful child completion records. Source provenance fields
@@ -181,6 +198,7 @@ export const acceptedChildCompletedSchema = Type.Object(
     // Spec §9: additive continuity sibling. Absent on legacy records and
     // on `minimal` children that did not supply a typed packet.
     continuity: Type.Optional(continuitySiblingSchema),
+    terminal_observation: Type.Optional(terminalObservationV2),
   },
   { additionalProperties: false },
 );
@@ -203,6 +221,7 @@ export const acceptedChildFailedSchema = Type.Object(
     completion_evidence: Type.Optional(evidence),
     output_capture: Type.Optional(childOutputCaptureSchema),
     output_capture_failure: Type.Optional(Type.String({ pattern: "^[a-z][a-z0-9-]{0,95}$" })),
+    terminal_observation: Type.Optional(terminalObservationV2),
   },
   { additionalProperties: false },
 );

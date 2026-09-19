@@ -178,6 +178,8 @@ export interface ChildTerminal {
   readonly started: boolean;
   readonly model: string;
   readonly report?: LegacyChildReport | null;
+  /** v2 report_result terminal intent, without importing legacy status semantics. */
+  readonly v2TerminalIntent?: boolean;
   readonly finalResponse?: string | null;
   readonly summaryTruncated?: boolean;
   readonly cancelled?: boolean;
@@ -395,7 +397,8 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     protocol: task.profile.completion_protocol,
     cancelled: terminal.cancelled === true || terminal.status === "cancelled",
     sessionError: terminal.sessionError ?? terminal.failureReason ?? null,
-    report,
+    ...(terminal.v2TerminalIntent === true ? { v2_terminal_intent: true } : {}),
+    report: terminal.v2TerminalIntent === true ? null : report,
     finalResponse: terminal.finalResponse ?? null,
     worktree,
     ...(terminal.fileToolCalls === undefined ? {} : { fileToolCalls: terminal.fileToolCalls }),
@@ -409,6 +412,21 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
   } as const;
   const normalized = normalizeChildTerminal(raw);
   const evidence = completionEvidence(raw, normalized, terminal.summaryTruncated ?? false);
+  const terminalObservation =
+    options.controlProtocol === "v2"
+      ? {
+          outcome: raw.cancelled
+            ? ("cancelled" as const)
+            : raw.sessionError !== null ||
+                (raw.worktree.state !== "changed" && raw.worktree.state !== "clean")
+              ? ("failed" as const)
+              : ("returned" as const),
+          workspace_state: raw.worktree.state,
+          ...(options.controlProtocol === "v2" || raw.report?.status === undefined
+            ? {}
+            : { reported_status: raw.report.status }),
+        }
+      : undefined;
   const summary = selectedSummary(raw, normalized.normalizationReason);
   const failureReason = selectedFailureReason(raw, normalized.normalizationReason);
 
@@ -429,6 +447,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       usage: terminal.usage,
       completionEvidence: evidence,
       ...(terminal.continuity === undefined ? {} : { continuity: terminal.continuity }),
+      ...(terminalObservation === undefined ? {} : { terminalObservation: terminalObservation }),
     };
   }
   return {
@@ -447,6 +466,7 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     usage: terminal.usage,
     lifecycleStarted: terminal.started,
     completionEvidence: evidence,
+    ...(terminalObservation === undefined ? {} : { terminalObservation: terminalObservation }),
   };
 }
 

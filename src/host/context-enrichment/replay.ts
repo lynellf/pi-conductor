@@ -1,6 +1,7 @@
 /** Durable context-enrichment replay and ranked-seed materialization — spec §8, §10. */
 
 import type { Role } from "../../core/types.js";
+import { isLegacyContextEnrichmentPolicy } from "../../manifest/context-enrichment.js";
 import type { ContextEnrichmentPolicy } from "../../manifest/types.js";
 import {
   assertContextEnrichmentRecord,
@@ -129,6 +130,7 @@ export function renderPersistedContextEnrichmentSeed(args: {
   readonly maxBytes: number;
   readonly terminal?: ContextEnrichmentRecord;
 }): ContinuitySeedSection | null {
+  if (!isLegacyContextEnrichmentPolicy(args.policy)) return null;
   const transitionKey = computeTransitionKey(args.identity);
   let match: { readonly transitionKey: string; readonly record: ContextEnrichmentRecord } | null;
   if (args.terminal === undefined) {

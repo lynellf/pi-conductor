@@ -41,49 +41,49 @@ v2 policy + schemas + bounded hint/argument helpers
 
 ## Slice B — deterministic observation substrate
 
-- [ ] B1. Add additive `accepted_control` v2 record metadata and strict reader/writer contracts.
-- [ ] B2. Add host-derived child terminal observation and bounded evidence projection while retaining compatibility-only legacy status fields.
-- [ ] B3. Add pure v2 work-observation materialization from canonical records with stable observation keys, provenance, execution/artifact/workspace bounds, and omission order.
-- [ ] B4. Add mandatory/direct-predecessor recipient seed rendering with deterministic newest-first historical admission and exact UTF-8 accounting.
-- [ ] B5. Pin default v2 continuity in new run snapshots; reconstruct v2 seeds after restart without ambient I/O.
-- [ ] B6. Extend continuity-report JSON/Markdown/OKF-candidate output for v2 while retaining v1 rendering.
-- [ ] B7. Add Slice B persistence/host/CLI/restart tests and prove no replay I/O.
+- [x] B1. Add additive `accepted_control` v2 record metadata and strict reader/writer contracts.
+- [x] B2. Add host-derived child terminal observation and bounded evidence projection while retaining compatibility-only legacy status fields.
+- [x] B3. Add pure v2 work-observation materialization from canonical records with stable observation keys, provenance, execution/artifact/workspace bounds, and omission order.
+- [x] B4. Add mandatory/direct-predecessor recipient seed rendering with deterministic newest-first historical admission and exact UTF-8 accounting.
+- [x] B5. Pin default v2 continuity in new run snapshots; reconstruct v2 seeds after restart without ambient I/O.
+- [x] B6. Extend continuity-report JSON/Markdown/OKF-candidate output for v2 while retaining v1 rendering.
+- [x] B7. Add Slice B persistence/host/CLI/restart tests and prove no replay I/O.
 
 ### Gate B
 
-- [ ] Focused v2 observation/seed/restart/CLI tests pass.
-- [ ] `pnpm typecheck`, `pnpm build`, `pnpm lint`, and `pnpm format:check` pass.
+- [x] Focused v2 observation/seed/restart/CLI tests pass.
+- [x] `pnpm typecheck`, `pnpm build`, `pnpm lint`, and `pnpm format:check` pass.
 
 ## Slice C — exact visible-prose capture
 
-- [ ] C1. Define bounded `ReportedContextV2` capture and exact tool-call-ID message binding.
-- [ ] C2. Wire shared SDK, isolated RPC, and stub transports without substituting nearby/latest prose.
-- [ ] C3. Attach exact prose only to accepted v2 control/result context; exclude thinking, tools, images, signatures, errors, and transcript recovery.
-- [ ] C4. Add UTF-8/privacy/transport-parity tests.
+- [x] C1. Define bounded `ReportedContextV2` capture and exact tool-call-ID message binding.
+- [x] C2. Wire shared SDK, isolated RPC, and stub transports without substituting nearby/latest prose.
+- [x] C3. Attach exact prose only to accepted v2 control/result context; exclude thinking, tools, images, signatures, errors, and transcript recovery.
+- [x] C4. Add UTF-8/privacy/transport-parity tests.
 
 ### Gate C
 
-- [ ] Focused text-capture and privacy tests pass.
-- [ ] `pnpm typecheck`, `pnpm build`, `pnpm lint`, and `pnpm format:check` pass.
+- [x] Focused text-capture and privacy tests pass.
+- [x] `pnpm typecheck`, `pnpm build`, `pnpm lint`, and `pnpm format:check` pass.
 
 ## Slice D — Jev historical relevance
 
-- [ ] D1. Add v2 candidate projection and fixed Score request state/rubric using existing fixed-origin client infrastructure.
-- [ ] D2. Add strict v2 response validation, bounded concurrency/retry, and provider-neutral unavailable fallback.
-- [ ] D3. Add durable v2 enrichment records, fingerprints, duplicate/stale replay rejection, and terminal reuse.
-- [ ] D4. Rank only optional historical observations; keep task context/direct predecessor mandatory and render atomically under the pinned cap.
-- [ ] D5. Add CLI/status diagnostics and disabled/completed/unavailable/restart tests.
+- [x] D1. Add v2 candidate projection and fixed Score request state/rubric using existing fixed-origin client infrastructure.
+- [x] D2. Add strict v2 response validation, bounded concurrency/retry, and provider-neutral unavailable fallback.
+- [x] D3. Add durable v2 enrichment records, fingerprints, duplicate/stale replay rejection, and terminal reuse.
+- [x] D4. Rank only optional historical observations; keep task context/direct predecessor mandatory and render atomically under the pinned cap.
+- [x] D5. Add CLI/status diagnostics and disabled/completed/unavailable/restart tests.
 
 ### Gate D / completion
 
-- [ ] All Slice D focused tests pass.
-- [ ] `pnpm typecheck` passes.
-- [ ] `pnpm build` passes.
-- [ ] `pnpm lint` and `pnpm format:check` pass.
-- [ ] `git diff --check` passes.
-- [ ] `pnpm test` passes.
-- [ ] `pnpm audit --audit-level high` passes or any environment limitation is explicitly reported.
-- [ ] Code review completed against correctness, simplicity, architecture, security, and performance.
+- [x] All Slice D focused tests pass.
+- [x] `pnpm typecheck` passes.
+- [x] `pnpm build` passes.
+- [x] `pnpm lint` and `pnpm format:check` pass.
+- [x] `git diff --check` passes.
+- [x] `pnpm test` passes.
+- [x] `pnpm audit --audit-level high` passes or any environment limitation is explicitly reported.
+- [x] Code review completed against correctness, simplicity, architecture, security, and performance.
 
 ## Risks and mitigations
 

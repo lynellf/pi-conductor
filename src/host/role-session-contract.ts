@@ -2,7 +2,12 @@
 
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
-import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
+import type {
+  ModelEffort,
+  ReportedContextV2,
+  Role,
+  SessionWorkspaceDescriptor,
+} from "../core/types.js";
 import type { ToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { ContextBoundaryReference } from "../persistence/orchestrator-context.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
@@ -107,6 +112,11 @@ export interface RoleSession {
    * `readCaptureBuffer` returns a frozen view of the current contents.
    */
   readCaptureBuffer(): readonly EmissionCapture[];
+
+  /** Read prose bound to the exact machine tool call, or null when unprovable. */
+  takeReportedContextV2?(toolCallId?: string): ReportedContextV2 | null;
+  /** Read the exact machine-control call ID when the transport provides it. */
+  takeControlToolCallId?(): string | undefined;
 
   /**
    * Clear the capture buffer. Called by the orchestration loop (Task 15)

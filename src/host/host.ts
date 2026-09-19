@@ -249,6 +249,14 @@ export interface Host {
    * terminal record exists, the seed is composed from the durable
    * record; otherwise the host materializes the legacy baseline.
    */
+  materializeFreshHostContinuitySeed?(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+    readonly sourceRecordKey?: string;
+  }): import("../persistence/work-observation-seed.js").ContinuitySeedV2 | null;
+
   materializeFreshContinuitySeed?(args: {
     readonly role: Role;
     readonly visitIndex: number;
@@ -272,6 +280,13 @@ export interface Host {
    * the terminal record persists permits a fresh attempt on resume;
    * a crash after persistence reuses the matching record.
    */
+  prepareFreshHostContinuityEnrichment?(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+  }): Promise<import("../persistence/context-enrichment-v2.js").ContextEnrichmentRecordV2 | null>;
+
   prepareFreshContinuityEnrichment?(args: {
     readonly role: Role;
     readonly visitIndex: number;

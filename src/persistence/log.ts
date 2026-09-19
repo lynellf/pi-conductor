@@ -18,6 +18,7 @@ import type {
 } from "./child-completion.js";
 import type { ChildOutputCapture, ChildOutputRecord } from "./child-output-records.js";
 import type { ContextEnrichmentRecord } from "./context-enrichment.js";
+import type { ContextEnrichmentRecordV2 } from "./context-enrichment-v2.js";
 import type { ChildContinuitySibling } from "./continuity.js";
 import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
@@ -26,7 +27,6 @@ import type { DelegationSourceWorkspace } from "./delegation-task-schema.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
-
 import type { RoleTurnRecord } from "./role-turn.js";
 import type { RunFinalizationFailedRecord } from "./run-finalization.js";
 import type { SourceWorkspaceRecord } from "./source-workspace.js";
@@ -38,6 +38,7 @@ import type {
   TrajectoryHandoffFailedRecord,
   TrajectoryTargetSeedDeliveredRecord,
 } from "./trajectory-records.js";
+import type { ChildTerminalObservationV2 } from "./work-observation.js";
 import type {
   ArtifactCollectedRecord,
   ArtifactDeliveryRecord,
@@ -388,6 +389,8 @@ export interface SubagentCompletedRecord {
    * supplied by the surrounding record; never by the child.
    */
   readonly continuity?: ChildContinuitySibling;
+  /** Host-derived v2 terminal facts; absent on historical child records. */
+  readonly terminal_observation?: ChildTerminalObservationV2;
   readonly ts: number;
 }
 
@@ -420,6 +423,8 @@ export interface SubagentFailedRecord {
   /** Host-measured output bytes, captured before authoritative settlement (#116). */
   readonly output_capture?: ChildOutputCapture;
   readonly output_capture_failure?: string;
+  /** Host-derived v2 terminal facts; absent on historical child records. */
+  readonly terminal_observation?: ChildTerminalObservationV2;
   readonly ts: number;
 }
 
@@ -473,7 +478,8 @@ export type PersistedRecord =
   | SourceWorkspaceRecord
   | ChildOutputRecord
   | ControllerEffectRecord
-  | ContextEnrichmentRecord;
+  | ContextEnrichmentRecord
+  | ContextEnrichmentRecordV2;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

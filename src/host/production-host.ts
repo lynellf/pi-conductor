@@ -44,9 +44,11 @@ import {
   captureUsage as captureUsageInModule,
   getNextModel as getNextModelInModule,
   materializeFreshContinuitySeed as materializeFreshContinuitySeedInModule,
+  materializeFreshHostContinuitySeed as materializeFreshHostContinuitySeedInModule,
   nextVisitIndex as nextVisitIndexInModule,
   persistRecord as persistRecordInModule,
   prepareFreshContinuityEnrichment as prepareFreshContinuityEnrichmentInModule,
+  prepareFreshHostContinuityEnrichment as prepareFreshHostContinuityEnrichmentInModule,
   runCostSoFar as runCostSoFarInModule,
   type StateHostContext,
   seedRunMemory as seedRunMemoryInModule,
@@ -329,6 +331,15 @@ export class ProductionHost extends ProductionHostContext implements Host {
     return seedRunMemoryInModule(this.stateContext(), args);
   }
 
+  materializeFreshHostContinuitySeed(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+  }): import("../persistence/work-observation-seed.js").ContinuitySeedV2 | null {
+    return materializeFreshHostContinuitySeedInModule(this.stateContext(), args);
+  }
+
   materializeFreshContinuitySeed(args: {
     readonly role: Role;
     readonly visitIndex: number;
@@ -340,6 +351,15 @@ export class ProductionHost extends ProductionHostContext implements Host {
     readonly sourceSessionFile?: string;
   }): import("./loop-format.js").ContinuitySeedSection | null {
     return materializeFreshContinuitySeedInModule(this.stateContext(), args);
+  }
+
+  prepareFreshHostContinuityEnrichment(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+  }): Promise<import("../persistence/context-enrichment-v2.js").ContextEnrichmentRecordV2 | null> {
+    return prepareFreshHostContinuityEnrichmentInModule(this.stateContext(), args);
   }
 
   prepareFreshContinuityEnrichment(args: {

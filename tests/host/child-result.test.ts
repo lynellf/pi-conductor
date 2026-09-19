@@ -142,6 +142,29 @@ describe("legacy report-result normalization (Issue #57 §7.3)", () => {
     });
   });
 
+  it("treats v2 report_result as terminal intent, not a model status", () => {
+    expect(
+      normalizeChildTerminal(
+        raw({
+          protocol: "report_result",
+          v2_terminal_intent: true,
+          report: null,
+          worktree: cleanWorktree,
+        }),
+      ),
+    ).toMatchObject({ status: "no_changes", completionSource: "host" });
+    expect(
+      normalizeChildTerminal(
+        raw({
+          protocol: "report_result",
+          v2_terminal_intent: true,
+          report: null,
+          worktree: invalidWorktree,
+        }),
+      ),
+    ).toMatchObject({ status: "failed", normalizationReason: "invalid_git_state" });
+  });
+
   it("retains the continuity protocol diagnostic beside the compatibility reason", () => {
     const terminal = raw({
       protocol: "report_result",

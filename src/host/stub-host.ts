@@ -68,6 +68,8 @@ import {
 } from "../manifest/continuity.js";
 import { materializeContinuity } from "../persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../persistence/continuity-seed.js";
+import { materializeFreshHostContinuitySeed as materializeFreshHostContinuitySeedImpl } from "./context-enrichment/materialize-v2.js";
+import { prepareFreshHostContinuityEnrichment } from "./context-enrichment/prepare-v2.js";
 import { SessionState } from "./cost.js";
 import { DelegationManager } from "./delegation/manager.js";
 import type { DisplaySink } from "./display-sink.js";
@@ -508,6 +510,19 @@ export class StubHost implements Host {
     });
   }
 
+  materializeFreshHostContinuitySeed(args: {
+    readonly role: import("../core/types.js").Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+  }): import("../persistence/work-observation-seed.js").ContinuitySeedV2 | null {
+    if (this.loadedManifestValue === undefined) return null;
+    return materializeFreshHostContinuitySeedImpl(
+      { loadedManifest: this.loadedManifestValue, log: this.log, runId: this.runId },
+      args,
+    );
+  }
+
   materializeFreshContinuitySeed(args: {
     readonly role: import("../core/types.js").Role;
     readonly visitIndex: number;
@@ -535,6 +550,25 @@ export class StubHost implements Host {
       used_bytes: seed.budget.used_bytes,
       max_bytes: seed.budget.max_bytes,
     };
+  }
+
+  async prepareFreshHostContinuityEnrichment(args: {
+    readonly role: import("../core/types.js").Role;
+    readonly visitIndex: number;
+    readonly runGoal: string;
+    readonly task: import("../core/types.js").RecipientTaskContextV2;
+  }): Promise<import("../persistence/context-enrichment-v2.js").ContextEnrichmentRecordV2 | null> {
+    if (this.loadedManifestValue === undefined) return null;
+    return prepareFreshHostContinuityEnrichment({
+      loadedManifest: this.loadedManifestValue,
+      log: this.log,
+      runId: this.runId,
+      recipient: args.role,
+      recipientVisit: args.visitIndex,
+      runGoal: args.runGoal,
+      task: args.task,
+      apiKey: null,
+    });
   }
 
   async prepareFreshContinuityEnrichment(_args: {

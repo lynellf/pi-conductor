@@ -13,7 +13,7 @@
  * the seam and persistence modules the adapter imports remain pi-free.
  */
 
-import type { Role } from "../../core/types.js";
+import type { RecipientTaskContextV2, Role } from "../../core/types.js";
 import type {
   ContextEnrichmentOutcome,
   ContextRelevanceJudgment,
@@ -40,6 +40,9 @@ export interface ContextEnrichmentRequest {
     readonly role: Role;
     readonly objective: string;
     readonly requested_action: string;
+    /** V2 exact host/report task context; absent on v1 requests. */
+    readonly run_goal?: string;
+    readonly task?: RecipientTaskContextV2;
   };
   readonly candidate: ContextEnrichmentRequestCandidate;
   readonly instructions: string;
@@ -47,7 +50,7 @@ export interface ContextEnrichmentRequest {
   /** Pinned policy snapshot the adapter must use to select the requested model. */
   readonly policy: {
     readonly model: string;
-    readonly strategy: "recipient_relevance_rank";
+    readonly strategy: "recipient_relevance_rank" | "work_observation_relevance_rank";
     readonly provider: "typesafe_jev";
   };
   readonly request_timeout_ms: number;

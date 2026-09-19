@@ -7,6 +7,7 @@ import type {
   UsageRecord,
 } from "../core/types.js";
 import type { ArtifactDeliveryRecord, EndGuardRecord } from "../persistence/log.js";
+import type { ContinuitySeedV2 } from "../persistence/work-observation-seed.js";
 import type { ContinuityEvidenceAuthority } from "./continuity-evidence.js";
 import type { EndGuardConfig } from "./end-guard-runner.js";
 import type { ArtifactRouteSource, Host, RoleSession, SpawnRoleOptions } from "./host.js";
@@ -52,6 +53,8 @@ export interface RunLoopOptions {
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Ranked continuity to preserve when a resumed target is the orchestrator. */
   readonly initialOrchestratorContinuitySeed?: ContinuitySeedSection | null;
+  /** Host-generated v2 seed reconstructed from the pinned run log on resume. */
+  readonly initialHostGeneratedSeed?: ContinuitySeedV2 | null;
   /** Optional: per-role spawn overrides. Defaults to a minimal call
    *  that lets the host derive model + system prompt + tools from the
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
@@ -117,6 +120,8 @@ export type InnerOutcome =
       readonly nextSeed: string;
       /** Ranked continuity to preserve when the next role is the orchestrator. */
       readonly nextContinuitySeed?: ContinuitySeedSection;
+      /** Host-generated v2 seed for the next recipient. */
+      readonly nextHostGeneratedSeed?: ContinuitySeedV2;
     };
 
 /** Task 18: outcome of a role visit's fallback loop. */
@@ -127,6 +132,8 @@ export type RoleOutcome =
       readonly kind: "advance";
       readonly nextSeed: string;
       readonly nextContinuitySeed?: ContinuitySeedSection;
+      /** Host-generated v2 seed for the next recipient. */
+      readonly nextHostGeneratedSeed?: ContinuitySeedV2;
     }
   | { readonly kind: "exhausted" };
 

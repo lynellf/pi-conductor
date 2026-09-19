@@ -1,12 +1,17 @@
 /** Own run-handle completion wiring and lease release (spec §11.1). */
 import { incomingAcceptedHandoff, recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { Checkpoint, MachineDefinition } from "../core/types.js";
-import { isLegacyContinuityPolicy } from "../manifest/continuity.js";
+import {
+  isHostGeneratedContinuityPolicy,
+  isLegacyContinuityPolicy,
+} from "../manifest/continuity.js";
+import { assertAcceptedControlV2 } from "../persistence/accepted-control-v2.js";
 import { continuityItemIndexFromRecords } from "../persistence/continuity.js";
 import { materializeContinuity } from "../persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../persistence/continuity-seed.js";
 import { type EndGuardRecord, endGuardRequestId } from "../persistence/end-guard.js";
 import type { ArtifactDeliveryRecord, RecordLog } from "../persistence/log.js";
+import type { ContinuitySeedV2 } from "../persistence/work-observation-seed.js";
 import {
   findIncomingAcceptedHandoff,
   latestHandoffContextRef,
@@ -124,6 +129,9 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       ...(preparedRestartSeed.orchestratorContinuitySeed === undefined
         ? {}
         : { initialOrchestratorContinuitySeed: preparedRestartSeed.orchestratorContinuitySeed }),
+      ...(preparedRestartSeed.hostGeneratedSeed === undefined
+        ? {}
+        : { initialHostGeneratedSeed: preparedRestartSeed.hostGeneratedSeed }),
       initialArtifactDelivery: args.initialArtifactDelivery ?? null,
       ...(args.initialParentSessionId !== undefined && {
         initialParentSessionId: args.initialParentSessionId,
@@ -212,6 +220,7 @@ async function prepareRestartHandoffSeed(
 ): Promise<{
   readonly seed: string | null | undefined;
   readonly orchestratorContinuitySeed?: ContinuitySeedSection | null;
+  readonly hostGeneratedSeed?: ContinuitySeedV2 | null;
 }> {
   const recipientRole = args.initialCheckpoint.current_role;
   if (recipientRole === "done" || controllerMode || args.initialTrajectorySeed !== undefined) {
@@ -224,6 +233,55 @@ async function prepareRestartHandoffSeed(
   const accepted = acceptedIndex === null ? undefined : records[acceptedIndex];
   const incoming = incomingAcceptedHandoff(records, args.runId, recipientRole);
   const envelope = incoming?.envelope;
+  if (
+    args.host.controlProtocol === "v2" &&
+    isHostGeneratedContinuityPolicy(args.loadedManifest.manifest.continuity) &&
+    accepted?.type === "transition_accepted" &&
+    accepted.event === "handoff" &&
+    accepted.accepted_control === undefined
+  ) {
+    throw new Error("v2 accepted handoff is missing its host-generated accepted_control record");
+  }
+  if (
+    args.host.controlProtocol === "v2" &&
+    isHostGeneratedContinuityPolicy(args.loadedManifest.manifest.continuity) &&
+    accepted?.type === "transition_accepted" &&
+    accepted.event === "handoff" &&
+    accepted.accepted_control !== undefined
+  ) {
+    assertAcceptedControlV2(accepted.accepted_control, recipientRole);
+  }
+  if (
+    args.host.controlProtocol === "v2" &&
+    isHostGeneratedContinuityPolicy(args.loadedManifest.manifest.continuity) &&
+    accepted?.type === "transition_accepted" &&
+    accepted.accepted_control !== undefined &&
+    typeof args.host.materializeFreshHostContinuitySeed === "function"
+  ) {
+    const visitIndex =
+      acceptedIndex === null
+        ? 1
+        : expectedContextEnrichmentVisitIndex(records, acceptedIndex, recipientRole);
+    if (typeof args.host.prepareFreshHostContinuityEnrichment === "function") {
+      await args.host.prepareFreshHostContinuityEnrichment({
+        role: recipientRole,
+        visitIndex,
+        runGoal: args.goal,
+        task: accepted.accepted_control.task,
+      });
+      records = args.log.records(args.runId);
+    }
+    const generated = args.host.materializeFreshHostContinuitySeed({
+      role: recipientRole,
+      visitIndex,
+      runGoal: args.goal,
+      task: accepted.accepted_control.task,
+    });
+    return {
+      seed: generated?.rendered,
+      ...(generated === null ? {} : { hostGeneratedSeed: generated }),
+    };
+  }
   if (
     policy !== undefined &&
     typeof args.host.prepareFreshContinuityEnrichment === "function" &&

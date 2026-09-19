@@ -3,6 +3,7 @@
 import type { ChildCompletionEvidence } from "../../persistence/child-completion.js";
 import type { ChildOutputCapture } from "../../persistence/child-output-records.js";
 import type { SubagentUsage } from "../../persistence/log.js";
+import type { ChildTerminalObservationV2 } from "../../persistence/work-observation.js";
 import type { ChildId } from "./ids.js";
 import type { ValidatedTask } from "./validate-batch.js";
 
@@ -27,6 +28,8 @@ export interface PoolCompletedResult {
   readonly continuity?: import("../../persistence/continuity.js").ChildContinuitySibling;
   readonly outputCapture?: ChildOutputCapture;
   readonly outputCaptureFailure?: string;
+  /** Host-derived v2 child terminal facts; absent for legacy children. */
+  readonly terminalObservation?: ChildTerminalObservationV2;
 }
 
 /** Failed, blocked, or cancelled child result. */
@@ -50,6 +53,8 @@ export interface PoolFailedResult {
   readonly completionEvidence?: ChildCompletionEvidence;
   readonly outputCapture?: ChildOutputCapture;
   readonly outputCaptureFailure?: string;
+  /** Host-derived v2 child terminal facts; absent for legacy children. */
+  readonly terminalObservation?: ChildTerminalObservationV2;
 }
 
 /** One child terminal result. */

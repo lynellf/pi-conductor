@@ -28,7 +28,11 @@
 import { existsSync } from "node:fs";
 import { latestManifestSnapshot } from "../host/api-resume-state.js";
 import { FileRecordLog } from "../host/log-file.js";
-import { isLegacyContinuityPolicy } from "../manifest/continuity.js";
+import {
+  isHostGeneratedContinuityPolicy,
+  isLegacyContinuityPolicy,
+} from "../manifest/continuity.js";
+import { findContextEnrichmentTerminalsV2 } from "../persistence/context-enrichment-v2.js";
 import type { ContinuityLedger } from "../persistence/continuity.js";
 import {
   ContinuityMaterializationException,
@@ -40,6 +44,12 @@ import {
   renderOkfCandidates,
 } from "../persistence/continuity-render.js";
 import type { PersistedRecord } from "../persistence/log.js";
+import { materializeWorkObservations } from "../persistence/work-observation.js";
+import {
+  renderWorkObservationJson,
+  renderWorkObservationMarkdown,
+  renderWorkObservationOkfCandidates,
+} from "../persistence/work-observation-report.js";
 
 // ─── Public API ─────────────────────────────────────────────────────────
 
@@ -111,14 +121,36 @@ export async function runContinuityReport(
 
   log.close();
 
-  // Materialize the ledger
+  const manifestSnapshot = latestManifestSnapshot(records, runId);
+  const continuity = manifestSnapshot?.normalized_manifest.continuity;
+  if (isHostGeneratedContinuityPolicy(continuity)) {
+    try {
+      const observations = materializeWorkObservations(records, runId, {
+        requireV2Control: true,
+      });
+      const enrichments = findContextEnrichmentTerminalsV2(records, runId);
+      const output =
+        format === "json"
+          ? renderWorkObservationJson(observations, enrichments)
+          : format === "markdown"
+            ? renderWorkObservationMarkdown(observations, enrichments)
+            : renderWorkObservationOkfCandidates();
+      return { output, exitCode: 0 };
+    } catch (error) {
+      return {
+        output: "",
+        exitCode: 1,
+        errorMessage: `v2 observation materialization failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  // Materialize the historical v1 ledger
   let ledger: ContinuityLedger;
   try {
     // The manifest snapshot is the durable policy source for resumed/reporting
     // paths; never fall back to the current ambient manifest or omit required
     // continuity checks.
-    const manifestSnapshot = latestManifestSnapshot(records, runId);
-    const continuity = manifestSnapshot?.normalized_manifest.continuity;
     ledger = materializeContinuity(records, {
       run_id: runId,
       ...(isLegacyContinuityPolicy(continuity) ? { continuity } : {}),

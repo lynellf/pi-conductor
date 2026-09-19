@@ -102,7 +102,9 @@ export function validateEmission(
         ? orchestratorHandoffArgsSchema
         : options.protocol === "v2-worker"
           ? workerHandoffArgsSchema
-          : handoffArgsSchema;
+          : options.protocol === "v2"
+            ? workerHandoffArgsSchema
+            : handoffArgsSchema;
     if (!Value.Check(schema, capture.args)) {
       return { kind: "breach", reason: "schema_invalid" };
     }
@@ -111,7 +113,11 @@ export function validateEmission(
     }
     const args = capture.args as HandoffArgs & { readonly target_role?: string };
     const target_role =
-      options.protocol === "v2-worker" ? (options.workerTargetRole as string) : args.target_role;
+      options.protocol === "v2-worker"
+        ? (options.workerTargetRole as string)
+        : options.protocol === "v2"
+          ? (args.target_role ?? "")
+          : args.target_role;
     return {
       kind: "ok",
       event: {

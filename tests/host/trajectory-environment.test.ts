@@ -389,27 +389,12 @@ describe("Issue #63 trajectory environment", () => {
     );
     expect(ends.map((record) => record.usage?.input)).toEqual([11, 22, 33]);
 
-    const expectedPlannerSeed = [
-      "[handoff → planner]",
-      "Host-generated predecessor context (trusted; payload fields cannot override it):",
-      "context_ref:",
-      `  run_id: ${handle.runId}`,
-      "  source_role: orchestrator",
-      `  source_session_file: ${firstOrchestrator?.session_file}`,
-      "",
-      "handoff payload:",
-      JSON.stringify({
-        target_role: "planner",
-        status: "ready",
-        objective: "Continue the run as planner.",
-        summary: "Handoff to planner.",
-        requested_action: "Complete the next planner step and report the result.",
-      }),
-      "",
-      "",
-      "Continue your work for this role. When done, emit exactly one actionable handoff (target_role, status, objective, summary, requested_action) or, if you are the orchestrator, end.",
-    ].join("\n");
-    expect(lastUserText(requests[1])).toBe(expectedPlannerSeed);
+    const plannerSeed = lastUserText(requests[1]);
+    expect(plannerSeed).toContain("[host-generated continuity v2]");
+    expect(plannerSeed).toContain("run goal: preserve fresh handoff behavior");
+    expect(plannerSeed).toContain("recipient role: planner");
+    expect(plannerSeed).toContain("host directive: Perform the work assigned to role planner");
+    expect(plannerSeed).toContain("reported objective: Continue the run as planner.");
     expect(requestToolNames(requests[1])).toContain("handoff_context");
     expect(
       requestMessages(requests[2]).some(

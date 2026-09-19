@@ -10,6 +10,10 @@ import {
 } from "../../src/manifest/continuity.js";
 import { parseManifest } from "../../src/manifest/parse.js";
 import {
+  AcceptedControlV2RecordError,
+  assertAcceptedControlV2,
+} from "../../src/persistence/accepted-control-v2.js";
+import {
   RAW_CONTROL_ARGUMENT_MAX_UTF8_BYTES,
   readRawControlArguments,
   sanitizeReportedHintsV2,
@@ -111,6 +115,23 @@ describe("v2 tool promotion", () => {
       reason: 7,
     });
     expect(validateEmission(seam.read(), { protocol: "v2" })).toMatchObject({ kind: "ok" });
+  });
+});
+
+describe("persisted v2 control bounds", () => {
+  it("rejects fields that fit character limits but exceed UTF-8 byte limits", () => {
+    const candidate = {
+      schema_version: 2 as const,
+      direction: "dispatch" as const,
+      recipient_role: "worker",
+      task: { host_directive: "😀".repeat(512) },
+      reported_hints: {},
+      ignored_hint_fields: [],
+      utf8_bytes: 0,
+    };
+    expect(() => assertAcceptedControlV2(candidate)).toThrow(
+      new AcceptedControlV2RecordError("accepted_control_v2_invalid_schema"),
+    );
   });
 });
 
