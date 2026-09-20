@@ -13,6 +13,7 @@ import type { SubagentStartedRecord } from "../../persistence/log.js";
 import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import { SessionState } from "../cost.js";
 import { SandboxBackendUnavailableError } from "../execution/sandbox/enablement.js";
+import { SandboxProjectIngestionError } from "../execution/sandbox/project-ingestion.js";
 import { ToolExecutionController } from "../execution/tool-execution-controller.js";
 import { toToolExecutionModelError } from "../execution/tool-execution-model-error.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
@@ -173,6 +174,17 @@ export function buildSpawnCallback(opts: DelegateChildFactoryOptions) {
             ...observed,
             cancelled: true,
             sessionError: "child cancelled during sandbox integration",
+            worktreeInspection: invalidWorktreeInspection(),
+          };
+        }
+        // A pre-marker failure is a normal child terminal: the durable application
+        // marker was never written, so no host worktree mutation occurred. Preserve
+        // the underlying diagnostic (classification, stage path, message) so the
+        // controller reports it as a failed child without aborting unrelated children.
+        if (cause instanceof SandboxProjectIngestionError && cause.integration === "not-started") {
+          return {
+            ...observed,
+            sessionError: `sandbox child integration not-started at ${cause.stagePath}: ${cause.message}`,
             worktreeInspection: invalidWorktreeInspection(),
           };
         }

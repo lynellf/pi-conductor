@@ -120,6 +120,67 @@ describe("sandbox child SDK lifecycle", () => {
     expect(events).toEqual(["close-tools", "ingest", "dispose"]);
   });
 
+  it("returns a normal failed terminal (not an ownership failure) for not-started ingestion", async () => {
+    const events: string[] = [];
+    const manager = new DelegationManager();
+    const stagePath = "/state/worktrees/child-1/patch-11111111-2222-3333-4444-555555555555";
+    // Import the error against the live module registry so the instance is a
+    // genuine instanceof of the class child-session resolves after
+    // vi.resetModules(); a static top-level binding would be a stale class.
+    const { SandboxProjectIngestionError } = await import(
+      "../../src/host/execution/sandbox/project-ingestion.js"
+    );
+    const notStarted = new SandboxProjectIngestionError(
+      "patch validation failed before worktree application; inspect and repair private output",
+      stagePath,
+      "not-started",
+    );
+    const context = sandboxContext(events);
+    (
+      context.ingestAndInspect as unknown as {
+        mockRejectedValue: (error: unknown) => void;
+      }
+    ).mockRejectedValue(notStarted);
+    vi.doMock("../../src/host/delegation/sandbox-child-context.js", () => ({
+      createSandboxChildContext: vi.fn(async () => context),
+    }));
+    mockSdk(mockSession(events, true));
+    const { buildSpawnCallback } = await import("../../src/host/delegation/child-session.js");
+    const result = await buildSpawnCallback(options(manager))(config);
+
+    // A pre-marker ingestion failure settles as a normal failed child terminal
+    // that carries the retained diagnostic, instead of an ownership failure.
+    expect(result.sessionError).toContain("not-started");
+    expect(result.sessionError).toContain(stagePath);
+    expect(result.worktreeInspection).toMatchObject({ state: "invalid" });
+  });
+
+  it("retains integration_incomplete ingestion as an ownership failure without downgrade", async () => {
+    const events: string[] = [];
+    const manager = new DelegationManager();
+    const incomplete = Object.assign(
+      new Error("partial apply; inspect retained staging and both trees"),
+      { integration: "integration_incomplete" },
+    );
+    const context = sandboxContext(events);
+    (
+      context.ingestAndInspect as unknown as {
+        mockRejectedValue: (error: unknown) => void;
+      }
+    ).mockRejectedValue(incomplete);
+    vi.doMock("../../src/host/delegation/sandbox-child-context.js", () => ({
+      createSandboxChildContext: vi.fn(async () => context),
+    }));
+    mockSdk(mockSession(events, true));
+    const { buildSpawnCallback } = await import("../../src/host/delegation/child-session.js");
+    // An application-marker/partial-application failure stays ownership-fatal;
+    // it is not downgraded to a normal failed terminal.
+    await expect(buildSpawnCallback(options(manager))(config)).rejects.toThrow(
+      "sandbox child integration is incomplete",
+    );
+    expect(events.at(-1)).toBe("dispose");
+  });
+
   it("passes the exact projected SDK names plus completion protocol", async () => {
     const events: string[] = [];
     const tools = ["read", "verify"].map((name) => ({ name }) as ToolDefinition);
