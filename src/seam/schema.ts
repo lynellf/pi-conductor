@@ -318,8 +318,7 @@ export const delegateTaskSchema = Type.Object({
   // cannot smuggle parameters the host would silently ignore. Every model-
   // visible field is enumerated above (id/subagent/objective/expected_output/
   // projection_paths/context_artifacts/tools/verification_recipe).
-  { additionalProperties: false },
-});
+}, { additionalProperties: false });
 
 /** Typed view of a single delegation task. */
 export type DelegateTask = Static<typeof delegateTaskSchema>;

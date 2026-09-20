@@ -74,16 +74,17 @@ function isSafeRepositoryRelativePath(path: string): boolean {
   // Stricter than the legacy `isSafeSnapshotPath` from
   // `subagent-snapshot.ts`: recipe `required_paths` must be exact
   // tracked repository files, so any hidden segment (not only `.git` /
-  // `.pi-conductor`) is rejected. The legacy snapshot predicate is
-  // preserved verbatim for its snapshot-policy consumer.
+  // `.pi-conductor`) is rejected, and any backslash anywhere in the
+  // path is rejected. The legacy snapshot predicate is preserved
+  // verbatim for its snapshot-policy consumer.
   if (
     path.length === 0 ||
     path !== path.trim() ||
     /\s/.test(path) ||
     path.includes("\u0000") ||
+    path.includes("\\") ||
     path.startsWith("~") ||
     path.startsWith("/") ||
-    path.startsWith("\\") ||
     /^[A-Za-z]:/.test(path) ||
     /[*?[\]{}$`]/.test(path)
   ) {

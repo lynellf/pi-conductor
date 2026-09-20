@@ -280,10 +280,11 @@ export function validateSubagentToolPolicy(
   }
 
   // (10)(11)(12)(13)(14) verify requires bubblewrap + non-empty profile-
-  // verification_recipes. P1 remediation: distinguish omission
-  // (`profileRecipes === undefined`) from explicit empty (`[]`); an
-  // explicit empty inventory while `verify` is authorized is itself a
-  // broken declaration and remains rejected.
+  // verification_recipes. Spec §3.4: a profile that authorizes `verify`
+  // must declare a non-empty `profile.verification_recipes` inventory.
+  // Omission (`profileRecipes === undefined`) and explicit empty
+  // (`[]`) are both rejected when `verify` is authorized; omission
+  // remains valid only when `verify` is not authorized.
   const authorizesVerify = policy.allowed.includes("verify");
   if (authorizesVerify) {
     if (opts.executionBackend !== "bubblewrap") {
@@ -292,7 +293,12 @@ export function validateSubagentToolPolicy(
         message: `subagent '${profileName}' authorizes 'verify' but profile.execution.backend is '${opts.executionBackend}' (must be 'bubblewrap')`,
       });
     }
-    if (opts.profileRecipes !== undefined && opts.profileRecipes.length === 0) {
+    if (opts.profileRecipes === undefined) {
+      errors.push({
+        code: "invalid-subagent-tool-policy",
+        message: `subagent '${profileName}' authorizes 'verify' but profile.verification_recipes is omitted (must reference at least one top-level recipe per spec §3.4)`,
+      });
+    } else if (opts.profileRecipes.length === 0) {
       errors.push({
         code: "invalid-subagent-tool-policy",
         message: `subagent '${profileName}' authorizes 'verify' but declares profile.verification_recipes=[] (must reference at least one top-level recipe)`,

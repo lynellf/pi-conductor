@@ -39,14 +39,18 @@ export function validateSubagentSnapshotPolicy(policy: SubagentSnapshotPolicy): 
 
 /** Snapshot literals exclude control state as well as traversal and glob syntax. */
 export function isSafeSnapshotPath(path: string): boolean {
+  // Pre-delegated-verification legacy semantics (commit e90d236):
+  // - accept spaces, '$', and backticks anywhere in the literal
+  // - still reject leading/trailing whitespace, leading '~', Windows drive
+  //   prefixes, any backslash or NUL, and glob metacharacters `*?[]{}`
+  // - reject control state segments (`.git`, `.pi-conductor`) and traversal
+  //   segments (`.`, `..`, empty)
   return (
     path.length > 0 &&
-    // Reject leading/trailing whitespace and any non-canonical whitespace forms.
     path === path.trim() &&
-    !/\s/.test(path) &&
     !path.startsWith("~") &&
     !/^[A-Za-z]:/.test(path) &&
-    !/[\\\0*?[\]{}$`]/.test(path) &&
+    !/[\\\0*?[\]{}]/.test(path) &&
     path
       .split("/")
       .every(
