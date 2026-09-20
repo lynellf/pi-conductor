@@ -182,6 +182,12 @@ export function fixture(options: {
           worktree_path: task.worktreePath,
           branch: task.branch,
           base_commit: task.baseCommit,
+          ...(task.effectiveTools === undefined
+            ? {}
+            : { effective_tools: [...task.effectiveTools] }),
+          ...(task.verificationRecipe === undefined
+            ? {}
+            : { verification_recipe: task.verificationRecipe }),
           ts: 2,
         });
       }

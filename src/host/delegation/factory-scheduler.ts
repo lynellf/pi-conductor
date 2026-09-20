@@ -80,6 +80,9 @@ function createNativeDelegateScheduler(
         args: input,
         policy: opts.delegationPolicy,
         profiles: opts.subagents,
+        ...(opts.verificationRecipes === undefined
+          ? {}
+          : { verificationRecipes: opts.verificationRecipes }),
         remainingChildren,
         runStateDir: opts.runStateDir,
         runId: opts.runId,

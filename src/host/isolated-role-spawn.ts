@@ -26,6 +26,7 @@ import {
   prepareIsolatedContextRetention,
 } from "./isolated-context-retention.js";
 import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
+import type { ReviewGateOptions } from "./review.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import type { RpcContextRetentionBridge } from "./rpc/context-retention-bridge.js";
 import { DelegateBridgeConfigError, type DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
@@ -52,6 +53,7 @@ export async function spawnIsolatedRoleSession(options: {
   readonly role: Role;
   readonly orchestratorRole?: Role;
   readonly controlProtocol?: "v1" | "v2";
+  readonly reviewGate?: ReviewGateOptions;
   readonly roleConfig: RoleConfig | undefined;
   readonly workspaceConfig: WorkspaceConfig;
   readonly backend: "worktree" | "copy";
@@ -206,6 +208,7 @@ export async function spawnIsolatedRoleSession(options: {
             executionPolicy.termination_grace_seconds,
           ),
         }),
+    ...(options.reviewGate === undefined ? {} : { reviewGate: options.reviewGate }),
   });
   let delegateBridge: NonNullable<NodeRoleSessionOptions["delegateBridge"]> | undefined;
   let requestFilesBridge: NonNullable<NodeRoleSessionOptions["requestFilesBridge"]> | undefined;

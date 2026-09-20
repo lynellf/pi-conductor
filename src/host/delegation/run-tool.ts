@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
+import type { ChildToolName } from "../../manifest/subagent-tool-policy.js";
 import type { ChildCompletionProtocol } from "../../persistence/child-completion.js";
 import { createSupervisedTools } from "../execution/supervised-tools.js";
 import type { ToolExecutionController } from "../execution/tool-execution-controller.js";
@@ -25,16 +26,20 @@ export interface ChildToolOptions {
   /** Optional child controller bound after SDK session creation. */
   readonly getController?: () => ToolExecutionController | null;
   readonly getPolicy?: () => Readonly<Required<ToolExecutionPolicy>>;
+  /** Exact configured authority; omitted preserves the legacy six-tool surface. */
+  readonly effectiveTools?: readonly ChildToolName[];
 }
 
 /** The only built-in tool names enabled for a child SDK session (§6). */
 export const CHILD_FILE_TOOL_NAMES = ["read", "grep", "find", "ls", "edit", "write"] as const;
 
 /** Return the exact SDK child tool allowlist for a profile-pinned protocol (§6.1). */
-export function childToolNames(protocol: ChildCompletionProtocol): string[] {
-  return protocol === "report_result"
-    ? [...CHILD_FILE_TOOL_NAMES, "report_result"]
-    : [...CHILD_FILE_TOOL_NAMES];
+export function childToolNames(
+  protocol: ChildCompletionProtocol,
+  effectiveTools?: readonly ChildToolName[],
+): string[] {
+  const selected = effectiveTools === undefined ? [...CHILD_FILE_TOOL_NAMES] : [...effectiveTools];
+  return protocol === "report_result" ? [...selected, "report_result"] : selected;
 }
 
 /** Build the child file tools, all confined to its generated worktree (§6). */
@@ -44,7 +49,7 @@ export function buildChildTools(opts: ChildToolOptions): ToolDefinition[] {
     opts.getController !== undefined && opts.getPolicy !== undefined
       ? createSupervisedTools({
           cwd: root,
-          declaredTools: [...CHILD_FILE_TOOL_NAMES],
+          declaredTools: fileToolNames(opts.effectiveTools),
           getController: opts.getController,
           getPolicy: opts.getPolicy,
           wrapFileTool: (rawTool) => confinePathTool(rawTool, root),
@@ -56,14 +61,30 @@ export function buildChildTools(opts: ChildToolOptions): ToolDefinition[] {
           createLsToolDefinition(root),
           createEditToolDefinition(root),
           createWriteToolDefinition(root),
-        ];
+        ].filter(
+          (tool) =>
+            opts.effectiveTools === undefined ||
+            opts.effectiveTools.includes(tool.name as ChildToolName),
+        );
   const confined =
     opts.getController !== undefined && opts.getPolicy !== undefined
       ? tools
       : (tools as unknown as ToolDefinition[]).map((tool) => confinePathTool(tool, root));
+  if (opts.effectiveTools === undefined) return confined as unknown as ToolDefinition[];
+  const byName = new Map(confined.map((tool) => [tool.name, tool]));
   // The SDK's `customTools` boundary erases each definition's parameter
   // schema. Preserve the factories' precise types above, then erase only here.
-  return confined as unknown as ToolDefinition[];
+  return opts.effectiveTools.map((name) => {
+    const tool = byName.get(name);
+    if (tool === undefined) throw new Error(`configured child tool '${name}' is not a file tool`);
+    return tool;
+  }) as unknown as ToolDefinition[];
+}
+
+function fileToolNames(effectiveTools: readonly ChildToolName[] | undefined): readonly string[] {
+  return effectiveTools === undefined
+    ? CHILD_FILE_TOOL_NAMES
+    : CHILD_FILE_TOOL_NAMES.filter((name) => effectiveTools.includes(name));
 }
 
 function isAbsolutePath(value: string): boolean {

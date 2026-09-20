@@ -43,6 +43,11 @@ export class SandboxOperationGate {
     });
   }
 
+  /** Report whether a terminal ownership failure has sealed admission. */
+  isSealed(): boolean {
+    return this.sealedCause !== undefined;
+  }
+
   /** Seal admission, preserving an active operation until its promise settles. */
   seal(cause: unknown = new Error("sandbox operation gate sealed")): void {
     if (this.sealedCause !== undefined) return;

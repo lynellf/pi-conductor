@@ -128,6 +128,7 @@ export async function prepareDelegateSubmission(
     gitCheck,
     parentProjection.materializedPaths,
     options.sandboxAdmission !== undefined,
+    options.verificationRecipes,
   );
   if (!validation.valid) {
     throw new DelegateToolError(
@@ -191,6 +192,7 @@ export async function prepareDelegateSubmission(
         worktreePath,
         task.projectionPaths,
         task.resolvedContextArtifacts,
+        task.effectiveTools,
       );
       const paths = task.projectionPaths ?? materializedParentPaths;
       const profile = deepFreeze(structuredClone(task.profile));
@@ -242,12 +244,23 @@ export async function prepareDelegateSubmission(
         profile,
         objective: task.objective,
         expectedOutput: task.expectedOutput,
+        ...(task.effectiveTools === undefined ? {} : { effectiveTools: task.effectiveTools }),
+        ...(task.verificationRecipe === undefined
+          ? {}
+          : { verificationRecipe: task.verificationRecipe }),
         worktreePath,
         branch,
         baseCommit,
         ...(task.projectionPaths === undefined ? {} : { projectionPaths: task.projectionPaths }),
         contextArtifacts: task.resolvedContextArtifacts,
-        taskFingerprint: taskFingerprint(task.objective, task.expectedOutput, baseCommit, paths),
+        taskFingerprint: taskFingerprint(
+          task.objective,
+          task.expectedOutput,
+          baseCommit,
+          paths,
+          task.effectiveTools,
+          task.verificationRecipe,
+        ),
         projectionFingerprint: projectionFingerprint(
           task.projectionPaths === undefined ? "full_materialized" : "exact",
           paths,

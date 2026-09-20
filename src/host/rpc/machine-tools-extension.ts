@@ -14,6 +14,7 @@ import {
 import type { TSchema } from "typebox";
 import { delegateModeDescription } from "../../manifest/delegation-mode.js";
 import { readRawControlArguments } from "../../seam/control-arguments.js";
+import { approveArgsSchema, requestChangesArgsSchema } from "../../seam/review.js";
 
 import {
   type DelegateArgs,
@@ -45,8 +46,15 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
       ? orchestratorHandoffArgsSchema
       : workerHandoffArgsSchema
     : handoffArgsSchema;
-  pi.registerTool(createTerminatingMachineTool("handoff", "Handoff", handoffSchema));
-  pi.registerTool(createTerminatingMachineTool("end", "End", v2 ? endArgsSchemaV2 : endArgsSchema));
+  if (config.reviewGate === undefined) {
+    pi.registerTool(createTerminatingMachineTool("handoff", "Handoff", handoffSchema));
+    pi.registerTool(
+      createTerminatingMachineTool("end", "End", v2 ? endArgsSchemaV2 : endArgsSchema),
+    );
+  } else {
+    pi.registerTool(createTerminatingReviewTool("approve", approveArgsSchema));
+    pi.registerTool(createTerminatingReviewTool("request_changes", requestChangesArgsSchema));
+  }
 
   const confined = buildConfinedTools(
     { workspaceRoot: config.workspaceRoot, mounts: config.mounts },
@@ -181,6 +189,47 @@ function createRequestFilesBridgeTool(directory: string): ToolDefinition {
           terminate: false,
         };
       }
+    },
+  });
+}
+
+function createTerminatingReviewTool(
+  name: "approve" | "request_changes",
+  parameters: TSchema,
+): ToolDefinition {
+  return defineTool({
+    name,
+    label: name,
+    description:
+      name === "approve"
+        ? "Approve the pinned review gate with one bounded reason."
+        : "Request changes from the phase owner with one bounded reason.",
+    parameters,
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const raw = readRawControlArguments(params);
+      if (raw.kind === "rejected") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "review decision arguments were not exactly representable or were too large",
+            },
+          ],
+          details: { ok: false, reason: "schema_invalid" },
+          terminate: true,
+        };
+      }
+      if (process.env.PI_CONDUCTOR_CONTEXT_CHILD_CONFIG === undefined) ctx.shutdown();
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `${name} recorded. Do not call further tools; the conductor will route the review outcome.`,
+          },
+        ],
+        details: {},
+        terminate: true,
+      };
     },
   });
 }

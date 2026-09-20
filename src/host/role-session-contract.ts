@@ -10,6 +10,7 @@ import type {
 } from "../core/types.js";
 import type { ToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { ContextBoundaryReference } from "../persistence/orchestrator-context.js";
+import type { ReviewDecisionCapture } from "../seam/review.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 import type { ArtifactCollectionContext } from "./artifacts/lifecycle.js";
 import type { ControllerMetricsSnapshot } from "./controller/metrics.js";
@@ -112,6 +113,9 @@ export interface RoleSession {
    * `readCaptureBuffer` returns a frozen view of the current contents.
    */
   readCaptureBuffer(): readonly EmissionCapture[];
+
+  /** Read host-captured reviewer terminal decisions for a review visit. */
+  readReviewDecisions?(): readonly ReviewDecisionCapture[];
 
   /** Read prose bound to the exact machine tool call, or null when unprovable. */
   takeReportedContextV2?(toolCallId?: string): ReportedContextV2 | null;

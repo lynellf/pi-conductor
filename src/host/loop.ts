@@ -72,6 +72,7 @@ import { runRoleVisit } from "./loop-fallback.js";
 import { type ContinuitySeedSection, formatRoleUnavailableSeed } from "./loop-format.js";
 import { forceRunCostCapEnd } from "./loop-run-cost-cap.js";
 import type { PendingArtifactRoute, RunLoopOptions, RunLoopResult } from "./loop-types.js";
+import { resumePendingReviewRoute } from "./review-recovery.js";
 import { formatRunMemorySeed } from "./run-memory.js";
 
 // ─── Public API ────────────────────────────────────────────────────────
@@ -156,6 +157,24 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const SYNTHESIZED_UNAVAILABLE_SESSION_FILE = "<synthesized:handoff:role-unavailable>";
 
   while (checkpoint.current_role !== "done") {
+    if (opts.reviewGate !== undefined && opts.reviewRecords !== undefined) {
+      const resumedReviewRoute = resumePendingReviewRoute({
+        checkpoint,
+        def,
+        host,
+        gate: opts.reviewGate,
+        records: opts.reviewRecords(),
+      });
+      if (resumedReviewRoute !== null) {
+        checkpoint = resumedReviewRoute.checkpoint;
+        seed = resumedReviewRoute.nextSeed;
+        parentSessionId = resumedReviewRoute.parentSessionId;
+        pendingArtifactRoute = null;
+        handoffContextRef = null;
+        continue;
+      }
+    }
+
     // ── §11.7 deferred forced end (Task 17) ──────────────────
     // A previous worker's terminal tripped the run cap; the worker's
     // handoff returned control to the orchestrator (state advanced).

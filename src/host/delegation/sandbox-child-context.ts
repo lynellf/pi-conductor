@@ -1,6 +1,8 @@
 /** Compose one admitted child's private tools, worktree, and integration lifecycle (#106 §9). */
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Static, TSchema } from "typebox";
+import { assertDelegatedAuthorityMetadata } from "../../persistence/delegated-authority-record.js";
+import type { PersistedRecord } from "../../persistence/log.js";
 import { readSandboxAdmission } from "../execution/sandbox/admission-store.js";
 import { createSandboxCommandTools } from "../execution/sandbox/command-tools.js";
 import { createSandboxFileTools } from "../execution/sandbox/file-tools.js";
@@ -13,6 +15,7 @@ import {
   inspectTrustedProjectedWorktree,
   type TrustedProjectedWorktree,
 } from "../execution/sandbox/trusted-git.js";
+import { createSandboxVerificationTool } from "../execution/sandbox/verification-tool.js";
 import type { ToolExecutionController } from "../execution/tool-execution-controller.js";
 import type { ChildWorktreeInspection } from "./child-result.js";
 import type { SpawnChildConfig } from "./delegate-tool.js";
@@ -32,6 +35,7 @@ export interface CreateSandboxChildContextOptions {
   readonly runStateDir: string;
   readonly hostApproval: SandboxHostApproval;
   readonly getController: () => ToolExecutionController | null;
+  readonly records?: () => readonly PersistedRecord[];
 }
 
 /** Private tools and settlement barriers retained until child disposal. */
@@ -56,6 +60,7 @@ export async function createSandboxChildContext(
   const primaryCheckout = supplied.primaryCheckout;
   const runStateDir = supplied.runStateDir;
   const getController = supplied.getController;
+  assertDelegatedAuthorityMetadata(config.effectiveTools, config.verificationRecipe);
   if (config.sandbox === undefined) throw new Error("sandbox child context requires admission");
   const admission = await readSandboxAdmission({
     runStateDir,
@@ -96,6 +101,7 @@ export async function createSandboxChildContext(
     admission,
     project,
     runStateDir,
+    ...(config.effectiveTools === undefined ? {} : { effectiveTools: config.effectiveTools }),
   });
   const commandTools = createSandboxCommandTools({
     gate,
@@ -105,9 +111,42 @@ export async function createSandboxChildContext(
     hostApproval,
     getController,
     childSignal: toolAbort.signal,
+    ...(config.effectiveTools === undefined ? {} : { effectiveTools: config.effectiveTools }),
   });
+  if (config.verificationRecipe !== undefined && config.effectiveTools?.includes("verify") !== true)
+    throw new Error("configured verification recipe has no effective verify tool");
+  const verificationTools =
+    config.effectiveTools?.includes("verify") === true
+      ? config.verificationRecipe === undefined
+        ? (() => {
+            throw new Error("configured verify authority has no pinned recipe");
+          })()
+        : [
+            createSandboxVerificationTool({
+              gate,
+              admission,
+              project,
+              runStateDir,
+              hostApproval,
+              getController,
+              childSignal: toolAbort.signal,
+              recipe: config.verificationRecipe,
+              ...(supplied.records === undefined ? {} : { records: supplied.records }),
+            }),
+          ]
+      : [];
+  const availableTools = [...fileTools, ...commandTools, ...verificationTools];
+  const orderedTools =
+    config.effectiveTools === undefined
+      ? availableTools
+      : config.effectiveTools.map((name) => {
+          const tool = availableTools.find((candidate) => candidate.name === name);
+          if (tool === undefined)
+            throw new Error(`configured child tool '${name}' was not constructed`);
+          return tool;
+        });
   const tools = Object.freeze(
-    [...fileTools, ...commandTools].map((tool) => wrapWithPersistentSignal(tool, toolAbort.signal)),
+    orderedTools.map((tool) => wrapWithPersistentSignal(tool, toolAbort.signal)),
   );
   let closeWork: Promise<void> | undefined;
   let integrationWork: Promise<ChildWorktreeInspection> | undefined;

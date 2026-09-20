@@ -5,6 +5,15 @@ export {
   type PreparedDelegateSubmission,
   prepareDelegateSubmission,
 } from "./admission.js";
+export {
+  type DelegatedAuthorityError,
+  type DelegatedAuthorityErrorCode,
+  type DelegatedAuthorityResolution,
+  type RejectedDelegatedAuthority,
+  type ResolveDelegatedAuthorityOptions,
+  type ResolvedDelegatedAuthority,
+  resolveDelegatedAuthority,
+} from "./authority.js";
 export { buildChildPrompt, type ChildPrompt } from "./child-prompt.js";
 export {
   type DelegateResult,

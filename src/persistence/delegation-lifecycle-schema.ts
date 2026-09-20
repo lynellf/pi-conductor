@@ -4,7 +4,11 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import { CONTINUITY_CONSTRAINTS, continuityPacketV1Schema } from "../seam/continuity.js";
 import { childOutputCaptureSchema } from "./child-output-records.js";
-import { delegationSourceWorkspaceSchema } from "./delegation-task-schema.js";
+import {
+  delegatedEffectiveToolsSchema,
+  delegatedVerificationRecipePinSchema,
+  delegationSourceWorkspaceSchema,
+} from "./delegation-task-schema.js";
 import { subagentSandboxDescriptorSchema } from "./subagent-sandbox.js";
 
 const id = Type.String({ minLength: 1 });
@@ -174,6 +178,8 @@ export const acceptedChildStartedSchema = Type.Object(
     ),
     task_fingerprint: Type.Optional(Type.String({ pattern: "^[a-f0-9]{64}$" })),
     projection_fingerprint: Type.Optional(projectionFingerprint),
+    effective_tools: Type.Optional(delegatedEffectiveToolsSchema),
+    verification_recipe: Type.Optional(delegatedVerificationRecipePinSchema),
     sandbox: Type.Optional(subagentSandboxDescriptorSchema),
     source_workspace: Type.Optional(delegationSourceWorkspaceSchema),
     context_artifacts: Type.Optional(Type.Unknown()),

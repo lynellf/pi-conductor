@@ -6,6 +6,7 @@
 
 - [Worktree subagent delegation](#worktree-subagent-delegation)
 - [Configure a parent and profiles](#configure-a-parent-and-profiles)
+- [Delegated tool projection and fixed verification](#delegated-tool-projection-and-fixed-verification)
 - [Ask the parent to delegate](#ask-the-parent-to-delegate)
 - [Nonblocking tasks and controls](#nonblocking-tasks-and-controls)
 - [Settlement and recovery](#settlement-and-recovery)
@@ -91,6 +92,73 @@ its worktree path; do not put parent transcripts or FSM routing instructions in
 the child prompt. A profile is file-only by default. An operator can opt a
 profile into the Bubblewrap command boundary described below; the parent still
 reviews the result and decides whether to integrate it.
+
+### Delegated tool projection and fixed verification
+
+A profile may opt into an exact child tool policy. The task can only narrow a
+profile's `default`; it cannot select a merely allowed sibling. Effective tools
+are sorted and deduplicated before any worktree, sandbox, or SDK session exists.
+Omit both the profile policy and task fields to preserve the historical child
+surface.
+
+```yaml
+verification_recipes:
+  - name: parser-focused
+    commands:
+      - executable: /usr/bin/pnpm
+        args: [exec, vitest, run, tests/parser.test.ts]
+    evaluation: report_only
+    required_paths: [package.json, tests/parser.test.ts]
+    timeout_seconds: 180
+    max_calls: 5
+
+subagents:
+  - name: local-implementer
+    tools:
+      required: false
+      allowed: [read, grep, find, ls, edit, write, verify, read_execution_output]
+      default: [read, grep, edit, write, verify, read_execution_output]
+    verification_recipes: [parser-focused]
+```
+
+The task binds the recipe and may narrow the profile default:
+
+```json
+{
+  "id": "parser-green",
+  "subagent": "local-implementer",
+  "objective": "Implement the parser behavior.",
+  "expected_output": "A focused patch and verification evidence.",
+  "projection_paths": ["package.json", "src/parser.ts", "tests/parser.test.ts"],
+  "tools": ["read", "grep", "edit", "write", "verify", "read_execution_output"],
+  "verification_recipe": "parser-focused"
+}
+```
+
+`bash`, `read_execution_output`, and `verify` require explicit Bubblewrap
+execution. `verify` is exposed as a parameterless `{}` tool; the child cannot
+choose a recipe or provide command arguments. The host pins the recipe name,
+canonical JSON, SHA-256 digest, effective tools, projection, runtime, and limits
+in the acceptance/start records. Queueing, resume, and retry use those pins,
+not current YAML.
+
+Recipes use fixed literal argv and run sequentially in the same private
+`/workspace` as the child's file tools. They never accept shell source,
+environment, paths, or output destinations from the model. Execution stops on
+nonzero status, timeout, cancellation, capture failure, or uncertain cleanup;
+results contain bounded status, output references, byte counts, and previews.
+`max_calls` is shared across child retries/restarts. An unfinished or ambiguous
+call is never replayed and blocks further verification until reconciliation.
+`report_only` is advisory; `require_pass` and `require_fail` are factual
+expectation fields, not patch approval. The parent must inspect the diff,
+integrate it, and run its own focused checks and repository gates.
+
+When migrating an existing manifest, leave omitted fields omitted unless the
+profile is ready for exact authority and approved Bubblewrap prerequisites.
+Adding a configured tool policy or recipe is a new authority contract and should
+be paired with a manifest version bump for new runs. Existing records without
+these additive fields remain legacy records; malformed configured policy is
+rejected rather than silently widened.
 
 ### Ask the parent to delegate
 
@@ -245,8 +313,9 @@ behavior. An explicit subset is always applied and rechecked before the child
 session starts.
 
 A child cannot use `request_files` or `delegate`, and it cannot expand its own
-projection. A file-only child has no shell. A Bubblewrap-enabled child gets
-only the sandbox command tools described below. The parent must decide whether
+projection. A file-only child has no shell. A legacy Bubblewrap-enabled child gets the
+sandbox command tools described below; a configured policy receives only its
+pinned subset. The parent must decide whether
 to disclose more context before or in a later delegated batch. This keeps child
 authority monotonic even when siblings run concurrently.
 
@@ -451,7 +520,11 @@ admitted projection. `network` is currently exactly `none`. The child receives
 `bash` and `read_execution_output` in addition to its confined file tools.
 Commands and file tools operate on the same private materialization; the host
 validates and stages its final changed paths without giving the child ambient
-Git authority.
+Git authority. For configured tool policies, the SDK-visible `customTools` and
+tool-name list are exactly the pinned effective set plus the host-injected
+completion tool. A configured profile that omits `bash` does not receive it;
+profiles without a policy retain the legacy six file tools (or the legacy
+Bubblewrap command/output tools).
 
 The host operator must independently prepare four inputs before starting or
 resuming an opted-in run:
@@ -584,8 +657,9 @@ and `report_result`, rooted in its generated worktree. Every child file tool
 rejects absolute paths, `..` traversal, and paths that resolve through a symlink
 outside that worktree; this is path confinement, not an OS or credential
 sandbox. File-only children cannot call `run`, `bash`, `handoff`, `end`,
-`ask_user`, or `delegate`; Bubblewrap-enabled children add only the command and
-output tools above.
+`ask_user`, or `delegate`; legacy Bubblewrap-enabled children add only the
+command and output tools above, while configured profiles receive their exact
+pinned subset.
 
 The parent receives the worktree path and branch, then owns testing, formatting,
 builds, Git inspection, commits, and integration. For example, it may run

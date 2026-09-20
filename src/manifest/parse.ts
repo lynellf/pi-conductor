@@ -31,6 +31,7 @@ import { parseContextEnrichmentPolicy } from "./context-enrichment.js";
 import { parseControllerConfig } from "./controller.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
+import { parseReviewGates } from "./review-gates.js";
 import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
 import { parseSubagentToolPolicy } from "./subagent-tool-policy.js";
@@ -122,6 +123,8 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     obj.context_enrichment === undefined
       ? undefined
       : parseContextEnrichmentPolicy(obj.context_enrichment);
+  const review_gates =
+    obj.review_gates === undefined ? undefined : parseReviewGates(obj.review_gates);
 
   const manifest = Object.freeze({
     version,
@@ -133,6 +136,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(controller === undefined ? {} : { controller }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(context_enrichment === undefined ? {} : { context_enrichment }),
+    ...(review_gates === undefined ? {} : { review_gates }),
     ...(verificationRecipes === undefined ? {} : { verification_recipes: verificationRecipes }),
   }) as Manifest;
   return manifest;

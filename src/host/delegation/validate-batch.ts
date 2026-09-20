@@ -15,9 +15,16 @@
  * separate and accepts a pre-captured status result.
  */
 
-import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
+import type {
+  ChildToolName,
+  DelegationPolicy,
+  SubagentProfile,
+  VerificationRecipe,
+  VerificationRecipePin,
+} from "../../manifest/types.js";
 import type { ContextArtifact, DelegateSubmissionArgs } from "../../seam/schema.js";
 import { SANDBOX_UNAVAILABLE_MESSAGE } from "../execution/sandbox/enablement.js";
+import { type DelegatedAuthorityError, resolveDelegatedAuthority } from "./authority.js";
 import { isValidTaskId } from "./ids.js";
 import { isSafeExactProjectionPath } from "./projection.js";
 import {
@@ -43,6 +50,7 @@ export type BatchValidationErrorCode =
   | "primary-not-git"
   | "primary-dirty"
   | "sandbox-backend-unavailable"
+  | DelegatedAuthorityError["code"]
   | ProjectionAdmissionErrorCode
   | SnapshotAdmissionErrorCode;
 
@@ -72,6 +80,10 @@ export interface ValidatedTask {
   readonly projectionPaths?: readonly string[];
   /** Raw Issue #60 descriptors retained only until pre-spawn host resolution. */
   readonly contextArtifacts?: readonly ContextArtifact[];
+  /** Exact configured child tool authority; omitted for legacy profiles. */
+  readonly effectiveTools?: readonly ChildToolName[];
+  /** One pinned fixed recipe; omitted when verification is not selected. */
+  readonly verificationRecipe?: VerificationRecipePin;
 }
 
 // ─── Git cleanliness check result ──────────────────────────────────────
@@ -106,6 +118,7 @@ export function validateBatch(
   gitCheck: GitCheckResult,
   materializedParentPaths?: readonly string[],
   hostAvailable = false,
+  verificationRecipes?: readonly VerificationRecipe[],
 ): BatchValidationResult {
   const errors: BatchValidationError[] = [];
   const profileByName = new Map(profiles.map((p) => [p.name, p]));
@@ -172,6 +185,13 @@ export function validateBatch(
   }
 
   const effectiveProjectionByTaskId = new Map<string, readonly string[]>();
+  const effectiveAuthorityByTaskId = new Map<
+    string,
+    {
+      readonly effectiveTools?: readonly ChildToolName[];
+      readonly verificationRecipe?: VerificationRecipePin;
+    }
+  >();
   // Policy-controlled profiles resolve E before any pool worker can create a
   // worktree. Profiles without one retain the Issue #52 runtime path gate.
   for (const task of args.tasks) {
@@ -189,38 +209,58 @@ export function validateBatch(
           code: "invalid-snapshot-policy",
           message: `task '${task.id}': workspace snapshot and projection are mutually exclusive`,
         });
-        continue;
+      } else {
+        if (profile?.execution?.backend !== "bubblewrap")
+          errors.push({
+            code: "snapshot-requires-sandbox",
+            message: `task '${task.id}': snapshot requires explicit Bubblewrap execution`,
+          });
+        const resolution = resolveSnapshotProjection(
+          snapshot,
+          task.projection_paths,
+          materializedParentPaths,
+        );
+        if (!resolution.valid)
+          errors.push(...resolution.errors.map((error) => withTaskId(task.id, error)));
+        else effectiveProjectionByTaskId.set(task.id, resolution.projection.paths);
       }
-      if (profile?.execution?.backend !== "bubblewrap")
-        errors.push({
-          code: "snapshot-requires-sandbox",
-          message: `task '${task.id}': snapshot requires explicit Bubblewrap execution`,
-        });
-      const resolution = resolveSnapshotProjection(
-        snapshot,
-        task.projection_paths,
-        materializedParentPaths,
-      );
-      if (!resolution.valid)
-        errors.push(...resolution.errors.map((error) => withTaskId(task.id, error)));
-      else effectiveProjectionByTaskId.set(task.id, resolution.projection.paths);
-      continue;
-    }
-    const projectionPolicy = profile?.workspace?.projection;
-    if (projectionPolicy !== undefined) {
-      const resolution = resolveEffectiveProjection(
-        projectionPolicy,
-        task.projection_paths,
-        materializedParentPaths,
-      );
-      if (!resolution.valid) {
-        errors.push(...resolution.errors.map((error) => withTaskId(task.id, error)));
-        continue;
+    } else {
+      const projectionPolicy = profile?.workspace?.projection;
+      if (projectionPolicy !== undefined) {
+        const resolution = resolveEffectiveProjection(
+          projectionPolicy,
+          task.projection_paths,
+          materializedParentPaths,
+        );
+        if (!resolution.valid)
+          errors.push(...resolution.errors.map((error) => withTaskId(task.id, error)));
+        else effectiveProjectionByTaskId.set(task.id, resolution.projection.paths);
+      } else {
+        errors.push(...validateLegacyProjectionPaths(task, materializedPathSet));
       }
-      effectiveProjectionByTaskId.set(task.id, resolution.projection.paths);
-      continue;
     }
-    errors.push(...validateLegacyProjectionPaths(task, materializedPathSet));
+
+    if (profile !== undefined) {
+      const projectionPaths =
+        effectiveProjectionByTaskId.get(task.id) ??
+        (task.projection_paths === undefined
+          ? materializedParentPaths
+          : Object.freeze([...task.projection_paths]));
+      const authority = resolveDelegatedAuthority({
+        profile,
+        ...(task.tools === undefined ? {} : { requestedTools: task.tools }),
+        ...(task.verification_recipe === undefined
+          ? {}
+          : { requestedRecipe: task.verification_recipe }),
+        ...(verificationRecipes === undefined ? {} : { verificationRecipes }),
+        ...(projectionPaths === undefined ? {} : { projectionPaths }),
+      });
+      if (!authority.valid) {
+        errors.push(...authority.errors.map((error) => withTaskId(task.id, error)));
+      } else {
+        effectiveAuthorityByTaskId.set(task.id, authority);
+      }
+    }
   }
 
   // §4: Git cleanliness gate.
@@ -250,6 +290,7 @@ export function validateBatch(
       throw new Error(`profile '${task.subagent}' not found`);
     }
     const effectiveProjectionPaths = effectiveProjectionByTaskId.get(task.id);
+    const authority = effectiveAuthorityByTaskId.get(task.id);
     return {
       taskId: task.id,
       subagent: task.subagent,
@@ -264,6 +305,12 @@ export function validateBatch(
       ...(task.context_artifacts === undefined
         ? {}
         : { contextArtifacts: Object.freeze([...task.context_artifacts]) }),
+      ...(authority?.effectiveTools === undefined
+        ? {}
+        : { effectiveTools: authority.effectiveTools }),
+      ...(authority?.verificationRecipe === undefined
+        ? {}
+        : { verificationRecipe: authority.verificationRecipe }),
     };
   });
 
@@ -324,7 +371,7 @@ function validateLegacyProjectionPaths(
 
 function withTaskId(
   taskId: string,
-  error: ProjectionAdmissionError | SnapshotAdmissionError,
+  error: ProjectionAdmissionError | SnapshotAdmissionError | DelegatedAuthorityError,
 ): BatchValidationError {
   return {
     code: error.code,

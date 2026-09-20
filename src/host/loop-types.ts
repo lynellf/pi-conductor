@@ -12,6 +12,7 @@ import type { ContinuityEvidenceAuthority } from "./continuity-evidence.js";
 import type { EndGuardConfig } from "./end-guard-runner.js";
 import type { ArtifactRouteSource, Host, RoleSession, SpawnRoleOptions } from "./host.js";
 import type { ContinuitySeedSection } from "./loop-format.js";
+import type { ReviewGateOptions } from "./review.js";
 import type { RunControl } from "./run-control.js";
 
 /** Abort bridge for the active role session. */
@@ -60,6 +61,10 @@ export interface RunLoopOptions {
    *  loaded manifest. Tests pass `sessionManager: SessionManager.inMemory()`
    *  to skip real disk I/O. */
   readonly spawnDefaults?: Partial<SpawnRoleOptions>;
+  /** Optional host-pinned reviewer gate; absent preserves the existing machine-event path. */
+  readonly reviewGate?: ReviewGateOptions;
+  /** Read append-only review records for crash/resume idempotence. */
+  readonly reviewRecords?: () => readonly import("../persistence/log.js").PersistedRecord[];
   /**
    * Optional: dynamic cap reader for `max_run_cost_usd` (§11.7, Task 17).
    * Called on every terminal usage capture to evaluate the run cap.

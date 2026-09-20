@@ -52,6 +52,8 @@ import type {
   RunContextRecord,
   RunSeededRecord,
 } from "../persistence/log.js";
+import type { ReviewGatePinnedRecord } from "../persistence/review.js";
+import { createReviewGatePinnedRecord, latestReviewGatePinned } from "../persistence/review.js";
 import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { createManifestSnapshot } from "../persistence/trajectory-records.js";
 import { assertManifestWorkspaceBackendsSupported } from "./api-admission.js";
@@ -75,6 +77,8 @@ import {
   admitOrchestratorContextResume,
   resetOrchestratorContext,
 } from "./orchestrator-context-resume.js";
+import type { ReviewGateOptions } from "./review.js";
+import { reviewGateFromManifest, reviewGateFromPinnedRecord } from "./review.js";
 import type { RunHandle } from "./run-handle.js";
 
 // Public crash-recovery seams remain exported from this entry module while
@@ -105,6 +109,14 @@ export interface StartRunOptions {
    * unchanged from prior releases.
    */
   readonly modelRegistry?: ModelRegistry;
+  /** Optional host-pinned reviewer gate for this run. */
+  readonly reviewGate?: ReviewGateOptions;
+  /** Manifest gate id; resolves the gate contract without duplicating its roles. */
+  readonly reviewGateId?: string;
+  /** Host-observed revision pinned into the selected manifest gate. */
+  readonly reviewedRevision?: string;
+  /** Optional authoritative revision provider; absence fails approval closed. */
+  readonly currentRevision?: () => string | Promise<string>;
 }
 
 /** Top-level options for `resumeRun`. */
@@ -121,6 +133,14 @@ export interface ResumeRunOptions {
    * `resumeRun` returns. When omitted, the check is skipped.
    */
   readonly modelRegistry?: ModelRegistry;
+  /** Optional host-pinned reviewer gate for this resumed run. */
+  readonly reviewGate?: ReviewGateOptions;
+  /** Optional manifest gate id for an explicit resume configuration. */
+  readonly reviewGateId?: string;
+  /** Host-observed revision when explicitly resolving a manifest gate. */
+  readonly reviewedRevision?: string;
+  /** Optional authoritative revision provider; absence fails approval closed. */
+  readonly currentRevision?: () => string | Promise<string>;
   /** Reset retained orchestrator history after crash reconciliation. */
   readonly resetOrchestratorContext?: boolean;
 }
@@ -168,6 +188,12 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
     ...loaded,
     manifest: pinExecutionPolicies(newRunManifest),
   });
+  const selectedReviewGate = resolveRequestedReviewGate(pinnedLoaded.manifest, {
+    explicit: opts.reviewGate,
+    gateId: opts.reviewGateId,
+    reviewedRevision: opts.reviewedRevision,
+    currentRevision: opts.currentRevision,
+  });
   const baseDir = await resolveBaseDir(opts.baseDir);
   const log = new FileRecordLog({ baseDir });
   const def = loaded.def;
@@ -194,6 +220,9 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
       checkpoint: initialCheckpoint,
     };
     log.append(initialSnapshot);
+    if (selectedReviewGate !== undefined) {
+      log.append(createReviewGatePinnedRecord(toPinnedReviewGateInput(runId, selectedReviewGate)));
+    }
 
     // Normalize once at the shared start boundary. The extension and CLI
     // already trim their accepted goal; doing it here also keeps direct SDK
@@ -232,6 +261,7 @@ export async function startRun(manifestPath: string, opts: StartRunOptions): Pro
       goal,
       loadedManifest: pinnedLoaded,
       lease,
+      ...(selectedReviewGate === undefined ? {} : { reviewGate: selectedReviewGate }),
     });
   } catch (error) {
     await lease.release();
@@ -399,6 +429,28 @@ export async function resumeRun(
       });
     }
     const resumedRecords = log.records(runId);
+    const pinnedReviewGate = latestReviewGatePinned(resumedRecords, runId);
+    const requestedReviewGate = resolveRequestedReviewGate(resumedLoaded.manifest, {
+      explicit: opts.reviewGate,
+      gateId: opts.reviewGateId,
+      reviewedRevision: opts.reviewedRevision,
+      currentRevision:
+        opts.reviewGateId !== undefined || opts.reviewGate !== undefined
+          ? opts.currentRevision
+          : undefined,
+    });
+    if (requestedReviewGate !== undefined && pinnedReviewGate !== null) {
+      assertReviewGateMatchesPin(requestedReviewGate, pinnedReviewGate);
+    }
+    const pinnedReviewOptions =
+      pinnedReviewGate === null ? undefined : reviewGateFromPinnedRecord(pinnedReviewGate);
+    const reviewGate =
+      requestedReviewGate ??
+      (pinnedReviewOptions === undefined
+        ? undefined
+        : opts.currentRevision === undefined
+          ? pinnedReviewOptions
+          : { ...pinnedReviewOptions, currentRevision: opts.currentRevision });
     assertNoUnselectedTrajectoryHandoff(
       resumedRecords,
       runId,
@@ -476,6 +528,7 @@ export async function resumeRun(
       ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
       initialExecutionVisitIndexByRole,
       endGuardEpoch,
+      ...(reviewGate === undefined ? {} : { reviewGate }),
     });
   } catch (error) {
     await lease.release();
@@ -492,6 +545,88 @@ export function listRuns(baseDir: string): readonly string[] {
 }
 
 // ─── Internals ──────────────────────────────────────────────────────────
+
+function assertReviewGateMatchesPin(gate: ReviewGateOptions, pin: ReviewGatePinnedRecord): void {
+  const matches =
+    gate.reviewerRole === pin.reviewer_role &&
+    gate.phaseOwnerRole === pin.phase_owner_role &&
+    gate.phaseId === pin.phase_id &&
+    gate.gateId === pin.gate_id &&
+    gate.reviewedRevision === pin.reviewed_revision &&
+    (gate.nextPhase ?? null) === (pin.next_phase ?? null);
+  if (!matches) {
+    throw new Error(
+      `resumeRun: supplied review gate does not match the run-start review_gate_pinned record for gate '${pin.gate_id}'`,
+    );
+  }
+}
+
+function resolveRequestedReviewGate(
+  manifest: LoadedManifest["manifest"],
+  request: {
+    readonly explicit?: ReviewGateOptions | undefined;
+    readonly gateId?: string | undefined;
+    readonly reviewedRevision?: string | undefined;
+    readonly currentRevision?: (() => string | Promise<string>) | undefined;
+  },
+): ReviewGateOptions | undefined {
+  if (request.gateId !== undefined) {
+    if (request.explicit !== undefined) {
+      throw new Error("reviewGateId cannot be combined with reviewGate");
+    }
+    if (request.reviewedRevision === undefined || request.reviewedRevision.trim().length === 0) {
+      throw new Error("reviewGateId requires a non-empty reviewedRevision");
+    }
+    return reviewGateFromManifest(
+      manifest,
+      request.gateId,
+      request.reviewedRevision,
+      request.currentRevision,
+    );
+  }
+  if (request.reviewedRevision !== undefined) {
+    throw new Error("reviewedRevision requires reviewGateId or reviewGate");
+  }
+  if (request.explicit === undefined) {
+    if (request.currentRevision !== undefined) {
+      throw new Error("currentRevision requires reviewGateId or reviewGate");
+    }
+    return undefined;
+  }
+  const configured = manifest.review_gates?.find((gate) => gate.id === request.explicit?.gateId);
+  if (manifest.review_gates !== undefined && configured === undefined) {
+    throw new Error(
+      `reviewGate '${request.explicit.gateId}' is not declared in manifest.review_gates`,
+    );
+  }
+  if (
+    configured !== undefined &&
+    (configured.reviewer_role !== request.explicit.reviewerRole ||
+      configured.phase_owner_role !== request.explicit.phaseOwnerRole ||
+      configured.phase_id !== request.explicit.phaseId ||
+      configured.next_phase !== request.explicit.nextPhase)
+  ) {
+    throw new Error(`reviewGate '${request.explicit.gateId}' does not match its manifest gate`);
+  }
+  return request.currentRevision === undefined
+    ? request.explicit
+    : { ...request.explicit, currentRevision: request.currentRevision };
+}
+
+function toPinnedReviewGateInput(runId: string, gate: ReviewGateOptions) {
+  return {
+    run_id: runId,
+    reviewer_role: gate.reviewerRole,
+    phase_owner_role: gate.phaseOwnerRole,
+    phase_id: gate.phaseId,
+    gate_id: gate.gateId,
+    reviewed_revision: gate.reviewedRevision,
+    ...(gate.nextPhase === undefined ? {} : { next_phase: gate.nextPhase }),
+    ...(gate.repairGuidance === undefined ? {} : { repair_guidance: gate.repairGuidance }),
+    ...(gate.evidence === undefined ? {} : { evidence: gate.evidence }),
+    ts: Date.now(),
+  };
+}
 
 // Surface unused type-only import to keep the symbol live for
 // downstream consumers (the reconciler uses it indirectly via the

@@ -120,6 +120,9 @@ export async function createControllerAdmission(
       subagents: (ctx.loadedManifest.manifest.subagents ?? []).filter((profile) =>
         allowed.has(profile.name),
       ),
+      ...(ctx.loadedManifest.manifest.verification_recipes === undefined
+        ? {}
+        : { verificationRecipes: ctx.loadedManifest.manifest.verification_recipes }),
       remainingChildren: options.config.delegation.max_children_per_session,
       runId: ctx.runId,
       parentRole: options.parentRole,
@@ -239,6 +242,9 @@ export async function createDelegateTool(
       ? ("v2" as const)
       : ("v1" as const),
     subagents: manifest.subagents ?? [],
+    ...(manifest.verification_recipes === undefined
+      ? {}
+      : { verificationRecipes: manifest.verification_recipes }),
     remainingChildren: roleConfig.delegation.max_children_per_session,
     runId: ctx.runId,
     parentRole: role,

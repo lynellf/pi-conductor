@@ -99,4 +99,10 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "context_compaction",
   "context_enrichment",
   "run_finalization_failed",
+  "review_gate_pinned",
+  "review_decision",
+  "review_incomplete",
+  "review_route_pending",
+  "review_route",
+  "review_approval_invalidated",
 ]);

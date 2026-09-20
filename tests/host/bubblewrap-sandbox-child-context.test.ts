@@ -2,6 +2,7 @@ import type { AgentToolResult, ToolDefinition } from "@earendil-works/pi-coding-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnChildConfig } from "../../src/host/delegation/delegate-tool.js";
 import type { SandboxHostApproval } from "../../src/host/execution/sandbox/host-approval.js";
+import { pinVerificationRecipe } from "../../src/manifest/verification-recipes.js";
 import type { SandboxAdmissionRecord } from "../../src/persistence/sandbox-admission.js";
 import type { SandboxProjectMaterializationDescriptor } from "../../src/persistence/sandbox-materialization.js";
 
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   ingest: vi.fn(),
   fileTools: vi.fn(),
   commandTools: vi.fn(),
+  verificationTool: vi.fn(),
   createIndependentWorktree: vi.fn(),
   configureIndependentSparse: vi.fn(),
   inspectIndependentWorktree: vi.fn(),
@@ -40,6 +42,9 @@ beforeEach(async () => {
   vi.doMock("../../src/host/execution/sandbox/command-tools.js", () => ({
     createSandboxCommandTools: mocks.commandTools,
   }));
+  vi.doMock("../../src/host/execution/sandbox/verification-tool.js", () => ({
+    createSandboxVerificationTool: mocks.verificationTool,
+  }));
   vi.doMock("../../src/host/delegation/worktree.js", () => ({
     createIndependentSourceWorktree: mocks.createIndependentWorktree,
     configureExactSparseWorktree: mocks.configureIndependentSparse,
@@ -58,6 +63,7 @@ afterEach(() => {
   vi.doUnmock("../../src/host/execution/sandbox/project-ingestion.js");
   vi.doUnmock("../../src/host/execution/sandbox/file-tools.js");
   vi.doUnmock("../../src/host/execution/sandbox/command-tools.js");
+  vi.doUnmock("../../src/host/execution/sandbox/verification-tool.js");
   vi.doUnmock("../../src/host/delegation/worktree.js");
   vi.resetModules();
 });
@@ -112,6 +118,31 @@ describe("sandbox child context", () => {
       "bash",
       "read_execution_output",
     ]);
+  });
+
+  it("projects a configured verify tool without restoring omitted command tools", async () => {
+    arrange({ fileTools: namedTools(["read"]) });
+    mocks.commandTools.mockReturnValue([]);
+    mocks.verificationTool.mockReturnValue(namedTools(["verify"])[0]);
+    const context = await createSandboxChildContext({
+      ...options(),
+      config: {
+        ...options().config,
+        effectiveTools: ["read", "verify"],
+        verificationRecipe: pinVerificationRecipe({
+          name: "focused",
+          commands: [{ executable: "/usr/bin/test", args: [] }],
+          evaluation: "report_only",
+          required_paths: ["package.json"],
+          timeout_seconds: 10,
+          max_calls: 1,
+        }),
+      } as unknown as SpawnChildConfig,
+    });
+    expect(context.tools.map((tool) => tool.name)).toEqual(["read", "verify"]);
+    expect(mocks.verificationTool).toHaveBeenCalledWith(
+      expect.objectContaining({ recipe: expect.objectContaining({ name: "focused" }) }),
+    );
   });
 
   it("materializes a source-backed sandbox child in an independent repository (#118)", async () => {

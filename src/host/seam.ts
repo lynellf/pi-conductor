@@ -33,6 +33,7 @@
  */
 
 import type { AcceptedHandoffEnvelopeRejection } from "../core/accepted-handoff.js";
+import type { ReviewDecisionCapture } from "../seam/review.js";
 import type { HandoffActionabilityFailure } from "../seam/schema.js";
 import type { EmissionCapture } from "../seam/validate-emission.js";
 
@@ -58,6 +59,7 @@ export function isTransportHandoffValidationFailure(failure: {
 
 export class SessionSeam {
   private readonly _captures: EmissionCapture[] = [];
+  private readonly _reviewDecisions: ReviewDecisionCapture[] = [];
   private readonly _handoffValidationFailures: HandoffValidationFailure[] = [];
   private readonly _sealedListeners = new Set<() => void>();
   private _lastToolCallId: string | undefined;
@@ -76,6 +78,16 @@ export class SessionSeam {
   push(capture: EmissionCapture, toolCallId?: string): void {
     this._captures.push(capture);
     this._lastToolCallId = toolCallId;
+  }
+
+  /** Append one host-captured reviewer terminal decision. */
+  pushReviewDecision(capture: ReviewDecisionCapture): void {
+    this._reviewDecisions.push(capture);
+  }
+
+  /** Frozen reviewer decision captures in invocation order. */
+  readReviewDecisions(): readonly ReviewDecisionCapture[] {
+    return Object.freeze([...this._reviewDecisions]);
   }
 
   /** Read the call ID for the first captured machine event, when transport exposed it. */
@@ -139,6 +151,7 @@ export class SessionSeam {
    */
   reset(): void {
     this._captures.length = 0;
+    this._reviewDecisions.length = 0;
     this._handoffValidationFailures.length = 0;
     this._lastToolCallId = undefined;
     this._sealed = false;

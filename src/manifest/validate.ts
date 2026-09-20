@@ -24,6 +24,7 @@ import { validateContinuityPolicy } from "./continuity.js";
 import { validateControllerConfig } from "./controller-validation.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
+import { validateReviewGates } from "./review-gates.js";
 import { validateSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
 import { validateSubagentSnapshotPolicy } from "./subagent-snapshot.js";
@@ -120,7 +121,15 @@ export type ManifestErrorCode =
   /** Delegated verification §3.1: verification_recipes payload is malformed. */
   | "invalid-verification-recipes"
   /** Delegated verification §3.3 / §3.4: subagent tool policy is malformed. */
-  | "invalid-subagent-tool-policy";
+  | "invalid-subagent-tool-policy"
+  /** Issue #124: duplicate or role-invalid manifest review gate. */
+  | "review-gate-duplicate-id"
+  | "review-gate-duplicate-phase"
+  | "review-gate-reviewer-undeclared"
+  | "review-gate-owner-undeclared"
+  | "review-gate-self-owner"
+  | "review-gate-reviewer-orchestrator"
+  | "review-gate-self-next-phase";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -238,6 +247,7 @@ export function validateManifest(m: Manifest): ManifestReport {
   const warnings: ManifestWarning[] = [];
 
   validateControllerConfig(m, errors);
+  validateReviewGates(m, errors);
 
   for (const error of validateContinuityPolicy(m)) {
     errors.push({

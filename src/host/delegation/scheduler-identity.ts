@@ -83,6 +83,7 @@ export function acceptedDelegationRecord(
   input: DelegateSubmissionArgs,
   submissionId: string,
   fingerprint: string,
+  requestFingerprint: string,
   rawRequestFingerprint: string,
   tasks: readonly PreparedDelegateChild[],
 ): DelegationSubmissionAcceptedRecord {
@@ -94,10 +95,13 @@ export function acceptedDelegationRecord(
     parent_role: identity.parentRole,
     parent_visit_index: identity.parentVisitIndex,
     input_fingerprint: fingerprint,
-    ...(tasks.some(
-      (task) => task.sandbox !== undefined || task.resolvedSourceWorkspace !== undefined,
-    )
-      ? { request_fingerprint: rawRequestFingerprint }
+    ...(tasks.some(hasPinnedAuthority)
+      ? {
+          request_fingerprint: requestFingerprint,
+          ...(requestFingerprint === rawRequestFingerprint
+            ? {}
+            : { raw_request_fingerprint: rawRequestFingerprint }),
+        }
       : {}),
     children: tasks.map((task) => acceptedChild(task)),
     ts: Date.now(),
@@ -138,6 +142,15 @@ export function matchesSchedulerScope(
   );
 }
 
+function hasPinnedAuthority(task: PreparedDelegateChild): boolean {
+  return (
+    task.effectiveTools !== undefined ||
+    task.verificationRecipe !== undefined ||
+    task.sandbox !== undefined ||
+    task.resolvedSourceWorkspace !== undefined
+  );
+}
+
 function acceptedChild(task: PreparedDelegateChild) {
   return {
     child_id: task.childId,
@@ -156,6 +169,10 @@ function acceptedChild(task: PreparedDelegateChild) {
     context_fingerprint: task.contextFingerprint,
     prompt_fingerprint: task.promptFingerprint,
     projection_fingerprint: task.projectionFingerprint,
+    ...(task.effectiveTools === undefined ? {} : { effective_tools: [...task.effectiveTools] }),
+    ...(task.verificationRecipe === undefined
+      ? {}
+      : { verification_recipe: task.verificationRecipe }),
     ...(task.resolvedSourceWorkspace === undefined
       ? {}
       : {

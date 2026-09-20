@@ -9,7 +9,12 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 
 import type { Role } from "../../core/types.js";
 import { delegateModeDescription, resolveDelegationMode } from "../../manifest/delegation-mode.js";
-import type { DelegationPolicy, RoleConfig, SubagentProfile } from "../../manifest/types.js";
+import type {
+  DelegationPolicy,
+  RoleConfig,
+  SubagentProfile,
+  VerificationRecipe,
+} from "../../manifest/types.js";
 import type { PersistedRecord } from "../../persistence/log.js";
 import {
   type DelegateArgs,
@@ -41,6 +46,8 @@ export interface DelegateChildFactoryOptions {
   /** Pinned v2 host-generated child-result protocol for new runs. */
   readonly controlProtocol?: "v1" | "v2";
   readonly subagents: readonly SubagentProfile[];
+  /** Pinned top-level verification recipes for the run. */
+  readonly verificationRecipes?: readonly VerificationRecipe[];
   readonly remainingChildren: number;
   readonly runId: string;
   readonly parentRole: Role;
@@ -201,6 +208,9 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
           args,
           policy,
           profiles: opts.subagents,
+          ...(opts.verificationRecipes === undefined
+            ? {}
+            : { verificationRecipes: opts.verificationRecipes }),
           remainingChildren: remaining,
           runStateDir: opts.runStateDir,
           runId: opts.runId,

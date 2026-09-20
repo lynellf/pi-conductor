@@ -136,6 +136,11 @@ export {
 } from "./manifest/execution-policy.js";
 export { parseManifest } from "./manifest/parse.js";
 export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
+export {
+  findReviewGate,
+  parseReviewGates,
+  validateReviewGates,
+} from "./manifest/review-gates.js";
 // Reviewer F10 remediation: surface the delegated-verification public
 // surface (P1) on the package barrel so consumers can import the closed
 // child-tool alphabet, profile tool policy, top-level verification recipe
@@ -158,6 +163,7 @@ export type {
   DelegationPolicy,
   Manifest,
   ModelConfig,
+  ReviewGateConfig,
   RoleConfig,
   SubagentProfile,
   SubagentSnapshotPolicy,
@@ -166,8 +172,10 @@ export { ManifestParseError } from "./manifest/types.js";
 export {
   canonicalizeVerificationRecipe,
   parseVerificationRecipes,
+  pinVerificationRecipe,
   type VerificationEvaluation,
   type VerificationRecipe,
+  type VerificationRecipePin,
   validateVerificationRecipes,
 } from "./manifest/verification-recipes.js";
 // Pure continuity contracts (spec §6, §10, §11) consumed by host + CLI lanes.
@@ -270,6 +278,17 @@ export {
   sanitizeReportedHintsV2,
 } from "./seam/control-arguments.js";
 export { summarizePayload } from "./seam/payload-summary.js";
+export type {
+  ApproveArgs,
+  RequestChangesArgs,
+  ReviewDecision,
+  ReviewDecisionCapture,
+} from "./seam/review.js";
+export {
+  approveArgsSchema,
+  REVIEW_REASON_MAX_LENGTH,
+  requestChangesArgsSchema,
+} from "./seam/review.js";
 export type {
   DelegateArgs,
   DelegateControlArgs,
@@ -403,6 +422,29 @@ export type {
   OrchestratorContextUnknownCompactionInspection,
 } from "./persistence/orchestrator-context-inspection.js";
 export { inspectOrchestratorContext } from "./persistence/orchestrator-context-inspection.js";
+export type {
+  ReviewApprovalInvalidatedRecord,
+  ReviewDecisionRecord,
+  ReviewEvidence,
+  ReviewGatePinnedRecord,
+  ReviewIdentity,
+  ReviewIncompleteRecord,
+  ReviewRecord,
+  ReviewRoutePendingRecord,
+  ReviewRouteRecord,
+} from "./persistence/review.js";
+export {
+  assertReviewRecord,
+  createReviewApprovalInvalidatedRecord,
+  createReviewDecisionRecord,
+  createReviewGatePinnedRecord,
+  createReviewIncompleteRecord,
+  createReviewRoutePendingRecord,
+  createReviewRouteRecord,
+  latestReviewGatePinned,
+  latestReviewOutcome,
+  ReviewRecordError,
+} from "./persistence/review.js";
 // ─── Issue #68: bounded structured role-turn telemetry record + option ───
 // Additive `role_turn` persisted record and the host-only partial limits option.
 // Pure, host-agnostic; see docs/issue-68-role-turn-telemetry/spec.md.
@@ -557,6 +599,9 @@ export type {
   LoadedManifest,
   ProductionHostOptions,
   ResumeRunOptions,
+  ReviewCaptureResult,
+  ReviewGateOptions,
+  ReviewToolDetails,
   RoleSession,
   RoleSessionOrigin,
   RunConfigError,
@@ -584,16 +629,20 @@ export {
   AskUserUnavailableError,
   buildToolsAllowlist,
   CONTROLLER_JSON_MAX_BYTES,
+  classifyReviewCapture,
   controllerHostApprovalSchema,
+  createApproveTool,
   createAskUserTool,
   createHandoffContextTool,
   createProductionHost,
+  createRequestChangesTool,
   decodeControllerResponse,
   deriveLocalProgramHostDriverDigest,
   type EffectGrant,
   encodeBoundedControllerJson,
   encodeControllerRequest,
   FileRecordLog,
+  formatReviewRouteSeed,
   formatRunMemorySeed,
   HostManifestError,
   handoffContextArgsSchema,
@@ -617,6 +666,8 @@ export {
   NoMoreModelsError,
   ProductionHost,
   RecordLogError,
+  ReviewGateConfigError,
+  ReviewRoutingError,
   RoleEscalationError,
   RunControlError,
   RunHandle,
@@ -625,7 +676,11 @@ export {
   reconcileControllerActionEffects,
   reconcileToolExecutionCleanup,
   resolveModel,
+  resumePendingReviewRoute,
   resumeRun,
+  reviewGateFromManifest,
+  reviewGateFromPinnedRecord,
+  reviewRepairGuidance,
   StubHost,
   SystemPromptNotFoundError,
   selectModelEntry,

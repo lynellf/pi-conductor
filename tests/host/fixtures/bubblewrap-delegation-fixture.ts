@@ -34,7 +34,11 @@ export interface RealDelegationFixture {
 }
 
 export async function createRealDelegationFixture(
-  options: { readonly freshProductionLayout?: boolean; readonly fourFiles?: boolean } = {},
+  options: {
+    readonly freshProductionLayout?: boolean;
+    readonly fourFiles?: boolean;
+    readonly verificationScript?: boolean;
+  } = {},
 ): Promise<RealDelegationFixture> {
   const binaryPath = required("PI_CONDUCTOR_BWRAP");
   const runtimeSource = required("PI_CONDUCTOR_BWRAP_RUNTIME");
@@ -96,6 +100,11 @@ export async function createRealDelegationFixture(
     await mkdir(join(checkout, "delta"));
   }
   await writeFile(join(checkout, "alpha/value.txt"), "original\n");
+  if (options.verificationScript)
+    await writeFile(
+      join(checkout, "alpha/check.bash"),
+      '#!/bin/bash\nvalue=$(<alpha/value.txt)\n[[ "$value" == "fixed" ]]\n',
+    );
   await writeFile(join(checkout, "beta/value.txt"), "original\n");
   if (options.fourFiles) {
     await writeFile(join(checkout, "gamma/value.txt"), "original\n");

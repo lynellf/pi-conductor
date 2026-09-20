@@ -88,7 +88,10 @@ interface TaskState {
 interface SubmissionState {
   readonly submissionId: string;
   readonly fingerprint: string;
+  /** Enriched accepted request identity when configured authority is pinned. */
   readonly requestFingerprint?: string;
+  /** Raw model request used to recognize idempotent redelivery. */
+  readonly rawRequestFingerprint: string;
   readonly tasks: readonly TaskState[];
 }
 
@@ -164,8 +167,7 @@ export class DelegationScheduler {
     const rawRequestFingerprint = requestFingerprint(input, sourceWorkspaceRef);
     const prior = this.submissions.get(submissionId);
     if (prior !== undefined) {
-      const expected = prior.requestFingerprint ?? prior.fingerprint;
-      if (expected !== rawRequestFingerprint)
+      if (prior.rawRequestFingerprint !== rawRequestFingerprint)
         throw new Error("delegation submission identity was reused with different inputs");
       return prior.tasks.map((task) => task.childId);
     }
@@ -180,11 +182,18 @@ export class DelegationScheduler {
     );
     const tasks = prepared.tasks;
     const hasBoundAuthority = tasks.some(
-      (task) => task.sandbox !== undefined || task.resolvedSourceWorkspace !== undefined,
+      (task) =>
+        task.effectiveTools !== undefined ||
+        task.verificationRecipe !== undefined ||
+        task.sandbox !== undefined ||
+        task.resolvedSourceWorkspace !== undefined,
     );
-    const fingerprint = hasBoundAuthority
-      ? acceptedFingerprint(input, tasks, sourceWorkspaceRef)
-      : rawRequestFingerprint;
+    const resolvedRequestFingerprint = requestFingerprint(input, sourceWorkspaceRef, tasks);
+    const fingerprint =
+      hasBoundAuthority &&
+      tasks.some((task) => task.sandbox !== undefined || task.resolvedSourceWorkspace !== undefined)
+        ? acceptedFingerprint(input, tasks, sourceWorkspaceRef)
+        : resolvedRequestFingerprint;
     if (this.isClosed() || this.isBudgetExhausted())
       throw new Error("delegation admission is closed");
     this.options.assertAdmissionOpen?.();
@@ -201,6 +210,7 @@ export class DelegationScheduler {
       input,
       submissionId,
       fingerprint,
+      resolvedRequestFingerprint,
       rawRequestFingerprint,
       tasks,
     );
@@ -227,7 +237,8 @@ export class DelegationScheduler {
     this.submissions.set(submissionId, {
       submissionId,
       fingerprint,
-      ...(hasBoundAuthority ? { requestFingerprint: rawRequestFingerprint } : {}),
+      ...(hasBoundAuthority ? { requestFingerprint: resolvedRequestFingerprint } : {}),
+      rawRequestFingerprint,
       tasks: states,
     });
     this.drain();
@@ -482,6 +493,7 @@ export class DelegationScheduler {
     );
     for (const submission of accepted) {
       if (!matchesSchedulerScope(submission, this.options.identity)) continue;
+      assertDelegationSubmissionAccepted(submission);
       const states = submission.children.map((child) => {
         const terminal = terminals.get(child.child_id);
         const result = terminal === undefined ? undefined : terminalToPoolResult(terminal);
@@ -503,6 +515,10 @@ export class DelegationScheduler {
         ...(submission.request_fingerprint === undefined
           ? {}
           : { requestFingerprint: submission.request_fingerprint }),
+        rawRequestFingerprint:
+          submission.raw_request_fingerprint ??
+          submission.request_fingerprint ??
+          submission.input_fingerprint,
         tasks: states,
       });
     }

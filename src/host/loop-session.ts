@@ -25,6 +25,7 @@ import type {
   RunLoopResult,
 } from "./loop-types.js";
 import { ZERO_USAGE } from "./loop-types.js";
+import type { ReviewGateOptions } from "./review.js";
 import { finalizeSession } from "./session-finalization.js";
 
 /** Explicit state and host dependencies for one role session lifecycle. */
@@ -36,6 +37,7 @@ export interface SessionLoopContext {
   readonly visitIndex: number;
   readonly executionVisitIndex: number;
   readonly session: RoleSession;
+  readonly reviewGate: ReviewGateOptions | null;
   readonly sessionParentId: string | null;
   readonly seed: string;
   artifactSeedForVisit: string | null;

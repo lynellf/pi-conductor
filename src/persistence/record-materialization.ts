@@ -19,6 +19,7 @@ import { terminalObservationV2Schema } from "./delegation-lifecycle-schema.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
+import { assertReviewRecord } from "./review.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { assertRunFinalizationFailure } from "./run-finalization.js";
 import { assertSourceWorkspaceRecord } from "./source-workspace.js";
@@ -124,6 +125,17 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
   }
   if (record.type === "run_finalization_failed") {
     assertRunFinalizationFailure(record);
+    return;
+  }
+  if (
+    record.type === "review_gate_pinned" ||
+    record.type === "review_decision" ||
+    record.type === "review_incomplete" ||
+    record.type === "review_route_pending" ||
+    record.type === "review_route" ||
+    record.type === "review_approval_invalidated"
+  ) {
+    assertReviewRecord(record);
     return;
   }
 

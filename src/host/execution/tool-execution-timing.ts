@@ -10,12 +10,12 @@ export function timeoutDelay(milliseconds: number): number {
 
 /** Preserve explicit cleanup evidence across host and worker error types. */
 export function hasUnconfirmedCleanup(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "cleanup" in error &&
-    (error as { readonly cleanup?: unknown }).cleanup === "unconfirmed"
-  );
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as {
+    readonly cleanup?: unknown;
+    readonly terminal?: { readonly cleanup?: unknown };
+  };
+  return candidate.cleanup === "unconfirmed" || candidate.terminal?.cleanup === "unconfirmed";
 }
 
 /** Wait for operation settlement after cancellation, bounded by graceful cleanup windows. */

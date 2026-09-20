@@ -28,6 +28,7 @@ import type { RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
 import { type ContinuitySeedSection, formatIncomingHandoffSeed } from "./loop-format.js";
 import type { LoadedManifest } from "./manifest.js";
+import type { ReviewGateOptions } from "./review.js";
 import { RunControl } from "./run-control.js";
 import { type ConfigOverrideContainer, RunHandle } from "./run-handle.js";
 /** Inputs for the run-loop and lease-release completion coordinator. */
@@ -48,6 +49,8 @@ export interface RunWithCompletionArgs {
   /** Next lifecycle visit indexes reconstructed from durable starts. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
+  /** Optional host-pinned reviewer gate for this run. */
+  readonly reviewGate?: ReviewGateOptions;
   readonly endGuardEpoch?: number;
   /** Live ownership held from API entry through the final loop outcome. */
   readonly lease: RunExecutionLease;
@@ -145,6 +148,8 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       ...(args.initialExecutionVisitIndexByRole !== undefined && {
         initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,
       }),
+      ...(args.reviewGate === undefined ? {} : { reviewGate: args.reviewGate }),
+      reviewRecords: () => log.records(runId),
       getRunCostCap,
       ...(isLegacyContinuityPolicy(loadedManifest.manifest.continuity) === false
         ? {}

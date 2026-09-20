@@ -116,6 +116,7 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
           getRunCostCap: opts.getRunCostCap ?? (() => opts.runCostCap ?? null),
           getCurrentParentUsage: () => host.captureUsage(session).cost,
           ...(handoffContextRef !== null && { handoffContextRef }),
+          ...(opts.reviewGate?.reviewerRole === role ? { reviewGate: opts.reviewGate } : {}),
         });
       }
     } catch (err) {
@@ -153,6 +154,7 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
       visitIndex,
       executionVisitIndex,
       session,
+      reviewGate: opts.reviewGate?.reviewerRole === role ? opts.reviewGate : null,
       sessionParentId: parentSessionId,
       seed,
       artifactSeedForVisit,

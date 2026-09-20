@@ -2,7 +2,7 @@
 
 import { readFile } from "node:fs/promises";
 
-import type { SubagentProfile } from "../../manifest/types.js";
+import type { ChildToolName, SubagentProfile } from "../../manifest/types.js";
 import type { ResolvedContextArtifact } from "./context-artifacts.js";
 
 /** System prompt supplied to one standalone child session. */
@@ -22,6 +22,7 @@ export async function buildChildPrompt(
   worktreePath: string,
   projectionPaths?: readonly string[],
   contextArtifacts: readonly ResolvedContextArtifact[] = [],
+  effectiveTools?: readonly ChildToolName[],
 ): Promise<ChildPrompt> {
   const snapshot = profile.workspace?.snapshot;
   if (snapshot !== undefined && (profile.execution === undefined || projectionPaths === undefined))
@@ -40,6 +41,7 @@ export async function buildChildPrompt(
           projectionPaths,
           profile.execution !== undefined,
           snapshotSummary,
+          effectiveTools,
         )
       : profile.execution !== undefined
         ? sandboxChildPrompt(
@@ -51,6 +53,7 @@ export async function buildChildPrompt(
             runId,
             parentRole,
             snapshotSummary,
+            effectiveTools,
           )
         : legacyChildPrompt(
             baseSystemPrompt,
@@ -61,6 +64,7 @@ export async function buildChildPrompt(
             runId,
             parentRole,
             worktreePath,
+            effectiveTools,
           );
   return {
     systemPrompt: appendContextArtifacts(taskPrompt, contextArtifacts),
@@ -76,6 +80,7 @@ function sandboxChildPrompt(
   runId: string,
   parentRole: string,
   snapshotSummary?: string,
+  effectiveTools?: readonly ChildToolName[],
 ): string {
   const completion =
     profile.completion_protocol === "minimal"
@@ -95,10 +100,14 @@ function sandboxChildPrompt(
     "YOUR TASK:",
     objective,
     "",
-    "AVAILABLE TOOLS:",
-    "- Use the confined file tools for files in /workspace.",
-    "- Use bash to run commands in /workspace.",
-    "- Use read_execution_output to inspect retained command output by output_ref; it accepts no path.",
+    ...(effectiveTools === undefined
+      ? [
+          "AVAILABLE TOOLS:",
+          "- Use the confined file tools for files in /workspace.",
+          "- Use bash to run commands in /workspace.",
+          "- Use read_execution_output to inspect retained command output by output_ref; it accepts no path.",
+        ]
+      : projectedToolPrompt(effectiveTools)),
     "",
     "REQUIRED BEHAVIOR:",
     "- Work only inside /workspace and through the available tools.",
@@ -119,6 +128,7 @@ function minimalChildPrompt(
   projectionPaths: readonly string[] | undefined,
   sandboxed = false,
   snapshotSummary?: string,
+  effectiveTools?: readonly ChildToolName[],
 ): string {
   const visibleFiles =
     snapshotSummary ??
@@ -127,17 +137,31 @@ function minimalChildPrompt(
         ? "the files materialized in /workspace"
         : "the files materialized in this worktree"
       : projectionPaths.join("\n"));
-  const behavior = sandboxed
-    ? [
-        "- Work only through the available file tools and bash in /workspace.",
-        "- Use read_execution_output to inspect retained command output by output_ref; it accepts no path.",
-        "- If a test fails, diagnose the failure, repair the work, and rerun the relevant test.",
-        "- Do not expand authority, enable network access, use ambient Git, or access host paths.",
-      ]
-    : [
-        "- Work only through the available file tools.",
-        "- Stay within the visible files and do not run commands.",
-      ];
+  const behavior =
+    effectiveTools === undefined
+      ? sandboxed
+        ? [
+            "- Work only through the available file tools and bash in /workspace.",
+            "- Use read_execution_output to inspect retained command output by output_ref; it accepts no path.",
+            "- If a test fails, diagnose the failure, repair the work, and rerun the relevant test.",
+            "- Do not expand authority, enable network access, use ambient Git, or access host paths.",
+          ]
+        : [
+            "- Work only through the available file tools.",
+            "- Stay within the visible files and do not run commands.",
+          ]
+      : [
+          ...projectedToolPrompt(effectiveTools),
+          ...(sandboxed
+            ? [
+                "- Work only in /workspace and through the projected tools.",
+                "- If a test fails, diagnose the failure, repair the work, and rerun the relevant test.",
+                "- Do not expand authority, enable network access, use ambient Git, or access host paths.",
+              ]
+            : [
+                "- Stay within the visible files and do not run commands unless a projected tool permits it.",
+              ]),
+        ];
   return [
     baseSystemPrompt.trim(),
     "",
@@ -157,6 +181,19 @@ function minimalChildPrompt(
     "",
     "When finished, respond normally with a concise final summary. Do not call a conductor completion tool. If you cannot continue because required context or an external dependency is missing, start the first non-empty line of the final response with: BLOCKED: <reason>",
   ].join("\n");
+}
+
+function projectedToolPrompt(tools: readonly ChildToolName[]): readonly string[] {
+  return [
+    "AVAILABLE TOOLS (EXACT PROJECTED SET):",
+    ...tools.map((tool) => `- ${tool}`),
+    ...(tools.includes("verify")
+      ? ["- verify accepts an empty object and runs the pinned recipe."]
+      : []),
+    ...(tools.includes("read_execution_output")
+      ? ["- read_execution_output reads retained output by output_ref; it accepts no path."]
+      : []),
+  ];
 }
 
 function appendContextArtifacts(
@@ -195,6 +232,7 @@ function legacyChildPrompt(
   runId: string,
   parentRole: string,
   worktreePath: string,
+  effectiveTools?: readonly ChildToolName[],
 ): string {
   return [
     baseSystemPrompt.trim(),
@@ -213,7 +251,9 @@ function legacyChildPrompt(
     "EXPECTED OUTPUT:",
     expectedOutput,
     "",
-    "You may use only read, grep, find, ls, edit, write, and report_result.",
+    ...(effectiveTools === undefined
+      ? ["You may use only read, grep, find, ls, edit, write, and report_result."]
+      : projectedToolPrompt(effectiveTools)),
     "Do not run commands or create commits. The parent verifies and commits your work.",
     "Call report_result with completed, no_changes, or failed when finished.",
   ].join("\n");

@@ -1,7 +1,7 @@
 /** Bounded delegated-child cohort fingerprints — Issue #57 §9.1. */
 
 import { createHash } from "node:crypto";
-
+import type { ChildToolName, VerificationRecipePin } from "../../manifest/types.js";
 import type { ChildProjectionFingerprint } from "../../persistence/child-completion.js";
 
 /** Hash the canonical task identity without retaining a second raw task card. */
@@ -10,15 +10,18 @@ export function taskFingerprint(
   expectedOutput: string,
   baseCommit: string,
   materializedPaths: readonly string[],
+  effectiveTools?: readonly ChildToolName[],
+  verificationRecipe?: VerificationRecipePin,
 ): string {
-  return sha256(
-    JSON.stringify({
-      objective,
-      expected_output: expectedOutput,
-      base_commit: baseCommit,
-      materialized_paths: sortedUnique(materializedPaths),
-    }),
-  );
+  const identity: Record<string, unknown> = {
+    objective,
+    expected_output: expectedOutput,
+    base_commit: baseCommit,
+    materialized_paths: sortedUnique(materializedPaths),
+  };
+  if (effectiveTools !== undefined) identity.effective_tools = [...effectiveTools];
+  if (verificationRecipe !== undefined) identity.verification_recipe = verificationRecipe;
+  return sha256(JSON.stringify(identity));
 }
 
 /** Fingerprint a resolved exact or full-materialized projection without storing raw roots. */

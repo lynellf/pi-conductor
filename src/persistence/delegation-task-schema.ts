@@ -12,6 +12,30 @@ const sourceWorkspaceRef = Type.String({
   pattern: "^source-workspace/v1/[a-f0-9]{64}/[a-f0-9]{64}$",
 });
 const nonNegativeInteger = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+const effectiveChildToolSchema = Type.Union([
+  Type.Literal("read"),
+  Type.Literal("grep"),
+  Type.Literal("find"),
+  Type.Literal("ls"),
+  Type.Literal("edit"),
+  Type.Literal("write"),
+  Type.Literal("bash"),
+  Type.Literal("read_execution_output"),
+  Type.Literal("verify"),
+]);
+const effectiveTools = Type.Array(effectiveChildToolSchema, {
+  minItems: 1,
+  maxItems: 16,
+  uniqueItems: true,
+});
+const verificationRecipePin = Type.Object(
+  {
+    name: id,
+    digest: sha256,
+    canonical_json: Type.String({ minLength: 2, maxLength: 65_536 }),
+  },
+  { additionalProperties: false },
+);
 const projectionFingerprint = Type.Object(
   {
     kind: Type.Union([Type.Literal("exact"), Type.Literal("full_materialized")]),
@@ -51,6 +75,8 @@ const child = Type.Object(
     context_fingerprint: sha256,
     prompt_fingerprint: sha256,
     projection_fingerprint: projectionFingerprint,
+    effective_tools: Type.Optional(effectiveTools),
+    verification_recipe: Type.Optional(verificationRecipePin),
     source_workspace: Type.Optional(delegationSourceWorkspaceSchema),
     sandbox: Type.Optional(subagentSandboxDescriptorSchema),
   },
@@ -94,6 +120,7 @@ export const delegationSubmissionAcceptedV1Schema = Type.Object(
     tool_call_id: id,
     input_fingerprint: sha256,
     request_fingerprint: Type.Optional(sha256),
+    raw_request_fingerprint: Type.Optional(sha256),
     children: Type.Array(child, { minItems: 1 }),
     ts: Type.Number({ minimum: 0 }),
   },
@@ -114,6 +141,7 @@ export const delegationSubmissionAcceptedV2Schema = Type.Object(
     origin: delegationAdmissionOriginSchema,
     input_fingerprint: sha256,
     request_fingerprint: Type.Optional(sha256),
+    raw_request_fingerprint: Type.Optional(sha256),
     accepted_args: delegateSubmissionArgsSchema,
     children: Type.Array(child, { minItems: 1 }),
     ts: Type.Number({ minimum: 0 }),
@@ -135,6 +163,7 @@ export const delegationSubmissionAcceptedV3Schema = Type.Object(
     origin: controllerActionAdmissionOriginSchema,
     input_fingerprint: sha256,
     request_fingerprint: Type.Optional(sha256),
+    raw_request_fingerprint: Type.Optional(sha256),
     accepted_args: delegateSubmissionArgsSchema,
     children: Type.Array(child, { minItems: 1 }),
     ts: Type.Number({ minimum: 0 }),
@@ -159,5 +188,13 @@ export type ControllerAdmissionOrigin = Readonly<
 >;
 /** Child metadata retained in an accepted submission. */
 export type DelegationAcceptedChild = Readonly<Static<typeof child>>;
+/** Pinned exact tool authority retained in accepted/start records. */
+export type DelegatedEffectiveTools = Static<typeof effectiveTools>;
+/** Pinned canonical recipe identity/content retained in accepted/start records. */
+export type DelegatedVerificationRecipePin = Static<typeof verificationRecipePin>;
+export {
+  effectiveTools as delegatedEffectiveToolsSchema,
+  verificationRecipePin as delegatedVerificationRecipePinSchema,
+};
 /** Immutable source identity bound to a native child without a host path. */
 export type DelegationSourceWorkspace = Readonly<Static<typeof delegationSourceWorkspaceSchema>>;

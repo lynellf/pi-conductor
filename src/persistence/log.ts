@@ -23,10 +23,22 @@ import type { ChildContinuitySibling } from "./continuity.js";
 import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
-import type { DelegationSourceWorkspace } from "./delegation-task-schema.js";
+import type {
+  DelegatedEffectiveTools,
+  DelegatedVerificationRecipePin,
+  DelegationSourceWorkspace,
+} from "./delegation-task-schema.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
+import type {
+  ReviewApprovalInvalidatedRecord,
+  ReviewDecisionRecord,
+  ReviewGatePinnedRecord,
+  ReviewIncompleteRecord,
+  ReviewRoutePendingRecord,
+  ReviewRouteRecord,
+} from "./review.js";
 import type { RoleTurnRecord } from "./role-turn.js";
 import type { RunFinalizationFailedRecord } from "./run-finalization.js";
 import type { SourceWorkspaceRecord } from "./source-workspace.js";
@@ -321,6 +333,10 @@ export interface SubagentStartedRecord {
   readonly task_fingerprint?: string;
   /** Issue #57: hash-only materialized projection cohort identity. */
   readonly projection_fingerprint?: ChildProjectionFingerprint;
+  /** Delegated verification §4: exact configured tool authority. */
+  readonly effective_tools?: DelegatedEffectiveTools;
+  /** Delegated verification §4: canonical fixed-recipe identity/content. */
+  readonly verification_recipe?: DelegatedVerificationRecipePin;
   /** Issue #106: accepted sandbox identity, repeated at child start. */
   readonly sandbox?: SubagentSandboxDescriptor;
   /** Immutable delegated source identity, never a host filesystem path (#118). */
@@ -479,7 +495,13 @@ export type PersistedRecord =
   | ChildOutputRecord
   | ControllerEffectRecord
   | ContextEnrichmentRecord
-  | ContextEnrichmentRecordV2;
+  | ContextEnrichmentRecordV2
+  | ReviewGatePinnedRecord
+  | ReviewDecisionRecord
+  | ReviewIncompleteRecord
+  | ReviewRoutePendingRecord
+  | ReviewRouteRecord
+  | ReviewApprovalInvalidatedRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { FileRecordLog } from "../../src/host/log-file.js";
+import { pinVerificationRecipe } from "../../src/manifest/verification-recipes.js";
 import {
   acceptedDelegationResults,
   assertDelegationSubmissionAccepted,
@@ -327,6 +328,52 @@ describe("delegation submission acceptance ledger", () => {
     expect(() => assertDelegationTaskTimeline([acceptedWithSandbox, { ...started }])).toThrow(
       "identity",
     );
+  });
+
+  it("pins effective tools and canonical recipe identity across accepted and started records", () => {
+    const verificationRecipe = pinVerificationRecipe({
+      name: "focused",
+      commands: [{ executable: "/usr/bin/test", args: [] }],
+      evaluation: "report_only",
+      required_paths: ["package.json"],
+      timeout_seconds: 10,
+      max_calls: 2,
+    });
+    const effectiveTools: ("read" | "verify")[] = ["read", "verify"];
+    const authorityChild = {
+      ...child,
+      effective_tools: effectiveTools,
+      verification_recipe: verificationRecipe,
+    };
+    const authorityAccepted = {
+      ...accepted,
+      request_fingerprint: "9".repeat(64),
+      input_fingerprint: "9".repeat(64),
+      children: [authorityChild],
+    };
+    const authorityStarted = {
+      ...started,
+      effective_tools: authorityChild.effective_tools,
+      verification_recipe: verificationRecipe,
+    };
+    expect(() => assertDelegationTaskTimeline([authorityAccepted, authorityStarted])).not.toThrow();
+    expect(() =>
+      assertDelegationSubmissionAccepted({
+        ...authorityAccepted,
+        children: [{ ...authorityChild, effective_tools: ["verify", "read"] }],
+      }),
+    ).toThrow("sorted");
+    expect(() =>
+      assertDelegationSubmissionAccepted({
+        ...authorityAccepted,
+        children: [
+          {
+            ...authorityChild,
+            verification_recipe: { ...verificationRecipe, canonical_json: "{}" },
+          },
+        ],
+      }),
+    ).toThrow("invalid shape");
   });
 
   it("requires request fingerprint for sandbox acceptance and rejects sandbox orphan starts", () => {

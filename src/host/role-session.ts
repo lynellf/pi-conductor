@@ -57,6 +57,7 @@ export function createRoleSessionAdapter(opts: {
     retryDelayMs: opts.retryDelayMs,
     ...(opts.isTrajectory === true && { isTrajectory: true }),
     readCaptureBuffer: () => seam.read(),
+    readReviewDecisions: () => seam.readReviewDecisions(),
     takeReportedContextV2: (toolCallId?: string) => reportedContext.read(toolCallId),
     takeControlToolCallId: () => seam.lastToolCallId,
     resetCaptureBuffer: () => seam.reset(),

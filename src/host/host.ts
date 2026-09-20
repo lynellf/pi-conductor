@@ -53,6 +53,7 @@ import type {
 import type { PersistedRecord } from "../persistence/log.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
+import type { ReviewGateOptions } from "./review.js";
 
 // ─── RoleSession ───────────────────────────────────────────────────────
 
@@ -103,6 +104,8 @@ export interface SpawnRoleOptions {
   readonly tools?: readonly string[];
   /** Custom tools to register (`handoff` + `end` from Task 14). */
   readonly customTools?: readonly ToolDefinition[];
+  /** Host-pinned review gate; reviewer visits receive approve/request_changes instead of machine routing. */
+  readonly reviewGate?: ReviewGateOptions;
   /** Session manager (in-memory for tests, file-backed for real runs). */
   readonly sessionManager?: SessionManager;
   /** Working directory for the session (default: `process.cwd()`). */

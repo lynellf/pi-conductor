@@ -25,6 +25,8 @@ import { finishHostRunCostCap, forceRunCostCapEnd } from "./loop-run-cost-cap.js
 import type { SessionLoopContext } from "./loop-session.js";
 import { persistAcceptedTransition } from "./loop-session-accepted.js";
 import type { InnerOutcome, RunLoopResult } from "./loop-types.js";
+import { classifyReviewCapture } from "./review.js";
+import { completeReview } from "./review-loop.js";
 import { RpcChildExitError } from "./rpc/protocol.js";
 import { formatGuidedPrompt } from "./run-control.js";
 
@@ -160,6 +162,24 @@ export async function runSessionTurn(
       sessionId,
       sessionFile,
     });
+
+    if (ctx.reviewGate !== null && hostReasonOnPrompt === null && promptFailureReason === null) {
+      const review = await completeReview({
+        ctx,
+        gate: ctx.reviewGate,
+        session,
+        sessionId,
+        sessionFile,
+        sessionParentId,
+        visitIndex,
+        usage: state.capturedUsage,
+        settleDelegationBeforeLifecycle,
+        captures: classifyReviewCapture(ctx.reviewGate, session.readReviewDecisions?.() ?? []),
+      });
+      state.inner = { kind: "advance", nextSeed: review.nextSeed };
+      state.terminalPersisted = true;
+      break;
+    }
 
     const captures = session.readCaptureBuffer();
     const validated = validateEmission(

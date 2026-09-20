@@ -3,6 +3,7 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import type { ChildToolName } from "../../../manifest/subagent-tool-policy.js";
 import type { SandboxAdmissionRecord } from "../../../persistence/sandbox-admission.js";
 import {
   assertSandboxExecutionTerminal,
@@ -42,12 +43,20 @@ export interface SandboxCommandToolsOptions {
   readonly hostApproval: SandboxHostApproval;
   readonly getController: () => ToolExecutionController | null;
   readonly childSignal: AbortSignal;
+  /** Exact command subset for configured child authority; omitted means legacy tools. */
+  readonly effectiveTools?: readonly ChildToolName[];
 }
 
 /** Build exactly the sandbox `bash` and retained-output tools for one child. */
 export function createSandboxCommandTools(
+  supplied: SandboxCommandToolsOptions & { readonly effectiveTools?: undefined },
+): readonly [ToolDefinition, ToolDefinition];
+export function createSandboxCommandTools(
   supplied: SandboxCommandToolsOptions,
-): readonly [ToolDefinition, ToolDefinition] {
+): readonly ToolDefinition[];
+export function createSandboxCommandTools(
+  supplied: SandboxCommandToolsOptions,
+): readonly ToolDefinition[] {
   const options = {
     ...supplied,
     admission: structuredClone(supplied.admission),
@@ -154,7 +163,10 @@ export function createSandboxCommandTools(
       }
     },
   });
-  return [bash, output];
+  const tools: readonly ToolDefinition[] = [bash, output];
+  return options.effectiveTools === undefined
+    ? [bash, output]
+    : tools.filter((tool) => options.effectiveTools?.includes(tool.name as ChildToolName));
 }
 
 function assertOwner(options: SandboxCommandToolsOptions): void {

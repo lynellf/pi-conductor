@@ -30,6 +30,11 @@ export interface CreateSandboxCommandRunnerOptions {
   readonly testHookAfterSpool?: () => Promise<void>;
 }
 
+/** Direct fixed-argv Bubblewrap runner used by manifest-pinned verification recipes. */
+export type CreateSandboxArgvRunnerOptions = Omit<CreateSandboxCommandRunnerOptions, "command"> & {
+  readonly argv: readonly [string, ...string[]];
+};
+
 /** Preserve the SDK child runner while sharing its verified process lifecycle. */
 export function createSandboxCommandRunner(
   supplied: CreateSandboxCommandRunnerOptions,
@@ -40,12 +45,37 @@ export function createSandboxCommandRunner(
     ...structuredClone(cloneable),
     ...(testHookAfterSpool === undefined ? {} : { testHookAfterSpool }),
   };
+  return createArgvSandboxCommandRunner({
+    ...options,
+    argv: ["/bin/bash", "--noprofile", "--norc", "-c", options.command],
+  });
+}
+
+/** Build a verified runner from a literal argv without introducing a shell. */
+export function createSandboxArgvRunner(
+  supplied: CreateSandboxArgvRunnerOptions,
+): SandboxCommandRunner {
+  const { testHookAfterSpool, ...cloneable } = supplied;
+  return createArgvSandboxCommandRunner({
+    ...structuredClone(cloneable),
+    argv: supplied.argv,
+    ...(testHookAfterSpool === undefined ? {} : { testHookAfterSpool }),
+  });
+}
+
+function createArgvSandboxCommandRunner(
+  supplied: Omit<CreateSandboxCommandRunnerOptions, "command"> & {
+    readonly argv: readonly [string, ...string[]];
+    readonly testHookAfterSpool?: () => Promise<void>;
+  },
+): SandboxCommandRunner {
+  const options = supplied;
   return createVerifiedSandboxCommandRunner({
     binaryPath: options.binaryPath,
     approvedBuilds: options.approvedBuilds,
     ...(options.getcapPath === undefined ? {} : { getcapPath: options.getcapPath }),
     runStateDir: options.runStateDir,
-    argv: ["/bin/bash", "--noprofile", "--norc", "-c", options.command],
+    argv: options.argv,
     ...(options.testHookAfterSpool === undefined
       ? {}
       : { testHookAfterSpool: options.testHookAfterSpool }),

@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { resolveToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { SubagentStartedRecord } from "../../persistence/log.js";
+import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import { SessionState } from "../cost.js";
 import { SandboxBackendUnavailableError } from "../execution/sandbox/enablement.js";
 import { ToolExecutionController } from "../execution/tool-execution-controller.js";
@@ -255,6 +256,7 @@ export async function createChildSession(
         runStateDir: opts.runStateDir,
         hostApproval: opts.sandboxHostApproval,
         getController: () => controller,
+        ...(opts.records === undefined ? {} : { records: opts.records }),
       })
     : undefined;
   try {
@@ -328,6 +330,7 @@ async function initializeSdkChild(
       worktreePath: config.worktreePath,
       getController,
       getPolicy: () => policy,
+      ...(config.effectiveTools === undefined ? {} : { effectiveTools: config.effectiveTools }),
     });
   const createOpts: NonNullable<Parameters<typeof createAgentSession>[0]> & {
     modelRuntime?: unknown;
@@ -341,7 +344,7 @@ async function initializeSdkChild(
     customTools: [...childTools, ...reportTool],
     tools:
       sandboxContext === undefined
-        ? childToolNames(config.profile.completion_protocol)
+        ? childToolNames(config.profile.completion_protocol, config.effectiveTools)
         : [...childTools.map((tool) => tool.name), ...reportTool.map((tool) => tool.name)],
     thinkingLevel: effort as never,
   };
@@ -365,6 +368,14 @@ async function initializeSdkChild(
         roleSessionId: config.childId,
         policy,
         persist: opts.persistRecord,
+        ...(opts.records === undefined
+          ? {}
+          : {
+              priorRecords: opts
+                .records()
+                .filter(isToolExecutionRecord)
+                .filter((record) => record.role_session_id === config.childId),
+            }),
         onFatal: (error) => {
           reportCapture.close();
           state.setTerminalReason(
@@ -445,6 +456,10 @@ function persistStarted(
     completion_protocol: config.profile.completion_protocol,
     task_fingerprint: config.taskFingerprint,
     projection_fingerprint: config.projectionFingerprint,
+    ...(config.effectiveTools === undefined ? {} : { effective_tools: [...config.effectiveTools] }),
+    ...(config.verificationRecipe === undefined
+      ? {}
+      : { verification_recipe: config.verificationRecipe }),
     ...(config.sandbox === undefined ? {} : { sandbox: config.sandbox }),
     ...(config.sourceWorkspace === undefined ? {} : { source_workspace: config.sourceWorkspace }),
     context_artifacts: contextArtifactsAudit(config.contextArtifacts),

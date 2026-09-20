@@ -1,7 +1,14 @@
 /** Atomic delegated-task acceptance ledger — asynchronous delegation §1. */
+// Keep acceptance validation, lifecycle matching, and replay queries together:
+// they share one append-only identity contract and remain below the 500-line
+// coherent-module exception from AGENTS.md.
 
 import { Value } from "typebox/value";
 import type { DelegateSubmissionArgs } from "../seam/schema.js";
+import {
+  assertDelegatedAuthorityMetadata,
+  DelegatedAuthorityRecordError,
+} from "./delegated-authority-record.js";
 import { assertAcceptedChildLifecycle } from "./delegation-lifecycle-schema.js";
 import {
   type DelegationAcceptedChild,
@@ -52,14 +59,24 @@ export function assertDelegationSubmissionAccepted(
     throw new DelegationTaskRecordError("acceptance timestamp must be finite");
   if (new Set(record.children.map((entry) => entry.child_id)).size !== record.children.length)
     throw new DelegationTaskRecordError("accepted child IDs must be unique");
+  for (const entry of record.children)
+    assertAuthorityMetadata(entry.effective_tools, entry.verification_recipe);
   const hasSandbox = record.children.some((entry) => entry.sandbox !== undefined);
   const hasSource = record.children.some((entry) => entry.source_workspace !== undefined);
+  const hasPinnedAuthority = record.children.some(
+    (entry) => entry.effective_tools !== undefined || entry.verification_recipe !== undefined,
+  );
   if (hasSource !== (record.schema_version === 3))
     throw new DelegationTaskRecordError("source identity requires a v3 acceptance");
-  if ((hasSandbox || hasSource) !== (record.request_fingerprint !== undefined))
+  if (
+    (hasSandbox || hasSource || hasPinnedAuthority) !==
+    (record.request_fingerprint !== undefined)
+  )
     throw new DelegationTaskRecordError(
-      "bound child acceptance requires request_fingerprint and no-sandbox acceptance forbids it",
+      "bound child acceptance requires request_fingerprint and no-sandbox unbound acceptance forbids it",
     );
+  if (record.raw_request_fingerprint !== undefined && !hasPinnedAuthority)
+    throw new DelegationTaskRecordError("raw request fingerprint requires pinned child authority");
   if (hasSource) {
     const request = record.request_fingerprint as string;
     if (
@@ -71,18 +88,23 @@ export function assertDelegationSubmissionAccepted(
       })
     )
       throw new DelegationTaskRecordError("source acceptance fingerprint does not bind authority");
-  } else if (
-    hasSandbox &&
-    record.input_fingerprint !==
+  } else if (hasSandbox) {
+    if (
+      record.input_fingerprint !==
       sandboxBoundFingerprint(
         record.request_fingerprint as string,
         record.children.map((entry) => entry.sandbox),
       )
-  )
-    throw new DelegationTaskRecordError("sandbox acceptance fingerprint does not bind authority");
+    )
+      throw new DelegationTaskRecordError("sandbox acceptance fingerprint does not bind authority");
+  } else if (hasPinnedAuthority && record.input_fingerprint !== record.request_fingerprint)
+    throw new DelegationTaskRecordError("delegation request fingerprint does not bind authority");
   if (record.schema_version === 2 && record.origin.kind === "controller_action") {
     const acceptedArgsFingerprint = sha256Canonical(record.accepted_args);
-    if (acceptedArgsFingerprint !== (record.request_fingerprint ?? record.input_fingerprint))
+    if (
+      acceptedArgsFingerprint !==
+      (record.raw_request_fingerprint ?? record.request_fingerprint ?? record.input_fingerprint)
+    )
       throw new DelegationTaskRecordError(
         "controller accepted arguments do not match the durable request fingerprint",
       );
@@ -113,7 +135,7 @@ export function assertDelegationSubmissionAccepted(
       input: record.accepted_args,
       source_workspace_ref: ref,
     });
-    if (acceptedArgsFingerprint !== record.request_fingerprint)
+    if (acceptedArgsFingerprint !== (record.raw_request_fingerprint ?? record.request_fingerprint))
       throw new DelegationTaskRecordError(
         "controller accepted arguments do not match the durable request fingerprint",
       );
@@ -220,6 +242,31 @@ function sameSourceWorkspace(
   return sha256Canonical(accepted) === sha256Canonical(started);
 }
 
+function assertAuthorityMetadata(
+  effectiveTools: Parameters<typeof assertDelegatedAuthorityMetadata>[0],
+  verificationRecipe: Parameters<typeof assertDelegatedAuthorityMetadata>[1],
+): void {
+  try {
+    assertDelegatedAuthorityMetadata(effectiveTools, verificationRecipe);
+  } catch (cause) {
+    if (cause instanceof DelegatedAuthorityRecordError)
+      throw new DelegationTaskRecordError(cause.message);
+    throw cause;
+  }
+}
+
+function sameDelegatedAuthority(
+  accepted: DelegationAcceptedChild,
+  started: SubagentStartedRecord,
+): boolean {
+  return (
+    JSON.stringify(accepted.effective_tools ?? null) ===
+      JSON.stringify(started.effective_tools ?? null) &&
+    JSON.stringify(accepted.verification_recipe ?? null) ===
+      JSON.stringify(started.verification_recipe ?? null)
+  );
+}
+
 function validateQueuedTerminal(record: SubagentCompletedRecord | SubagentFailedRecord): void {
   if (
     record.type !== "subagent_failed" ||
@@ -253,6 +300,7 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
         throw new DelegationTaskRecordError("delegation submission identity mismatch");
       submissions.add(record.submission_id);
       for (const entry of record.children) {
+        assertAuthorityMetadata(entry.effective_tools, entry.verification_recipe);
         if (
           accepted.has(entry.child_id) ||
           orphanTerminals.has(entry.child_id) ||
@@ -281,6 +329,7 @@ export function assertDelegationTaskTimeline(records: readonly PersistedRecord[]
         !matchesChild(entry, record) ||
         !sameSandbox(entry.sandbox, record.sandbox) ||
         !sameSourceWorkspace(entry.source_workspace, record.source_workspace) ||
+        !sameDelegatedAuthority(entry, record) ||
         record.run_id !== submission.run_id ||
         !nonEmpty(record.session_file) ||
         !Number.isFinite(record.ts) ||

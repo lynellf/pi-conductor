@@ -79,6 +79,7 @@ import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
 import { notifyListeners } from "./record-emitter.js";
+import { createApproveTool, createRequestChangesTool } from "./review-tools.js";
 import { createRoleSessionAdapter } from "./role-session.js";
 import { RoleTurnProducer, type RoleTurnTelemetryOptions } from "./role-turn-producer.js";
 import { attachSessionEventHandler, createCaptureRejector } from "./session-event-handler.js";
@@ -272,10 +273,13 @@ export class StubHost implements Host {
             def: this.loadedManifestValue.def,
             protocol: this.controlProtocol,
           };
+    const reviewMode = opts.reviewGate !== undefined && role === opts.reviewGate.reviewerRole;
     const handoff = createHandoffTool(seam, rejector.getRejection, handoffContractContext);
     const end = createEndTool(seam, rejector.getRejection, this.controlProtocol);
+    const approve = createApproveTool(seam, () => rejector.getRejection() !== false);
+    const requestChanges = createRequestChangesTool(seam, () => rejector.getRejection() !== false);
     const handoffContext =
-      opts.handoffContextRef === undefined
+      reviewMode || opts.handoffContextRef === undefined
         ? null
         : createHandoffContextTool(opts.handoffContextRef);
 
@@ -301,6 +305,9 @@ export class StubHost implements Host {
         role: roleConfig,
         controlProtocol: this.controlProtocol,
         subagents: manifest.subagents ?? [],
+        ...(manifest.verification_recipes === undefined
+          ? {}
+          : { verificationRecipes: manifest.verification_recipes }),
         remainingChildren: remaining,
         runId: this.runId,
         parentRole: role,
@@ -360,14 +367,12 @@ export class StubHost implements Host {
       model: this.model,
       modelRegistry: this.modelRegistry,
       tools: [
-        "handoff",
-        "end",
+        ...(reviewMode ? ["approve", "request_changes"] : ["handoff", "end"]),
         ...(handoffContext === null ? [] : ["handoff_context"]),
         ...(delegateTool === null ? [] : ["delegate"]),
       ],
       customTools: [
-        handoff,
-        end,
+        ...(reviewMode ? [approve, requestChanges] : [handoff, end]),
         ...(handoffContext === null ? [] : [handoffContext]),
         ...(delegateTool === null ? [] : [delegateTool]),
         ...(confinedTools !== undefined ? confinedTools.tools : []),

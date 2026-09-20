@@ -8,6 +8,7 @@ import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import type { Role } from "../../core/types.js";
 import type { DelegationMode } from "../../manifest/types.js";
+import type { ReviewGateOptions } from "../review.js";
 
 /** Environment variable naming the mandatory machine-tools configuration file. */
 export const MACHINE_TOOLS_CONFIG_ENV = "PI_CONDUCTOR_MACHINE_TOOLS_CONFIG";
@@ -58,6 +59,19 @@ export const machineToolsConfigSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    reviewGate: Type.Optional(
+      Type.Object(
+        {
+          phase_id: Type.String({ minLength: 1, maxLength: 256 }),
+          gate_id: Type.String({ minLength: 1, maxLength: 256 }),
+          phase_owner_role: Type.String({ minLength: 1, maxLength: 256 }),
+          reviewed_revision: Type.String({ minLength: 1, maxLength: 256 }),
+          next_phase: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+          repair_guidance: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -103,6 +117,8 @@ export interface WriteMachineToolsConfigOptions {
   readonly enableExecutionBridge?: boolean;
   /** Bounded bridge wait covering execution plus host cleanup. */
   readonly executionBridgeTimeoutMs?: number;
+  /** Serialized host-pinned reviewer gate for isolated roles. */
+  readonly reviewGate?: ReviewGateOptions;
 }
 
 /** Atomically write one isolated role's static machine-tools configuration under the host run state. */
@@ -134,6 +150,10 @@ export async function writeMachineToolsConfig(
   if (options.enableExecutionBridge && !isTimerDelay(options.executionBridgeTimeoutMs)) {
     throw new MachineToolsConfigError("execution bridge timeout must fit a Node timer");
   }
+  const reviewGate =
+    options.reviewGate !== undefined && options.role === options.reviewGate.reviewerRole
+      ? options.reviewGate
+      : undefined;
   const config: MachineToolsConfig = {
     ...(options.controlProtocol === "v2" &&
     options.role !== undefined &&
@@ -163,6 +183,20 @@ export async function writeMachineToolsConfig(
           executionBridge: {
             directory: executionBridgeDirectory,
             timeout_ms: options.executionBridgeTimeoutMs as number,
+          },
+        }),
+    ...(reviewGate === undefined
+      ? {}
+      : {
+          reviewGate: {
+            phase_id: reviewGate.phaseId,
+            gate_id: reviewGate.gateId,
+            phase_owner_role: reviewGate.phaseOwnerRole,
+            reviewed_revision: reviewGate.reviewedRevision,
+            ...(reviewGate.nextPhase === undefined ? {} : { next_phase: reviewGate.nextPhase }),
+            ...(reviewGate.repairGuidance === undefined
+              ? {}
+              : { repair_guidance: reviewGate.repairGuidance }),
           },
         }),
   };
@@ -254,6 +288,22 @@ export function loadMachineToolsConfig(env: NodeJS.ProcessEnv = process.env): Ma
               "execution bridge directory",
             ),
             timeout_ms: parsed.executionBridge.timeout_ms,
+          }),
+        }),
+    ...(parsed.reviewGate === undefined
+      ? {}
+      : {
+          reviewGate: Object.freeze({
+            phase_id: parsed.reviewGate.phase_id,
+            gate_id: parsed.reviewGate.gate_id,
+            phase_owner_role: parsed.reviewGate.phase_owner_role,
+            reviewed_revision: parsed.reviewGate.reviewed_revision,
+            ...(parsed.reviewGate.next_phase === undefined
+              ? {}
+              : { next_phase: parsed.reviewGate.next_phase }),
+            ...(parsed.reviewGate.repair_guidance === undefined
+              ? {}
+              : { repair_guidance: parsed.reviewGate.repair_guidance }),
           }),
         }),
   }) as MachineToolsConfig;

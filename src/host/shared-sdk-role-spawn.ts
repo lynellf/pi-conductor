@@ -35,6 +35,8 @@ import type {
   PreparedOrchestratorContext,
 } from "./orchestrator-context-coordinator.js";
 import { buildToolsAllowlist } from "./production-host-resolve.js";
+import type { ReviewGateOptions } from "./review.js";
+import { createApproveTool, createRequestChangesTool } from "./review-tools.js";
 import { createRoleSessionAdapter } from "./role-session.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { SessionSeam } from "./seam.js";
@@ -85,6 +87,7 @@ export async function spawnSharedSdkRoleSession(options: {
   /** Pinned run control protocol; absent keeps direct legacy callers on v1. */
   readonly controlProtocol?: "v1" | "v2";
   readonly handoffContextRef?: HandoffContextRef;
+  readonly reviewGate?: ReviewGateOptions;
   readonly delegateTool: ToolDefinition | null;
   readonly uiContext?: ExtensionUIContext;
   readonly isUiContextCurrent?: () => boolean;
@@ -139,8 +142,10 @@ export async function spawnSharedSdkRoleSession(options: {
   });
   await loader.reload();
 
+  const reviewMode =
+    options.reviewGate !== undefined && options.role === options.reviewGate.reviewerRole;
   const handoffContext =
-    options.handoffContextRef === undefined
+    reviewMode || options.handoffContextRef === undefined
       ? null
       : createHandoffContextTool(options.handoffContextRef);
   let activeSeam = new SessionSeam();
@@ -162,6 +167,14 @@ export async function spawnSharedSdkRoleSession(options: {
     options.controlProtocol ?? "v1",
   );
   const askUser = createAskUserTool() as ToolDefinition;
+  const approve = createApproveTool(
+    () => activeSeam,
+    () => rejector.getRejection() !== false,
+  );
+  const requestChanges = createRequestChangesTool(
+    () => activeSeam,
+    () => rejector.getRejection() !== false,
+  );
   const guardTool = (tool: ToolDefinition): ToolDefinition =>
     wrapToolWithSeal(tool, () => activeSeam.isSealed, rejector.getRejection);
   let controller: ToolExecutionController | null = null;
@@ -181,7 +194,12 @@ export async function spawnSharedSdkRoleSession(options: {
   const restoredActiveToolNames =
     options.activeToolNames === undefined
       ? [
-          ...buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null),
+          ...(reviewMode
+            ? buildToolsAllowlist(options.roleConfig?.tools, false).filter(
+                (name) => name !== "handoff" && name !== "end",
+              )
+            : buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null)),
+          ...(reviewMode ? ["approve", "request_changes"] : []),
           ...(options.delegateTool === null ? [] : ["delegate"]),
         ]
       : [...options.activeToolNames];
@@ -207,8 +225,7 @@ export async function spawnSharedSdkRoleSession(options: {
       SessionManager.create(options.cwd, options.sessionDir),
     customTools: [
       ...supervisedTools.map(guardTool),
-      handoff,
-      end,
+      ...(reviewMode ? [approve, requestChanges] : [handoff, end]),
       guardTool(askUser),
       ...(handoffContext === null ? [] : [guardTool(handoffContext)]),
       // Delegate checks admission again after its asynchronous queue; controls

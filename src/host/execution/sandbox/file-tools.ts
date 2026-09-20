@@ -1,6 +1,7 @@
 /** Descriptor-anchored sandbox file tools sharing the child operation gate (#106 §4). */
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import type { ChildToolName } from "../../../manifest/subagent-tool-policy.js";
 import type { SandboxAdmissionRecord } from "../../../persistence/sandbox-admission.js";
 import type { SandboxProjectMaterializationDescriptor } from "../../../persistence/sandbox-materialization.js";
 import type { SandboxOperationGate } from "./operation-gate.js";
@@ -68,6 +69,8 @@ export interface SandboxFileToolsOptions {
   readonly admission: SandboxAdmissionRecord;
   readonly project: SandboxProjectMaterializationDescriptor;
   readonly runStateDir: string;
+  /** Exact file subset for configured child authority; omitted means all six files. */
+  readonly effectiveTools?: readonly ChildToolName[];
 }
 type ProjectWork<T> = (view: SandboxProjectFileView, signal: AbortSignal) => Promise<T>;
 /** Build the six `/workspace` tools backed only by private descriptor-anchored trees. */
@@ -103,7 +106,7 @@ export function createSandboxFileTools(
       }
     });
   };
-  return [
+  const tools = [
     defineTool({
       name: "read",
       label: "read",
@@ -199,6 +202,9 @@ export function createSandboxFileTools(
         ),
     }),
   ] as ToolDefinition[];
+  return options.effectiveTools === undefined
+    ? tools
+    : tools.filter((tool) => options.effectiveTools?.includes(tool.name as ChildToolName));
 }
 
 function abort(signal: AbortSignal): void {

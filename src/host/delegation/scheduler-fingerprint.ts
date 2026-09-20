@@ -9,10 +9,22 @@ import type { PreparedDelegateChild } from "./admission.js";
 export function requestFingerprint(
   input: DelegateSubmissionArgs,
   sourceWorkspaceRef?: string,
+  tasks?: readonly PreparedDelegateChild[],
 ): string {
-  return sourceWorkspaceRef === undefined
-    ? sha256Canonical(input)
-    : sha256Canonical({ input, source_workspace_ref: sourceWorkspaceRef });
+  const raw =
+    sourceWorkspaceRef === undefined
+      ? sha256Canonical(input)
+      : sha256Canonical({ input, source_workspace_ref: sourceWorkspaceRef });
+  if (tasks === undefined || !tasks.some(hasPinnedAuthority)) return raw;
+  return sha256Canonical({
+    request_fingerprint: raw,
+    effective_tools: tasks.map((task) => task.effectiveTools ?? null),
+    verification_recipes: tasks.map((task) => task.verificationRecipe ?? null),
+  });
+}
+
+function hasPinnedAuthority(task: PreparedDelegateChild): boolean {
+  return task.effectiveTools !== undefined || task.verificationRecipe !== undefined;
 }
 
 /** Bind sandbox policy/runtime digests in task order, excluding random IDs. */
@@ -21,7 +33,7 @@ export function acceptedFingerprint(
   tasks: readonly PreparedDelegateChild[],
   sourceWorkspaceRef?: string,
 ): string {
-  const request = requestFingerprint(input, sourceWorkspaceRef);
+  const request = requestFingerprint(input, sourceWorkspaceRef, tasks);
   if (tasks.some((task) => task.resolvedSourceWorkspace !== undefined)) {
     return sha256Canonical({
       request_fingerprint: request,

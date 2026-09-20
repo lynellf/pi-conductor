@@ -272,6 +272,7 @@ export async function spawnRole(
       roleTurnProducer: host.roleTurnProducer,
       ...(roleConfig?.context_retention === "run" ? { contextRetention: { log: host.log } } : {}),
       ...(host.displaySink !== undefined && { displaySink: host.displaySink }),
+      ...(opts.reviewGate === undefined ? {} : { reviewGate: opts.reviewGate }),
     });
     isolatedParent = isolatedSession;
     host.delegationSessionKeys.set(
@@ -379,6 +380,7 @@ export async function spawnRole(
     agentsBySessionId: host.agentsBySessionId,
     roleTurnProducer: host.roleTurnProducer,
     ...(contextRetention === undefined ? {} : { contextRetention }),
+    ...(opts.reviewGate === undefined ? {} : { reviewGate: opts.reviewGate }),
   });
   sharedParent = sharedSession;
   host.delegationSessionKeys.set(

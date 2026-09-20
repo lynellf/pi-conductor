@@ -30,6 +30,7 @@
  *     authoritative pinned source for downstream admission.
  */
 
+import { createHash } from "node:crypto";
 import { ManifestParseError } from "./types.js";
 import { canonicalizeVerificationRecipe } from "./verification-recipes-canonical.js";
 
@@ -116,6 +117,20 @@ export interface VerificationRecipe {
   readonly required_paths: readonly string[];
   readonly timeout_seconds: number;
   readonly max_calls: number;
+}
+
+/** Immutable recipe identity retained after delegated-child admission. */
+export interface VerificationRecipePin {
+  readonly name: string;
+  readonly digest: string;
+  readonly canonical_json: string;
+}
+
+/** Compute the bounded canonical recipe content and its SHA-256 identity. */
+export function pinVerificationRecipe(recipe: VerificationRecipe): VerificationRecipePin {
+  const canonical_json = canonicalizeVerificationRecipe(recipe);
+  const digest = createHash("sha256").update(canonical_json, "utf8").digest("hex");
+  return Object.freeze({ name: recipe.name, digest, canonical_json });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────

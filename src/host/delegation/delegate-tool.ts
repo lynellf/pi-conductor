@@ -5,7 +5,11 @@
  */
 import { mkdir } from "node:fs/promises";
 import type { ControllerOutputPrincipal } from "../../manifest/controller-output.js";
-import type { DelegationPolicy, SubagentProfile } from "../../manifest/types.js";
+import type {
+  DelegationPolicy,
+  SubagentProfile,
+  VerificationRecipe,
+} from "../../manifest/types.js";
 import type {
   ChildCompletionEvidence,
   ChildProjectionFingerprint,
@@ -99,6 +103,8 @@ export interface DelegateToolOptions {
   readonly controlProtocol?: "v1" | "v2";
   readonly policy: DelegationPolicy;
   readonly profiles: readonly SubagentProfile[];
+  /** Pinned top-level recipe inventory for this run; never reread at child start. */
+  readonly verificationRecipes?: readonly VerificationRecipe[];
   readonly remainingChildren: number;
   readonly runStateDir: string;
   readonly runId: string;
@@ -154,6 +160,10 @@ export interface SpawnChildConfig {
   readonly profile: SubagentProfile;
   readonly objective: string;
   readonly expectedOutput: string;
+  /** Exact configured child tool authority; omitted for legacy profiles. */
+  readonly effectiveTools?: readonly import("../../manifest/subagent-tool-policy.js").ChildToolName[];
+  /** Pinned fixed recipe identity/content; omitted when verify is unavailable. */
+  readonly verificationRecipe?: import("../../manifest/verification-recipes.js").VerificationRecipePin;
   readonly worktreePath: string;
   readonly branch: string;
   readonly baseCommit: string;
@@ -333,6 +343,8 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
     task.expectedOutput,
     baseCommit,
     authorityPaths,
+    task.effectiveTools,
+    task.verificationRecipe,
   );
   const childProjectionFingerprint = projectionFingerprint(
     task.projectionPaths === undefined ? "full_materialized" : "exact",
@@ -347,6 +359,10 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
       profile: task.profile,
       objective: task.objective,
       expectedOutput: task.expectedOutput,
+      ...(task.effectiveTools === undefined ? {} : { effectiveTools: task.effectiveTools }),
+      ...(task.verificationRecipe === undefined
+        ? {}
+        : { verificationRecipe: task.verificationRecipe }),
       worktreePath,
       branch,
       baseCommit,
@@ -505,6 +521,10 @@ export async function runPreparedChild(options: {
       profile: prepared.profile,
       objective: prepared.objective,
       expectedOutput: prepared.expectedOutput,
+      ...(prepared.effectiveTools === undefined ? {} : { effectiveTools: prepared.effectiveTools }),
+      ...(prepared.verificationRecipe === undefined
+        ? {}
+        : { verificationRecipe: prepared.verificationRecipe }),
       ...(prepared.projectionPaths === undefined
         ? {}
         : { projectionPaths: prepared.projectionPaths }),

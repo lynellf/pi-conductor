@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpawnChildConfig } from "../../src/host/delegation/delegate-tool.js";
 import type { DelegateToolFactoryOptions } from "../../src/host/delegation/delegate-tool-factory.js";
 import { DelegationManager } from "../../src/host/delegation/manager.js";
+import { pinVerificationRecipe } from "../../src/manifest/verification-recipes.js";
 
 const config = {
   childId: "child-1",
@@ -117,6 +118,58 @@ describe("sandbox child SDK lifecycle", () => {
     expect(createOptions?.customTools).toEqual(tools);
     expect(result.worktreeInspection).toMatchObject({ state: "changed", changedPathCount: 1 });
     expect(events).toEqual(["close-tools", "ingest", "dispose"]);
+  });
+
+  it("passes the exact projected SDK names plus completion protocol", async () => {
+    const events: string[] = [];
+    const tools = ["read", "verify"].map((name) => ({ name }) as ToolDefinition);
+    const context = {
+      ...sandboxContext(events),
+      tools,
+    };
+    vi.doMock("../../src/host/delegation/sandbox-child-context.js", () => ({
+      createSandboxChildContext: vi.fn(async () => context),
+    }));
+    let createOptions: { tools?: string[]; customTools?: ToolDefinition[] } | undefined;
+    const session = mockSession(events, true);
+    vi.doMock("@earendil-works/pi-coding-agent", async () => {
+      const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+        "@earendil-works/pi-coding-agent",
+      );
+      return {
+        ...actual,
+        DefaultResourceLoader: class {
+          async reload(): Promise<void> {}
+        },
+        SessionManager: { create: () => ({}) },
+        createAgentSession: async (options: typeof createOptions) => {
+          createOptions = options;
+          return { session };
+        },
+      };
+    });
+    const { buildSpawnCallback } = await import("../../src/host/delegation/child-session.js");
+    const configured = {
+      ...config,
+      profile: { ...config.profile, completion_protocol: "report_result" as const },
+      effectiveTools: ["read", "verify"] as const,
+      verificationRecipe: pinVerificationRecipe({
+        name: "focused",
+        commands: [{ executable: "/usr/bin/test", args: [] }],
+        evaluation: "report_only",
+        required_paths: ["package.json"],
+        timeout_seconds: 10,
+        max_calls: 1,
+      }),
+    } satisfies SpawnChildConfig;
+    const result = await buildSpawnCallback(options(new DelegationManager()))(configured);
+    expect(createOptions?.tools).toEqual(["read", "verify", "report_result"]);
+    expect(createOptions?.customTools?.map((tool) => tool.name)).toEqual([
+      "read",
+      "verify",
+      "report_result",
+    ]);
+    expect(result.worktreeInspection).toMatchObject({ state: "no_changes" });
   });
 
   it("cancels and settles sandbox ownership before disposal when start persistence fails", async () => {

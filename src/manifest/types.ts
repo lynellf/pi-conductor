@@ -23,12 +23,12 @@ import type { EndGuardConfig } from "./end-guard.js";
 import type { ToolExecutionPolicy } from "./execution-policy.js";
 import type { SubagentExecutionConfig } from "./subagent-execution-policy.js";
 import type { ChildToolName, SubagentToolPolicy } from "./subagent-tool-policy.js";
-import type { VerificationRecipe } from "./verification-recipes.js";
+import type { VerificationRecipe, VerificationRecipePin } from "./verification-recipes.js";
 
 export { canonicalizeVerificationRecipe } from "./verification-recipes.js";
 // Re-export the delegated-verification types so callers can import the
 // canonical name from the manifest barrel without traversing submodules.
-export type { ChildToolName, SubagentToolPolicy, VerificationRecipe };
+export type { ChildToolName, SubagentToolPolicy, VerificationRecipe, VerificationRecipePin };
 
 // ─── Subagent profile types (delegation lite §3) ───────────────────────
 
@@ -202,8 +202,20 @@ export interface Manifest {
   readonly continuity?: ContinuityPolicy;
   /** Opt-in Jev recipient-context ranking policy (spec §5). Absent preserves legacy behavior. */
   readonly context_enrichment?: ContextEnrichmentPolicy;
+  /** Issue #124: opt-in host-owned phase review gates. */
+  readonly review_gates?: readonly ReviewGateConfig[];
   /** Delegated verification §3.1: top-level verification recipe inventory. */
   readonly verification_recipes?: readonly VerificationRecipe[];
+}
+
+/** Host-owned phase gate; the reducer receives only the pinned machine definition. */
+export interface ReviewGateConfig {
+  readonly id: string;
+  readonly phase_id: string;
+  readonly reviewer_role: Role;
+  readonly phase_owner_role: Role;
+  readonly next_phase: string;
+  readonly repair_guidance?: string;
 }
 
 /**

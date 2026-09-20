@@ -13,7 +13,7 @@ import {
   makeStubStreamFunction,
   type StubStep,
 } from "../../src/host/stub-provider.js";
-import type { SubagentProfile } from "../../src/manifest/types.js";
+import type { SubagentProfile, VerificationRecipe } from "../../src/manifest/types.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 import {
   createRealDelegationFixture,
@@ -46,6 +46,101 @@ describe("production Bubblewrap delegated SDK sessions", () => {
       ),
     ).toEqual([17, 0]);
   }, 45_000);
+
+  it("runs a pinned parameterless verify recipe through the private workspace", async () => {
+    const fixture = await createRealDelegationFixture({ verificationScript: true });
+    fixtures.push(fixture);
+    const records: PersistedRecord[] = [];
+    const recipe = {
+      name: "alpha-focused",
+      commands: [{ executable: "/bin/bash", args: ["alpha/check.bash"] }],
+      evaluation: "require_pass" as const,
+      required_paths: ["alpha/check.bash", "alpha/value.txt"],
+      timeout_seconds: 5,
+      max_calls: 2,
+    };
+    const profile: SubagentProfile = {
+      name: "verifier",
+      models: [{ model: "stub:verifier", effort: "medium" }],
+      max_session_cost_usd: 1,
+      system_prompt: "worker.md",
+      completion_protocol: "minimal",
+      execution: {
+        backend: "bubblewrap",
+        runtime_root: ".pi/runtime",
+        writable_paths: ["alpha/value.txt"],
+      },
+      workspace: {
+        projection: { required: true, allowed_paths: ["alpha/check.bash", "alpha/value.txt"] },
+      },
+      tools: {
+        required: false,
+        allowed: ["read", "write", "verify"],
+        default: ["read", "write", "verify"],
+      },
+      verification_recipes: [recipe.name],
+      tool_execution: { timeout_seconds: 5, termination_grace_seconds: 1 },
+    };
+    const manager = new DelegationManager();
+    const registry = makeModelRegistryWithStub(
+      [
+        call("write", { path: "alpha/value.txt", content: "broken\n" }),
+        call("verify", {}),
+        call("write", { path: "alpha/value.txt", content: "fixed\n" }),
+        call("verify", {}),
+        { kind: "emit_text", text: "verified repair" },
+      ],
+      ["alpha"],
+    );
+    const { tool, scheduler } = delegate(fixture, [profile], records, manager, registry, [recipe]);
+    try {
+      const raw = await invoke(tool, "verify-call", {
+        mode: "blocking",
+        tasks: [
+          {
+            id: "task-verifier",
+            subagent: profile.name,
+            objective: "repair alpha and verify it",
+            expected_output: "verified repair",
+            projection_paths: ["alpha/check.bash", "alpha/value.txt"],
+            tools: ["read", "write", "verify"],
+            verification_recipe: recipe.name,
+          },
+        ],
+      });
+      const result = (JSON.parse(raw.content[0].text) as { results: ChildJson[] }).results[0];
+      if (result === undefined) throw new Error("verification child result missing");
+      expect(result.status).toBe("completed");
+      expect(await readFile(join(result.worktree_path, "alpha/value.txt"), "utf8")).toBe("fixed\n");
+      const accepted = records.find((record) => record.type === "delegation_submission_accepted");
+      const started = records.find((record) => record.type === "subagent_started");
+      expect(
+        accepted?.type === "delegation_submission_accepted" ? accepted.children[0] : null,
+      ).toMatchObject({
+        effective_tools: ["read", "verify", "write"],
+        verification_recipe: { name: recipe.name },
+      });
+      expect(started?.type === "subagent_started" ? started : null).toMatchObject({
+        effective_tools: ["read", "verify", "write"],
+        verification_recipe: { name: recipe.name },
+      });
+      expect(
+        records
+          .filter((record) => record.type === "tool_execution_finished")
+          .map((record) =>
+            record.type === "tool_execution_finished"
+              ? record.sandbox?.normalized_status
+              : undefined,
+          ),
+      ).toEqual([1, 0]);
+    } finally {
+      try {
+        await scheduler.close();
+      } finally {
+        await manager.abortAll();
+      }
+    }
+  }, 60_000);
 
   it("runs two children concurrently with independent projections, outputs, and gates", async () => {
     const fixture = await createRealDelegationFixture();
@@ -227,6 +322,7 @@ function delegate(
   records: PersistedRecord[],
   manager: DelegationManager,
   modelRegistry: ModelRegistry,
+  verificationRecipes: readonly VerificationRecipe[] = [],
 ) {
   const options = {
     role: {
@@ -255,6 +351,7 @@ function delegate(
     modelRegistry,
     sessionDir: fixture.sessionDir,
     manager,
+    ...(verificationRecipes.length === 0 ? {} : { verificationRecipes }),
     sandboxAdmission: fixture.sandboxAdmission,
     sandboxHostApproval: fixture.hostApproval,
     records: () => records,

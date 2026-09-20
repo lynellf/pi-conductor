@@ -7,12 +7,18 @@
  */
 
 import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
 import type {
   ModelEffort,
   Role,
   SessionWorkspaceDescriptor,
   UsageRecord,
 } from "../../core/types.js";
+import {
+  approveArgsSchema,
+  type ReviewDecisionCapture,
+  requestChangesArgsSchema,
+} from "../../seam/review.js";
 import {
   type EmissionCapture,
   type ValidateEmissionOptions,
@@ -101,6 +107,7 @@ export class NodeRoleSession implements RoleSession {
   private readonly emissionValidationOptions: ValidateEmissionOptions;
   private readonly optionsRoleSessionId: string | undefined;
   private readonly captures: EmissionCapture[] = [];
+  private readonly reviewDecisions: ReviewDecisionCapture[] = [];
   private lastToolCallId: string | undefined;
   private readonly reportedContext = createReportedContextCapture();
   private readonly listeners = new Set<(event: AgentSessionEvent) => void>();
@@ -216,8 +223,13 @@ export class NodeRoleSession implements RoleSession {
     return Object.freeze([...this.captures]);
   }
 
+  readReviewDecisions(): readonly ReviewDecisionCapture[] {
+    return Object.freeze([...this.reviewDecisions]);
+  }
+
   resetCaptureBuffer(): void {
     this.captures.length = 0;
+    this.reviewDecisions.length = 0;
     this.lastToolCallId = undefined;
     this.sealed = false;
   }
@@ -369,18 +381,36 @@ export class NodeRoleSession implements RoleSession {
         this.fail(new RpcProtocolError("tool_execution_start is missing toolName or args"));
         return;
       }
-      if (toolName === "handoff" || toolName === "end") {
+      if (
+        toolName === "handoff" ||
+        toolName === "end" ||
+        toolName === "approve" ||
+        toolName === "request_changes"
+      ) {
         const toolCallId = optionalString(value.toolCallId) ?? optionalString(value.tool_call_id);
-        const capture: EmissionCapture = { toolName, args: value.args };
         this.lastToolCallId = toolCallId === null ? undefined : toolCallId;
-        this.captures.push(capture);
-        // Shared seam parity: only a first, schema-valid capture seals.
-        // A subsequent call remains unsealed because it is extra_emission.
-        if (
-          this.captures.length === 1 &&
-          validateEmission([capture], this.emissionValidationOptions).kind === "ok"
-        ) {
-          this.seal();
+        if (toolName === "approve" || toolName === "request_changes") {
+          const reviewCapture: ReviewDecisionCapture = {
+            toolName,
+            args: value.args,
+          };
+          this.reviewDecisions.push(reviewCapture);
+          const schema = toolName === "approve" ? approveArgsSchema : requestChangesArgsSchema;
+          if (this.reviewDecisions.length === 1 && Value.Check(schema, value.args)) this.seal();
+        } else {
+          const capture: EmissionCapture = {
+            toolName: toolName === "handoff" ? "handoff" : "end",
+            args: value.args,
+          };
+          this.captures.push(capture);
+          // Shared seam parity: only a first, schema-valid capture seals.
+          // A subsequent call remains unsealed because it is extra_emission.
+          if (
+            this.captures.length === 1 &&
+            validateEmission([capture], this.emissionValidationOptions).kind === "ok"
+          ) {
+            this.seal();
+          }
         }
       }
     }

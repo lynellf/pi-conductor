@@ -91,6 +91,17 @@ export type {
 } from "./host.js";
 export type { LoadedManifest } from "./manifest.js";
 export { HostManifestError, loadManifest, loadManifestFromString } from "./manifest.js";
+export type { ReviewCaptureResult, ReviewGateOptions } from "./review.js";
+export {
+  classifyReviewCapture,
+  formatReviewRouteSeed,
+  ReviewGateConfigError,
+  reviewGateFromManifest,
+  reviewGateFromPinnedRecord,
+  reviewRepairGuidance,
+} from "./review.js";
+export { resumePendingReviewRoute } from "./review-recovery.js";
+export { ReviewRoutingError } from "./review-routing.js";
 export type {
   ControllerSessionNotification,
   HostTermination,
@@ -126,6 +137,8 @@ export type {
 export type { HandoffContextToolDetails } from "./handoff-context-tool.js";
 export { createHandoffContextTool, handoffContextArgsSchema } from "./handoff-context-tool.js";
 export type { HandoffContractContext } from "./handoff-contract.js";
+export type { ReviewToolDetails } from "./review-tools.js";
+export { createApproveTool, createRequestChangesTool } from "./review-tools.js";
 export type { EmissionToolDetails } from "./tools.js";
 export { createEndTool, createHandoffTool } from "./tools.js";
 

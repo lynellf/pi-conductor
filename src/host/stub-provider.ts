@@ -103,6 +103,12 @@ export type StubStep =
       readonly usage?: Partial<Usage>;
     }
   | {
+      readonly kind: "emit_review_decision";
+      readonly decision: "approve" | "request_changes";
+      readonly reason: string;
+      readonly usage?: Partial<Usage>;
+    }
+  | {
       readonly kind: "emit_text";
       readonly text: string;
       readonly usage?: Partial<Usage>;
@@ -314,6 +320,13 @@ export function makeStubStreamFunction(opts: StubStreamOptions): StreamFunction 
         {
           name: "end",
           arguments: step.reason !== undefined ? { reason: step.reason } : {},
+        },
+      ];
+    } else if (step.kind === "emit_review_decision") {
+      tcs = [
+        {
+          name: step.decision,
+          arguments: { reason: step.reason },
         },
       ];
     } else {
