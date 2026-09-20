@@ -15,10 +15,19 @@
 | `max_session_cost_usd` | any role          | Per-invocation cap, **shared across model fallbacks** within that invocation (§8.1, §11.7).                                                                                                                                                               |
 | `max_run_cost_usd`     | orchestrator only | Run-level cap. Rejected on workers (§13).                                                                                                                                                                                                                 |
 | `system_prompt`        | any role          | Path to a per-role system-prompt file the host loads. Plain prose, not frontmatter.                                                                                                                                                                       |
-| `tools`                | any role          | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. `delegate` is available only when it is listed here **and** the role declares `delegation`. See [Tools available to roles](role-tools.md#tools-available-to-roles) below for the full tool model and the `tools:`-omission footgun. |
-| `delegation`           | parent roles only | Enables bounded worktree subagents for this role. Requires `tools: [..., delegate]`; `mode: blocking` (the default for new runs) or `mode: nonblocking` is pinned in the run snapshot. See [Worktree subagent delegation](delegation.md#worktree-subagent-delegation) below. |
+| `tools`                | any role          | Declared tool allowlist. `handoff` and `end` are **force-injected by the host regardless**; omitting them emits a §13 warning. Assignment delegation requires `delegate_task` and `delegation_control`; legacy delegation requires `delegate`. See [Tools available to roles](role-tools.md#tools-available-to-roles) for the full tool model and the `tools:`-omission footgun. |
+| `delegation`           | parent roles only | Enables bounded worktree subagents for this role. Explicit `interface: assignments_v1` exposes the separate assignment/control tools; `interface: legacy_v1` or omission preserves `delegate`. `mode: blocking` (the default for new runs) or `mode: nonblocking` is pinned in the run snapshot. See [Worktree subagent delegation](delegation.md#worktree-subagent-delegation) below. |
 | `tool_execution`       | roles and subagent profiles | Pins executable-tool deadlines and timeout recovery. See [Executable tool controls](execution-controls.md). |
 | `context_retention`    | orchestrator only | `none` (default) or `run`. Retains the orchestrator's conversation within one run. See [Retained orchestrator context](orchestrator-context.md). |
+
+With `interface: assignments_v1`, the policy also contains a closed
+`assignments` list. Each assignment pins its profile, expected output,
+projection, child tools, and optional verification recipe; models may provide
+only `assignment` and a bounded `brief`. Assignment configuration is validated
+against declared profiles and recipes, frozen, included in the manifest
+snapshot, and used on resume. `assignments_v1` never registers the legacy
+`delegate` tool. See the [assignment-based delegation](delegation.md#assignment-based-delegation)
+example and migration table.
 
 The optional top-level `end_request_roles` list enables gated completion. It
 must contain one or more unique declared worker roles—never the orchestrator.

@@ -262,8 +262,31 @@ export type ContextArtifact = Static<typeof contextArtifactSchema>;
 /** Typed view of a validated task-local context-artifact inventory. */
 export type ContextArtifacts = Static<typeof contextArtifactsSchema>;
 
+/** Issue #121: closed model-facing assignment submission schema. */
+export const delegateTaskArgsSchema = Type.Object(
+  {
+    assignment: Type.String({
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      description: "Name of a pinned manifest assignment.",
+    }),
+    brief: Type.String({
+      minLength: 1,
+      maxLength: 8192,
+      pattern: "\\S",
+      description: "Bounded work brief; all authority comes from the assignment.",
+    }),
+  },
+  { additionalProperties: false },
+);
+
+/** Typed view of the Issue #121 assignment submission arguments. */
+export type DelegateTaskArgs = Static<typeof delegateTaskArgsSchema>;
+
 /**
  * §4: `delegate` task entry schema.
+ *
+ * @deprecated Legacy/internal batch task shape. Model-facing assignments use
+ * `delegateTaskArgsSchema` instead.
  *
  * - `id`: task identifier matching ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$
  * - `subagent`: profile name allowed to this parent (validated at batch level)
@@ -323,7 +346,7 @@ export const delegateTaskSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Typed view of a single delegation task. */
+/** @deprecated Legacy task-array entry retained for compatibility. */
 export type DelegateTask = Static<typeof delegateTaskSchema>;
 
 /**
@@ -335,7 +358,10 @@ export type DelegateTask = Static<typeof delegateTaskSchema>;
 export const verifyArgsSchema = Type.Object({}, { additionalProperties: false });
 
 /**
- * §4: `delegate` tool arguments schema.
+ * §4: legacy `delegate` tool arguments schema.
+ *
+ * @deprecated Use `delegateTaskArgsSchema` and `delegationControlArgsSchema`
+ * for the assignments_v1 model-facing surface.
  *
  * The host validates the full batch before any child spawn:
  * - at least one task and at most the parent's remaining child allowance
@@ -352,10 +378,10 @@ export const delegateSubmissionArgsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Typed view of one delegate submission. */
+/** @deprecated Legacy task-array submission retained for compatibility. */
 export type DelegateSubmissionArgs = Static<typeof delegateSubmissionArgsSchema>;
 
-/** Build the model-visible submission schema constrained to trusted policy mode (Issue #86). */
+/** @deprecated Build the legacy task-array schema constrained to trusted policy mode. */
 export function delegateSubmissionArgsSchemaForMode(mode: "blocking" | "nonblocking") {
   return Type.Object(
     {
@@ -369,8 +395,8 @@ export function delegateSubmissionArgsSchemaForMode(mode: "blocking" | "nonblock
 /** Describe the effective behavior selected by the pinned parent policy. */
 export { delegateModeDescription } from "../manifest/delegation-mode.js";
 
-/** Strict control operation over already accepted delegated children. */
-export const delegateControlArgsSchema = Type.Object(
+/** Issue #121: strict control operation over accepted delegated children. */
+export const delegationControlArgsSchema = Type.Object(
   {
     operation: Type.Union([
       Type.Literal("status"),
@@ -383,22 +409,34 @@ export const delegateControlArgsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Typed view of one delegate control request. */
-export type DelegateControlArgs = Static<typeof delegateControlArgsSchema>;
+/** Typed view of one Issue #121 delegation control request. */
+export type DelegationControlArgs = Static<typeof delegationControlArgsSchema>;
 
-/** Single TypeBox union for blocking/nonblocking delegate calls and controls. */
+/** @deprecated Legacy name retained for pinned and programmatic callers. */
+export const delegateControlArgsSchema = delegationControlArgsSchema;
+
+/** @deprecated Legacy name retained for pinned and programmatic callers. */
+export type DelegateControlArgs = DelegationControlArgs;
+
+/** @deprecated Legacy task-array/control union retained for compatibility. */
 export const delegateArgsSchema = Type.Union([
   delegateSubmissionArgsSchema,
   delegateControlArgsSchema,
 ]);
 
-/** Build the model-visible delegate union for one trusted configured mode. */
+/** @deprecated Build the legacy delegate union for one trusted configured mode. */
 export function delegateArgsSchemaForMode(mode: "blocking" | "nonblocking") {
-  return Type.Union([delegateSubmissionArgsSchemaForMode(mode), delegateControlArgsSchema]);
+  return Type.Union([delegateSubmissionArgsSchemaForMode(mode), delegationControlArgsSchema]);
 }
 
-/** Typed view of a delegate submission or control request. */
+/** @deprecated Legacy delegate submission/control request. */
 export type DelegateArgs = Static<typeof delegateArgsSchema>;
+
+/** @deprecated Legacy submission schema retained for pinned and programmatic callers. */
+export const legacyDelegateSubmissionArgsSchema = delegateSubmissionArgsSchema;
+
+/** @deprecated Legacy delegate union retained for pinned and programmatic callers. */
+export const legacyDelegateArgsSchema = delegateArgsSchema;
 
 // ─── Issue #51: progressive disclosure ────────────────────────────────
 

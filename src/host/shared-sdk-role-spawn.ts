@@ -22,6 +22,7 @@ import type { PersistedRecord } from "../persistence/log.js";
 import { isToolExecutionRecord, type ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
+import type { AssignmentDelegationTools } from "./delegation/delegate-tool-factory.js";
 import type { DisplaySink } from "./display-sink.js";
 import { bindLiveRoleToolExecution } from "./execution/role-tool-execution-binding.js";
 import { createSupervisedTools } from "./execution/supervised-tools.js";
@@ -89,6 +90,7 @@ export async function spawnSharedSdkRoleSession(options: {
   readonly handoffContextRef?: HandoffContextRef;
   readonly reviewGate?: ReviewGateOptions;
   readonly delegateTool: ToolDefinition | null;
+  readonly assignmentDelegationTools?: AssignmentDelegationTools;
   readonly uiContext?: ExtensionUIContext;
   readonly isUiContextCurrent?: () => boolean;
   readonly displaySink?: DisplaySink;
@@ -200,7 +202,11 @@ export async function spawnSharedSdkRoleSession(options: {
               )
             : buildToolsAllowlist(options.roleConfig?.tools, handoffContext !== null)),
           ...(reviewMode ? ["approve", "request_changes"] : []),
-          ...(options.delegateTool === null ? [] : ["delegate"]),
+          ...(options.delegateTool === null
+            ? options.assignmentDelegationTools === undefined
+              ? []
+              : ["delegate_task", "delegation_control"]
+            : ["delegate"]),
         ]
       : [...options.activeToolNames];
   // The parent registry owns the runtime that carries extension-registered
@@ -228,9 +234,16 @@ export async function spawnSharedSdkRoleSession(options: {
       ...(reviewMode ? [approve, requestChanges] : [handoff, end]),
       guardTool(askUser),
       ...(handoffContext === null ? [] : [guardTool(handoffContext)]),
-      // Delegate checks admission again after its asynchronous queue; controls
+      // Delegation checks admission again after its asynchronous queue; controls
       // remain available to retrieve or cancel work already accepted.
-      ...(options.delegateTool === null ? [] : [options.delegateTool]),
+      ...(options.delegateTool === null
+        ? options.assignmentDelegationTools === undefined
+          ? []
+          : [
+              options.assignmentDelegationTools.submission,
+              options.assignmentDelegationTools.control,
+            ]
+        : [options.delegateTool]),
     ],
     // Pi registers custom tools only when their names are present in `tools`.
     // Register the complete supervised executable surface, then immediately
@@ -240,7 +253,11 @@ export async function spawnSharedSdkRoleSession(options: {
     tools: [
       ...restoredActiveToolNames,
       ...supervisedTools.map((candidate) => candidate.name),
-      ...(options.delegateTool === null ? [] : ["delegate"]),
+      ...(options.delegateTool === null
+        ? options.assignmentDelegationTools === undefined
+          ? []
+          : ["delegate_task", "delegation_control"]
+        : ["delegate"]),
     ].filter((name, index, names) => names.indexOf(name) === index),
   };
   const { session } = await createSharedSdkSession({

@@ -391,6 +391,21 @@ describe("Task 16.5 — orchestrator run-memory seed (§8.4)", () => {
     expect(seed).toContain("Delegate submits child work without changing the active FSM role.");
   });
 
+  it("names the pinned assignment interface without promising availability", () => {
+    const seed = formatRunMemorySeed(
+      buildRunMemory(createInitialCheckpoint(makeDef()), [], makeDef(), {
+        goal: "assign work",
+        runCostCap: null,
+      }),
+      undefined,
+      "assignments_v1",
+    );
+
+    expect(seed).toContain("Assignment delegation submits one pinned child task");
+    expect(seed).toContain("use delegation_control for child status, result, wait, or cancel");
+    expect(seed).not.toContain("If delegate is available in your toolset");
+  });
+
   it("explains an empty list when no top-level workers are configured", () => {
     const def: MachineDefinition = {
       ...makeDef(),

@@ -6,6 +6,7 @@ import type {
   MachineDefinition,
   UsageRecord,
 } from "../core/types.js";
+import type { DelegationInterface } from "../manifest/types.js";
 import type { ArtifactDeliveryRecord, EndGuardRecord } from "../persistence/log.js";
 import type { ContinuitySeedV2 } from "../persistence/work-observation-seed.js";
 import type { ContinuityEvidenceAuthority } from "./continuity-evidence.js";
@@ -35,6 +36,8 @@ export interface RunLoopOptions {
   readonly host: Host;
   /** Initial goal text seeded into the first orchestrator session. */
   readonly initialGoal: string;
+  /** Pinned model-facing delegation interface for run-memory guidance. */
+  readonly delegationInterface?: DelegationInterface;
   /**
    * Latest persisted handoff reference when entering a run at a non-initial
    * role (resume). Fresh runs leave this unset.

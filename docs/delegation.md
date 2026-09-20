@@ -5,11 +5,13 @@
 ## Contents
 
 - [Worktree subagent delegation](#worktree-subagent-delegation)
-- [Configure a parent and profiles](#configure-a-parent-and-profiles)
-- [Delegated tool projection and fixed verification](#delegated-tool-projection-and-fixed-verification)
-- [Ask the parent to delegate](#ask-the-parent-to-delegate)
-- [Nonblocking tasks and controls](#nonblocking-tasks-and-controls)
-- [Settlement and recovery](#settlement-and-recovery)
+- [Assignment-based delegation](#assignment-based-delegation)
+- [Legacy compatibility (deprecated)](#legacy-compatibility-deprecated)
+- [Legacy configuration and profiles](#legacy-configuration-and-profiles)
+- [Legacy delegated tool projection and fixed verification](#legacy-delegated-tool-projection-and-fixed-verification)
+- [Legacy task submission](#legacy-task-submission)
+- [Legacy nonblocking tasks and controls](#legacy-nonblocking-tasks-and-controls)
+- [Legacy settlement and recovery](#legacy-settlement-and-recovery)
 - [Projection-aware child authority (Issue #52)](#projection-aware-child-authority-issue-52)
 - [Read-only context artifacts (Issue #60)](#read-only-context-artifacts-issue-60)
 - [Declarative profile projection policy (Issue #55)](#declarative-profile-projection-policy-issue-55)
@@ -17,8 +19,9 @@
 - [Bubblewrap command sandbox (Issue #106)](#bubblewrap-command-sandbox-issue-106)
 - [Child boundary and branch integration](#child-boundary-and-branch-integration)
 
-Yes: `delegate` is a host-provided tool, but **only a role that explicitly opts
-in receives it**. It is not an FSM transition and subagents are not conductor
+Assignment delegation is the documented model-facing default. Only a role
+that explicitly opts in receives `delegate_task` and `delegation_control`.
+Assignment delegation is not an FSM transition and subagents are not conductor
 roles: the parent remains responsible for reviewing the result and deciding
 whether to integrate a child branch.
 
@@ -26,12 +29,107 @@ The orchestrator's run-memory `next_candidates` lists only top-level FSM
 handoff targets. A coordinator-only manifest has no such worker roles, so an
 empty list is expected even when delegation is configured. FSM visit limits do
 not describe child-task capacity, and an empty list does not mean the goal is
-complete. Use `handoff` to transfer the active FSM role; use an enabled `delegate`
-tool to submit child work under the parent's configured policy. Allowed profiles
-do not guarantee admission: live child and budget limits, approvals, projection,
-Git state, and cleanup checks still apply.
+complete. Use `handoff` to transfer the active FSM role; use `delegate_task` to
+submit one host-resolved child task and `delegation_control` to inspect, await,
+or cancel it. Assignment names, profiles, task IDs, and child IDs are distinct:
+the assignment name selects pinned authority, the profile supplies the pinned
+child runtime, the host-derived task ID identifies the accepted task, and the
+host-issued child ID is the durable control handle. Live child and budget
+limits, approvals, projection, Git state, and cleanup checks still apply.
 
-### Configure a parent and profiles
+### Assignment-based delegation
+
+Declare the model-facing interface explicitly. The assignment owns every
+authority-bearing field; the model supplies only the assignment name and a
+bounded task brief:
+
+```yaml
+version: 2
+roles:
+  - name: implementer
+    max_visits: 3
+    models: [anthropic:claude-sonnet-4-5]
+    system_prompt: .pi/roles/implementer.md
+    tools: [read, grep, edit, write, bash, handoff, end, delegate_task, delegation_control]
+    delegation:
+      interface: assignments_v1
+      mode: nonblocking
+      allowed_subagents: [api-implementer, test-writer]
+      max_children_per_session: 6
+      max_parallel: 2
+      assignments:
+        - name: api-review
+          subagent: api-implementer
+          expected_output: A focused implementation and relevant tests.
+          projection_paths: [src/api.ts, tests/api.test.ts]
+          tools: [read, grep, edit, write, verify]
+        - name: test-review
+          subagent: test-writer
+          expected_output: Focused edge-case coverage.
+          tools: [read, grep, edit, write, verify]
+
+subagents:
+  - name: api-implementer
+    models: [anthropic:claude-sonnet-4-5]
+    max_session_cost_usd: 2.00
+    system_prompt: .pi/subagents/api-implementer.md
+  - name: test-writer
+    models: [anthropic:claude-sonnet-4-5]
+    max_session_cost_usd: 1.00
+    system_prompt: .pi/subagents/test-writer.md
+```
+
+`delegate_task` accepts exactly one assignment and brief; it cannot choose the
+profile, mode, tools, recipe, projection, paths, or child identity. In the
+example, a nonblocking call returns one child handle:
+
+```json
+{"assignment":"api-review","brief":"Implement the endpoint validation and run focused checks."}
+```
+
+```json
+{"child_id":"<host-issued-child-id>"}
+```
+
+Use the separate closed control schema for lifecycle operations:
+
+```json
+{"operation":"status","child_ids":["<host-issued-child-id>"]}
+{"operation":"wait","child_ids":["<host-issued-child-id>"]}
+```
+
+With `mode: blocking`, the submission still returns its one `child_id` together
+with the terminal `result`. `delegation_control` consumes no admission slot.
+Distinct nonblocking calls can run concurrently up to `max_parallel`; assignment
+configuration is pinned at run start and remains authoritative on resume.
+
+## Legacy compatibility (deprecated)
+
+`legacy_v1` and the general `delegate` tool remain supported for compatibility,
+but new manifests should use `assignments_v1`. The legacy surface accepts model
+provided task arrays and authority fields, so it is intentionally isolated from
+assignment-mode tools and is not a translation shim. Existing omitted-interface
+manifests and pinned snapshots retain legacy behavior. To migrate, bump the
+manifest `version`, add the explicit assignment interface and tool names, create
+one assignment per approved task shape, and move each field as follows:
+
+| Legacy model field | Assignment owner |
+| --- | --- |
+| `tasks[].id` | Host-generated task identity; the model selects `assignments[].name` |
+| `tasks[].subagent` | `assignments[].subagent` |
+| `tasks[].objective` | Model `brief` (bounded, non-authoritative) |
+| `tasks[].expected_output` | `assignments[].expected_output` |
+| `tasks[].tools` | `assignments[].tools` |
+| `tasks[].projection_paths` | `assignments[].projection_paths` |
+| `tasks[].verification_recipe` | `assignments[].verification_recipe` |
+| per-call `mode` | `delegation.mode` |
+
+Rollback is explicit: restore `legacy_v1` (or omit `interface` for historical
+manifests), restore the `delegate` tool, and start a new run with the prior
+manifest version. A running assignment-mode run remains pinned; do not mutate
+its assignments in place.
+
+### Legacy configuration and profiles
 
 Add `delegate` and a `delegation` policy to the parent role, then define the
 named child profiles at top level:
@@ -93,7 +191,7 @@ the child prompt. A profile is file-only by default. An operator can opt a
 profile into the Bubblewrap command boundary described below; the parent still
 reviews the result and decides whether to integrate it.
 
-### Delegated tool projection and fixed verification
+### Legacy delegated tool projection and fixed verification
 
 A profile may opt into an exact child tool policy. The task can only narrow a
 profile's `default`; it cannot select a merely allowed sibling. Effective tools
@@ -160,7 +258,7 @@ be paired with a manifest version bump for new runs. Existing records without
 these additive fields remain legacy records; malformed configured policy is
 rejected rather than silently widened.
 
-### Ask the parent to delegate
+### Legacy task submission
 
 The enabled parent calls `delegate` with one or more independent tasks:
 
@@ -196,7 +294,7 @@ verified uncommitted changes in the child worktree; `no_changes` requires a
 clean worktree at the batch base. A `completed` report without changes becomes
 `no_changes`; an unexpected commit or invalid Git state becomes `failed`.
 
-### Nonblocking tasks and controls
+### Legacy nonblocking tasks and controls
 
 Configure `mode: nonblocking` in the parent role policy to return after the
 whole batch has been durably accepted. Submit tasks without a mode argument:
@@ -255,7 +353,7 @@ tool-call ID identify that submission. Redelivery of identical arguments under
 the same identity returns the original handles before recapturing the checkout;
 changed arguments reject. A new model-issued tool call is a new submission.
 
-### Settlement and recovery
+### Legacy settlement and recovery
 
 A normal role handoff or end waits for all accepted children to settle. If work
 is pending, the parent receives a correction listing handles and can wait or

@@ -49,14 +49,31 @@ export function createDelegateBridge(options: NodeRoleSessionOptions): DelegateB
       [MACHINE_TOOLS_CONFIG_ENV]: options.machineToolsConfigPath,
     });
     if (delegateBridge !== undefined) {
-      if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
+      if (config.delegateBridge === undefined) {
         throw new RpcChildProcessError(
-          "RPC delegate bridge requires a delegate-enabled machine-tools configuration",
+          "RPC delegation bridge requires a delegation-enabled machine-tools configuration",
+        );
+      }
+      const hasLegacy = delegateBridge.delegate !== undefined;
+      const hasAssignments =
+        delegateBridge.delegateTask !== undefined && delegateBridge.delegationControl !== undefined;
+      if (
+        (hasLegacy &&
+          (config.delegationInterface === "assignments_v1" ||
+            !config.declaredToolNames.includes("delegate"))) ||
+        (hasAssignments &&
+          (config.delegationInterface !== "assignments_v1" ||
+            !config.declaredToolNames.includes("delegate_task") ||
+            !config.declaredToolNames.includes("delegation_control"))) ||
+        (!hasLegacy && !hasAssignments)
+      ) {
+        throw new RpcChildProcessError(
+          "RPC delegation bridge handlers do not match the configured delegation interface",
         );
       }
       if (realpathSync(delegateBridge.directory) !== config.delegateBridge.directory) {
         throw new RpcChildProcessError(
-          "RPC delegate bridge directory does not match the machine-tools configuration",
+          "RPC delegation bridge directory does not match the machine-tools configuration",
         );
       }
     }
@@ -89,7 +106,13 @@ export function createDelegateBridge(options: NodeRoleSessionOptions): DelegateB
     return new DelegateBridgeHost({
       sessionDir: options.sessionDir,
       directory,
-      ...(delegateBridge === undefined ? {} : { delegate: delegateBridge.delegate }),
+      ...(delegateBridge?.delegate === undefined ? {} : { delegate: delegateBridge.delegate }),
+      ...(delegateBridge?.delegateTask === undefined
+        ? {}
+        : { delegateTask: delegateBridge.delegateTask }),
+      ...(delegateBridge?.delegationControl === undefined
+        ? {}
+        : { delegationControl: delegateBridge.delegationControl }),
       ...(requestFilesBridge === undefined
         ? {}
         : { requestFiles: requestFilesBridge.requestFiles }),

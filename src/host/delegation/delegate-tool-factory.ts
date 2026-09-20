@@ -20,12 +20,20 @@ import {
   type DelegateArgs,
   type DelegateControlArgs,
   type DelegateSubmissionArgs,
+  type DelegateTaskArgs,
+  type DelegationControlArgs,
   delegateArgsSchema,
   delegateArgsSchemaForMode,
+  delegateTaskArgsSchema,
+  delegationControlArgsSchema,
 } from "../../seam/schema.js";
 import type { DisplaySink } from "../display-sink.js";
 import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js";
 import { formatHostRejection, type HostRejection } from "../host-rejection.js";
+import {
+  DelegationAssignmentResolutionError,
+  resolveDelegationAssignment,
+} from "./assignment-resolver.js";
 import { mapPoolResult } from "./child-result-mapping.js";
 import { buildSpawnCallback } from "./child-session.js";
 import type { HostArtifactContextResolver } from "./context-artifact-contract.js";
@@ -40,6 +48,12 @@ import { HostDelegationRejectedError } from "./factory-scheduler.js";
 import type { DelegationManager } from "./manager.js";
 import type { PoolChildResult } from "./pool.js";
 import type { DelegationScheduler } from "./scheduler.js";
+
+/** Two model-visible tools for the pinned assignments_v1 interface. */
+export interface AssignmentDelegationTools {
+  readonly submission: ToolDefinition;
+  readonly control: ToolDefinition;
+}
 
 /** Shared child-runtime dependencies for SDK-tool and controller-native admission. */
 export interface DelegateChildFactoryOptions {
@@ -286,6 +300,118 @@ export function createDelegateTool(opts: DelegateToolFactoryOptions): ToolDefini
         signal?.removeEventListener("abort", abortChildren);
         finishExecution();
       }
+    },
+  });
+}
+
+/** Create the separate assignment submission and lifecycle-control tools. */
+export function createAssignmentDelegationTools(
+  opts: DelegateToolFactoryOptions,
+): AssignmentDelegationTools {
+  const policy = delegationPolicy(opts.role);
+  if (policy.interface !== "assignments_v1") {
+    throw new Error("assignment delegation tools require assignments_v1");
+  }
+  const scheduler = opts.scheduler;
+  if (scheduler === undefined) {
+    throw new Error("assignment delegation requires the shared scheduler");
+  }
+
+  let executionTail = Promise.resolve();
+  const submission = defineTool<typeof delegateTaskArgsSchema, Record<string, unknown>>({
+    name: "delegate_task",
+    label: "delegate_task",
+    description: `Submit one manifest-defined delegated task. ${delegateModeDescription(resolveDelegationMode(policy))}`,
+    parameters: delegateTaskArgsSchema,
+    async execute(toolCallId, rawArgs, signal) {
+      const args = rawArgs as DelegateTaskArgs;
+      const initialRejection = opts.getHostRejection?.() ?? false;
+      if (initialRejection !== false) return formatHostRejection("delegate_task", initialRejection);
+      const abortChildren = (): void => {
+        void opts.manager.abortAll();
+      };
+      signal?.addEventListener("abort", abortChildren, { once: true });
+      const previousExecution = executionTail;
+      let finishExecution: () => void = () => {};
+      executionTail = new Promise<void>((resolve) => {
+        finishExecution = resolve;
+      });
+      try {
+        await previousExecution;
+        const queuedRejection = opts.getHostRejection?.() ?? false;
+        if (queuedRejection !== false) return formatHostRejection("delegate_task", queuedRejection);
+        const resolved = resolveDelegationAssignment(args, policy, opts.subagents);
+        const childIds = await scheduler.submit(toolCallId, resolved);
+        const childId = childIds[0];
+        if (childId === undefined) throw new Error("assignment submission returned no child ID");
+        if (resolved.mode === "nonblocking") {
+          return {
+            content: [{ type: "text", text: JSON.stringify({ child_id: childId }) }],
+            details: { childId, remainingChildren: scheduler.remainingChildren() },
+            terminate: false,
+          };
+        }
+        const result = await scheduler.wait(childId, signal);
+        if (opts.manager.isClosed()) {
+          throw new Error("delegation unavailable: parent session is closed");
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ child_id: childId, result: mapPoolResult(result) }),
+            },
+          ],
+          details: { childId, remainingChildren: scheduler.remainingChildren() },
+          terminate: false,
+        };
+      } catch (cause) {
+        if (cause instanceof HostDelegationRejectedError) {
+          return formatHostRejection("delegate_task", cause.rejection);
+        }
+        const error = cause instanceof DelegationAssignmentResolutionError ? cause : undefined;
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: "delegate_task_failed",
+                code: error?.code ?? "delegation_submission_failed",
+                message: errorMessage(cause),
+              }),
+            },
+          ],
+          details: {
+            remainingChildren: scheduler.remainingChildren(),
+            code: error?.code ?? "delegation_submission_failed",
+          },
+          isError: true,
+          terminate: false,
+        };
+      } finally {
+        signal?.removeEventListener("abort", abortChildren);
+        finishExecution();
+      }
+    },
+  });
+  const control = createDelegationControlTool(scheduler);
+  return Object.freeze({ submission, control });
+}
+
+function createDelegationControlTool(scheduler: DelegationScheduler): ToolDefinition {
+  return defineTool<typeof delegationControlArgsSchema, Record<string, unknown>>({
+    name: "delegation_control",
+    label: "delegation_control",
+    description: "Inspect, await, or cancel accepted delegated child handles.",
+    parameters: delegationControlArgsSchema,
+    async execute(_toolCallId, rawArgs, signal) {
+      const args = rawArgs as DelegationControlArgs;
+      const statuses = await executeControl(scheduler, args.operation, args.child_ids, signal);
+      return {
+        content: [{ type: "text", text: JSON.stringify(statuses) }],
+        details: { operation: args.operation },
+        terminate: false,
+      };
     },
   });
 }

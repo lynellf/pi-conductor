@@ -38,7 +38,9 @@ disable them.
   `reason: string`.
 
 A role with pending delegated children receives a correction to wait or cancel
-them before its handoff/end can be accepted. See [delegation controls](delegation.md#nonblocking-tasks-and-controls).
+them before its handoff/end can be accepted. Assignment-mode parents use
+`delegation_control`; legacy parents use the combined `delegate` control surface.
+See [delegation controls](delegation.md#assignment-based-delegation).
 
 Both tools only **validate and record intent** into a per-session capture buffer
 and return a terminating message after a valid capture; they do **not** call
@@ -57,8 +59,10 @@ conductor-owned tools.
 Isolated `worktree` and `copy` roles instead run a package-local `pi --mode rpc`
 process with pi's built-in tools disabled. A host-loaded static machine-tools
 extension provides `handoff` and `end`, plus only declared, path-confined file
-tools; it also provides the host-mediated `delegate` bridge when authorized.
-Other declared names do not receive the shared SDK pass-through registry.
+tools; it provides the host-mediated `delegate_task` and
+`delegation_control` bridges for `assignments_v1`, or the legacy `delegate`
+bridge for `legacy_v1`, when authorized. Other declared names do not receive the
+shared SDK pass-through registry.
 
 For shared SDK roles, pi's built-in tool set (the authoritative reference is
 **pi's own documentation** — see the links below; pi-conductor does not
@@ -101,6 +105,22 @@ role that omits `tools:` has no file or shell access, and no §13 warning fires
 `handoff`/`end`). `handoff` and `end` remain conductor machine tools. Declare
 every tool a role actually needs.
 
+### Assignment delegation tools
+
+`assignments_v1` registers exactly two model-facing tools:
+
+- `delegate_task`: closed `{ assignment, brief }` arguments; one call admits one
+  host-resolved child task. The model cannot provide a profile, task ID, mode,
+  tools, recipe, projection, or path.
+- `delegation_control`: closed `{ operation, child_ids }` arguments for
+  `status`, `result`, `wait`, and `cancel`. Controls do not consume admission
+  allowance and cannot submit work.
+
+`legacy_v1` continues to register only `delegate`, whose task-array and
+per-call-control schema is retained for compatibility and is deprecated. The
+host selects the interface from the pinned manifest; tools are not inferred from
+model payloads.
+
 Related pages: [role configuration](role-config.md#roleconfig-fields),
-[worktree subagent delegation](delegation.md#worktree-subagent-delegation),
+[assignment-based delegation](delegation.md#assignment-based-delegation),
 and [the record stream](record-stream.md#hooking-into-the-record-stream).

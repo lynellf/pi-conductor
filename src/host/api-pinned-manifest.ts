@@ -2,7 +2,12 @@
 import { dirname } from "node:path";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { toMachineDefinition } from "../manifest/definition.js";
+import {
+  parseDelegationAssignments,
+  parseDelegationInterface,
+} from "../manifest/delegation-assignment.js";
 import { parseSubagentWorkspace } from "../manifest/subagent-projection.js";
+import type { AssignmentDelegationPolicy, LegacyDelegationPolicy } from "../manifest/types.js";
 import type { ManifestSnapshotRecord } from "../persistence/trajectory-records.js";
 import { checkModelProvidersRegistered, type LoadedManifest } from "./manifest.js";
 
@@ -18,6 +23,36 @@ export async function loadPinnedManifest(
   const pinned = snapshot.normalized_manifest;
   const manifest = Object.freeze({
     ...pinned,
+    roles: Object.freeze(
+      pinned.roles.map((role, index) => {
+        if (role.delegation === undefined) return role;
+        const delegation = role.delegation;
+        const assignments = parseDelegationAssignments(
+          delegation.assignments,
+          `pinned roles[${index}].delegation.assignments`,
+        );
+        const delegationInterface = parseDelegationInterface(
+          delegation.interface,
+          `pinned roles[${index}].delegation`,
+        );
+        if (delegationInterface === "assignments_v1") {
+          const normalizedDelegation = Object.freeze({
+            ...delegation,
+            interface: delegationInterface,
+            ...(assignments === undefined ? {} : { assignments }),
+          }) as AssignmentDelegationPolicy;
+          return Object.freeze({ ...role, delegation: normalizedDelegation });
+        }
+        if (assignments !== undefined) {
+          throw new Error(`pinned roles[${index}].delegation.assignments is invalid for legacy_v1`);
+        }
+        const normalizedDelegation = Object.freeze({
+          ...delegation,
+          interface: delegationInterface,
+        }) as LegacyDelegationPolicy;
+        return Object.freeze({ ...role, delegation: normalizedDelegation });
+      }),
+    ),
     ...(pinned.subagents === undefined
       ? {}
       : {

@@ -10,7 +10,12 @@ import type {
 } from "../../core/types.js";
 import type { ArtifactCollectionContext } from "../artifacts/lifecycle.js";
 import type { RpcContextRetentionBridge } from "./context-retention-bridge.js";
-import type { DelegateBridgeHandler, RequestFilesBridgeHandler } from "./delegate-bridge.js";
+import type {
+  DelegateBridgeHandler,
+  DelegateTaskBridgeHandler,
+  DelegationControlBridgeHandler,
+  RequestFilesBridgeHandler,
+} from "./delegate-bridge.js";
 import type { ExecutionBridgeToolDefinition } from "./execution-bridge.js";
 
 /** All-zero usage before the first child turn settles. */
@@ -93,10 +98,12 @@ export interface NodeRoleSessionOptions {
   readonly workspace?: SessionWorkspaceDescriptor;
   /** Actual host-provisioned artifact roots for terminal collection. */
   readonly artifactCollection?: ArtifactCollectionContext;
-  /** Explicit host callback and canonical per-session directory for isolated delegation. */
+  /** Explicit host callback and canonical per-session directory for legacy delegation. */
   readonly delegateBridge?: {
     readonly directory: string;
-    readonly delegate: DelegateBridgeHandler;
+    readonly delegate?: DelegateBridgeHandler;
+    readonly delegateTask?: DelegateTaskBridgeHandler;
+    readonly delegationControl?: DelegationControlBridgeHandler;
   };
   /** Explicit host callback and canonical per-session directory for progressive disclosure. */
   readonly requestFilesBridge?: {

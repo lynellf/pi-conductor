@@ -7,7 +7,12 @@ import {
   createDelegationAdmissionService,
   type DelegationAdmissionService,
 } from "./admission-service.js";
-import { createDelegateTool, type DelegateToolFactoryOptions } from "./delegate-tool-factory.js";
+import {
+  type AssignmentDelegationTools,
+  createAssignmentDelegationTools,
+  createDelegateTool,
+  type DelegateToolFactoryOptions,
+} from "./delegate-tool-factory.js";
 import {
   createControllerDelegateScheduler,
   createDelegateScheduler,
@@ -32,10 +37,31 @@ export class ProductionDelegationCoordinator {
     options: Omit<DelegateToolFactoryOptions, "manager" | "scheduler">,
     logicalParentId: string,
   ): Promise<ToolDefinition> {
+    const scope = await this.getOrCreateScope(options, logicalParentId);
+    return createDelegateTool({ ...options, manager: scope.manager, scheduler: scope.scheduler });
+  }
+
+  /** Build the two model-visible tools for an assignments_v1 parent. */
+  async createAssignmentTools(
+    options: Omit<DelegateToolFactoryOptions, "manager" | "scheduler">,
+    logicalParentId: string,
+  ): Promise<AssignmentDelegationTools> {
+    const scope = await this.getOrCreateScope(options, logicalParentId);
+    return createAssignmentDelegationTools({
+      ...options,
+      manager: scope.manager,
+      scheduler: scope.scheduler,
+    });
+  }
+
+  private async getOrCreateScope(
+    options: Omit<DelegateToolFactoryOptions, "manager" | "scheduler">,
+    logicalParentId: string,
+  ): Promise<DelegationScope> {
     const replacement = this.replacements.get(logicalParentId);
     if (replacement !== undefined) {
       await replacement;
-      return this.createTool(options, logicalParentId);
+      return this.getOrCreateScope(options, logicalParentId);
     }
     const priorFailure = this.failures.get(logicalParentId);
     if (priorFailure !== undefined) throw priorFailure;
@@ -71,7 +97,7 @@ export class ProductionDelegationCoordinator {
       scope = { manager, scheduler: createDelegateScheduler(scopedOptions, logicalParentId) };
       this.scopes.set(logicalParentId, scope);
     }
-    return createDelegateTool({ ...options, manager: scope.manager, scheduler: scope.scheduler });
+    return scope;
   }
 
   /** Build controller-owned native admission without creating an SDK tool. */

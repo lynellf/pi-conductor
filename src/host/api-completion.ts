@@ -123,6 +123,9 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       initialCheckpoint,
       host,
       initialGoal: goal,
+      delegationInterface:
+        loadedManifest.manifest.roles.find((role) => role.name === def.orchestrator)?.delegation
+          ?.interface ?? "legacy_v1",
       initialHandoffContextRef: controllerMode
         ? null
         : latestHandoffContextRef(log.records(runId), runId),

@@ -181,6 +181,57 @@ describe("machine tools RPC extension", () => {
     ]);
   });
 
+  it("registers separate assignment submission and control tools for assignments_v1", async () => {
+    const sessionDir = join(sandbox, "assignment-rpc");
+    const configPath = await writeMachineToolsConfig({
+      sessionDir,
+      role: "implementer",
+      visitIndex: 1,
+      workspaceRoot: workspace,
+      mounts: [],
+      declaredToolNames: ["delegate_task", "delegation_control"],
+      enableDelegateBridge: true,
+      delegationInterface: "assignments_v1",
+      delegationMode: "nonblocking",
+    });
+    process.env[MACHINE_TOOLS_CONFIG_ENV] = configPath;
+    const tools = registeredTools();
+    const task = requiredTool(tools, "delegate_task");
+    const control = requiredTool(tools, "delegation_control");
+
+    expect(tools.map((tool) => tool.name)).toEqual([
+      "handoff",
+      "end",
+      "delegate_task",
+      "delegation_control",
+    ]);
+    expect(Value.Check(task.parameters, { assignment: "review", brief: "Inspect it." })).toBe(true);
+    expect(
+      Value.Check(task.parameters, {
+        assignment: "review",
+        brief: "Inspect it.",
+        mode: "blocking",
+      }),
+    ).toBe(false);
+    expect(Value.Check(control.parameters, { operation: "status", child_ids: ["child-1"] })).toBe(
+      true,
+    );
+  });
+
+  it("rejects mixed legacy and assignment tool declarations", async () => {
+    const bridge = join(sandbox, "bridge");
+    await mkdir(bridge, { recursive: true });
+    await configure({
+      workspaceRoot: workspace,
+      mounts: [],
+      declaredToolNames: ["delegate", "delegate_task", "delegation_control"],
+      delegateBridge: { directory: bridge },
+      delegationInterface: "assignments_v1",
+    });
+
+    expect(() => registeredTools()).toThrow("expected delegate_task and delegation_control only");
+  });
+
   it("uses the broad legacy schema when trusted provenance overrides current blocking config", async () => {
     const sessionDir = join(sandbox, "legacy-rpc");
     await writeMachineToolsConfig({

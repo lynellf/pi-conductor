@@ -29,6 +29,7 @@ import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
 import { parseContextEnrichmentPolicy } from "./context-enrichment.js";
 import { parseControllerConfig } from "./controller.js";
+import { parseDelegationAssignments, parseDelegationInterface } from "./delegation-assignment.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
 import { parseReviewGates } from "./review-gates.js";
@@ -37,12 +38,14 @@ import { parseSubagentWorkspace } from "./subagent-projection.js";
 import { parseSubagentToolPolicy } from "./subagent-tool-policy.js";
 import type {
   ArtifactConfig,
+  AssignmentDelegationPolicy,
   ContextRetention,
   ContinuityPolicy,
   ContinuityPolicyV2,
   DelegationPolicy,
   HandoffMode,
   HandoffPolicy,
+  LegacyDelegationPolicy,
   Manifest,
   ModelConfig,
   ProgressiveDisclosurePolicy,
@@ -263,6 +266,8 @@ function parseDelegationPolicy(raw: unknown, roleIndex: number): DelegationPolic
 
   const mode =
     entry.mode === undefined ? ("blocking" as const) : parseDelegationMode(entry.mode, path);
+  const delegationInterface = parseDelegationInterface(entry.interface, path);
+  const assignments = parseDelegationAssignments(entry.assignments, `${path}.assignments`);
 
   const allowed_subagents = toNonEmptyStringArray(
     entry.allowed_subagents,
@@ -281,13 +286,26 @@ function parseDelegationPolicy(raw: unknown, roleIndex: number): DelegationPolic
           `${path}.context_artifact_limits`,
         );
 
-  return Object.freeze({
+  const base = {
     mode,
     allowed_subagents,
     max_children_per_session,
     max_parallel,
     ...(context_artifact_limits === undefined ? {} : { context_artifact_limits }),
-  }) as DelegationPolicy;
+  };
+  if (delegationInterface === "assignments_v1") {
+    return Object.freeze({
+      ...base,
+      interface: delegationInterface,
+      ...(assignments === undefined ? {} : { assignments }),
+    }) as AssignmentDelegationPolicy;
+  }
+  if (assignments !== undefined) {
+    throw new ManifestParseError(
+      `${path}.assignments is only valid when delegation.interface is "assignments_v1"`,
+    );
+  }
+  return Object.freeze({ ...base, interface: delegationInterface }) as LegacyDelegationPolicy;
 }
 
 function parseDelegationMode(value: unknown, path: string): "blocking" | "nonblocking" {

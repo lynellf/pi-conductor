@@ -29,7 +29,12 @@ import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
 import type { ReviewGateOptions } from "./review.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import type { RpcContextRetentionBridge } from "./rpc/context-retention-bridge.js";
-import { DelegateBridgeConfigError, type DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
+import {
+  DelegateBridgeConfigError,
+  type DelegateBridgeHandler,
+  type DelegateTaskBridgeHandler,
+  type DelegationControlBridgeHandler,
+} from "./rpc/delegate-bridge.js";
 import type { ExecutionBridgeToolDefinition } from "./rpc/execution-bridge.js";
 import {
   loadMachineToolsConfig,
@@ -73,6 +78,11 @@ export async function spawnIsolatedRoleSession(options: {
   readonly createDelegateBridgeHandler?: (
     primaryCheckout: string,
   ) => Promise<DelegateBridgeHandler>;
+  /** Build the two assignment-mode host delegation operations. */
+  readonly createAssignmentDelegationBridgeHandlers?: (primaryCheckout: string) => Promise<{
+    readonly delegateTask: DelegateTaskBridgeHandler;
+    readonly delegationControl: DelegationControlBridgeHandler;
+  }>;
   /** Explicit durable provenance for pre-#86 snapshots without a mode field. */
   readonly legacyDelegationMode?: boolean;
   /** Prior attempt records used to enforce timeout recovery across role replacement. */
@@ -169,11 +179,27 @@ export async function spawnIsolatedRoleSession(options: {
     }),
   );
 
-  const delegateAuthorized =
-    options.roleConfig?.delegation !== undefined && options.roleConfig.tools?.includes("delegate");
-  if (delegateAuthorized !== (options.createDelegateBridgeHandler !== undefined)) {
+  const legacyDelegateAuthorized =
+    options.roleConfig?.delegation !== undefined &&
+    (options.roleConfig.delegation.interface === undefined ||
+      options.roleConfig.delegation.interface === "legacy_v1") &&
+    options.roleConfig.tools?.includes("delegate") === true;
+  const assignmentDelegationAuthorized =
+    options.roleConfig?.delegation?.interface === "assignments_v1" &&
+    options.roleConfig.tools?.includes("delegate_task") === true &&
+    options.roleConfig.tools?.includes("delegation_control") === true;
+  const delegationAuthorized = legacyDelegateAuthorized || assignmentDelegationAuthorized;
+  if (legacyDelegateAuthorized !== (options.createDelegateBridgeHandler !== undefined)) {
     throw new DelegateBridgeConfigError(
-      "isolated delegate bridge authorization does not match its host handler",
+      "isolated legacy delegation bridge authorization does not match its host handler",
+    );
+  }
+  if (
+    assignmentDelegationAuthorized !==
+    (options.createAssignmentDelegationBridgeHandlers !== undefined)
+  ) {
+    throw new DelegateBridgeConfigError(
+      "isolated assignment delegation bridge authorization does not match its host handlers",
     );
   }
   const machineToolsConfigPath = await writeMachineToolsConfig({
@@ -188,14 +214,22 @@ export async function spawnIsolatedRoleSession(options: {
     mounts: guarantee.projection.mounts,
     declaredToolNames: [
       ...confinedTools.activeNames,
-      ...(delegateAuthorized ? (["delegate"] as const) : []),
+      ...(legacyDelegateAuthorized ? (["delegate"] as const) : []),
+      ...(assignmentDelegationAuthorized ? (["delegate_task", "delegation_control"] as const) : []),
       ...(requestFilesAuthorized ? (["request_files"] as const) : []),
     ],
-    ...(delegateAuthorized ? { enableDelegateBridge: true } : {}),
-    ...(delegateAuthorized && options.roleConfig?.delegation?.mode !== undefined
+    ...(delegationAuthorized ? { enableDelegateBridge: true } : {}),
+    ...(delegationAuthorized
+      ? {
+          delegationInterface: assignmentDelegationAuthorized
+            ? ("assignments_v1" as const)
+            : ("legacy_v1" as const),
+        }
+      : {}),
+    ...(delegationAuthorized && options.roleConfig?.delegation?.mode !== undefined
       ? { delegationMode: options.roleConfig.delegation.mode }
       : {}),
-    ...(delegateAuthorized && options.legacyDelegationMode === true
+    ...(legacyDelegateAuthorized && options.legacyDelegationMode === true
       ? { legacyDelegationMode: true }
       : {}),
     ...(requestFilesAuthorized ? { enableRequestFilesBridge: true } : {}),
@@ -214,19 +248,41 @@ export async function spawnIsolatedRoleSession(options: {
   let requestFilesBridge: NonNullable<NodeRoleSessionOptions["requestFilesBridge"]> | undefined;
   let executionBridge: NonNullable<NodeRoleSessionOptions["executionBridge"]> | undefined;
   const config = loadMachineToolsConfig({ [MACHINE_TOOLS_CONFIG_ENV]: machineToolsConfigPath });
-  if (delegateAuthorized) {
+  if (legacyDelegateAuthorized) {
     if (config.delegateBridge === undefined || !config.declaredToolNames.includes("delegate")) {
       throw new DelegateBridgeConfigError(
-        "isolated delegate bridge configuration is missing its authorized tool",
+        "isolated legacy delegation bridge configuration is missing its authorized tool",
       );
     }
     const createHandler = options.createDelegateBridgeHandler;
     if (createHandler === undefined) {
-      throw new DelegateBridgeConfigError("isolated delegate bridge has no host handler");
+      throw new DelegateBridgeConfigError("isolated legacy delegation bridge has no host handler");
     }
     delegateBridge = {
       directory: config.delegateBridge.directory,
       delegate: await createHandler(workspaceResult.workspacePath),
+    };
+  } else if (assignmentDelegationAuthorized) {
+    if (
+      config.delegateBridge === undefined ||
+      !config.declaredToolNames.includes("delegate_task") ||
+      !config.declaredToolNames.includes("delegation_control")
+    ) {
+      throw new DelegateBridgeConfigError(
+        "isolated assignment delegation bridge configuration is missing its authorized tools",
+      );
+    }
+    const createHandlers = options.createAssignmentDelegationBridgeHandlers;
+    if (createHandlers === undefined) {
+      throw new DelegateBridgeConfigError(
+        "isolated assignment delegation bridge has no host handlers",
+      );
+    }
+    const handlers = await createHandlers(workspaceResult.workspacePath);
+    delegateBridge = {
+      directory: config.delegateBridge.directory,
+      delegateTask: handlers.delegateTask,
+      delegationControl: handlers.delegationControl,
     };
   }
   if (requestFilesAuthorized) {

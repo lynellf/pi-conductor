@@ -90,6 +90,19 @@ export interface ContextArtifactLimits {
 /** Issue #86: trusted parent behavior for delegate submissions. */
 export type DelegationMode = "blocking" | "nonblocking";
 
+/** Issue #121: model-visible delegation protocol selected by the pinned role policy. */
+export type DelegationInterface = "assignments_v1" | "legacy_v1";
+
+/** Issue #121: one closed, manifest-owned delegated-work assignment. */
+export interface DelegationAssignment {
+  readonly name: string;
+  readonly subagent: string;
+  readonly expected_output: string;
+  readonly projection_paths?: readonly string[];
+  readonly tools?: readonly ChildToolName[];
+  readonly verification_recipe?: string;
+}
+
 // ─── Durable continuity policy (docs/durable-continuity/spec.md §5) ────
 
 /** Durable continuity policy from the v1 reader or v2 host-generated contract. */
@@ -145,13 +158,8 @@ export interface ContextEnrichmentPolicyV2 {
 
 export type ContextEnrichmentPolicy = ContextEnrichmentPolicyV1 | ContextEnrichmentPolicyV2;
 
-/**
- * §3: the delegation policy attached to a parent role.
- *
- * A role receives `delegate` only when it declares BOTH `tools: [delegate]`
- * AND a `delegation` block. Neither is injected implicitly.
- */
-export interface DelegationPolicy {
+/** Shared trusted limits for a parent delegation policy. */
+interface DelegationPolicyBase {
   /** Issue #86: omitted in programmatic legacy inputs; fresh YAML is normalized to blocking. */
   readonly mode?: DelegationMode;
   readonly allowed_subagents: readonly string[];
@@ -160,6 +168,29 @@ export interface DelegationPolicy {
   /** Issue #60: optional strict limits; admission supplies defaults when absent. */
   readonly context_artifact_limits?: ContextArtifactLimits;
 }
+
+/** Legacy v1 policy; assignment fields cannot be mixed into this shape. */
+export interface LegacyDelegationPolicy extends DelegationPolicyBase {
+  /** Issue #121: omitted programmatic and historical snapshots resolve to legacy_v1. */
+  readonly interface?: "legacy_v1";
+  readonly assignments?: never;
+}
+
+/** Assignment v1 policy selected by the explicit model-visible interface. */
+export interface AssignmentDelegationPolicy extends DelegationPolicyBase {
+  readonly interface: "assignments_v1";
+  /** Issue #121: closed assignment vocabulary; static validation requires it. */
+  readonly assignments?: readonly DelegationAssignment[];
+}
+
+/**
+ * §3: the delegation policy attached to a parent role.
+ *
+ * The discriminant prevents new and legacy model-facing fields from being
+ * represented as one ambiguous mixed contract. Structural-invalid programmatic
+ * values are still reported by `validateManifest` at the untrusted boundary.
+ */
+export type DelegationPolicy = LegacyDelegationPolicy | AssignmentDelegationPolicy;
 
 /** Parsed manifest model entry: logical model id plus conductor-owned effort. */
 export interface ModelConfig {

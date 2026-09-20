@@ -290,10 +290,17 @@ export class StubHost implements Host {
     let delegateTool: ReturnType<
       typeof import("../host/delegation/delegate-tool-factory.js").createDelegateTool
     > | null = null;
+    let assignmentDelegationTools: Awaited<
+      ReturnType<
+        typeof import("../host/delegation/delegate-tool-factory.js").createAssignmentDelegationTools
+      >
+    > | null = null;
     const manifest = this.loadedManifestValue?.manifest;
     if (
       roleConfig?.delegation !== undefined &&
-      roleConfig.tools?.includes("delegate") &&
+      (roleConfig.delegation.interface === undefined ||
+        roleConfig.delegation.interface === "legacy_v1") &&
+      roleConfig.tools?.includes("delegate") === true &&
       manifest !== undefined
     ) {
       if (opts.visitIndex === undefined) {
@@ -322,6 +329,69 @@ export class StubHost implements Host {
         ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
         sessionDir: `${this.cwd}/.pi-conductor/runs/${this.runId}/sessions`,
         manager: this.delegationManager,
+      });
+    } else if (
+      roleConfig?.delegation?.interface === "assignments_v1" &&
+      roleConfig.tools?.includes("delegate_task") === true &&
+      roleConfig.tools?.includes("delegation_control") === true &&
+      manifest !== undefined
+    ) {
+      if (opts.visitIndex === undefined) {
+        throw new Error("delegation requires the loop-owned parent visitIndex");
+      }
+      const { createAssignmentDelegationTools } = await import(
+        "./delegation/delegate-tool-factory.js"
+      );
+      const { createDelegateScheduler } = await import("./delegation/factory-scheduler.js");
+      const scheduler = createDelegateScheduler(
+        {
+          role: roleConfig,
+          controlProtocol: this.controlProtocol,
+          subagents: manifest.subagents ?? [],
+          ...(manifest.verification_recipes === undefined
+            ? {}
+            : { verificationRecipes: manifest.verification_recipes }),
+          remainingChildren: roleConfig.delegation.max_children_per_session,
+          runId: this.runId,
+          parentRole: role,
+          parentVisitIndex: opts.visitIndex,
+          primaryCheckout: this.cwd,
+          runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
+          persistRecord: (record) => this.persistRecord(record),
+          agentDir: `${this.cwd}/.pi-conductor/agent`,
+          systemPromptRoot: delegationPromptRoot(this.loadedManifestValue, this.cwd),
+          modelRegistry: this.modelRegistry,
+          resolveChildModel: () => this.model,
+          ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+          sessionDir: `${this.cwd}/.pi-conductor/runs/${this.runId}/sessions`,
+          records: () => this.log.records(this.runId),
+          manager: this.delegationManager,
+        },
+        JSON.stringify([this.runId, role, opts.executionVisitIndex ?? opts.visitIndex ?? 1]),
+      );
+      assignmentDelegationTools = createAssignmentDelegationTools({
+        role: roleConfig,
+        controlProtocol: this.controlProtocol,
+        subagents: manifest.subagents ?? [],
+        ...(manifest.verification_recipes === undefined
+          ? {}
+          : { verificationRecipes: manifest.verification_recipes }),
+        remainingChildren: roleConfig.delegation.max_children_per_session,
+        runId: this.runId,
+        parentRole: role,
+        parentVisitIndex: opts.visitIndex,
+        primaryCheckout: this.cwd,
+        runStateDir: `${this.cwd}/.pi-conductor/runs/${this.runId}`,
+        persistRecord: (record) => this.persistRecord(record),
+        agentDir: `${this.cwd}/.pi-conductor/agent`,
+        systemPromptRoot: delegationPromptRoot(this.loadedManifestValue, this.cwd),
+        modelRegistry: this.modelRegistry,
+        resolveChildModel: () => this.model,
+        ...(this.displaySink !== undefined && { displaySink: this.displaySink }),
+        sessionDir: `${this.cwd}/.pi-conductor/runs/${this.runId}/sessions`,
+        records: () => this.log.records(this.runId),
+        manager: this.delegationManager,
+        scheduler,
       });
     }
 
@@ -369,12 +439,20 @@ export class StubHost implements Host {
       tools: [
         ...(reviewMode ? ["approve", "request_changes"] : ["handoff", "end"]),
         ...(handoffContext === null ? [] : ["handoff_context"]),
-        ...(delegateTool === null ? [] : ["delegate"]),
+        ...(delegateTool === null
+          ? assignmentDelegationTools === null
+            ? []
+            : ["delegate_task", "delegation_control"]
+          : ["delegate"]),
       ],
       customTools: [
         ...(reviewMode ? [approve, requestChanges] : [handoff, end]),
         ...(handoffContext === null ? [] : [handoffContext]),
-        ...(delegateTool === null ? [] : [delegateTool]),
+        ...(delegateTool === null
+          ? assignmentDelegationTools === null
+            ? []
+            : [assignmentDelegationTools.submission, assignmentDelegationTools.control]
+          : [delegateTool]),
         ...(confinedTools !== undefined ? confinedTools.tools : []),
       ],
       sessionManager: this.sessionManager,

@@ -20,7 +20,11 @@ import { assertDelegationMode } from "../../manifest/delegation-mode.js";
 import type { DelegationMode } from "../../manifest/types.js";
 import {
   type DelegateArgs,
+  type DelegateTaskArgs,
+  type DelegationControlArgs,
   delegateArgsSchema,
+  delegateTaskArgsSchema,
+  delegationControlArgsSchema,
   type RequestFilesArgs,
   requestFilesArgsSchema,
 } from "../../seam/schema.js";
@@ -58,6 +62,23 @@ const delegateBridgeRequestSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const assignmentTaskBridgeRequestSchema = Type.Object(
+  {
+    id: Type.String({ pattern: REQUEST_ID_PATTERN }),
+    tool_call_id: Type.String({ minLength: 1 }),
+    args: delegateTaskArgsSchema,
+  },
+  { additionalProperties: false },
+);
+
+const assignmentControlBridgeRequestSchema = Type.Object(
+  {
+    id: Type.String({ pattern: REQUEST_ID_PATTERN }),
+    args: delegationControlArgsSchema,
+  },
+  { additionalProperties: false },
+);
+
 const requestFilesBridgeRequestSchema = Type.Object(
   {
     id: Type.String({ pattern: REQUEST_ID_PATTERN }),
@@ -68,6 +89,8 @@ const requestFilesBridgeRequestSchema = Type.Object(
 
 const machineToolBridgeRequestSchema = Type.Union([
   delegateBridgeRequestSchema,
+  assignmentTaskBridgeRequestSchema,
+  assignmentControlBridgeRequestSchema,
   requestFilesBridgeRequestSchema,
 ]);
 
@@ -103,6 +126,17 @@ export type RequestFilesBridgeResult = MachineToolBridgeResult;
 export type DelegateBridgeHandler = (
   args: DelegateArgs,
   toolCallId: string,
+) => Promise<DelegateBridgeResult>;
+
+/** Callback for one assignment-mode submission. */
+export type DelegateTaskBridgeHandler = (
+  args: DelegateTaskArgs,
+  toolCallId: string,
+) => Promise<DelegateBridgeResult>;
+
+/** Callback for assignment-mode lifecycle controls. */
+export type DelegationControlBridgeHandler = (
+  args: DelegationControlArgs,
 ) => Promise<DelegateBridgeResult>;
 
 /** Callback supplied by the host-owned progressive-disclosure wiring slice. */
@@ -154,6 +188,39 @@ export async function requestDelegateBridge(options: {
   });
 }
 
+/** Invoke one assignment-mode submission from the static RPC extension. */
+export async function requestDelegateTaskBridge(options: {
+  readonly directory: string;
+  readonly args: DelegateTaskArgs;
+  readonly actualToolCallId: string;
+  /** Trusted mode from the host-written RPC configuration. */
+  readonly configuredMode?: DelegationMode;
+  readonly signal?: AbortSignal;
+  /** Test-only bound; production uses a five-minute operation deadline. */
+  readonly timeoutMs?: number;
+}): Promise<DelegateBridgeResult> {
+  return requestMachineToolBridge({
+    ...options,
+    argsSchema: delegateTaskArgsSchema,
+    toolName: "delegate_task",
+  });
+}
+
+/** Invoke assignment-mode lifecycle controls from the static RPC extension. */
+export async function requestDelegationControlBridge(options: {
+  readonly directory: string;
+  readonly args: DelegationControlArgs;
+  readonly signal?: AbortSignal;
+  /** Test-only bound; production uses a five-minute operation deadline. */
+  readonly timeoutMs?: number;
+}): Promise<DelegateBridgeResult> {
+  return requestMachineToolBridge({
+    ...options,
+    argsSchema: delegationControlArgsSchema,
+    toolName: "delegation_control",
+  });
+}
+
 /** Invoke the host-owned progressive-disclosure operation from the static RPC extension. */
 export async function requestFilesBridge(options: {
   readonly directory: string;
@@ -171,9 +238,13 @@ export async function requestFilesBridge(options: {
 
 async function requestMachineToolBridge(options: {
   readonly directory: string;
-  readonly args: DelegateArgs | RequestFilesArgs;
-  readonly argsSchema: typeof delegateArgsSchema | typeof requestFilesArgsSchema;
-  readonly toolName: "delegate" | "request_files";
+  readonly args: DelegateArgs | DelegateTaskArgs | DelegationControlArgs | RequestFilesArgs;
+  readonly argsSchema:
+    | typeof delegateArgsSchema
+    | typeof delegateTaskArgsSchema
+    | typeof delegationControlArgsSchema
+    | typeof requestFilesArgsSchema;
+  readonly toolName: "delegate" | "delegate_task" | "delegation_control" | "request_files";
   readonly actualToolCallId?: string;
   readonly configuredMode?: DelegationMode;
   readonly legacyDelegationMode?: boolean;
@@ -197,16 +268,19 @@ async function requestMachineToolBridge(options: {
   if (options.signal?.aborted === true) {
     throw new DelegateBridgeInterruptedError(`${options.toolName} bridge request was interrupted`);
   }
-  const timeoutMs =
-    options.timeoutMs ??
+  const unboundedWait =
     (options.toolName === "delegate" &&
-    Value.Check(delegateArgsSchema, options.args) &&
-    hasUnboundedWait(
-      options.args,
-      options.legacyDelegationMode === true ? undefined : (options.configuredMode ?? "blocking"),
-    )
-      ? undefined
-      : DEFAULT_RESPONSE_TIMEOUT_MS);
+      Value.Check(delegateArgsSchema, options.args) &&
+      hasUnboundedWait(
+        options.args,
+        options.legacyDelegationMode === true ? undefined : (options.configuredMode ?? "blocking"),
+      )) ||
+    (options.toolName === "delegate_task" &&
+      (options.configuredMode ?? "blocking") === "blocking") ||
+    (options.toolName === "delegation_control" &&
+      Value.Check(delegationControlArgsSchema, options.args) &&
+      options.args.operation === "wait");
+  const timeoutMs = options.timeoutMs ?? (unboundedWait ? undefined : DEFAULT_RESPONSE_TIMEOUT_MS);
   if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1)) {
     throw new DelegateBridgeConfigError(
       `${options.toolName} bridge timeout must be a positive integer`,
@@ -217,13 +291,15 @@ async function requestMachineToolBridge(options: {
   const requestPath = bridgePath(directory, id, REQUEST_SUFFIX);
   const responsePath = bridgePath(directory, id, RESPONSE_SUFFIX);
   if (
-    options.toolName === "delegate" &&
+    (options.toolName === "delegate" || options.toolName === "delegate_task") &&
     (typeof options.actualToolCallId !== "string" || options.actualToolCallId.length === 0)
   ) {
-    throw new DelegateBridgeConfigError("delegate bridge requires the actual tool call ID");
+    throw new DelegateBridgeConfigError(
+      `${options.toolName} bridge requires the actual tool call ID`,
+    );
   }
   const frame =
-    options.toolName === "delegate"
+    options.toolName === "delegate" || options.toolName === "delegate_task"
       ? { id, tool_call_id: options.actualToolCallId, args: options.args }
       : { id, args: options.args };
   await writeJsonFrame(requestPath, frame);
@@ -249,6 +325,8 @@ function hasUnboundedWait(args: DelegateArgs, configuredMode?: DelegationMode): 
 export class DelegateBridgeHost {
   private readonly directory: string;
   private readonly delegate: DelegateBridgeHandler | undefined;
+  private readonly delegateTask: DelegateTaskBridgeHandler | undefined;
+  private readonly delegationControl: DelegationControlBridgeHandler | undefined;
   private readonly requestFiles: RequestFilesBridgeHandler | undefined;
   private readonly handledRequests = new Set<string>();
   private readonly pending = new Map<string, PendingDelegateRequest>();
@@ -261,12 +339,21 @@ export class DelegateBridgeHost {
     readonly sessionDir: string;
     readonly directory: string;
     readonly delegate?: DelegateBridgeHandler;
+    readonly delegateTask?: DelegateTaskBridgeHandler;
+    readonly delegationControl?: DelegationControlBridgeHandler;
     readonly requestFiles?: RequestFilesBridgeHandler;
   }) {
-    if (options.delegate === undefined && options.requestFiles === undefined) {
+    if (
+      options.delegate === undefined &&
+      options.delegateTask === undefined &&
+      options.delegationControl === undefined &&
+      options.requestFiles === undefined
+    ) {
       throw new DelegateBridgeConfigError("machine tool bridge requires at least one host handler");
     }
     this.delegate = options.delegate;
+    this.delegateTask = options.delegateTask;
+    this.delegationControl = options.delegationControl;
     this.requestFiles = options.requestFiles;
     const bridgeRoot = canonicalDirectory(
       resolve(options.sessionDir, "machine-tools", "delegate-bridge"),
@@ -356,10 +443,15 @@ export class DelegateBridgeHost {
 
     let result: MachineToolBridgeResult;
     try {
-      result =
-        operation.name === "delegate"
-          ? await operation.handler(operation.args, operation.toolCallId)
-          : await operation.handler(operation.args);
+      if (operation.name === "delegate") {
+        result = await operation.handler(operation.args, operation.toolCallId);
+      } else if (operation.name === "delegate_task") {
+        result = await operation.handler(operation.args, operation.toolCallId);
+      } else if (operation.name === "delegation_control") {
+        result = await operation.handler(operation.args);
+      } else {
+        result = await operation.handler(operation.args);
+      }
     } catch {
       if (pending.active && !this.closed) {
         await this.writeFailure(pending.id, `host ${operation.name} operation unavailable`);
@@ -385,6 +477,17 @@ export class DelegateBridgeHost {
         readonly toolCallId: string;
       }
     | {
+        readonly name: "delegate_task";
+        readonly args: DelegateTaskArgs;
+        readonly handler: DelegateTaskBridgeHandler;
+        readonly toolCallId: string;
+      }
+    | {
+        readonly name: "delegation_control";
+        readonly args: DelegationControlArgs;
+        readonly handler: DelegationControlBridgeHandler;
+      }
+    | {
         readonly name: "request_files";
         readonly args: RequestFilesArgs;
         readonly handler: RequestFilesBridgeHandler;
@@ -399,6 +502,21 @@ export class DelegateBridgeHost {
             handler: this.delegate,
             toolCallId: request.tool_call_id,
           };
+    }
+    if (Value.Check(assignmentTaskBridgeRequestSchema, request)) {
+      return this.delegateTask === undefined
+        ? null
+        : {
+            name: "delegate_task",
+            args: request.args,
+            handler: this.delegateTask,
+            toolCallId: request.tool_call_id,
+          };
+    }
+    if (Value.Check(assignmentControlBridgeRequestSchema, request)) {
+      return this.delegationControl === undefined
+        ? null
+        : { name: "delegation_control", args: request.args, handler: this.delegationControl };
     }
     if (Value.Check(requestFilesBridgeRequestSchema, request)) {
       return this.requestFiles === undefined
@@ -436,7 +554,7 @@ async function waitForResponse(options: {
   readonly responsePath: string;
   readonly signal: AbortSignal | undefined;
   readonly timeoutMs: number | undefined;
-  readonly toolName: "delegate" | "request_files";
+  readonly toolName: "delegate" | "delegate_task" | "delegation_control" | "request_files";
 }): Promise<MachineToolBridgeResult> {
   return new Promise<MachineToolBridgeResult>((resolveResponse, rejectResponse) => {
     let settled = false;

@@ -7,7 +7,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
 import type { Role } from "../../core/types.js";
-import type { DelegationMode } from "../../manifest/types.js";
+import type { DelegationInterface, DelegationMode } from "../../manifest/types.js";
 import type { ReviewGateOptions } from "../review.js";
 
 /** Environment variable naming the mandatory machine-tools configuration file. */
@@ -37,6 +37,9 @@ export const machineToolsConfigSchema = Type.Object(
         },
         { additionalProperties: false },
       ),
+    ),
+    delegationInterface: Type.Optional(
+      Type.Union([Type.Literal("assignments_v1"), Type.Literal("legacy_v1")]),
     ),
     delegationMode: Type.Optional(
       Type.Union([Type.Literal("blocking"), Type.Literal("nonblocking")]),
@@ -107,6 +110,8 @@ export interface WriteMachineToolsConfigOptions {
   readonly declaredToolNames: readonly string[];
   /** Explicitly provision the host-owned bridge directory required for `delegate`. */
   readonly enableDelegateBridge?: boolean;
+  /** Trusted model-visible protocol for this role's delegation policy. */
+  readonly delegationInterface?: DelegationInterface;
   /** Trusted effective mode for this role's delegation policy. */
   readonly delegationMode?: DelegationMode;
   /** Explicit durable provenance for pre-mode snapshots. */
@@ -170,6 +175,9 @@ export async function writeMachineToolsConfig(
     ...(options.enableDelegateBridge === true && bridgeDirectory !== undefined
       ? { delegateBridge: { directory: bridgeDirectory } }
       : {}),
+    ...(options.delegationInterface === undefined
+      ? {}
+      : { delegationInterface: options.delegationInterface }),
     ...(options.delegationMode === undefined ? {} : { delegationMode: options.delegationMode }),
     ...(options.legacyDelegationMode === undefined
       ? {}
@@ -265,6 +273,9 @@ export function loadMachineToolsConfig(env: NodeJS.ProcessEnv = process.env): Ma
             ),
           }),
         }),
+    ...(parsed.delegationInterface === undefined
+      ? {}
+      : { delegationInterface: parsed.delegationInterface }),
     ...(parsed.delegationMode === undefined ? {} : { delegationMode: parsed.delegationMode }),
     ...(parsed.legacyDelegationMode === undefined
       ? {}

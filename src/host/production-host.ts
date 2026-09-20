@@ -34,6 +34,8 @@ import {
   settleDelegation as settleDelegationInModule,
 } from "./production-host-control.js";
 import {
+  createAssignmentDelegationBridgeHandlers as createAssignmentDelegationBridgeHandlersInModule,
+  createAssignmentDelegationTools as createAssignmentDelegationToolsInModule,
   createDelegateBridgeHandler as createDelegateBridgeHandlerInModule,
   createDelegateTool as createDelegateToolInModule,
   type DelegateHostContext,
@@ -155,7 +157,10 @@ export class ProductionHost extends ProductionHostContext implements Host {
           source,
         ),
       createDelegateBridgeHandler: (...args) => this.createDelegateBridgeHandler(...args),
+      createAssignmentDelegationBridgeHandlers: (...args) =>
+        this.createAssignmentDelegationBridgeHandlers(...args),
       createDelegateTool: (...args) => this.createDelegateTool(...args),
+      createAssignmentDelegationTools: (...args) => this.createAssignmentDelegationTools(...args),
       persistRecord: (record) => {
         this.log.append(record);
         notifyListeners(record);
@@ -268,6 +273,28 @@ export class ProductionHost extends ProductionHostContext implements Host {
       : never
   ): ReturnType<typeof createDelegateToolInModule> {
     return createDelegateToolInModule(this.delegateContext(), ...args);
+  }
+
+  private createAssignmentDelegationBridgeHandlers(
+    ...args: Parameters<typeof createAssignmentDelegationBridgeHandlersInModule> extends [
+      DelegateHostContext,
+      ...infer Rest,
+    ]
+      ? Rest
+      : never
+  ): ReturnType<typeof createAssignmentDelegationBridgeHandlersInModule> {
+    return createAssignmentDelegationBridgeHandlersInModule(this.delegateContext(), ...args);
+  }
+
+  private createAssignmentDelegationTools(
+    ...args: Parameters<typeof createAssignmentDelegationToolsInModule> extends [
+      DelegateHostContext,
+      ...infer Rest,
+    ]
+      ? Rest
+      : never
+  ): ReturnType<typeof createAssignmentDelegationToolsInModule> {
+    return createAssignmentDelegationToolsInModule(this.delegateContext(), ...args);
   }
 
   private createDelegateBridgeHandler(

@@ -38,6 +38,7 @@
 
 import { recipientHandoffPayload } from "../core/accepted-handoff.js";
 import type { RunMemory } from "../core/run-memory.js";
+import type { DelegationInterface } from "../manifest/types.js";
 import type { ContinuitySeedSection } from "./loop-format.js";
 
 /**
@@ -47,6 +48,7 @@ import type { ContinuitySeedSection } from "./loop-format.js";
 export function formatRunMemorySeed(
   memory: RunMemory,
   continuitySeedOverride?: ContinuitySeedSection | null,
+  delegationInterface?: DelegationInterface,
 ): string {
   const remaining =
     memory.remaining_budget === null
@@ -75,7 +77,7 @@ export function formatRunMemorySeed(
   const endRequestText =
     memory.end_request === null ? "(none)" : `role: ${memory.end_request.role}`;
   const terminalLine = formatTerminalGuidance(memory);
-  const delegationGuidance = formatDelegationGuidance(memory);
+  const delegationGuidance = formatDelegationGuidance(memory, delegationInterface);
   const continuitySection = formatContinuitySection(memory, continuitySeedOverride);
 
   const lastMessageText =
@@ -164,13 +166,20 @@ function formatCandidateGuidance(memory: RunMemory): string {
   return "All top-level FSM workers are visit-capped. An empty handoff list does not mean the goal is complete.";
 }
 
-function formatDelegationGuidance(memory: RunMemory): string {
+function formatDelegationGuidance(
+  memory: RunMemory,
+  delegationInterface: DelegationInterface | undefined,
+): string {
   if (memory.current_role === "done") {
     return "This run is terminal. Do not call handoff, delegate, or end.";
   }
 
   if (memory.remaining_budget !== null && memory.remaining_budget <= 0) {
     return "The exhausted run budget applies to all further work. Do not use handoff or delegate to continue it.";
+  }
+
+  if (delegationInterface === "assignments_v1") {
+    return "If a top-level target is listed, use handoff to route this FSM run to it. Assignment delegation submits one pinned child task without changing the active FSM role; use delegation_control for child status, result, wait, or cancel. This list does not determine delegation availability. Live child and run-budget limits plus admission, projection, and cleanup gates decide whether a request can be accepted.";
   }
 
   return "If a top-level target is listed, use handoff to route this FSM run to it. Delegate submits child work without changing the active FSM role. This list does not determine delegate availability. If delegate is available in your toolset, consult its interface; live child and run-budget limits plus admission, projection, and cleanup gates decide whether a request can be accepted.";

@@ -325,6 +325,7 @@ export async function persistAcceptedTransition(
               ...(nextContinuitySeed === undefined ? {} : { continuitySeed: nextContinuitySeed }),
             }),
             nextContinuitySeed,
+            opts.delegationInterface,
           )
         : ctx.nextSeed;
     const trajectoryTargetSeed =

@@ -285,8 +285,9 @@ The reference material is split into focused pages:
   continuity, compaction and recovery within a run.
 - [Tools available to roles](docs/role-tools.md) — machine tools, SDK tools, and
   the explicit `tools:` allowlist.
-- [Worktree subagent delegation](docs/delegation.md) — child profiles,
-  projections, optional Bubblewrap commands, artifacts, and branch integration.
+- [Worktree subagent delegation](docs/delegation.md) — assignment-based
+  delegation by default, legacy compatibility, child profiles, projections,
+  optional Bubblewrap commands, artifacts, and branch integration.
 - [Per-role isolated workspaces](docs/workspaces.md) — workspace backends,
   artifacts, mounts, and progressive disclosure.
 - [Sandboxed repository controllers](docs/controller.md) — fixed-argv planner

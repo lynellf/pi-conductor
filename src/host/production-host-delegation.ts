@@ -23,6 +23,7 @@ import type {
   ResolvedDelegatedSource,
   SandboxAdmissionAdapter,
 } from "./delegation/delegate-tool.js";
+import type { AssignmentDelegationTools } from "./delegation/delegate-tool-factory.js";
 import type { PoolChildResult } from "./delegation/pool.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import { createSandboxAdmissionAdapter } from "./delegation/sandbox-admission.js";
@@ -31,7 +32,12 @@ import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import { initializeProtectedRunLayout } from "./execution/sandbox/protected-run-layout.js";
 import type { HostRejection } from "./host-rejection.js";
 import type { LoadedManifest } from "./manifest.js";
-import type { DelegateBridgeHandler, DelegateBridgeResult } from "./rpc/delegate-bridge.js";
+import type {
+  DelegateBridgeHandler,
+  DelegateBridgeResult,
+  DelegateTaskBridgeHandler,
+  DelegationControlBridgeHandler,
+} from "./rpc/delegate-bridge.js";
 import { DelegateBridgeConfigError } from "./rpc/delegate-bridge.js";
 import {
   assertPersistedSnapshotPinResolves,
@@ -186,7 +192,7 @@ export async function getOrCreateSnapshotPin(
   ctx.setSnapshotPin(pin);
   return pin;
 }
-/** Create the loop-owned delegate tool for a role session. */
+/** Create the loop-owned legacy delegate tool for a role session. */
 export async function createDelegateTool(
   ctx: DelegateHostContext,
   role: Role,
@@ -200,9 +206,81 @@ export async function createDelegateTool(
   onFatal?: (cause: unknown) => void,
   getHostRejection?: () => HostRejection | false,
 ): Promise<ReturnType<typeof import("./delegation/delegate-tool-factory.js").createDelegateTool>> {
-  if (!hasDelegateConfiguration(roleConfig)) {
-    throw new DelegateBridgeConfigError(`role '${String(role)}' is not authorized to delegate`);
+  if (!hasLegacyDelegateConfiguration(roleConfig)) {
+    throw new DelegateBridgeConfigError(
+      `role '${String(role)}' is not authorized for legacy delegation`,
+    );
   }
+  const { factoryOptions, logicalParentId } = await buildDelegationFactoryOptions(
+    ctx,
+    role,
+    roleConfig,
+    primaryCheckout,
+    parentVisitIndex,
+    executionVisitIndex,
+    getRunCostCap,
+    getCurrentParentUsage,
+    onTaskTerminal,
+    onFatal,
+    getHostRejection,
+  );
+  return ctx.delegation.createTool(factoryOptions, logicalParentId);
+}
+
+/** Create the two model-facing tools for an assignments_v1 role session. */
+export async function createAssignmentDelegationTools(
+  ctx: DelegateHostContext,
+  role: Role,
+  roleConfig: RoleConfig | undefined,
+  primaryCheckout: string,
+  parentVisitIndex: number | undefined,
+  executionVisitIndex: number,
+  getRunCostCap?: () => number | null,
+  getCurrentParentUsage?: () => number,
+  onTaskTerminal?: (result: PoolChildResult) => void,
+  onFatal?: (cause: unknown) => void,
+  getHostRejection?: () => HostRejection | false,
+): Promise<AssignmentDelegationTools> {
+  if (!hasAssignmentConfiguration(roleConfig)) {
+    throw new DelegateBridgeConfigError(
+      `role '${String(role)}' is not authorized for assignment delegation`,
+    );
+  }
+  const { factoryOptions, logicalParentId } = await buildDelegationFactoryOptions(
+    ctx,
+    role,
+    roleConfig,
+    primaryCheckout,
+    parentVisitIndex,
+    executionVisitIndex,
+    getRunCostCap,
+    getCurrentParentUsage,
+    onTaskTerminal,
+    onFatal,
+    getHostRejection,
+  );
+  return ctx.delegation.createAssignmentTools(factoryOptions, logicalParentId);
+}
+
+async function buildDelegationFactoryOptions(
+  ctx: DelegateHostContext,
+  role: Role,
+  roleConfig: RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> },
+  primaryCheckout: string,
+  parentVisitIndex: number | undefined,
+  executionVisitIndex: number,
+  getRunCostCap?: () => number | null,
+  getCurrentParentUsage?: () => number,
+  onTaskTerminal?: (result: PoolChildResult) => void,
+  onFatal?: (cause: unknown) => void,
+  getHostRejection?: () => HostRejection | false,
+): Promise<{
+  readonly factoryOptions: Omit<
+    import("./delegation/delegate-tool-factory.js").DelegateToolFactoryOptions,
+    "manager" | "scheduler"
+  >;
+  readonly logicalParentId: string;
+}> {
   if (parentVisitIndex === undefined) {
     throw new Error("delegation requires the loop-owned parent visitIndex");
   }
@@ -284,11 +362,14 @@ export async function createDelegateTool(
     ...(ctx.sandboxHostApproval === undefined
       ? {}
       : { sandboxHostApproval: ctx.sandboxHostApproval }),
-  };
-  return ctx.delegation.createTool(
+  } satisfies Omit<
+    import("./delegation/delegate-tool-factory.js").DelegateToolFactoryOptions,
+    "manager" | "scheduler"
+  >;
+  return {
     factoryOptions,
-    JSON.stringify([ctx.runId, role, executionVisitIndex]),
-  );
+    logicalParentId: JSON.stringify([ctx.runId, role, executionVisitIndex]),
+  };
 }
 
 function protectedSandboxAdmission(
@@ -336,10 +417,77 @@ export async function createDelegateBridgeHandler(
     );
 }
 
-function hasDelegateConfiguration(
+/** Adapt both assignment-mode tools to the isolated role-session bridge. */
+export async function createAssignmentDelegationBridgeHandlers(
+  ctx: DelegateHostContext,
+  role: Role,
+  roleConfig: RoleConfig | undefined,
+  primaryCheckout: string,
+  parentVisitIndex: number | undefined,
+  executionVisitIndex: number,
+  getRunCostCap?: () => number | null,
+  getCurrentParentUsage?: () => number,
+  onTaskTerminal?: (result: PoolChildResult) => void,
+  onFatal?: (cause: unknown) => void,
+): Promise<{
+  readonly delegateTask: DelegateTaskBridgeHandler;
+  readonly delegationControl: DelegationControlBridgeHandler;
+}> {
+  const tools = await createAssignmentDelegationTools(
+    ctx,
+    role,
+    roleConfig,
+    primaryCheckout,
+    parentVisitIndex,
+    executionVisitIndex,
+    getRunCostCap,
+    getCurrentParentUsage,
+    onTaskTerminal,
+    onFatal,
+  );
+  return {
+    delegateTask: async (args, toolCallId): Promise<DelegateBridgeResult> =>
+      ctx.adaptDelegateToolResult(
+        await tools.submission.execute(
+          toolCallId,
+          args,
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        ),
+      ),
+    delegationControl: async (args): Promise<DelegateBridgeResult> =>
+      ctx.adaptDelegateToolResult(
+        await tools.control.execute(
+          "delegation-control",
+          args,
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        ),
+      ),
+  };
+}
+
+function hasLegacyDelegateConfiguration(
   roleConfig: RoleConfig | undefined,
 ): roleConfig is RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> } {
-  return roleConfig?.delegation !== undefined && roleConfig.tools?.includes("delegate") === true;
+  return (
+    roleConfig?.delegation !== undefined &&
+    (roleConfig.delegation.interface === undefined ||
+      roleConfig.delegation.interface === "legacy_v1") &&
+    roleConfig.tools?.includes("delegate") === true
+  );
+}
+
+function hasAssignmentConfiguration(
+  roleConfig: RoleConfig | undefined,
+): roleConfig is RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> } {
+  return (
+    roleConfig?.delegation?.interface === "assignments_v1" &&
+    roleConfig.tools?.includes("delegate_task") === true &&
+    roleConfig.tools?.includes("delegation_control") === true
+  );
 }
 
 function delegationPromptRoot(loaded: LoadedManifest, cwd: string): string {

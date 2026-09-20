@@ -22,6 +22,7 @@ import type { ModelEffort, Role } from "../core/types.js";
 import { validateContextRetention } from "./context-retention.js";
 import { validateContinuityPolicy } from "./continuity.js";
 import { validateControllerConfig } from "./controller-validation.js";
+import { validateDelegationInterface } from "./delegation-validation.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
 import { validateReviewGates } from "./review-gates.js";
@@ -71,6 +72,31 @@ export type ManifestErrorCode =
   | "delegation-duplicate-allowed-subagent"
   /** Issue #86: delegation mode must be one of the trusted literals. */
   | "invalid-delegation-mode"
+  /** Issue #121: delegation interface must be one of the trusted literals. */
+  | "invalid-delegation-interface"
+  | "delegation-assignments-required"
+  | "delegation-assignment-invalid-name"
+  | "delegation-assignment-duplicate-name"
+  | "delegation-assignment-invalid-output"
+  | "delegation-assignment-undeclared-subagent"
+  | "delegation-assignment-subagent-not-allowed"
+  | "delegation-assignment-tools-required"
+  | "delegation-assignment-tools-not-authorized"
+  | "delegation-assignment-projection-required"
+  | "delegation-assignment-projection-unsafe"
+  | "delegation-assignment-projection-duplicate"
+  | "delegation-assignment-projection-conflict"
+  | "delegation-assignment-projection-not-allowed"
+  | "delegation-assignment-projection-outside-defaults"
+  | "delegation-assignment-recipe-undeclared"
+  | "delegation-assignment-recipe-not-authorized"
+  | "delegation-assignment-verification-tool-missing"
+  | "delegation-assignment-recipe-path-unavailable"
+  | "delegation-legacy-assignment-config"
+  | "delegation-legacy-assignment-tool"
+  | "delegation-missing-delegate-task-tool"
+  | "delegation-missing-control-tool"
+  | "delegation-assignment-legacy-tool"
   /** Issue #87: context retention must be a trusted literal. */
   | "invalid-context-retention"
   /** Issue #87: only the designated orchestrator may retain context. */
@@ -393,6 +419,11 @@ export function validateManifest(m: Manifest): ManifestReport {
     }
   }
 
+  const subagentProfiles = new Map((m.subagents ?? []).map((profile) => [profile.name, profile]));
+  const verificationRecipeMap = new Map(
+    (m.verification_recipes ?? []).map((recipe) => [recipe.name, recipe]),
+  );
+
   for (const role of m.roles) {
     errors.push(...validateContextRetention(role));
     for (const message of validateToolExecutionPolicy(
@@ -531,8 +562,16 @@ export function validateManifest(m: Manifest): ManifestReport {
         });
       }
 
-      // §3.1: delegation requires `delegate` in tools.
-      if (!role.tools?.includes("delegate")) {
+      errors.push(
+        ...validateDelegationInterface(role, policy, subagentProfiles, verificationRecipeMap),
+      );
+
+      // §3.1: legacy delegation requires `delegate` in tools. Assignment
+      // mode has its own hard checks for the two explicit model tools.
+      if (
+        (policy.interface === undefined || policy.interface === "legacy_v1") &&
+        !role.tools?.includes("delegate")
+      ) {
         warnings.push({
           code: "delegation-missing-delegate-tool",
           message: `role '${role.name}' has a \`delegation\` block but does not include 'delegate' in \`tools:\`; the tool will not be available`,

@@ -8,7 +8,10 @@ import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types
 import type { PersistedRecord, RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
 import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { TrajectoryResumeError } from "../persistence/trajectory-records.js";
-import type { createDelegateTool as createDelegateToolFactory } from "./delegation/delegate-tool-factory.js";
+import type {
+  AssignmentDelegationTools,
+  createDelegateTool as createDelegateToolFactory,
+} from "./delegation/delegate-tool-factory.js";
 import type { PoolChildResult } from "./delegation/pool.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
@@ -22,7 +25,11 @@ import { OrchestratorContextCoordinator } from "./orchestrator-context-coordinat
 import { loadSystemPrompt, resolveModel, selectModelEntry } from "./production-host-resolve.js";
 import type { ProductionSessionState } from "./production-session-state.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
-import type { DelegateBridgeHandler } from "./rpc/delegate-bridge.js";
+import type {
+  DelegateBridgeHandler,
+  DelegateTaskBridgeHandler,
+  DelegationControlBridgeHandler,
+} from "./rpc/delegate-bridge.js";
 import type { NodeRoleSession, NodeRoleSessionOptions } from "./rpc/node-role-session.js";
 import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
 import { assertSupportedWorkspaceBackend } from "./workspace/index.js";
@@ -77,6 +84,22 @@ export interface SpawnRoleContext {
       ((cause: unknown) => void) | undefined,
     ]
   ) => Promise<DelegateBridgeHandler>;
+  readonly createAssignmentDelegationBridgeHandlers: (
+    ...args: [
+      Role,
+      RoleConfig,
+      string,
+      number | undefined,
+      number,
+      (() => number | null) | undefined,
+      (() => number) | undefined,
+      ((result: PoolChildResult) => void) | undefined,
+      ((cause: unknown) => void) | undefined,
+    ]
+  ) => Promise<{
+    readonly delegateTask: DelegateTaskBridgeHandler;
+    readonly delegationControl: DelegationControlBridgeHandler;
+  }>;
   readonly createDelegateTool: (
     ...args: [
       Role,
@@ -91,12 +114,41 @@ export interface SpawnRoleContext {
       (() => HostRejection | false)?,
     ]
   ) => Promise<ReturnType<typeof createDelegateToolFactory>>;
+  readonly createAssignmentDelegationTools: (
+    ...args: [
+      Role,
+      RoleConfig,
+      string,
+      number | undefined,
+      number,
+      (() => number | null) | undefined,
+      (() => number) | undefined,
+      ((result: PoolChildResult) => void) | undefined,
+      ((cause: unknown) => void) | undefined,
+      (() => HostRejection | false)?,
+    ]
+  ) => Promise<AssignmentDelegationTools>;
   readonly persistRecord: (record: PersistedRecord) => void;
 }
 function hasDelegateConfiguration(
   roleConfig: RoleConfig | undefined,
 ): roleConfig is RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> } {
-  return roleConfig?.delegation !== undefined && roleConfig.tools?.includes("delegate") === true;
+  return (
+    roleConfig?.delegation !== undefined &&
+    (roleConfig.delegation.interface === undefined ||
+      roleConfig.delegation.interface === "legacy_v1") &&
+    roleConfig.tools?.includes("delegate") === true
+  );
+}
+
+function hasAssignmentConfiguration(
+  roleConfig: RoleConfig | undefined,
+): roleConfig is RoleConfig & { readonly delegation: NonNullable<RoleConfig["delegation"]> } {
+  return (
+    roleConfig?.delegation?.interface === "assignments_v1" &&
+    roleConfig.tools?.includes("delegate_task") === true &&
+    roleConfig.tools?.includes("delegation_control") === true
+  );
 }
 export async function spawnRole(
   host: SpawnRoleContext,
@@ -259,6 +311,22 @@ export async function spawnRole(
               ),
           }
         : {}),
+      ...(hasAssignmentConfiguration(roleConfig)
+        ? {
+            createAssignmentDelegationBridgeHandlers: (primaryCheckout: string) =>
+              host.createAssignmentDelegationBridgeHandlers(
+                role,
+                roleConfig,
+                primaryCheckout,
+                opts.visitIndex,
+                opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+                opts.getRunCostCap,
+                opts.getCurrentParentUsage,
+                notifyTerminal,
+                fatalDelegation,
+              ),
+          }
+        : {}),
       ...(host.loadedManifest.legacyDelegationMode === true ||
       host.loadedManifest.legacyDelegationRoles?.includes(role) === true
         ? { legacyDelegationMode: true }
@@ -326,6 +394,20 @@ export async function spawnRole(
         getHostRejection,
       )
     : null;
+  const assignmentDelegationTools = hasAssignmentConfiguration(roleConfig)
+    ? await host.createAssignmentDelegationTools(
+        role,
+        roleConfig,
+        host.cwd,
+        opts.visitIndex,
+        opts.executionVisitIndex ?? opts.visitIndex ?? 1,
+        opts.getRunCostCap,
+        opts.getCurrentParentUsage,
+        notifyTerminal,
+        fatalDelegation,
+        getHostRejection,
+      )
+    : undefined;
 
   const contextRetention =
     roleConfig?.context_retention === "run"
@@ -370,6 +452,7 @@ export async function spawnRole(
       ) === true,
     ...(opts.handoffContextRef !== undefined && { handoffContextRef: opts.handoffContextRef }),
     delegateTool,
+    ...(assignmentDelegationTools === undefined ? {} : { assignmentDelegationTools }),
     ...(host.uiContext !== undefined && { uiContext: host.uiContext }),
     ...(host.isUiContextCurrent !== undefined && {
       isUiContextCurrent: host.isUiContextCurrent,

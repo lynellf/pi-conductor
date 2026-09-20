@@ -4,6 +4,11 @@
 
 ### Features
 
+- Add pinned `assignments_v1` delegation with manifest-defined task authority,
+  separate `delegate_task` and `delegation_control` tools, shared/RPC parity, and
+  resume-safe legacy compatibility. The existing `delegate` task-array surface
+  remains supported but is deprecated; no removal release is scheduled (#121).
+
 - Add opt-in measured local effect providers for bounded publication, CI observation
   and read-only recovery, with private credentials, durable process identity,
   resource conflict checks and resumable observation wakeups (#117).

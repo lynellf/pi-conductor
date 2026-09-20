@@ -232,7 +232,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
           ? {}
           : { continuitySeed: pendingOrchestratorContinuitySeed }),
       });
-      seed = formatRunMemorySeed(runMemory, pendingOrchestratorContinuitySeed);
+      seed = formatRunMemorySeed(
+        runMemory,
+        pendingOrchestratorContinuitySeed,
+        opts.delegationInterface,
+      );
       if (pendingHostGeneratedSeed !== undefined) {
         seed = `${seed}\n\n${pendingHostGeneratedSeed.rendered}`;
         pendingHostGeneratedSeed = undefined;

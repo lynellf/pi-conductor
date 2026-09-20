@@ -18,8 +18,12 @@ import { approveArgsSchema, requestChangesArgsSchema } from "../../seam/review.j
 
 import {
   type DelegateArgs,
+  type DelegateTaskArgs,
+  type DelegationControlArgs,
   delegateArgsSchema,
   delegateArgsSchemaForMode,
+  delegateTaskArgsSchema,
+  delegationControlArgsSchema,
   endArgsSchema,
   endArgsSchemaV2,
   handoffArgsSchema,
@@ -29,7 +33,12 @@ import {
   workerHandoffArgsSchema,
 } from "../../seam/schema.js";
 import { buildConfinedTools } from "../workspace/confine-tools.js";
-import { requestDelegateBridge, requestFilesBridge } from "./delegate-bridge.js";
+import {
+  requestDelegateBridge,
+  requestDelegateTaskBridge,
+  requestDelegationControlBridge,
+  requestFilesBridge,
+} from "./delegate-bridge.js";
 import { requestExecutionBridge } from "./execution-bridge.js";
 import { loadMachineToolsConfig, type MachineToolsConfig } from "./machine-tools-config.js";
 
@@ -73,20 +82,49 @@ export default function machineToolsExtension(pi: ExtensionAPI): void {
       pi.registerTool(tool);
     }
   }
-  if (config.delegateBridge !== undefined && config.declaredToolNames.includes("delegate")) {
-    pi.registerTool(
-      createDelegateBridgeTool(
-        config.delegateBridge.directory,
-        config.delegationMode,
-        config.legacyDelegationMode,
-      ),
-    );
+  if (config.delegateBridge !== undefined) {
+    assertDelegationToolConfiguration(config);
+    if (config.delegationInterface === "assignments_v1") {
+      pi.registerTool(
+        createDelegateTaskBridgeTool(config.delegateBridge.directory, config.delegationMode),
+      );
+      pi.registerTool(createDelegationControlBridgeTool(config.delegateBridge.directory));
+    } else if (config.declaredToolNames.includes("delegate")) {
+      pi.registerTool(
+        createDelegateBridgeTool(
+          config.delegateBridge.directory,
+          config.delegationMode,
+          config.legacyDelegationMode,
+        ),
+      );
+    }
   }
   if (
     config.requestFilesBridge !== undefined &&
     config.declaredToolNames.includes("request_files")
   ) {
     pi.registerTool(createRequestFilesBridgeTool(config.requestFilesBridge.directory));
+  }
+}
+
+function assertDelegationToolConfiguration(config: MachineToolsConfig): void {
+  const hasLegacyTool = config.declaredToolNames.includes("delegate");
+  const hasTaskTool = config.declaredToolNames.includes("delegate_task");
+  const hasControlTool = config.declaredToolNames.includes("delegation_control");
+
+  if (config.delegationInterface === "assignments_v1") {
+    if (!hasTaskTool || !hasControlTool || hasLegacyTool || config.legacyDelegationMode === true) {
+      throw new Error(
+        "invalid assignments_v1 machine-tools configuration: expected delegate_task and delegation_control only",
+      );
+    }
+    return;
+  }
+
+  if (hasTaskTool || hasControlTool) {
+    throw new Error(
+      "invalid legacy machine-tools configuration: assignment delegation tools require assignments_v1",
+    );
   }
 }
 
@@ -145,6 +183,74 @@ function createDelegateBridgeTool(
             {
               type: "text" as const,
               text: `delegate unavailable: ${error instanceof Error ? error.message : "bridge failure"}`,
+            },
+          ],
+          details: {},
+          isError: true,
+          terminate: false,
+        };
+      }
+    },
+  });
+}
+
+function createDelegateTaskBridgeTool(
+  directory: string,
+  configuredMode: MachineToolsConfig["delegationMode"],
+): ToolDefinition {
+  return defineTool({
+    name: "delegate_task",
+    label: "delegate_task",
+    description:
+      configuredMode === undefined
+        ? "Request one manifest-defined delegated task from the conductor host."
+        : `Request one manifest-defined delegated task from the conductor host. ${delegateModeDescription(configuredMode)}`,
+    parameters: delegateTaskArgsSchema,
+    async execute(toolCallId, args: DelegateTaskArgs, signal) {
+      try {
+        return await requestDelegateTaskBridge({
+          directory,
+          args,
+          actualToolCallId: toolCallId,
+          ...(configuredMode === undefined ? {} : { configuredMode }),
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `delegate_task unavailable: ${error instanceof Error ? error.message : "bridge failure"}`,
+            },
+          ],
+          details: {},
+          isError: true,
+          terminate: false,
+        };
+      }
+    },
+  });
+}
+
+function createDelegationControlBridgeTool(directory: string): ToolDefinition {
+  return defineTool({
+    name: "delegation_control",
+    label: "delegation_control",
+    description: "Inspect, await, or cancel accepted delegated child handles.",
+    parameters: delegationControlArgsSchema,
+    async execute(_toolCallId, args: DelegationControlArgs, signal) {
+      try {
+        return await requestDelegationControlBridge({
+          directory,
+          args,
+          ...(signal === undefined ? {} : { signal }),
+        });
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `delegation_control unavailable: ${error instanceof Error ? error.message : "bridge failure"}`,
             },
           ],
           details: {},

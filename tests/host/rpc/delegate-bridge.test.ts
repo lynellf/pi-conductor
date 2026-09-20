@@ -15,12 +15,18 @@ import {
   DelegateBridgeProtocolError,
   type DelegateBridgeResult,
   requestDelegateBridge,
+  requestDelegateTaskBridge,
+  requestDelegationControlBridge,
 } from "../../../src/host/rpc/delegate-bridge.js";
 import { MACHINE_TOOLS_CONFIG_ENV } from "../../../src/host/rpc/machine-tools-config.js";
 import machineToolsExtension from "../../../src/host/rpc/machine-tools-extension.js";
 import { NodeRoleSession, RpcChildProcessError } from "../../../src/host/rpc/node-role-session.js";
 import type { RpcChildProcess } from "../../../src/host/rpc/protocol.js";
-import type { DelegateArgs } from "../../../src/seam/schema.js";
+import type {
+  DelegateArgs,
+  DelegateTaskArgs,
+  DelegationControlArgs,
+} from "../../../src/seam/schema.js";
 
 class FakeWritable extends EventEmitter {
   writable = true;
@@ -305,6 +311,42 @@ describe("isolated delegate bridge", () => {
 
     child.exit(0, null);
     await session.dispose();
+  });
+
+  it("keeps assignment submission and controls on separate closed bridge frames", async () => {
+    const taskCalls: string[] = [];
+    const controlCalls: DelegationControlArgs[] = [];
+    const bridge = new DelegateBridgeHost({
+      sessionDir,
+      directory: bridgeDirectory,
+      delegateTask: vi.fn(async (args: DelegateTaskArgs, toolCallId: string) => {
+        taskCalls.push(`${args.assignment}:${toolCallId}`);
+        return { content: [{ type: "text" as const, text: "task-ok" }], details: {} };
+      }),
+      delegationControl: vi.fn(async (args: DelegationControlArgs) => {
+        controlCalls.push(args);
+        return { content: [{ type: "text" as const, text: "control-ok" }], details: {} };
+      }),
+    });
+
+    const task = requestDelegateTaskBridge({
+      directory: bridgeDirectory,
+      args: { assignment: "review", brief: "Inspect the change." },
+      actualToolCallId: "assignment-call",
+      configuredMode: "nonblocking",
+      timeoutMs: 500,
+    });
+    await task;
+    const control = requestDelegationControlBridge({
+      directory: bridgeDirectory,
+      args: { operation: "status", child_ids: ["child-review"] },
+      timeoutMs: 500,
+    });
+    await control;
+
+    expect(taskCalls).toEqual(["review:assignment-call"]);
+    expect(controlCalls).toEqual([{ operation: "status", child_ids: ["child-review"] }]);
+    await bridge.close();
   });
 
   it("rejects malformed and cross-call response frames without accepting their result", async () => {
