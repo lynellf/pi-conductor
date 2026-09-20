@@ -50,9 +50,9 @@ indexed v2 terminal boundary
 
 ### Phase 3 — quality gates
 
-- [ ] Run focused context-enrichment and observation tests.
-- [ ] Run `pnpm typecheck`.
-- [ ] Run `pnpm build`.
+- [x] Run focused context-enrichment and observation tests.
+- [x] Run `pnpm typecheck`.
+- [x] Run `pnpm build`.
 - [x] Run `pnpm lint`, `pnpm format:check`, and `git diff --check`.
 - [x] Run the full `pnpm test` suite.
 - [x] Run `pnpm audit --prod`.
