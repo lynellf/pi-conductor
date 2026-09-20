@@ -517,16 +517,13 @@ describe("delegated-verification §3.1 top-level verification_recipes", () => {
       ["contains space", "src/foo bar.ts"],
       ["contains '$'", "src/$env.ts"],
       ["contains '`'", "src/`pwd`.ts"],
-    ])(
-      "legacy manifest (no verification_recipes) accepts subagent.workspace.snapshot path: %s",
-      (_label, p) => {
-        const { manifest, errors, threw } = check(yamlStringify(legacyObjWithSnapshotPath(p)));
-        expect(threw).toBe(false);
-        expect(errors).toEqual([]);
-        // Legacy manifest does not project a top-level verification_recipes.
-        expect(manifest.verification_recipes).toBeUndefined();
-      },
-    );
+    ])("legacy manifest (no verification_recipes) accepts subagent.workspace.snapshot path: %s", (_label, p) => {
+      const { manifest, errors, threw } = check(yamlStringify(legacyObjWithSnapshotPath(p)));
+      expect(threw).toBe(false);
+      expect(errors).toEqual([]);
+      // Legacy manifest does not project a top-level verification_recipes.
+      expect(manifest.verification_recipes).toBeUndefined();
+    });
 
     it.each([
       ["contains space", "src/foo bar.ts"],

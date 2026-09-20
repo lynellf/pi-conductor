@@ -458,9 +458,11 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
 
     it("(P1) profile with `verification_recipes` omitted (legacy) remains valid", () => {
       const { errors, m } = parseAndValidate(buildYaml(bubblewrap()));
-      const subagents = (m as unknown as {
-        subagents?: { verification_recipes?: unknown }[];
-      }).subagents;
+      const subagents = (
+        m as unknown as {
+          subagents?: { verification_recipes?: unknown }[];
+        }
+      ).subagents;
       expect(subagents?.[0]?.verification_recipes).toBeUndefined();
       expect(errors).toEqual([]);
     });

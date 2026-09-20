@@ -167,7 +167,7 @@ describe("delegated-verification schema contracts (P1 RED)", () => {
     // documented legacy fields (id, subagent, objective, expected_output,
     // projection_paths, context_artifacts) remain accepted.
 
-    it.each<[string, unknown]>([
+    it.each<[string, Record<string, unknown>]>([
       ["random unknown key", { custom_field: "x" }],
       ["`executable` (recipe-internal field, not a task field)", { executable: "/bin/echo" }],
       ["`args` (recipe-internal field, not a task field)", { args: ["hi"] }],
