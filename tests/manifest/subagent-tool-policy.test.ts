@@ -422,6 +422,66 @@ describe("§3.3 profile `tools` policy and §3.4 profile verification_recipes au
     );
     expect(errors.some((e) => e.code === "parse-error")).toBe(true);
   });
+
+  // ---- P1 reviewer remediation regressions (post-c35e3a6 follow-ups) ----
+
+  describe("(P1) profile.verification_recipes: explicit [] rejected under all non-canonical conditions; omission remains legacy-valid", () => {
+    // Reviewer follow-up on (F2)/(10): the explicit-empty
+    // profile.verification_recipes form must be rejected whenever the
+    // profile is not in the legacy-omission form. Omission of the field
+    // must remain legacy-valid; verify in tools with [] must remain
+    // rejected (covered again here as a focused regression).
+
+    it("(P1) rejects profile with `verification_recipes: []` and NO tools policy", () => {
+      const { errors } = parseAndValidate(
+        buildYaml(bubblewrap({ verification_recipes: [] }), { recipes: [lintRecipe] }),
+      );
+      expect(errors.length).toBeGreaterThan(0);
+    });
+
+    it("(P1) rejects profile with `verification_recipes: []` and a non-verify tools policy (read+write)", () => {
+      const { errors } = parseAndValidate(
+        buildYaml(
+          bubblewrap({
+            verification_recipes: [],
+            tools: {
+              required: false,
+              allowed: ["read", "write"],
+              default: ["read"],
+            },
+          }),
+          { recipes: [lintRecipe] },
+        ),
+      );
+      expect(errors.length).toBeGreaterThan(0);
+    });
+
+    it("(P1) profile with `verification_recipes` omitted (legacy) remains valid", () => {
+      const { errors, m } = parseAndValidate(buildYaml(bubblewrap()));
+      const subagents = (m as unknown as {
+        subagents?: { verification_recipes?: unknown }[];
+      }).subagents;
+      expect(subagents?.[0]?.verification_recipes).toBeUndefined();
+      expect(errors).toEqual([]);
+    });
+
+    it("(P1) profile authorizing `verify` with `verification_recipes: []` remains rejected", () => {
+      const { errors } = parseAndValidate(
+        buildYaml(
+          bubblewrap({
+            tools: {
+              required: false,
+              allowed: ["read", "verify"],
+              default: ["read"],
+            },
+            verification_recipes: [],
+          }),
+          { recipes: [lintRecipe] },
+        ),
+      );
+      expect(errors.length).toBeGreaterThan(0);
+    });
+  });
 });
 
 // Reference the imported ManifestParseError so the exact import path stays

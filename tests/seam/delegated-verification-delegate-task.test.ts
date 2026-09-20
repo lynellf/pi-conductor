@@ -157,4 +157,38 @@ describe("delegated-verification schema contracts (P1 RED)", () => {
       expect(Value.Check(delegateTaskSchema, task)).toBe(true);
     });
   });
+
+  // ---- P1 reviewer remediation regressions (post-c35e3a6 follow-ups) ----
+
+  describe("§3.4 delegateTaskSchema — strict closed shape (rejects unknown + recipe-field keys; documented legacy fields remain accepted)", () => {
+    // Reviewer P1 remediation: the delegate-task schema must be closed
+    // shape. Recipe-internal fields such as `executable` and `args` must
+    // NOT be silently accepted at the top level of a delegate task. The
+    // documented legacy fields (id, subagent, objective, expected_output,
+    // projection_paths, context_artifacts) remain accepted.
+
+    it.each<[string, unknown]>([
+      ["random unknown key", { custom_field: "x" }],
+      ["`executable` (recipe-internal field, not a task field)", { executable: "/bin/echo" }],
+      ["`args` (recipe-internal field, not a task field)", { args: ["hi"] }],
+    ])("rejects a delegate task carrying extra top-level key: %s", (_label, extra) => {
+      const task = { ...baselineTask, ...extra };
+      expect(Value.Check(delegateTaskSchema, task)).toBe(false);
+    });
+
+    it("accepts the documented legacy field set (id, subagent, objective, expected_output, projection_paths, context_artifacts)", () => {
+      const task = {
+        ...baselineTask,
+        projection_paths: ["src/seam/schema.ts"],
+        context_artifacts: [
+          {
+            id: "ref-1",
+            source: "file" as const,
+            path: "docs/delegated-verification/spec.md",
+          },
+        ],
+      };
+      expect(Value.Check(delegateTaskSchema, task)).toBe(true);
+    });
+  });
 });

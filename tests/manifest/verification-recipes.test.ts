@@ -478,4 +478,62 @@ describe("delegated-verification §3.1 top-level verification_recipes", () => {
       expectRejected(minimalYaml([recipe({ evaluation: "bogus" })]));
     });
   });
+
+  // ---- P1 reviewer remediation regressions (post-c35e3a6 follow-ups) ----
+
+  describe("(P1) legacy manifests accept snapshot paths with spaces, '$', backticks; recipe.required_paths still rejects them", () => {
+    // Reviewer follow-up: the strict isSafeSnapshotPath predicate reused
+    // by recipe.required_paths (G2) must NOT over-apply to legacy snapshot
+    // paths. A legacy manifest — one that omits the delegated-verification
+    // fields (top-level verification_recipes and any profile.tools /
+    // profile.verification_recipes) — must continue to accept snapshot
+    // path strings containing characters the recipe predicate rejects.
+
+    function legacyObjWithSnapshotPath(snapshotPath: string): AnyObj {
+      return {
+        version: 1,
+        roles: [
+          { name: "orchestrator", is_orchestrator: true },
+          { name: "parent", max_visits: 1 },
+        ],
+        subagents: [
+          {
+            name: "wb",
+            models: ["stub:model"],
+            max_session_cost_usd: 1,
+            system_prompt: "wb.md",
+            workspace: { snapshot: { paths: [snapshotPath], max_files: 1 } },
+            execution: {
+              backend: "bubblewrap",
+              runtime_root: "rt",
+              writable_paths: ["src"],
+            },
+          },
+        ],
+      };
+    }
+
+    it.each([
+      ["contains space", "src/foo bar.ts"],
+      ["contains '$'", "src/$env.ts"],
+      ["contains '`'", "src/`pwd`.ts"],
+    ])(
+      "legacy manifest (no verification_recipes) accepts subagent.workspace.snapshot path: %s",
+      (_label, p) => {
+        const { manifest, errors, threw } = check(yamlStringify(legacyObjWithSnapshotPath(p)));
+        expect(threw).toBe(false);
+        expect(errors).toEqual([]);
+        // Legacy manifest does not project a top-level verification_recipes.
+        expect(manifest.verification_recipes).toBeUndefined();
+      },
+    );
+
+    it.each([
+      ["contains space", "src/foo bar.ts"],
+      ["contains '$'", "src/$env.ts"],
+      ["contains '`'", "src/`pwd`.ts"],
+    ])("recipe.required_paths still rejects: %s", (_label, p) => {
+      expectRejected(minimalYaml([recipe({ required_paths: [p] })]));
+    });
+  });
 });
