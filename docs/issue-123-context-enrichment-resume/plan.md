@@ -27,13 +27,13 @@ indexed v2 terminal boundary
 
 ### Phase 1 — reproduce and define the boundary
 
-- [ ] **Task 1: Add a failing regression scenario.** Model a completed v2 terminal, a failed role visit with `tool_cleanup_unconfirmed`, an append-only operator cleanup confirmation, and a retry of the same recipient visit. Assert the current implementation fails with `context_enrichment_v2_input_mismatch` before the fix.
+- [x] **Task 1: Add a failing regression scenario.** Model a completed v2 terminal, a failed role visit with `tool_cleanup_unconfirmed`, an append-only operator cleanup confirmation, and a retry of the same recipient visit. Assert the current implementation fails with `context_enrichment_v2_input_mismatch` before the fix.
 - [ ] **Task 2: Add indexed terminal lookup.** Preserve the existing strict terminal finder and add an internal/publicly typed way for host replay code to identify the matching terminal’s append index without weakening duplicate or malformed-record rejection.
 
 ### Checkpoint: reproduction
 
-- [ ] The regression demonstrates the issue before the implementation change.
-- [ ] Existing v2 replay and malformed/duplicate tests remain unchanged and passing.
+- [x] The regression demonstrates the issue before the implementation change.
+- [x] Existing v2 replay and malformed/duplicate tests remain unchanged and passing.
 
 ### Phase 2 — implement deterministic replay
 
