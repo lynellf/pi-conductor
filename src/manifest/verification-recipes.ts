@@ -30,16 +30,16 @@
  *     authoritative pinned source for downstream admission.
  */
 
-import { isSafeSnapshotPath } from "./subagent-snapshot.js";
 import { ManifestParseError } from "./types.js";
-import type { ManifestError } from "./validate.js";
-import {
-  canonicalizeInventory,
-  canonicalizeVerificationRecipe,
-} from "./verification-recipes-canonical.js";
+import { canonicalizeVerificationRecipe } from "./verification-recipes-canonical.js";
 
-// Re-export canonical helpers so the public API surface stays in one place.
-export { canonicalizeInventory, canonicalizeVerificationRecipe };
+// Re-export the canonical helper consumed by the validator so the
+// public API surface stays in one place. The inventory-level canonical
+// helper is consumed directly from `verification-recipes-canonical.ts`
+// by the validator — re-exporting it here would create a circular
+// import through the canonical module and is unnecessary because the
+// validator is the only caller.
+export { canonicalizeVerificationRecipe };
 
 // ─── Constants ────────────────────────────────────────────────────────
 
@@ -120,10 +120,6 @@ export interface VerificationRecipe {
 
 // ─── Helpers ──────────────────────────────────────────────────────────
 
-function utf8ByteLength(value: string): number {
-  return Buffer.byteLength(value, "utf8");
-}
-
 function rejectUnknownKeys(
   entry: Record<string, unknown>,
   allowed: ReadonlySet<string>,
@@ -134,53 +130,6 @@ function rejectUnknownKeys(
       throw new ManifestParseError(`${path} has unknown key '${key}'`);
     }
   }
-}
-
-function isSafeRepositoryRelativePath(path: string): boolean {
-  // Reviewer G2 remediation: reuse the strict subagent-snapshot exact-path
-  // predicate so all profile policies share one source of truth for safe
-  // exact repository-relative file literals. Tracked-file / effective-
-  // projection membership remains a P2 admission concern.
-  return isSafeSnapshotPath(path);
-}
-
-function isValidExecutableAbsolutePath(value: string): boolean {
-  if (value.length === 0 || value.includes("\u0000")) return false;
-  if (utf8ByteLength(value) > VERIFICATION_COMMAND_EXECUTABLE_MAX_UTF8_BYTES) return false;
-  if (!value.startsWith("/")) return false;
-  // Reviewer F1 remediation: require a canonical POSIX path. Reject dot
-  // segments, redundant separators, and any value whose normalized form
-  // diverges from the input. Prefix matching alone is bypassable.
-  if (value !== posixNormalize(value)) return false;
-  return VERIFICATION_EXECUTABLE_ROOTS.some(
-    (root) => value === root || value.startsWith(`${root}/`),
-  );
-}
-
-/** Minimal POSIX path normalization for the executable check (no syscalls). */
-function posixNormalize(value: string): string {
-  const absolute = value.startsWith("/");
-  const segments: string[] = [];
-  for (const raw of value.split("/")) {
-    if (raw === "" || raw === ".") continue;
-    if (raw === "..") {
-      if (segments.length > 0) {
-        segments.pop();
-      } else if (!absolute) {
-        segments.push("..");
-      }
-      // absolute && segments.length === 0: cannot escape root, drop the ..
-      continue;
-    }
-    segments.push(raw);
-  }
-  return (absolute ? "/" : "") + segments.join("/");
-}
-
-function isValidArgument(value: string): boolean {
-  if (value.includes("\u0000")) return false;
-  if (utf8ByteLength(value) > VERIFICATION_COMMAND_ARG_MAX_UTF8_BYTES) return false;
-  return true;
 }
 
 // ─── Parsing (structural shape only) ──────────────────────────────────

@@ -77,11 +77,16 @@ export interface SubagentToolPolicy {
 export interface ValidateSubagentToolPolicyOptions {
   readonly topLevelRecipeNames: readonly string[];
   readonly executionBackend: "file_only" | "bubblewrap";
-  readonly hasProfileRecipes: boolean;
   /**
    * Profile-level `verification_recipes` names supplied by the caller. The
    * validator confirms dedupe and that every entry is declared at the
-   * top level. Pass `undefined` to skip the reference/dedupe checks.
+   * top level.
+   *
+   * The tri-state is significant: `undefined` means the profile omitted
+   * the `verification_recipes` field entirely (valid for any tools
+   * policy); `[]` is an explicit empty inventory (rejected — see
+   * spec §3.4); a non-empty array must contain only declared top-level
+   * recipe names and require `verify` in `tools.allowed`.
    */
   readonly profileRecipes?: readonly string[];
 }
@@ -181,11 +186,14 @@ export function validateSubagentToolPolicy(
 ): readonly ManifestError[] {
   const errors: ManifestError[] = [];
 
-  // Reviewer F2 remediation: a profile with NO `tools` policy but with
-  // non-empty `profile.verification_recipes` is rejected. The cross-field
-  // rule of spec §3.4 is independent of the existence of a tools block.
+  // Reviewer F2 / P1-remediation remediation: a profile with NO `tools`
+  // policy but with an explicit `profile.verification_recipes` (any
+  // value, including `[]`) is rejected. Omission of the field remains
+  // valid (the profile simply doesn't opt into recipe authorization);
+  // an explicit value declares intent that cannot be honored without a
+  // tools policy that includes `verify` per spec §3.4.
   if (policy === undefined) {
-    if (opts.profileRecipes !== undefined && opts.profileRecipes.length > 0) {
+    if (opts.profileRecipes !== undefined) {
       errors.push({
         code: "invalid-subagent-tool-policy",
         message: `subagent '${profileName}' declares profile.verification_recipes without a tools policy (must include 'verify' in tools.allowed per spec §3.4)`,
@@ -271,7 +279,11 @@ export function validateSubagentToolPolicy(
     });
   }
 
-  // (10)(11)(12)(13)(14) verify requires bubblewrap + profile-verification_recipes.
+  // (10)(11)(12)(13)(14) verify requires bubblewrap + non-empty profile-
+  // verification_recipes. P1 remediation: distinguish omission
+  // (`profileRecipes === undefined`) from explicit empty (`[]`); an
+  // explicit empty inventory while `verify` is authorized is itself a
+  // broken declaration and remains rejected.
   const authorizesVerify = policy.allowed.includes("verify");
   if (authorizesVerify) {
     if (opts.executionBackend !== "bubblewrap") {
@@ -280,15 +292,18 @@ export function validateSubagentToolPolicy(
         message: `subagent '${profileName}' authorizes 'verify' but profile.execution.backend is '${opts.executionBackend}' (must be 'bubblewrap')`,
       });
     }
-    if (!opts.hasProfileRecipes) {
+    if (opts.profileRecipes !== undefined && opts.profileRecipes.length === 0) {
       errors.push({
         code: "invalid-subagent-tool-policy",
-        message: `subagent '${profileName}' authorizes 'verify' but does not declare profile.verification_recipes (must reference at least one top-level recipe)`,
+        message: `subagent '${profileName}' authorizes 'verify' but declares profile.verification_recipes=[] (must reference at least one top-level recipe)`,
       });
     }
   }
 
-  if (opts.profileRecipes !== undefined && opts.profileRecipes.length > 0) {
+  // Explicit `profile.verification_recipes` (empty or non-empty) triggers
+  // dedupe + reference checks and requires `verify` in tools.allowed.
+  // Omission of the field is always valid — this branch is skipped.
+  if (opts.profileRecipes !== undefined) {
     const recipeNames = new Set(opts.topLevelRecipeNames);
     const seen = new Map<string, number>();
     opts.profileRecipes.forEach((name, index) => {

@@ -668,15 +668,17 @@ export function validateManifest(m: Manifest): ManifestReport {
     }
     const executionBackend =
       profile.execution?.backend === "bubblewrap" ? "bubblewrap" : "file_only";
+    // P1 remediation: distinguish omission (`undefined`) from explicit
+    // empty (`[]`) for `profile.verification_recipes`. Only assign the
+    // field when the profile declared it; otherwise the validator sees
+    // omission and treats the profile as recipe-unaware.
     const opts: {
       topLevelRecipeNames: readonly string[];
       executionBackend: "file_only" | "bubblewrap";
-      hasProfileRecipes: boolean;
       profileRecipes?: readonly string[];
     } = {
       topLevelRecipeNames: topLevelRecipeNames(m),
       executionBackend,
-      hasProfileRecipes: (profile.verification_recipes?.length ?? 0) > 0,
     };
     if (profile.verification_recipes !== undefined) {
       opts.profileRecipes = profile.verification_recipes;

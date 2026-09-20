@@ -7,10 +7,8 @@
  * no pi imports.
  */
 
-import { isSafeSnapshotPath } from "./subagent-snapshot.js";
 import type { ManifestError } from "./validate.js";
 import {
-  canonicalizeInventory,
   canonicalizeVerificationRecipe,
   VERIFICATION_ARGS_MAX,
   VERIFICATION_ARGS_MIN,
@@ -72,7 +70,34 @@ function isValidArgument(value: string): boolean {
 }
 
 function isSafeRepositoryRelativePath(path: string): boolean {
-  return isSafeSnapshotPath(path);
+  // Recipe-specific strict exact repository-relative predicate (spec §3.1).
+  // Stricter than the legacy `isSafeSnapshotPath` from
+  // `subagent-snapshot.ts`: recipe `required_paths` must be exact
+  // tracked repository files, so any hidden segment (not only `.git` /
+  // `.pi-conductor`) is rejected. The legacy snapshot predicate is
+  // preserved verbatim for its snapshot-policy consumer.
+  if (
+    path.length === 0 ||
+    path !== path.trim() ||
+    /\s/.test(path) ||
+    path.includes("\u0000") ||
+    path.startsWith("~") ||
+    path.startsWith("/") ||
+    path.startsWith("\\") ||
+    /^[A-Za-z]:/.test(path) ||
+    /[*?[\]{}$`]/.test(path)
+  ) {
+    return false;
+  }
+  return path
+    .split("/")
+    .every(
+      (segment) =>
+        segment.length > 0 &&
+        segment !== "." &&
+        segment !== ".." &&
+        !segment.startsWith("."),
+    );
 }
 
 /**
@@ -228,9 +253,6 @@ export function validateVerificationRecipes(
       });
     }
   }
-
-  // Suppress unused import warning for the re-exported canonical helper.
-  void canonicalizeInventory;
 
   return Object.freeze(errors);
 }

@@ -314,6 +314,11 @@ export const delegateTaskSchema = Type.Object({
       pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
     }),
   ),
+  // Reviewer F9 remediation: close the delegate task shape so the model
+  // cannot smuggle parameters the host would silently ignore. Every model-
+  // visible field is enumerated above (id/subagent/objective/expected_output/
+  // projection_paths/context_artifacts/tools/verification_recipe).
+  { additionalProperties: false },
 });
 
 /** Typed view of a single delegation task. */
