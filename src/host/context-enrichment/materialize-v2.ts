@@ -7,7 +7,7 @@ import {
   buildWorkObservationRankingCandidates,
   ContextEnrichmentV2Error,
   computeWorkObservationEnrichmentInputFingerprint,
-  findContextEnrichmentTerminalsV2,
+  findContextEnrichmentTerminalEntriesV2,
   orderWorkObservationHistory,
 } from "../../persistence/context-enrichment-v2.js";
 import type { PersistedRecord, RecordLog } from "../../persistence/log.js";
@@ -87,8 +87,25 @@ function rankedWorkObservationOrder(args: {
   readonly direct: WorkObservationV2 | undefined;
   readonly historical: readonly WorkObservationV2[];
 } | null {
+  const terminals = findContextEnrichmentTerminalEntriesV2(args.records, args.runId);
+  const terminalEntry = terminals.find(
+    (entry) =>
+      entry.record.recipient_role === args.recipient.role &&
+      entry.record.recipient_visit === args.visitIndex,
+  );
+  // Revalidate a persisted ranking against the observation prefix that existed
+  // when its terminal was appended. Keep the full ledger for direct/current
+  // seed context and for later visits.
+  const inputRecords =
+    terminalEntry === undefined ? args.records : args.records.slice(0, terminalEntry.index);
+  const inputObservations =
+    terminalEntry === undefined
+      ? args.observations
+      : materializeWorkObservations(inputRecords, args.runId, {
+          requireV2Control: true,
+        });
   const built = buildWorkObservationRankingCandidates({
-    observations: args.observations,
+    observations: inputObservations,
     maxObservations: args.maxObservations,
     candidateLimit: args.policy.candidate_limit,
   });
@@ -104,11 +121,7 @@ function rankedWorkObservationOrder(args: {
     max_attempts: args.policy.max_attempts,
     max_observations: args.maxObservations,
   });
-  const terminals = findContextEnrichmentTerminalsV2(args.records, args.runId);
-  const identityMatch = terminals.find(
-    (record) =>
-      record.recipient_role === args.recipient.role && record.recipient_visit === args.visitIndex,
-  );
+  const identityMatch = terminalEntry?.record;
   if (identityMatch !== undefined && identityMatch.input_sha256 !== fingerprint)
     throw new ContextEnrichmentV2Error("context_enrichment_v2_input_mismatch");
   if (identityMatch !== undefined) {

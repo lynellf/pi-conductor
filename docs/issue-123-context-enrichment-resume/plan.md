@@ -28,7 +28,7 @@ indexed v2 terminal boundary
 ### Phase 1 — reproduce and define the boundary
 
 - [x] **Task 1: Add a failing regression scenario.** Model a completed v2 terminal, a failed role visit with `tool_cleanup_unconfirmed`, an append-only operator cleanup confirmation, and a retry of the same recipient visit. Assert the current implementation fails with `context_enrichment_v2_input_mismatch` before the fix.
-- [ ] **Task 2: Add indexed terminal lookup.** Preserve the existing strict terminal finder and add an internal/publicly typed way for host replay code to identify the matching terminal’s append index without weakening duplicate or malformed-record rejection.
+- [x] **Task 2: Add indexed terminal lookup.** Preserve the existing strict terminal finder and add an internal/publicly typed way for host replay code to identify the matching terminal’s append index without weakening duplicate or malformed-record rejection.
 
 ### Checkpoint: reproduction
 
@@ -37,16 +37,16 @@ indexed v2 terminal boundary
 
 ### Phase 2 — implement deterministic replay
 
-- [ ] **Task 3: Bound `prepare-v2` replay to the persisted terminal.** For an existing recipient/visit terminal, materialize and fingerprint only records before that terminal; otherwise use the live append prefix for a new attempt. Reuse the terminal only after the existing strict assertions pass.
-- [ ] **Task 4: Bound `materialize-v2` ranking validation to the same terminal.** Recompute replay validation from the persisted prefix while retaining the full current observation ledger for direct/current seed content and future visits.
-- [ ] **Task 5: Add fail-closed boundary tests.** Cover missing/corrupt candidate materialization and duplicate terminal behavior so boundary replay cannot silently accept an inconsistent record.
+- [x] **Task 3: Bound `prepare-v2` replay to the persisted terminal.** For an existing recipient/visit terminal, materialize and fingerprint only records before that terminal; otherwise use the live append prefix for a new attempt. Reuse the terminal only after the existing strict assertions pass.
+- [x] **Task 4: Bound `materialize-v2` ranking validation to the same terminal.** Recompute replay validation from the persisted prefix while retaining the full current observation ledger for direct/current seed content and future visits.
+- [x] **Task 5: Add fail-closed boundary tests.** Cover missing/corrupt candidate materialization and duplicate terminal behavior so boundary replay cannot silently accept an inconsistent record.
 
 ### Checkpoint: behavior
 
-- [ ] Same recipient visit resumes without a second provider call after cleanup confirmation.
-- [ ] The resumed seed remains materializable and deterministic.
-- [ ] A later recipient visit can observe/rank observations appended after the earlier terminal.
-- [ ] Corrupted, duplicate, and genuinely mismatched terminals still fail closed.
+- [x] Same recipient visit resumes without a second provider call after cleanup confirmation.
+- [x] The resumed seed remains materializable and deterministic.
+- [x] A later recipient visit can observe/rank observations appended after the earlier terminal.
+- [x] Corrupted, duplicate, and genuinely mismatched terminals still fail closed.
 
 ### Phase 3 — quality gates
 

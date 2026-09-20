@@ -6,6 +6,7 @@ import {
   type ContextEnrichmentRecordV2,
   ContextEnrichmentV2Error,
   contextEnrichmentRecordV2Schema,
+  findContextEnrichmentTerminalEntriesV2,
   findContextEnrichmentTerminalsV2,
 } from "./context-enrichment-v2-record.js";
 import { sha256Canonical } from "./trajectory-records.js";
@@ -14,12 +15,14 @@ import { projectRecipientObservation } from "./work-observation.js";
 
 export type {
   ContextEnrichmentRecordV2,
+  ContextEnrichmentTerminalV2Entry,
   V2Judgment,
 } from "./context-enrichment-v2-record.js";
 export {
   assertContextEnrichmentRecordV2,
   ContextEnrichmentV2Error,
   contextEnrichmentRecordV2Schema,
+  findContextEnrichmentTerminalEntriesV2,
   findContextEnrichmentTerminalsV2,
 };
 

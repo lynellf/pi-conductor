@@ -8,7 +8,7 @@ import {
   type ContextEnrichmentRecordV2,
   ContextEnrichmentV2Error,
   computeWorkObservationEnrichmentInputFingerprint,
-  findContextEnrichmentTerminalsV2,
+  findContextEnrichmentTerminalEntriesV2,
   type WorkObservationRankingRecipient,
 } from "../../persistence/context-enrichment-v2.js";
 import type { RecordLog } from "../../persistence/log.js";
@@ -39,7 +39,18 @@ export async function prepareFreshHostContinuityEnrichment(args: {
     !isHostGeneratedContinuityPolicy(continuity)
   )
     return null;
-  const observations = materializeWorkObservations(args.log.records(args.runId), args.runId, {
+  const records = args.log.records(args.runId);
+  const terminals = findContextEnrichmentTerminalEntriesV2(records, args.runId);
+  const replayEntry = terminals.find(
+    (entry) =>
+      entry.record.recipient_role === args.recipient &&
+      entry.record.recipient_visit === args.recipientVisit,
+  );
+  // The terminal's append position is the durable boundary for the input it
+  // already ranked. Later observations belong to recovery/future visits and
+  // must not invalidate this recipient visit's replay.
+  const inputRecords = replayEntry === undefined ? records : records.slice(0, replayEntry.index);
+  const observations = materializeWorkObservations(inputRecords, args.runId, {
     requireV2Control: true,
   });
   const built = buildWorkObservationRankingCandidates({
@@ -64,14 +75,7 @@ export async function prepareFreshHostContinuityEnrichment(args: {
     max_attempts: policy.max_attempts,
     max_observations: continuity.max_observations,
   });
-  const terminals = findContextEnrichmentTerminalsV2(args.log.records(args.runId), args.runId);
-  const identityMatches = terminals.filter(
-    (record) =>
-      record.recipient_role === args.recipient && record.recipient_visit === args.recipientVisit,
-  );
-  if (identityMatches.length > 1)
-    throw new Error("multiple v2 enrichment terminals match the recipient");
-  const replay = identityMatches[0];
+  const replay = replayEntry?.record;
   if (replay !== undefined && replay.input_sha256 !== fingerprint)
     throw new ContextEnrichmentV2Error("context_enrichment_v2_input_mismatch");
   if (replay !== undefined) {

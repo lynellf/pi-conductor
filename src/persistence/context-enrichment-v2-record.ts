@@ -144,14 +144,21 @@ export function assertContextEnrichmentRecordV2(
   }
 }
 
-/** Find v2 terminals and reject duplicate input identities. */
-export function findContextEnrichmentTerminalsV2(
+/** One validated v2 terminal together with its canonical append position. */
+export interface ContextEnrichmentTerminalV2Entry {
+  readonly index: number;
+  readonly record: ContextEnrichmentRecordV2;
+}
+
+/** Find v2 terminals, preserve their append positions, and reject duplicate identities. */
+export function findContextEnrichmentTerminalEntriesV2(
   records: readonly unknown[],
   runId: string,
-): readonly ContextEnrichmentRecordV2[] {
-  const result: ContextEnrichmentRecordV2[] = [];
+): readonly ContextEnrichmentTerminalV2Entry[] {
+  const result: ContextEnrichmentTerminalV2Entry[] = [];
   const seen = new Set<string>();
-  for (const value of records) {
+  for (let index = 0; index < records.length; index += 1) {
+    const value = records[index];
     if (!isRecord(value) || value.type !== "context_enrichment" || value.run_id !== runId) continue;
     if (value.schema_version !== 2)
       throw new ContextEnrichmentV2Error("context_enrichment_v2_invalid_schema");
@@ -161,9 +168,19 @@ export function findContextEnrichmentTerminalsV2(
     if (seen.has(identity))
       throw new ContextEnrichmentV2Error("context_enrichment_v2_duplicate_terminal");
     seen.add(identity);
-    result.push(record);
+    result.push({ index, record });
   }
   return Object.freeze(result);
+}
+
+/** Find v2 terminals and reject duplicate input identities. */
+export function findContextEnrichmentTerminalsV2(
+  records: readonly unknown[],
+  runId: string,
+): readonly ContextEnrichmentRecordV2[] {
+  return Object.freeze(
+    findContextEnrichmentTerminalEntriesV2(records, runId).map((entry) => entry.record),
+  );
 }
 
 function assertUniqueKeys(keys: readonly string[]): void {

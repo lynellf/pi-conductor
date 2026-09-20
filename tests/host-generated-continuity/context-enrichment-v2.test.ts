@@ -419,6 +419,72 @@ context_enrichment:
     );
   });
 
+  it("fails closed when a terminal fingerprint disagrees with its append-prefix candidates", async () => {
+    const loadedManifest = loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [test:model]
+  - name: worker
+    max_visits: 3
+    models: [test:model]
+continuity:
+  schema_version: 2
+  seed_max_utf8_bytes: 32768
+  max_observations: 64
+context_enrichment:
+  schema_version: 2
+  provider: typesafe_jev
+  model: test:jev
+  strategy: work_observation_relevance_rank
+  candidate_limit: 2
+  max_parallel: 2
+  request_timeout_ms: 100
+  max_attempts: 1
+`);
+    const log = new InMemoryRecordLog();
+    log.append(acceptedTransition(1));
+    log.append(acceptedTransition(2));
+    log.append(acceptedTransition(3));
+    const observations = materializeWorkObservations(log.records("run-v2"), "run-v2", {
+      requireV2Control: true,
+    });
+    const built = buildWorkObservationRankingCandidates({
+      observations,
+      maxObservations: 64,
+      candidateLimit: 2,
+    });
+    log.append({
+      type: "context_enrichment",
+      schema_version: 2,
+      run_id: "run-v2",
+      input_sha256: "f".repeat(64),
+      recipient_role: "worker",
+      recipient_visit: 1,
+      status: "unavailable",
+      provider: "typesafe_jev",
+      requested_model: "test:jev",
+      strategy: "work_observation_relevance_rank",
+      candidate_count: built.candidates.length,
+      candidate_keys: built.candidates.map((candidate) => candidate.observation_key),
+      failure: { code: "network_error", attempts: 1 },
+      ts: 4,
+    });
+
+    await expect(
+      prepareFreshHostContinuityEnrichment({
+        loadedManifest,
+        log,
+        runId: "run-v2",
+        recipient: "worker",
+        recipientVisit: 1,
+        runGoal: "ship the service",
+        task: { host_directive: "Retry the failed worker visit safely." },
+      }),
+    ).rejects.toThrowError(new ContextEnrichmentV2Error("context_enrichment_v2_input_mismatch"));
+  });
+
   it("rejects duplicate terminals and reordered candidate identities during replay", async () => {
     const observations = [observation("oldest"), observation("newer"), observation("direct")];
     const built = buildWorkObservationRankingCandidates({
