@@ -53,9 +53,10 @@ indexed v2 terminal boundary
 - [ ] Run focused context-enrichment and observation tests.
 - [ ] Run `pnpm typecheck`.
 - [ ] Run `pnpm build`.
-- [ ] Run `pnpm lint`, `pnpm format:check`, and `git diff --check`.
-- [ ] Run the full `pnpm test` suite.
-- [ ] Review the diff for correctness, simplicity, architecture, security, performance, and scope discipline.
+- [x] Run `pnpm lint`, `pnpm format:check`, and `git diff --check`.
+- [x] Run the full `pnpm test` suite.
+- [x] Run `pnpm audit --prod`.
+- [x] Review the diff for correctness, simplicity, architecture, security, performance, and scope discipline.
 
 ## Files likely touched
 
