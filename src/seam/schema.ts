@@ -275,50 +275,53 @@ export type ContextArtifacts = Static<typeof contextArtifactsSchema>;
  * - `tools`: optional 1–16 closed child-tool names (delegated verification §3.3)
  * - `verification_recipe`: optional top-level recipe name this task should invoke (delegated verification §3.4)
  */
-export const delegateTaskSchema = Type.Object({
-  id: Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }),
-  subagent: Type.String({ minLength: 1 }),
-  objective: Type.String({ minLength: 1, maxLength: 8192 }),
-  expected_output: Type.String({ minLength: 1, maxLength: 8192 }),
-  // Issue #52: exact parent-materialized paths only. The host validates
-  // safety, uniqueness, and membership in the captured parent H set.
-  projection_paths: Type.Optional(
-    Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 64 }),
-  ),
-  context_artifacts: Type.Optional(contextArtifactsSchema),
-  tools: Type.Optional(
-    Type.Array(
-      Type.Union(
-        [
-          Type.Literal("read"),
-          Type.Literal("grep"),
-          Type.Literal("find"),
-          Type.Literal("ls"),
-          Type.Literal("edit"),
-          Type.Literal("write"),
-          Type.Literal("bash"),
-          Type.Literal("read_execution_output"),
-          Type.Literal("verify"),
-        ],
-        { description: "Closed child tool surface; bare names only." },
-      ),
-      { minItems: 1, maxItems: 16, uniqueItems: true },
+export const delegateTaskSchema = Type.Object(
+  {
+    id: Type.String({ pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" }),
+    subagent: Type.String({ minLength: 1 }),
+    objective: Type.String({ minLength: 1, maxLength: 8192 }),
+    expected_output: Type.String({ minLength: 1, maxLength: 8192 }),
+    // Issue #52: exact parent-materialized paths only. The host validates
+    // safety, uniqueness, and membership in the captured parent H set.
+    projection_paths: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 1024 }), { minItems: 1, maxItems: 64 }),
     ),
-  ),
-  verification_recipe: Type.Optional(
-    Type.String({
-      minLength: 1,
-      maxLength: 64,
-      // Reviewer F8 remediation: enforce the recipe identifier grammar at the
-      // schema boundary (mirrors the manifest-side recipe-name regex).
-      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-    }),
-  ),
-  // Reviewer F9 remediation: close the delegate task shape so the model
-  // cannot smuggle parameters the host would silently ignore. Every model-
-  // visible field is enumerated above (id/subagent/objective/expected_output/
-  // projection_paths/context_artifacts/tools/verification_recipe).
-}, { additionalProperties: false });
+    context_artifacts: Type.Optional(contextArtifactsSchema),
+    tools: Type.Optional(
+      Type.Array(
+        Type.Union(
+          [
+            Type.Literal("read"),
+            Type.Literal("grep"),
+            Type.Literal("find"),
+            Type.Literal("ls"),
+            Type.Literal("edit"),
+            Type.Literal("write"),
+            Type.Literal("bash"),
+            Type.Literal("read_execution_output"),
+            Type.Literal("verify"),
+          ],
+          { description: "Closed child tool surface; bare names only." },
+        ),
+        { minItems: 1, maxItems: 16, uniqueItems: true },
+      ),
+    ),
+    verification_recipe: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 64,
+        // Reviewer F8 remediation: enforce the recipe identifier grammar at the
+        // schema boundary (mirrors the manifest-side recipe-name regex).
+        pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      }),
+    ),
+    // Reviewer F9 remediation: close the delegate task shape so the model
+    // cannot smuggle parameters the host would silently ignore. Every model-
+    // visible field is enumerated above (id/subagent/objective/expected_output/
+    // projection_paths/context_artifacts/tools/verification_recipe).
+  },
+  { additionalProperties: false },
+);
 
 /** Typed view of a single delegation task. */
 export type DelegateTask = Static<typeof delegateTaskSchema>;

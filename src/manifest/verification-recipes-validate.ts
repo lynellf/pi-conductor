@@ -94,10 +94,7 @@ function isSafeRepositoryRelativePath(path: string): boolean {
     .split("/")
     .every(
       (segment) =>
-        segment.length > 0 &&
-        segment !== "." &&
-        segment !== ".." &&
-        !segment.startsWith("."),
+        segment.length > 0 && segment !== "." && segment !== ".." && !segment.startsWith("."),
     );
 }
 
