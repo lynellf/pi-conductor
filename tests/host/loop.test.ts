@@ -435,6 +435,7 @@ function makeDef(): MachineDefinition {
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
     end_request_roles: null,
+    handoff_evidence: null,
   }) as MachineDefinition;
 }
 
@@ -749,6 +750,7 @@ describe("runLoop — happy path", () => {
       workers: ["worker"],
       max_visits: { worker: 2 },
       end_request_roles: ["worker"],
+      handoff_evidence: null,
     };
     const log = new InMemoryRecordLog();
     const initialCheckpoint = createInitialCheckpoint(def);

@@ -30,6 +30,7 @@ import type {
 } from "./delegation-task-schema.js";
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
+import type { HandoffEvidenceRecord } from "./handoff-evidence-schema.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 import type {
   ReviewApprovalInvalidatedRecord,
@@ -496,6 +497,7 @@ export type PersistedRecord =
   | ControllerEffectRecord
   | ContextEnrichmentRecord
   | ContextEnrichmentRecordV2
+  | HandoffEvidenceRecord
   | ReviewGatePinnedRecord
   | ReviewDecisionRecord
   | ReviewIncompleteRecord

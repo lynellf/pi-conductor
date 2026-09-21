@@ -18,6 +18,7 @@ function makeDef(): MachineDefinition {
     workers: [],
     max_visits: {},
     end_request_roles: null,
+    handoff_evidence: null,
   };
 }
 

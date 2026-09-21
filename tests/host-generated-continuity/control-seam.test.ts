@@ -79,6 +79,7 @@ describe("v2 tool promotion", () => {
     workers: ["worker"],
     max_visits: { worker: 2 },
     end_request_roles: [],
+    handoff_evidence: null,
   };
 
   it("lets a worker return with empty arguments and derives the hub target", async () => {

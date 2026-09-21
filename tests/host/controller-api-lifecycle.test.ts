@@ -90,6 +90,7 @@ describe("controller public run lifecycle", () => {
       workers: Object.freeze([]),
       max_visits: Object.freeze({}),
       end_request_roles: null,
+      handoff_evidence: null,
     }) as MachineDefinition;
     const initial = createInitialCheckpoint(def);
     const checkpoint = {

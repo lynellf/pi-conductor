@@ -42,6 +42,7 @@ const GATED_DEF: MachineDefinition = {
   workers: ["implementer", "reviewer"],
   max_visits: { implementer: 2, reviewer: 2 },
   end_request_roles: ["reviewer"],
+  handoff_evidence: null,
 };
 
 // ─── Test helper: invoke a tool's execute without an ExtensionContext ──

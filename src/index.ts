@@ -27,6 +27,7 @@ export type {
   Effect,
   EndRequest,
   HandoffContextRef,
+  HandoffEvidencePolicy,
   LegalTargets,
   MachineDefinition,
   MachineEvent,
@@ -134,6 +135,15 @@ export {
   resolveToolExecutionPolicy,
   validateToolExecutionPolicy,
 } from "./manifest/execution-policy.js";
+/** Issue #135: opt-in host-owned handoff evidence policy — parse + bounds (§8) and §13 check. */
+export {
+  HANDOFF_EVIDENCE_MAX_COMMAND_IDENTITY_CHARS,
+  HANDOFF_EVIDENCE_MAX_COMMANDS,
+  HANDOFF_EVIDENCE_MAX_DIRTY_PATHS,
+  HANDOFF_EVIDENCE_MAX_OUTPUT_HEAD_BYTES,
+  parseHandoffEvidencePolicy,
+  validateHandoffEvidencePolicy,
+} from "./manifest/handoff-evidence.js";
 export { parseManifest } from "./manifest/parse.js";
 export { pinExecutionPolicies } from "./manifest/pin-execution-policy.js";
 export {
@@ -406,6 +416,31 @@ export type {
   EndGuardStartedRecord,
 } from "./persistence/end-guard.js";
 export type { FileMutationRecord, HunkLine, TouchedFile } from "./persistence/file-mutation.js";
+/** Issue #135: durable host-observed handoff-evidence record schema (Phase 2).
+ * Closed TypeBox shape, host-only guards; the model never authors a record. */
+export type {
+  CommandCapture,
+  DirtyPath,
+  HandoffEvidenceRecord,
+  HandoffEvidenceUnavailableReason,
+  HandoffUnavailable,
+  Omitted,
+  WorktreeSnapshot,
+} from "./persistence/handoff-evidence-schema.js";
+export {
+  assertHandoffEvidenceRecord,
+  commandCaptureSchema,
+  dirtyPathSchema,
+  HandoffEvidenceRecordError,
+  handoffEvidenceRecordSchema,
+  handoffUnavailableSchema,
+  isHandoffEvidenceRecord,
+  omittedSchema,
+  worktreeSnapshotSchema,
+} from "./persistence/handoff-evidence-schema.js";
+/** Issue #135: host-only bounded projection of host-observed evidence into the continuity seed (Phase 4). */
+export type { HostEvidenceSeedItem } from "./persistence/handoff-evidence-seed.js";
+export { projectHandoffEvidence } from "./persistence/handoff-evidence-seed.js";
 export type {
   CheckpointSnapshot,
   PersistedRecord,

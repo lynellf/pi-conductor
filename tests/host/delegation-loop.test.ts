@@ -12,6 +12,7 @@ const DEF: MachineDefinition = Object.freeze({
   workers: Object.freeze(["worker"]),
   max_visits: Object.freeze({ worker: 2 }),
   end_request_roles: null,
+  handoff_evidence: null,
 });
 
 function makeHost(steps: readonly StubStep[]) {

@@ -14,6 +14,7 @@ const DEF: MachineDefinition = {
   workers: ["worker"],
   max_visits: { worker: 2 },
   end_request_roles: null,
+  handoff_evidence: null,
 };
 
 describe("delegation cross-layer forced closure", () => {

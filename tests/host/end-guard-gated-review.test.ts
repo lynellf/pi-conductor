@@ -14,6 +14,7 @@ const DEF: MachineDefinition = {
   workers: ["worker"],
   max_visits: { worker: 2 },
   end_request_roles: ["worker"],
+  handoff_evidence: null,
 };
 
 function fixture(checkpoint: Checkpoint) {

@@ -146,6 +146,16 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
       throw err;
     }
 
+    // Issue #135, Phase 3: run-scoped baseline capture. Read the provisioned
+    // workspace's run-start dirty paths once (idempotent per workspace) before
+    // this session prompts, so every accepted-handoff collection flags changes
+    // made during this visit against the genuine run-start state. The production
+    // host caches the baseline keyed by workspace path, so this call is a no-op
+    // for a workspace whose baseline was already captured.
+    if (def.handoff_evidence !== null && typeof host.captureRunEvidenceBaseline === "function") {
+      await host.captureRunEvidenceBaseline(session);
+    }
+
     const sessionResult = await runSession({
       opts,
       def,

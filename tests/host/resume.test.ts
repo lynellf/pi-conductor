@@ -51,6 +51,7 @@ function makeDef(): MachineDefinition {
     workers: Object.freeze(["worker"]),
     max_visits: Object.freeze({ worker: 3 }),
     end_request_roles: null,
+    handoff_evidence: null,
   }) as MachineDefinition;
 }
 
@@ -458,6 +459,7 @@ describe("Task 13.5 — file-backed log + resume", () => {
     const def: MachineDefinition = {
       ...makeDef(),
       end_request_roles: ["worker"],
+      handoff_evidence: null,
     };
     const checkpoint = {
       ...createInitialCheckpoint(def),

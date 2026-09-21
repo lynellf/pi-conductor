@@ -10,11 +10,13 @@ const LEGACY_DEF: MachineDefinition = Object.freeze({
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 2, reviewer: 2 }),
   end_request_roles: null,
+  handoff_evidence: null,
 });
 
 const GATED_DEF: MachineDefinition = Object.freeze({
   ...LEGACY_DEF,
   end_request_roles: Object.freeze(["reviewer"]),
+  handoff_evidence: null,
 });
 
 const TS = 1_700_000_000_000;

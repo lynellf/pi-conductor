@@ -25,6 +25,7 @@ const DEF: MachineDefinition = Object.freeze({
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 2, reviewer: 1 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -191,6 +192,7 @@ describe("visit-cap: guard reads def.max_visits (not hardcoded)", () => {
       workers: Object.freeze(["alpha"]),
       max_visits: Object.freeze({ alpha: 5 }),
       end_request_roles: null,
+      handoff_evidence: null,
     }) as MachineDefinition;
     const cp = createInitialCheckpoint(tiny);
     const r = reduce(

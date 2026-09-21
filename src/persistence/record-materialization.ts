@@ -18,6 +18,7 @@ import { assertControllerRecord, isControllerRecord } from "./controller-records
 import { terminalObservationV2Schema } from "./delegation-lifecycle-schema.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
+import { assertHandoffEvidenceRecord } from "./handoff-evidence-schema.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
 import { assertReviewRecord } from "./review.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
@@ -176,6 +177,9 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
     record.type === "end_guard_budget_reset"
   ) {
     assertEndGuardRecord(record);
+  }
+  if (record.type === "handoff_evidence") {
+    assertHandoffEvidenceRecord(record);
   }
   if (record.type === "delegation_submission_accepted") {
     assertDelegationSubmissionAccepted(record);

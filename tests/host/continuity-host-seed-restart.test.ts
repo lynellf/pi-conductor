@@ -565,6 +565,7 @@ function makeDef(): MachineDefinition {
     workers: Object.freeze(["implementer"]),
     max_visits: Object.freeze({ implementer: 3 }),
     end_request_roles: null,
+    handoff_evidence: null,
   }) as MachineDefinition;
 }
 

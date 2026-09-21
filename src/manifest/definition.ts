@@ -69,5 +69,16 @@ export function toMachineDefinition(m: Manifest): MachineDefinition {
     max_visits: Object.freeze(max_visits),
     end_request_roles:
       m.end_request_roles === undefined ? null : Object.freeze([...m.end_request_roles]),
+    // Issue #135: opt-in handoff-evidence policy, or null when disabled (absent
+    // block) so the continuity seed stays byte-identical to the legacy v2 seed.
+    handoff_evidence:
+      m.handoff_evidence === undefined
+        ? null
+        : Object.freeze({
+            max_dirty_paths: m.handoff_evidence.max_dirty_paths,
+            max_commands: m.handoff_evidence.max_commands,
+            max_command_identity_chars: m.handoff_evidence.max_command_identity_chars,
+            max_output_head_bytes: m.handoff_evidence.max_output_head_bytes,
+          }),
   }) as MachineDefinition;
 }

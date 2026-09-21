@@ -32,6 +32,7 @@ import { parseControllerConfig } from "./controller.js";
 import { parseDelegationAssignments, parseDelegationInterface } from "./delegation-assignment.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
+import { parseHandoffEvidencePolicy } from "./handoff-evidence.js";
 import { parseReviewGates } from "./review-gates.js";
 import { parseSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { parseSubagentWorkspace } from "./subagent-projection.js";
@@ -128,6 +129,10 @@ export function parseManifestFromObject(raw: unknown): Manifest {
       : parseContextEnrichmentPolicy(obj.context_enrichment);
   const review_gates =
     obj.review_gates === undefined ? undefined : parseReviewGates(obj.review_gates);
+  const handoff_evidence =
+    obj.handoff_evidence === undefined
+      ? undefined
+      : parseHandoffEvidencePolicy(obj.handoff_evidence);
 
   const manifest = Object.freeze({
     version,
@@ -140,6 +145,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(continuity === undefined ? {} : { continuity }),
     ...(context_enrichment === undefined ? {} : { context_enrichment }),
     ...(review_gates === undefined ? {} : { review_gates }),
+    ...(handoff_evidence === undefined ? {} : { handoff_evidence }),
     ...(verificationRecipes === undefined ? {} : { verification_recipes: verificationRecipes }),
   }) as Manifest;
   return manifest;

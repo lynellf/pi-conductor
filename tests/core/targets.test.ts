@@ -21,6 +21,7 @@ const ONE_WORKER: MachineDefinition = Object.freeze({
   workers: Object.freeze(["implementer"]),
   max_visits: Object.freeze({ implementer: 3 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 const THREE_WORKERS: MachineDefinition = Object.freeze({
@@ -29,6 +30,7 @@ const THREE_WORKERS: MachineDefinition = Object.freeze({
   workers: Object.freeze(["alpha", "beta", "gamma"]),
   max_visits: Object.freeze({ alpha: 1, beta: 2, gamma: 3 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 const SPEC_EXAMPLE: MachineDefinition = Object.freeze({
@@ -37,6 +39,7 @@ const SPEC_EXAMPLE: MachineDefinition = Object.freeze({
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 function ck(

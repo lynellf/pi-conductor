@@ -11,6 +11,7 @@ import type {
   RenderContinuitySeed,
 } from "./continuity.js";
 import { stableJsonStringify } from "./continuity.js";
+import type { HostEvidenceSeedItem } from "./handoff-evidence-seed.js";
 
 type Key = keyof ContinuitySeedSections;
 type Candidate = { readonly key: Key; readonly value: unknown; readonly packet: boolean };
@@ -82,6 +83,11 @@ function candidates(ledger: ContinuityLedger): readonly Candidate[] {
       },
       packet: true,
     });
+  // Host-observed evidence is projected last so it is only dropped once every
+  // deterministic continuity item has been admitted — it is never the first
+  // thing silenced by the byte budget (plan bounds).
+  for (const item of ledger.host_evidence ?? [])
+    output.push({ key: "host_evidence", value: item, packet: false });
   return Object.freeze(output);
 }
 function empty(): Record<Key, unknown[]> {
@@ -92,6 +98,7 @@ function empty(): Record<Key, unknown[]> {
     other_active_findings: [],
     evaluations: [],
     packet_summaries: [],
+    host_evidence: [],
   };
 }
 function omissions(
@@ -116,19 +123,36 @@ function serialize(
   // `used_bytes` itself changes the serialized length at decimal boundaries.
   // Iterate to the fixed point, which is bounded by the decimal width.
   for (let attempt = 0; attempt < 16; attempt += 1) {
+    // When no evidence item is admitted, omit the key entirely so the rendered
+    // seed is byte-identical to the v2 baseline, which never emitted an
+    // evidence section. The baseline serializes exactly six section keys.
+    const serializedSections =
+      sections.host_evidence.length > 0 ? sections : omitHostEvidence(sections);
     const text = stableJsonStringify({
       schema_version: 1,
       run_id: runId,
       budget: { max_bytes: maxBytes, used_bytes: used },
       omitted,
-      sections,
-      packet_summaries: sections.packet_summaries,
+      sections: serializedSections,
+      packet_summaries: serializedSections.packet_summaries,
     });
     const measured = encoder.encode(text).byteLength;
     if (measured === used) return text;
     used = measured;
   }
   throw new Error("continuity seed byte accounting did not converge");
+}
+
+/**
+ * Copy `sections` without the `host_evidence` key. The cast is sound: the
+ * rest object carries every key that was present (none, here), and an empty
+ * evidence section must not alter the serialized seed bytes.
+ */
+function omitHostEvidence(
+  sections: Record<Key, unknown[]>,
+): Record<Exclude<Key, "host_evidence">, unknown[]> {
+  const { host_evidence: _host_evidence, ...rest } = sections;
+  return rest as Record<Exclude<Key, "host_evidence">, unknown[]>;
 }
 function freeze(sections: Record<Key, unknown[]>): ContinuitySeedSections {
   return Object.freeze({
@@ -140,5 +164,12 @@ function freeze(sections: Record<Key, unknown[]>): ContinuitySeedSections {
       ...sections.evaluations,
     ]) as readonly ContinuityResolvedEvaluation[],
     packet_summaries: Object.freeze([...sections.packet_summaries]),
+    ...(sections.host_evidence.length > 0
+      ? {
+          host_evidence: Object.freeze([
+            ...sections.host_evidence,
+          ]) as readonly HostEvidenceSeedItem[],
+        }
+      : {}),
   });
 }

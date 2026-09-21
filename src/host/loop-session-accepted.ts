@@ -90,6 +90,26 @@ export async function persistAcceptedTransition(
   // durable, while reducer-rejected retries keep their child scope.
   await args.settleDelegationBeforeLifecycle("accepted machine transition");
   host.persistRecord(args.enrichedRecord);
+  //
+  // Issue #135, Phase 3: bounded, host-observed handoff evidence. When the
+  // manifest pins `handoff_evidence`, capture a snapshot of the just-finished
+  // role's work at this accepted handoff. The seam reads the session's
+  // provisioned workspace plus the run-scoped baseline (captured at run start)
+  // and persists one `HandoffEvidenceRecord`. It never throws — an uncollectable
+  // worktree becomes an explicit marker — so evidence collection can never
+  // reject an otherwise-accepted handoff (§4, §7.3.2).
+  if (
+    validated.event.type === "handoff" &&
+    def.handoff_evidence !== null &&
+    args.enrichedRecord.type === "transition_accepted" &&
+    typeof host.collectHandoffEvidence === "function"
+  ) {
+    await host.collectHandoffEvidence(session, {
+      policy: def.handoff_evidence,
+      run_id: args.enrichedRecord.run_id,
+      ts: args.enrichedRecord.ts,
+    });
+  }
   let acceptedArtifactRoute: PendingArtifactRoute | null =
     validated.event.type === "handoff" &&
     args.reduceResult.state !== "done" &&

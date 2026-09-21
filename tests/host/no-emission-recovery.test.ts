@@ -22,6 +22,7 @@ function fixture(steps: readonly StubStep[]) {
     workers: ["worker"],
     max_visits: { worker: 3 },
     end_request_roles: null,
+    handoff_evidence: null,
   } as MachineDefinition;
   const initialCheckpoint = createInitialCheckpoint(def);
   const log = new InMemoryRecordLog();

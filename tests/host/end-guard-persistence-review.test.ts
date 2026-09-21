@@ -23,6 +23,7 @@ const DEF: MachineDefinition = Object.freeze({
   workers: Object.freeze([]),
   max_visits: Object.freeze({}),
   end_request_roles: null,
+  handoff_evidence: null,
 });
 
 const session: RoleSession = {

@@ -30,6 +30,26 @@ export const DEFAULT_MODEL_EFFORT: ModelEffort = "medium";
 // ─── §12: Pinned manifest snapshot ──────────────────────────────────────
 
 /**
+ * Issue #135: opt-in, strict policy for bounded host-observed handoff evidence.
+ *
+ * All four bounds are required and range-checked (`max_dirty_paths ≤ 64`,
+ * `max_commands ≤ 16`, `max_command_identity_chars ≤ 512`,
+ * `max_output_head_bytes ≤ 1024`). The block is a strict opt-in gate: its
+ * presence enables collection, its absence leaves the continuity seed
+ * byte-identical to the legacy v2 seed (issue-135 host-handoff-evidence plan).
+ */
+export interface HandoffEvidencePolicy {
+  /** Max dirty paths captured per git snapshot. */
+  readonly max_dirty_paths: number;
+  /** Max command executions captured per handoff, most recent first. */
+  readonly max_commands: number;
+  /** Max characters per redacted, single-line command identity. */
+  readonly max_command_identity_chars: number;
+  /** Max bytes per redacted output head, in addition to the sha256 digest. */
+  readonly max_output_head_bytes: number;
+}
+
+/**
  * Pinned, immutable snapshot of the manifest config the reducer consumes.
  * Derived once at run-start from the pinned manifest version (§10/§12).
  *
@@ -48,6 +68,13 @@ export interface MachineDefinition {
   readonly max_visits: Readonly<Record<Role, number>>;
   /** Authorized completion requesters; null preserves legacy ungated ending. */
   readonly end_request_roles: readonly Role[] | null;
+  /**
+   * Issue #135: opt-in, bounded host-observed handoff evidence policy, or `null`
+   * when the manifest omits the `handoff_evidence:` block (disabled: the
+   * continuity seed stays byte-identical to the legacy v2 seed). Pinned at
+   * run-start from the manifest, like the rest of `MachineDefinition`.
+   */
+  readonly handoff_evidence: HandoffEvidencePolicy | null;
 }
 
 // ─── §5.1, §12: Machine events ──────────────────────────────────────────

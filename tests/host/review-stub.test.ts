@@ -13,6 +13,7 @@ const def: MachineDefinition = {
   workers: ["implementer", "reviewer"],
   max_visits: { implementer: 2, reviewer: 2 },
   end_request_roles: null,
+  handoff_evidence: null,
 };
 
 it("registers approve in the real stub session and routes its terminal result", async () => {

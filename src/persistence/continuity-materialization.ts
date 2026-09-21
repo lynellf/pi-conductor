@@ -101,6 +101,12 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
     okf_candidate_count: candidates.length,
   });
   const last = records.length === 0 ? 0 : timestamp(records[records.length - 1] as PersistedRecord);
+  // Project the run's host-observed evidence into the ledger, gated on the
+  // pinned continuity policy. `requirements` is null only when no continuity
+  // policy is pinned, so an absent policy keeps the seed byte-identical to the
+  // v2 baseline (plan: absent policy → no evidence section). Pure over the
+  // records, so replaying the same log reproduces the identical item list.
+  const host_evidence = requirements !== null ? projectHandoffEvidence(records, policy.run_id) : [];
   return Object.freeze({
     run_id: policy.run_id,
     generated_at: (policy.now ?? (() => new Date(last)))().toISOString(),
@@ -113,6 +119,7 @@ export const materializeContinuity: MaterializeContinuity = (records, policy) =>
       envelopes.flatMap((envelope) => envelope.evidence_resolutions),
     ),
     okf_candidates: candidates,
+    host_evidence: Object.freeze(host_evidence),
     counts,
   }) as ContinuityLedger;
 };
@@ -348,3 +355,5 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 export { renderContinuitySeed } from "./continuity-seed.js";
+
+import { projectHandoffEvidence } from "./handoff-evidence-seed.js";

@@ -31,6 +31,7 @@ const DEF: MachineDefinition = {
   workers: ["implementer", "reviewer"],
   max_visits: { implementer: 3, reviewer: 3 },
   end_request_roles: null,
+  handoff_evidence: null,
 };
 
 class ScriptedReviewSession implements RoleSession {

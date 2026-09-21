@@ -5,14 +5,25 @@
  */
 
 import type { RunMemory } from "../core/run-memory.js";
-import type { Checkpoint, MachineDefinition, Role, UsageRecord } from "../core/types.js";
+import type {
+  Checkpoint,
+  HandoffEvidencePolicy,
+  MachineDefinition,
+  Role,
+  UsageRecord,
+} from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
-
+import type { HandoffEvidenceRecord } from "../persistence/handoff-evidence-schema.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
 import { createProductionControllerSession } from "./controller/production-session-factory.js";
 import { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
+import {
+  captureRunEvidenceBaselineInModule,
+  collectHandoffEvidenceInModule,
+  type EvidenceHostContext,
+} from "./handoff-evidence/production.js";
 import type {
   ArtifactRouteSource,
   Host,
@@ -92,6 +103,25 @@ export class ProductionHost extends ProductionHostContext implements Host {
   private readonly delegation = new ProductionDelegationCoordinator();
   private readonly delegationSessionKeys = new Map<string, string>();
   private readonly inactiveDelegationSessions = new Set<string>();
+  /**
+   * Run-scoped dirty-path baseline, cached once per provisioned workspace and
+   * reused by every accepted-handoff collection (Issue #135, Phase 3). Captured
+   * at run start via `captureRunEvidenceBaseline`; keyed by workspace path so
+   * multiple workspaces in one run each retain their own baseline.
+   */
+  private readonly evidenceBaseline = new Map<string, readonly string[] | null>();
+  /**
+   * Context handed to the evidence seams so they operate over the host's
+   * run-scoped baseline cache and the loop-owned persist without touching
+   * host-private state (Issue #135, Phase 3). `persistRecord` is the loop-owned
+   * persist, keeping the single persist-owner rule intact.
+   */
+  private get evidenceHostContext(): EvidenceHostContext {
+    return {
+      evidenceBaseline: this.evidenceBaseline,
+      persistRecord: (record) => this.persistRecord(record),
+    };
+  }
 
   // ─── Host methods ──────────────────────────────────────────────────
 
@@ -498,6 +528,35 @@ export class ProductionHost extends ProductionHostContext implements Host {
       persistRecord: (record) => this.persistRecord(record),
     };
     return collectTerminalArtifactsInModule(context, session, args);
+  }
+
+  /**
+   * Run-scoped baseline capture at run start (Issue #135, Phase 3). Reads the
+   * provisioned workspace's initial dirty paths once, caches the result per
+   * workspace, and returns immediately for a non-git backend or a shared
+   * session with no workspace descriptor. Cached here so the accepted-handoff
+   * collection below reuses the same run-scoped origin.
+   */
+  captureRunEvidenceBaseline(session: RoleSession): Promise<void> {
+    return captureRunEvidenceBaselineInModule(this.evidenceHostContext, session);
+  }
+
+  /**
+   * Collect host-observed handoff evidence for one accepted handoff and persist
+   * the record (Issue #135, Phase 3). Builds the record from the session's
+   * provisioned workspace plus the cached run-scoped baseline, then persists it
+   * so the loop's single persist-owner is preserved. Tolerant of a non-git /
+   * absent workspace (produces an `unavailable` marker, never throws).
+   */
+  collectHandoffEvidence(
+    session: RoleSession,
+    args: {
+      readonly policy: HandoffEvidencePolicy;
+      readonly run_id: string;
+      readonly ts: number;
+    },
+  ): Promise<HandoffEvidenceRecord> {
+    return collectHandoffEvidenceInModule(this.evidenceHostContext, session, args);
   }
 }
 

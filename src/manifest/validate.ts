@@ -25,6 +25,7 @@ import { validateControllerConfig } from "./controller-validation.js";
 import { validateDelegationInterface } from "./delegation-validation.js";
 import { validateEndGuardConfig } from "./end-guard.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
+import { validateHandoffEvidencePolicy } from "./handoff-evidence.js";
 import { validateReviewGates } from "./review-gates.js";
 import { validateSubagentExecutionPolicy } from "./subagent-execution-policy.js";
 import { type Issue55ErrorCode, validateSubagentProjectionPolicy } from "./subagent-projection.js";
@@ -155,7 +156,9 @@ export type ManifestErrorCode =
   | "review-gate-owner-undeclared"
   | "review-gate-self-owner"
   | "review-gate-reviewer-orchestrator"
-  | "review-gate-self-next-phase";
+  | "review-gate-self-next-phase"
+  /** Issue #135: handoff_evidence block is malformed (unknown key, missing or over-bound value). */
+  | "invalid-handoff-evidence";
 
 export type ManifestWarningCode =
   /** Issue #87: legacy resume has no durable manifest snapshot proving context retention. */
@@ -274,6 +277,10 @@ export function validateManifest(m: Manifest): ManifestReport {
 
   validateControllerConfig(m, errors);
   validateReviewGates(m, errors);
+
+  for (const error of validateHandoffEvidencePolicy(m.handoff_evidence)) {
+    errors.push(error);
+  }
 
   for (const error of validateContinuityPolicy(m)) {
     errors.push({

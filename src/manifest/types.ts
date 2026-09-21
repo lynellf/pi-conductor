@@ -16,7 +16,7 @@
  * FSM `MachineDefinition`).
  */
 
-import type { ModelEffort, Role } from "../core/types.js";
+import type { HandoffEvidencePolicy, ModelEffort, Role } from "../core/types.js";
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { ControllerConfig } from "./controller.js";
 import type { EndGuardConfig } from "./end-guard.js";
@@ -237,6 +237,13 @@ export interface Manifest {
   readonly review_gates?: readonly ReviewGateConfig[];
   /** Delegated verification §3.1: top-level verification recipe inventory. */
   readonly verification_recipes?: readonly VerificationRecipe[];
+  /**
+   * Issue #135: opt-in host-owned handoff evidence policy. Absent → the host
+   * does not collect handoff evidence and the continuity seed is byte-identical
+   * to the legacy v2 seed. Presence opts in to bounded, host-observed evidence
+   * collection at accepted handoffs.
+   */
+  readonly handoff_evidence?: HandoffEvidencePolicy;
 }
 
 /** Host-owned phase gate; the reducer receives only the pinned machine definition. */

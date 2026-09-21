@@ -46,10 +46,12 @@ import type { RunMemory } from "../core/run-memory.js";
 import type {
   Checkpoint,
   HandoffContextRef,
+  HandoffEvidencePolicy,
   MachineDefinition,
   Role,
   UsageRecord,
 } from "../core/types.js";
+import type { HandoffEvidenceRecord } from "../persistence/handoff-evidence-schema.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import type { HandoffArgs } from "../seam/schema.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
@@ -361,6 +363,39 @@ export interface Host {
     source: ArtifactRouteSource,
     receiver: RoleSession,
   ): Promise<string | null>;
+
+  /**
+   * Collect bounded, host-observed handoff evidence for one accepted handoff
+   * and return the {@link HandoffEvidenceRecord} for the loop to persist
+   * (Issue #135, Phase 3). The loop calls this ONLY when the manifest pins
+   * `handoff_evidence`; omitted hosts retain legacy behavior.
+   *
+   * The host is the sole source of truth: the record carries a read-only
+   * worktree snapshot plus host-observed execution facts, never model-authored
+   * narrative. The run-scoped dirty-path baseline is cached by the host during
+   * `captureRunEvidenceBaseline` and reused here. The seam never throws and
+   * never fabricates a snapshot — a non-git or uncollectable worktree yields
+   * an explicit `unavailable` marker (plan invariant: no silent fallbacks).
+   */
+  collectHandoffEvidence?(
+    session: RoleSession,
+    args: {
+      readonly policy: HandoffEvidencePolicy;
+      readonly run_id: string;
+      readonly ts: number;
+    },
+  ): Promise<HandoffEvidenceRecord>;
+
+  /**
+   * Capture the run-scoped dirty-path baseline at run start — the initial
+   * repo-relative dirty paths observed in the provisioned workspace before the
+   * first role mutates it (Issue #135, Phase 3). The production host caches
+   * the result once per workspace so every accepted-handoff collection reuses
+   * the same run-scoped origin. The loop calls this exactly once, after the
+   * orchestrator's first spawn and before its prompt. Shared/test hosts omit
+   * the hook (the collection simply has no baseline and flags every path new).
+   */
+  captureRunEvidenceBaseline?(session: RoleSession): Promise<void>;
 
   /**
    * Get the 1-based visit_index for the next visit to `role` (§11.4).

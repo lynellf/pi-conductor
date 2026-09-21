@@ -9,6 +9,7 @@ const def: MachineDefinition = {
   workers: [],
   max_visits: {},
   end_request_roles: null,
+  handoff_evidence: null,
 };
 
 const epoch = (runId: string, number: number, reason: "start" | "reset", ts: number) => ({

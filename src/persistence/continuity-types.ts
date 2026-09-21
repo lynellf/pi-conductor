@@ -9,10 +9,13 @@ import type {
   EvidenceRef,
 } from "../seam/continuity.js";
 import type { continuitySiblingSchema } from "./delegation-lifecycle-schema.js";
+import type { HostEvidenceSeedItem } from "./handoff-evidence-seed.js";
 import type { PersistedRecord } from "./log.js";
 export type ContinuityEnvelopeSource = "handoff" | "delegated_result";
 
-/** Bounded host-authored child provenance for `delegated_result` envelopes. */
+/**
+ * Bounded host-authored child provenance for `delegated_result` envelopes.
+ */
 export interface ContinuityChildProvenance {
   readonly child_id: string;
   readonly subagent: string;
@@ -57,6 +60,13 @@ export interface ContinuityLedger {
   readonly next_steps: readonly ContinuityActiveOrSupersededItem<ContinuityNextStep>[];
   readonly evidence_resolutions: readonly ContinuityEvidenceResolution[];
   readonly okf_candidates: readonly ContinuityOkfCandidate[];
+  /**
+   * Projected host-observed handoff-evidence items (issue #135 Phase 4).
+   * Empty when no `handoff_evidence` records are present, so the rendered
+   * seed stays byte-identical to the v2 baseline. Optional on the type so
+   * ledger constructors that predate this field keep type-checking.
+   */
+  readonly host_evidence?: readonly HostEvidenceSeedItem[];
   readonly counts: ContinuityLedgerCounts;
 }
 
@@ -130,6 +140,12 @@ export interface ContinuitySeedSections {
   readonly other_active_findings: readonly unknown[];
   readonly evaluations: readonly ContinuityResolvedEvaluation[];
   readonly packet_summaries: readonly unknown[];
+  /**
+   * Issue #135 Phase 4: projected host-observed evidence items. Optional so
+   * other section constructors (ranking, restart) keep type-checking without
+   * always emitting the section.
+   */
+  readonly host_evidence?: readonly HostEvidenceSeedItem[];
 }
 
 // ─── Materializer + renderer signatures (spec §11) ─────────────────────

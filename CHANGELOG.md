@@ -4,6 +4,20 @@
 
 ### Features
 
+- Publish bounded, host-observed handoff evidence into the durable continuity
+  seed for fresh recipients (issue #135). A strict, opt-in `handoff_evidence:`
+  manifest block enables collection of read-only git worktree snapshots
+  (HEAD id, dirty-path delta against a run-start baseline with pre-existing vs
+  new flags) and bounded execution facts (redacted command identity, host-
+  observed exit status, duration, sha256 output digest + bounded redacted
+  head). Every missing fact records an explicit `unavailable` reason; absent
+  policy keeps the continuity seed byte-identical to v2. Host owns collection,
+  provenance, and persistence — the model may request or reference evidence but
+  never authors it. Full records live in the run-scoped append-only log; the
+  seed carries only bounded digests and reference keys. Public exports of the
+  policy, the closed record schema/guards, and the seed projection land on the
+  package barrel (`src/index.ts`).
+
 - Add pinned `assignments_v1` delegation with manifest-defined task authority,
   separate `delegate_task` and `delegation_control` tools, shared/RPC parity, and
   resume-safe legacy compatibility. The existing `delegate` task-array surface

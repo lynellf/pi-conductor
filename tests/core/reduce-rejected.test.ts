@@ -28,6 +28,7 @@ const DEF: MachineDefinition = Object.freeze({
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 const TIGHT: MachineDefinition = Object.freeze({
@@ -36,6 +37,7 @@ const TIGHT: MachineDefinition = Object.freeze({
   workers: Object.freeze(["alpha", "beta"]),
   max_visits: Object.freeze({ alpha: 1, beta: 2 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
@@ -102,6 +104,7 @@ describe("reduce: from orchestrator — illegal_event rejections (§7.3)", () =>
       workers: Object.freeze(["ghost"]),
       max_visits: Object.freeze({ ghost: 0 }),
       end_request_roles: null,
+      handoff_evidence: null,
     }) as MachineDefinition;
     const cp = ck(zeroCap, "orchestrator");
     const result = reduce(

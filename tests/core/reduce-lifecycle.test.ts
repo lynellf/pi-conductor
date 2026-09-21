@@ -36,6 +36,7 @@ const DEF: MachineDefinition = Object.freeze({
   workers: Object.freeze(["implementer", "reviewer"]),
   max_visits: Object.freeze({ implementer: 3, reviewer: 3 }),
   end_request_roles: null,
+  handoff_evidence: null,
 }) as MachineDefinition;
 
 const TS = 1_700_000_000_000;
