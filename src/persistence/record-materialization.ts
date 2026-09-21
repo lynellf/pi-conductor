@@ -20,6 +20,8 @@ import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertHandoffEvidenceRecord } from "./handoff-evidence-schema.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
+import { assertPhaseWorkPacketRecord } from "./phase-work-packet.js";
+import { assertReconstructionSignalRecord } from "./reconstruction-signal.js";
 import { assertReviewRecord } from "./review.js";
 import { assertRoleTurnRecord } from "./role-turn.js";
 import { assertRunFinalizationFailure } from "./run-finalization.js";
@@ -137,6 +139,16 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
     record.type === "review_approval_invalidated"
   ) {
     assertReviewRecord(record);
+    return;
+  }
+
+  if (record.type === "phase_work_packet") {
+    assertPhaseWorkPacketRecord(record);
+    return;
+  }
+
+  if (record.type === "reconstruction_signal") {
+    assertReconstructionSignalRecord(record);
     return;
   }
 

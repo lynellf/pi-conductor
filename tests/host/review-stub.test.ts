@@ -6,6 +6,7 @@ import type { MachineDefinition } from "../../src/core/types.js";
 import { runLoop } from "../../src/host/loop.js";
 import { StubHost } from "../../src/host/stub-host.js";
 import { InMemoryRecordLog } from "../../src/persistence/log.js";
+import { createReviewGatePinnedRecord } from "../../src/persistence/review.js";
 
 const def: MachineDefinition = {
   manifest_version: "1",
@@ -32,6 +33,22 @@ it("registers approve in the real stub session and routes its terminal result", 
   if (dispatched.kind !== "accepted") throw new Error("test setup failed");
 
   const log = new InMemoryRecordLog();
+  // Production pins the review gate at run start (api.ts); the packet
+  // materializer requires the durable pin to correlate review_route
+  // dispatches (issue #139). Persist it here so this direct-runLoop test
+  // mirrors the production path.
+  log.append(
+    createReviewGatePinnedRecord({
+      run_id: initial.run_id,
+      reviewer_role: "reviewer",
+      phase_owner_role: "implementer",
+      phase_id: "phase-1",
+      gate_id: "gate-1",
+      reviewed_revision: "abc123",
+      next_phase: "phase-2",
+      ts: 1,
+    }),
+  );
   const host = new StubHost({
     runId: initial.run_id,
     log,

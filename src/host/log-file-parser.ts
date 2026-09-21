@@ -98,6 +98,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "context_compaction_started",
   "context_compaction",
   "context_enrichment",
+  "handoff_evidence",
   "run_finalization_failed",
   "review_gate_pinned",
   "review_decision",
@@ -105,4 +106,6 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "review_route_pending",
   "review_route",
   "review_approval_invalidated",
+  "phase_work_packet",
+  "reconstruction_signal",
 ]);

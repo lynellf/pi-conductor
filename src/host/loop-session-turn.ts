@@ -25,6 +25,7 @@ import { finishHostRunCostCap, forceRunCostCapEnd } from "./loop-run-cost-cap.js
 import type { SessionLoopContext } from "./loop-session.js";
 import { persistAcceptedTransition } from "./loop-session-accepted.js";
 import type { InnerOutcome, RunLoopResult } from "./loop-types.js";
+import { emitReconstructionSignals } from "./reconstruction-emit.js";
 import { classifyReviewCapture } from "./review.js";
 import { completeReview } from "./review-loop.js";
 import { RpcChildExitError } from "./rpc/protocol.js";
@@ -75,6 +76,14 @@ export async function runSessionTurn(
     finishUserAbort,
     finishEndGuardFailure,
   } = deps;
+  // Issue #139 Phase 2: one pre-prompt packet seam per fresh session
+  // invocation. Trajectory continuations reuse their delivered target
+  // seed and must NOT receive a new packet; in-session retries reuse the
+  // already-appended seed via `packetAppended`. Phase 3 retains the
+  // packet for audit-only reconstruction-signal correlation.
+  let packetAppended = false;
+  let currentPacket: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord | null =
+    null;
   while (true) {
     if (opts.runControl !== undefined) {
       await opts.runControl.setActiveSession(session);
@@ -88,6 +97,20 @@ export async function runSessionTurn(
       return { kind: "terminal", result: await finishUserAbort(state.capturedUsage) };
     }
 
+    if (!packetAppended && session.isTrajectory !== true) {
+      packetAppended = true;
+      if (typeof host.ensurePhaseWorkPacket === "function") {
+        const ensured = host.ensurePhaseWorkPacket({
+          role,
+          visitIndex,
+          seed: ctx.nextSeed,
+          initialGoal: opts.initialGoal,
+        });
+        ctx.nextSeed = ensured.seedWithPacket;
+        currentPacket = ensured.packet;
+      }
+    }
+
     let promptError: unknown = null;
     try {
       const promptSeed = formatGuidedPrompt(
@@ -95,6 +118,24 @@ export async function runSessionTurn(
         opts.runControl?.takePendingGuidance() ?? [],
       );
       await session.prompt(promptSeed);
+      // Issue #139 Phase 3: audit-only reconstruction signals for the
+      // fresh recipient, emitted before its terminal is processed. Never
+      // affects routing; failures to drain/classify must not break the turn.
+      if (currentPacket !== null && session.isTrajectory !== true) {
+        try {
+          emitReconstructionSignals({
+            host,
+            session,
+            packet: currentPacket,
+            runId: ctx.checkpoint.run_id,
+            recipientRole: role,
+            recipientVisitIndex: visitIndex,
+          });
+        } catch {
+          // Telemetry capture/classification failures persist nothing and
+          // never affect machine routing or packet authority.
+        }
+      }
       if (session.isTrajectory === true && !state.trajectorySeedDeliveryRecorded) {
         host.persistRecord({
           type: "trajectory_target_seed_delivered",

@@ -17,6 +17,11 @@ import type { SessionState } from "./cost.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { RoleSession, SessionTerminalReason } from "./host.js";
 import type { LoadedManifest } from "./manifest.js";
+import {
+  composeSeedWithPacket,
+  materializePacketRecord,
+  PhaseWorkPacketBlockedError,
+} from "./phase-work-packet-materializer.js";
 import type { ProductionSessionState } from "./production-session-state.js";
 import { notifyListeners } from "./record-emitter.js";
 /** Dependencies for state inspection and record persistence helpers. */
@@ -58,6 +63,37 @@ export function sessionFailureDetail(host: StateHostContext, session: RoleSessio
     if (detail !== null) return detail;
   }
   return host.sessionState.sessionFailureDetail(session);
+}
+
+/** Lookup-or-materialize one phase work packet (issue #139 Phase 2). */
+export function ensurePhaseWorkPacket(
+  host: StateHostContext,
+  args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly seed: string;
+    readonly initialGoal: string;
+  },
+): {
+  readonly seedWithPacket: string;
+  readonly isNew: boolean;
+  readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+} {
+  const records = host.log.records(host.runId);
+  const def = host.loadedManifest.def;
+  const { record, isNew } = materializePacketRecord({
+    records,
+    runId: host.runId,
+    recipientRole: args.role,
+    recipientVisitIndex: args.visitIndex,
+    initialGoal: args.initialGoal,
+    ...(def.handoff_evidence === null ? {} : { handoffEvidencePolicy: def.handoff_evidence }),
+  });
+  if (isNew) persistRecord(host, record);
+  if (record.status === "blocked") {
+    throw new PhaseWorkPacketBlockedError(record, "phase work packet is blocked");
+  }
+  return { seedWithPacket: composeSeedWithPacket(args.seed, record), isNew, packet: record };
 }
 
 /** Append a host-owned record to the run log. */

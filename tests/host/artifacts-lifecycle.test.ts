@@ -508,9 +508,16 @@ roles:
         seed.includes("## Artifacts from implementer-v1"),
       );
       expect(unavailableReceiverSeeds).toHaveLength(2);
-      const unavailableSections = unavailableReceiverSeeds.map((seed) =>
-        seed.slice(seed.indexOf("## Artifacts from implementer-v1")),
-      );
+      // Issue #139: the seed tail now also carries the host phase work
+      // packet, whose visit index legitimately advances on a resumed visit
+      // (crashed v2 → resumed v3). Compare only the artifact section so
+      // this test keeps proving artifact-note reuse, not packet identity
+      // (packet resume idempotency is covered by phase-work-packet tests).
+      const unavailableSections = unavailableReceiverSeeds.map((seed) => {
+        const from = seed.indexOf("## Artifacts from implementer-v1");
+        const packetAt = seed.indexOf("## phase_work_packet", from);
+        return seed.slice(from, packetAt === -1 ? undefined : packetAt);
+      });
       expect(unavailableSections[1]).toBe(unavailableSections[0]);
       expect(unavailableSections[0]).toContain(
         "Host artifact collection failed: auto_patch_failed",

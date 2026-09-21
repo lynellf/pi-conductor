@@ -443,6 +443,28 @@ describe("FileRecordLog (issue #37 — torn-log recovery + typed boundary)", () 
     }
   });
 
+  it("reads a persisted handoff_evidence record", () => {
+    baseDir = mkdtempSync(join(tmpdir(), "pi-conductor-log-"));
+    const runId = "run-1";
+    writeFileSync(
+      join(baseDir, `${runId}.jsonl`),
+      `${JSON.stringify({
+        type: "handoff_evidence",
+        schema_version: 1,
+        run_id: runId,
+        handoff_id: "handoff-1",
+        ts: 1,
+        worktree: { head: "abc123", dirty_paths: [] },
+        commands: [],
+        omitted: { dirty_paths: 0, commands: 0 },
+      })}\n`,
+      "utf8",
+    );
+    const log = new FileRecordLog({ baseDir });
+
+    expect(log.records(runId)).toHaveLength(1);
+  });
+
   it("throws RecordLogError for an unknown persisted record type (schema drift)", () => {
     baseDir = mkdtempSync(join(tmpdir(), "pi-conductor-log-"));
     const runId = "run-1";

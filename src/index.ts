@@ -473,6 +473,51 @@ export type {
   OrchestratorContextUnknownCompactionInspection,
 } from "./persistence/orchestrator-context-inspection.js";
 export { inspectOrchestratorContext } from "./persistence/orchestrator-context-inspection.js";
+/** Issue #139: bounded, host-materialized phase work packet (record + projection + renderer). */
+export type {
+  CommandObservation,
+  HostObservedSection,
+  PhaseProcessSection,
+  PhaseWorkPacketBudget,
+  PhaseWorkPacketGateState,
+  PhaseWorkPacketLegalAction,
+  PhaseWorkPacketOmission,
+  PhaseWorkPacketRecord,
+  PhaseWorkPacketSource,
+  PhaseWorkPacketState,
+  ReportedNarrativeSection,
+  VerificationEntry,
+  WorktreeObservation,
+} from "./persistence/phase-work-packet.js";
+export {
+  assertPhaseWorkPacketRecord,
+  commandObservationArraySchema,
+  createPhaseWorkPacketRecord,
+  hostObservedSectionSchema,
+  isPhaseWorkPacketRecord,
+  phaseProcessSectionSchema,
+  phaseWorkPacketBudgetSchema,
+  phaseWorkPacketGateStateSchema,
+  phaseWorkPacketLegalActionSchema,
+  phaseWorkPacketOmissionSchema,
+  phaseWorkPacketRecordSchema,
+  phaseWorkPacketSourceSchema,
+  phaseWorkPacketStateSchema,
+  reportedNarrativeSectionSchema,
+  verificationEntryArraySchema,
+  worktreeObservationSchema,
+} from "./persistence/phase-work-packet.js";
+/** Issue #139 Phase 3: bounded reconstruction-signal record (audit-only telemetry). */
+export type {
+  ReconstructionSignalKind,
+  ReconstructionSignalRecord,
+} from "./persistence/reconstruction-signal.js";
+export {
+  assertReconstructionSignalRecord,
+  isReconstructionSignalRecord,
+  reconstructionSignalKindSchema,
+  reconstructionSignalRecordSchema,
+} from "./persistence/reconstruction-signal.js";
 export type {
   ReviewApprovalInvalidatedRecord,
   ReviewDecisionRecord,

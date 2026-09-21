@@ -117,6 +117,19 @@ export interface RoleSession {
   /** Read host-captured reviewer terminal decisions for a review visit. */
   readReviewDecisions?(): readonly ReviewDecisionCapture[];
 
+  /**
+   * Drain host-observed reconstruction signals for this session
+   * (issue #139 Phase 3). Each entry names the host-mediated tool and,
+   * for `bash`, the executed command. The loop classifies, redacts to a
+   * hash-only fingerprint, and persists bounded audit-only
+   * `reconstruction_signal` records. Omitted by sessions without
+   * host-observed tool uses; direct filesystem reads are unobservable.
+   */
+  takeReconstructionSignals?(): readonly {
+    readonly tool: string;
+    readonly command?: string;
+  }[];
+
   /** Read prose bound to the exact machine tool call, or null when unprovable. */
   takeReportedContextV2?(toolCallId?: string): ReportedContextV2 | null;
   /** Read the exact machine-control call ID when the transport provides it. */

@@ -78,6 +78,11 @@ import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
 import type { LoadedManifest } from "./manifest.js";
+import {
+  composeSeedWithPacket,
+  materializePacketRecord,
+  PhaseWorkPacketBlockedError,
+} from "./phase-work-packet-materializer.js";
 import { notifyListeners } from "./record-emitter.js";
 import { createApproveTool, createRequestChangesTool } from "./review-tools.js";
 import { createRoleSessionAdapter } from "./role-session.js";
@@ -542,6 +547,34 @@ export class StubHost implements Host {
   persistRecord(record: PersistedRecord): void {
     this.log.append(record);
     notifyListeners(record); // spec §4.1 — fan-out after durable append
+  }
+
+  ensurePhaseWorkPacket(args: {
+    readonly role: import("../core/types.js").Role;
+    readonly visitIndex: number;
+    readonly seed: string;
+    readonly initialGoal: string;
+  }): {
+    readonly seedWithPacket: string;
+    readonly isNew: boolean;
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  } {
+    // Issue #139 Phase 2: lookup-or-create against the host-owned log.
+    // A blocked packet is persisted and surfaced as a typed error so the
+    // loop never prompts the recipient on contradictory process sources.
+    const records = this.log.records(this.runId);
+    const { record, isNew } = materializePacketRecord({
+      records,
+      runId: this.runId,
+      recipientRole: args.role,
+      recipientVisitIndex: args.visitIndex,
+      initialGoal: args.initialGoal,
+    });
+    if (isNew) this.persistRecord(record);
+    if (record.status === "blocked") {
+      throw new PhaseWorkPacketBlockedError(record, "phase work packet is blocked");
+    }
+    return { seedWithPacket: composeSeedWithPacket(args.seed, record), isNew, packet: record };
   }
 
   nextVisitIndex(role: Role): number {

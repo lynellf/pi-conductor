@@ -304,6 +304,28 @@ export interface Host {
   }): Promise<import("../persistence/context-enrichment.js").ContextEnrichmentRecord | null>;
 
   /**
+   * Lookup-or-materialize one phase work packet and append its durable
+   * rendering to the fresh seed (issue #139 Phase 2). The host owns the
+   * record log: an exact identity match reuses the persisted rendering
+   * byte-for-byte (resume idempotency); otherwise the host projects from
+   * the source cutoff, persists one `phase_work_packet` record, and
+   * returns the augmented seed. A blocked packet is persisted and
+   * surfaced as `PhaseWorkPacketBlockedError`; the caller must NOT
+   * prompt the recipient. Hosts that omit this hook keep legacy seed
+   * behavior byte-identically. Trajectory continuations must not call it.
+   */
+  ensurePhaseWorkPacket?(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly seed: string;
+    readonly initialGoal: string;
+  }): {
+    readonly seedWithPacket: string;
+    readonly isNew: boolean;
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  };
+
+  /**
    * Signal the session to stop its current operation (Task 18 / §11.7
    * cost-cap breach). The Host calls `session.abort()` on the SDK
    * session; the loop records `session_failed` separately based on

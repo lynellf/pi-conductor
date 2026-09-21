@@ -55,6 +55,7 @@ import {
 import { type SpawnRoleContext, spawnRole as spawnRoleInModule } from "./production-host-spawn.js";
 import {
   captureUsage as captureUsageInModule,
+  ensurePhaseWorkPacket as ensurePhaseWorkPacketInModule,
   getNextModel as getNextModelInModule,
   materializeFreshContinuitySeed as materializeFreshContinuitySeedInModule,
   materializeFreshHostContinuitySeed as materializeFreshHostContinuitySeedInModule,
@@ -430,6 +431,19 @@ export class ProductionHost extends ProductionHostContext implements Host {
     readonly sourceSessionFile: string;
   }): Promise<import("../persistence/context-enrichment.js").ContextEnrichmentRecord | null> {
     return prepareFreshContinuityEnrichmentInModule(this.stateContext(), args);
+  }
+
+  ensurePhaseWorkPacket(args: {
+    readonly role: Role;
+    readonly visitIndex: number;
+    readonly seed: string;
+    readonly initialGoal: string;
+  }): {
+    readonly seedWithPacket: string;
+    readonly isNew: boolean;
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  } {
+    return ensurePhaseWorkPacketInModule(this.stateContext(), args);
   }
 
   nextVisitIndex(role: Role): number {
