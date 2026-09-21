@@ -4,6 +4,17 @@
 
 ### Features
 
+- Add an optional advisory Jev assessment layer over phase work packets
+  (issue #139 Jev comment). One bounded Jev request asks four questions
+  over packet facts plus the reported reason — relevance, consistency,
+  actionability (noul), and an advisory next action — and persists a
+  terminal `jev_assessment` record with confidences/probabilities and
+  packet/reason digest identities (stale if either input changes). The
+  record type cannot encode approval or check outcomes; the loop only
+  appends the labelled `### jev_advisory` section and never branches on
+  judgments. Opt-in via a minimal `jev_assessment:` manifest block;
+  absent policy or absent reason preserves legacy seeds byte-identically.
+
 - Materialize a bounded, deterministic host phase work packet before every
   fresh FSM role prompt (issue #139). The append-only `phase_work_packet`
   record separates `phase_process` (host-derived FSM, dispatch, gate, and
