@@ -4,6 +4,22 @@
 
 ### Features
 
+- Materialize a bounded, deterministic host phase work packet before every
+  fresh FSM role prompt (issue #139). The append-only `phase_work_packet`
+  record separates `phase_process` (host-derived FSM, dispatch, gate, and
+  legal-action facts), `host_observed` (source-keyed #135 evidence and
+  review-check facts), and `reported_narrative` (bounded untrusted model
+  objective/action/summary/reason). One pre-prompt seam covers initial
+  dispatch, accepted handoffs, review-route recovery, resume, and fallback
+  fresh sessions; trajectory continuations are untouched. Lookup-or-create
+  by `(run_id, recipient_role, visit_index, dispatch_source)` reuses the
+  persisted rendering byte-for-byte on resume; contradictory essential
+  sources persist a typed blocked record and refuse the prompt. Bounded
+  `reconstruction_signal` records (broad `find`, wide `rg`,
+  `handoff_context` reads; hash-only fingerprints, audit-only) measure
+  rediscovery without observing direct filesystem reads. Packet-first
+  recipient guidance retains the `AGENTS.md` + named-plan read requirement.
+
 - Preserve the accepted worker-return's supported narrative in fresh orchestrator
   handoff context (issue #137). A single documented return-envelope contract
   (`reason` primary, `summary`, `verification`; TypeBox-bound with
