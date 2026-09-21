@@ -296,18 +296,31 @@ function buildLastMessage(
     recipientRole === "done" || latest.event !== "handoff" || latest.to !== recipientRole
       ? null
       : incomingAcceptedHandoff(records, runId, recipientRole);
-  const reason = latest.payload_summary.reason;
   const acceptedHandoff = incoming?.envelope ?? undefined;
   const acceptedControl = incoming?.record.accepted_control;
+  // Issue #137: the supported return narrative's primary field is `reason`.
+  // Priority chain (no silent fallbacks):
+  //   1. accepted_control.reported_hints.reason (v2 host control; verbatim)
+  //   2. accepted_control.reported_hints.summary (v2 secondary narrative)
+  //   3. payload_summary.reason (legacy v1 path)
+  //   4. null (only when no reason/summary is present on the record)
+  // A present non-empty `reason` is always surfaced; it is never displaced
+  // by an absent `summary`, and the last_message.text never reads
+  // `(worker omitted reason)` while a reason is in scope.
+  const controlReason = acceptedControl?.reported_hints.reason;
   const controlSummary = acceptedControl?.reported_hints.summary;
+  const legacyReason = latest.payload_summary.reason;
+  const text =
+    typeof controlReason === "string"
+      ? controlReason
+      : typeof controlSummary === "string"
+        ? controlSummary
+        : typeof legacyReason === "string"
+          ? legacyReason
+          : null;
   return {
     from: latest.role,
-    text:
-      typeof controlSummary === "string"
-        ? controlSummary
-        : typeof reason === "string"
-          ? reason
-          : null,
+    text,
     suggests_next: latest.suggests_next,
     context_ref: resolveContextRef(latest, runId),
     ...(acceptedHandoff !== undefined && { accepted_handoff: acceptedHandoff }),

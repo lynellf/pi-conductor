@@ -39,11 +39,13 @@ import {
   type Checkpoint,
   createInitialCheckpoint,
   InMemoryRecordLog,
+  loadManifestFromString,
   type MachineDefinition,
   type SessionLifecycleEvent,
   type TransitionAccepted,
   type TransitionRejected,
 } from "../../src/index.js";
+import { createManifestSnapshot } from "../../src/persistence/trajectory-records.js";
 import { makeAndTrackIsolatedAgentDir } from "./test-agent-dir.js";
 
 function makeDef(): MachineDefinition {
@@ -306,6 +308,84 @@ describe("stub provider — full orch → worker → orch → end via runLoop (T
     expect(started[0]?.parent_session).toBeNull();
     expect(started[1]?.parent_session).not.toBeNull();
     expect(started[2]?.parent_session).not.toBeNull();
+  });
+});
+
+// ─── (3) Production v2 return envelope through the loop ───────────────
+
+describe("stub provider — v2 return envelope follows the real loop path", () => {
+  it("persists the supported reason and ignored-field diagnostics", async () => {
+    const loaded = loadManifestFromString(`
+version: 1
+roles:
+  - name: orchestrator
+    is_orchestrator: true
+    models: [stub:model]
+  - name: worker
+    max_visits: 2
+    models: [stub:model]
+continuity:
+  schema_version: 2
+  seed_max_utf8_bytes: 65536
+  max_observations: 128
+`);
+    const initialCheckpoint = createInitialCheckpoint(loaded.def);
+    const log = new InMemoryRecordLog();
+    log.append(
+      createManifestSnapshot({
+        runId: initialCheckpoint.run_id,
+        manifest: loaded.manifest,
+        definition: loaded.def,
+        ts: 1,
+      }),
+    );
+    const host = new StubHost({
+      runId: initialCheckpoint.run_id,
+      log,
+      loadedManifest: loaded,
+      steps: [
+        { kind: "emit_handoff", target_role: "worker", reason: "dispatch" },
+        {
+          kind: "emit_tool_calls",
+          calls: [
+            {
+              name: "handoff",
+              arguments: {
+                reason: "worker completed the assigned work",
+                phase: "Phase 2",
+                changed_paths: ["src/host/accepted-control-v2.ts"],
+              },
+            },
+          ],
+        },
+        { kind: "emit_end", reason: "reviewed return" },
+      ],
+      agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-v2-return-envelope-"),
+    });
+
+    const result = await runLoop({
+      def: loaded.def,
+      initialCheckpoint,
+      host,
+      initialGoal: "preserve the worker return narrative",
+    });
+
+    expect(result.exitReason).toBe("done");
+    const returned = log
+      .records(initialCheckpoint.run_id)
+      .find(
+        (record): record is TransitionAccepted =>
+          record.type === "transition_accepted" && record.role === "worker",
+      );
+    expect(returned?.accepted_control).toMatchObject({
+      direction: "return",
+      reported_hints: { reason: "worker completed the assigned work" },
+      ignored_hint_fields: ["phase", "changed_paths"],
+      ignored_hint_diagnostics: [
+        "ignored_return_field:phase",
+        "ignored_return_field:changed_paths",
+      ],
+    });
   });
 });
 

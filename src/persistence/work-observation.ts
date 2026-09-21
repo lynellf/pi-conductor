@@ -64,6 +64,7 @@ export interface WorkObservationV2 {
     readonly verification?: readonly string[];
   };
   readonly ignored_hint_fields?: readonly string[];
+  readonly ignored_hint_diagnostics?: readonly string[];
   readonly observed: {
     readonly terminal: "dispatched" | "returned_control" | "returned" | "failed" | "cancelled";
     readonly workspace_state?: ChildTerminalObservationV2["workspace_state"];
@@ -89,6 +90,27 @@ export interface RecipientObservationV2 {
   readonly execution_statuses: readonly string[];
   readonly artifact_labels: readonly string[];
   readonly omitted: WorkObservationV2["omitted"];
+  /**
+   * Issue #137 Phase 2: returned worker's supported narrative
+   * (reported/untrusted). The `reason` field is the primary carried
+   * value and is mandatory in the rendered v2 seed; `summary` and
+   * `verification` are surfaced alongside when present. Empty when
+   * the observation's source carried no hints.
+   */
+  readonly reported_hints: {
+    readonly summary?: string;
+    readonly reason?: string;
+    readonly verification?: readonly string[];
+  };
+  /**
+   * Issue #137 Phase 2: host-recorded list of unsupported return-envelope
+   * fields the worker's tool call carried (e.g. `phase`, `tdd_stage`,
+   * `changed_paths`, `red_*`, `green_*`). Surfaced verbatim to the
+   * orchestrator's seed so a self-correcting role can see them.
+   */
+  readonly ignored_hint_fields?: readonly string[];
+  /** Stable diagnostics for ignored worker-return fields (issue #137). */
+  readonly ignored_hint_diagnostics?: readonly string[];
 }
 
 /** Materialize all v2 observations in canonical append order. */
@@ -150,6 +172,13 @@ export function projectRecipientObservation(
         : `${entry.kind}: ${entry.description}`,
     ),
     omitted: { ...observation.omitted },
+    reported_hints: { ...observation.reported_hints },
+    ...(observation.ignored_hint_fields === undefined
+      ? {}
+      : { ignored_hint_fields: [...observation.ignored_hint_fields] }),
+    ...(observation.ignored_hint_diagnostics === undefined
+      ? {}
+      : { ignored_hint_diagnostics: [...observation.ignored_hint_diagnostics] }),
   };
   return Object.freeze(projected);
 }
@@ -196,6 +225,10 @@ function buildTransitionObservation(
     ...(control?.ignored_hint_fields === undefined || control.ignored_hint_fields.length === 0
       ? {}
       : { ignoredHintFields: control.ignored_hint_fields }),
+    ...(control?.ignored_hint_diagnostics === undefined ||
+    control.ignored_hint_diagnostics.length === 0
+      ? {}
+      : { ignoredHintDiagnostics: control.ignored_hint_diagnostics }),
     terminal,
     changedPaths: evidence.changedPaths,
     executions: evidence.executions,
@@ -309,6 +342,7 @@ function makeObservation(args: {
   readonly task: RecipientTaskContextV2;
   readonly hints: WorkObservationV2["reported_hints"];
   readonly ignoredHintFields?: readonly string[];
+  readonly ignoredHintDiagnostics?: readonly string[];
   readonly terminal: WorkObservationV2["observed"]["terminal"];
   readonly workspaceState?: WorkObservationV2["observed"]["workspace_state"];
   readonly changedPaths: readonly string[];
@@ -345,6 +379,13 @@ function makeObservation(args: {
       ? {}
       : {
           ignored_hint_fields: args.ignoredHintFields
+            .slice(0, 32)
+            .map((item) => boundText(item, 128)),
+        }),
+    ...(args.ignoredHintDiagnostics === undefined || args.ignoredHintDiagnostics.length === 0
+      ? {}
+      : {
+          ignored_hint_diagnostics: args.ignoredHintDiagnostics
             .slice(0, 32)
             .map((item) => boundText(item, 128)),
         }),

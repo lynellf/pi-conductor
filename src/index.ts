@@ -284,10 +284,14 @@ export type {
   RawControlArguments,
   ReportedHintsV2,
   ReportedTaskContextV2,
+  ReturnEnvelope,
+  ReturnEnvelopeIgnoredField,
   SanitizedReportedHintsV2,
 } from "./seam/control-arguments.js";
 export {
+  parseReturnEnvelope,
   RAW_CONTROL_ARGUMENT_MAX_UTF8_BYTES,
+  RETURN_ENVELOPE_DIAGNOSTIC_PREFIX,
   readRawControlArguments,
   sanitizeReportedHintsV2,
 } from "./seam/control-arguments.js";
@@ -313,6 +317,7 @@ export type {
   HandoffArgs,
   LegacyReportResultArgs,
   ReportResultArgs,
+  ReturnEnvelopeArgs,
 } from "./seam/schema.js";
 export {
   delegateArgsSchema,
@@ -328,6 +333,7 @@ export {
   legacyDelegateSubmissionArgsSchema,
   orchestratorHandoffArgsSchema,
   reportResultArgsSchema,
+  returnEnvelopeArgsSchema,
   workerHandoffArgsSchema,
 } from "./seam/schema.js";
 export type {

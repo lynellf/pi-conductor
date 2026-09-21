@@ -127,6 +127,58 @@ export const workerHandoffArgsSchema = Type.Object({}, { additionalProperties: t
 /** v2 end schema: all model-authored fields are optional hints. */
 export const endArgsSchemaV2 = Type.Object({}, { additionalProperties: true });
 
+// ─── Issue #137: worker→orchestrator return envelope ────────────────
+
+/**
+ * Issue #137: documented worker-return envelope. The worker→orchestrator
+ * return transport carries a bounded *supported* narrative; any other
+ * top-level field is reported in a stable, explicitly ignored list so a
+ * role can self-correct without re-deriving the contract from a failure.
+ *
+ * Supported narrative fields:
+ *  - `reason` (primary) — the free-form rationale the worker is delivering.
+ *  - `summary` — bounded secondary narrative.
+ *  - `verification` — bounded list of executed verification commands.
+ *
+ * `additionalProperties: true` permits custom fields (`tdd_stage`,
+ * `changed_paths`, `phase`, `red_*`, `green_*`, …) so the host can record
+ * them in an explicit ignored list rather than silently drop them or, worse,
+ * displace the supported `reason`. The contract lives in
+ * `parseReturnEnvelope` (control-arguments.ts); this schema is the shape
+ * the captured emission is checked against.
+ */
+export const returnEnvelopeArgsSchema = Type.Object(
+  {
+    reason: Type.Optional(
+      Type.String({
+        description:
+          "Primary narrative field. The free-form rationale the worker is delivering to the orchestrator; surfaced verbatim by the host as reported/untrusted context.",
+      }),
+    ),
+    summary: Type.Optional(
+      Type.String({
+        description:
+          "Secondary narrative field. A bounded summary of the work performed; surfaced alongside the reason.",
+      }),
+    ),
+    verification: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 256 }), {
+        maxItems: 16,
+        description:
+          "Bounded list of executed verification commands or checks. Surfaced alongside the reason and summary.",
+      }),
+    ),
+  },
+  {
+    additionalProperties: true,
+    description:
+      "Documented worker→orchestrator return envelope (issue #137). Supported narrative fields: reason (primary), summary, verification. Other top-level fields are reported in an explicit ignored list, never silently dropped.",
+  },
+);
+
+/** Typed view of a validated worker-return envelope arguments object. */
+export type ReturnEnvelopeArgs = Static<typeof returnEnvelopeArgsSchema>;
+
 /** Field names required by every model-emitted actionable handoff. */
 export const ACTIONABLE_HANDOFF_FIELDS = [
   "status",

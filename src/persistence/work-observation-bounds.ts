@@ -38,8 +38,15 @@ export function boundedObservation(observation: WorkObservationV2): WorkObservat
     executions: Math.max(0, executions.length - MAX_EXECUTIONS),
     artifacts: Math.max(0, artifacts.length - MAX_ARTIFACTS),
   };
-  let hints = observation.reported_hints;
+  // Issue #137 Phase 2: the returned worker's `reason` is mandatory
+  // in the projected seed. The bounded observation must never drop
+  // it — it is dropped only when the reason itself is truncated (by
+  // `projectHints`). Other hints (summary, verification) remain
+  // optional and may be dropped when budget pressure requires it.
+  const mandatoryReason = observation.reported_hints.reason;
+  let hints: WorkObservationV2["reported_hints"] = observation.reported_hints;
   let ignoredHintFields = observation.ignored_hint_fields;
+  let ignoredHintDiagnostics = observation.ignored_hint_diagnostics;
   changedPaths = changedPaths.slice(-MAX_CHANGED_PATHS);
   executions = executions.slice(-MAX_EXECUTIONS);
   artifacts = artifacts.slice(-MAX_ARTIFACTS);
@@ -50,6 +57,9 @@ export function boundedObservation(observation: WorkObservationV2): WorkObservat
     ...(ignoredHintFields === undefined || ignoredHintFields.length === 0
       ? {}
       : { ignored_hint_fields: ignoredHintFields }),
+    ...(ignoredHintDiagnostics === undefined || ignoredHintDiagnostics.length === 0
+      ? {}
+      : { ignored_hint_diagnostics: ignoredHintDiagnostics }),
     observed: {
       ...observation.observed,
       changed_paths: changedPaths,
@@ -71,10 +81,17 @@ export function boundedObservation(observation: WorkObservationV2): WorkObservat
       } else if (changedPaths.length > 0) {
         changedPaths = changedPaths.slice(1);
         omitted = { ...omitted, changed_paths: omitted.changed_paths + 1 };
-      } else if (Object.keys(hints).length > 0) {
-        hints = {};
-      } else if (ignoredHintFields !== undefined && ignoredHintFields.length > 0) {
+      } else if (hasOptionalHints(hints, mandatoryReason)) {
+        // Drop only the non-mandatory hints; preserve `reason`.
+        const next: { summary?: string; reason?: string; verification?: readonly string[] } = {};
+        if (mandatoryReason !== undefined) next.reason = mandatoryReason;
+        hints = next as WorkObservationV2["reported_hints"];
+      } else if (
+        (ignoredHintFields !== undefined && ignoredHintFields.length > 0) ||
+        (ignoredHintDiagnostics !== undefined && ignoredHintDiagnostics.length > 0)
+      ) {
         ignoredHintFields = undefined;
+        ignoredHintDiagnostics = undefined;
       } else {
         throw new WorkObservationSizeError("mandatory v2 work observation exceeds 12 KiB");
       }
@@ -82,6 +99,24 @@ export function boundedObservation(observation: WorkObservationV2): WorkObservat
     result = candidate();
   }
   return result;
+}
+
+/**
+ * Issue #137 Phase 2: there are optional hints left to drop only if the
+ * hints object still carries fields beyond the mandatory `reason`. The
+ * mandatory reason survives even when summary/verification are dropped.
+ */
+function hasOptionalHints(
+  hints: WorkObservationV2["reported_hints"],
+  mandatoryReason: string | undefined,
+): boolean {
+  if (hints.summary !== undefined) return true;
+  if (hints.verification !== undefined && hints.verification.length > 0) return true;
+  // The reason itself can be dropped only if the observation carried
+  // none — a present reason is mandatory and must never be discarded
+  // by size pressure. We surface that as `false` so the bounded loop
+  // keeps the reason and continues trimming optional evidence.
+  return mandatoryReason === undefined && hints.reason !== undefined;
 }
 
 /** Associate durable execution, mutation, and artifact facts with one invocation. */

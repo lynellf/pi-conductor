@@ -101,6 +101,10 @@ export function renderWorkObservationMarkdown(
       `- omitted: ${JSON.stringify(observation.omitted)}`,
       `- reported hints: ${escapeMarkdown(JSON.stringify(observation.reported_hints))}`,
       `- ignored optional fields: ${list(observation.ignored_hint_fields ?? [])}`,
+      ...(observation.ignored_hint_diagnostics === undefined ||
+      observation.ignored_hint_diagnostics.length === 0
+        ? []
+        : [`- ignored return diagnostics: ${list(observation.ignored_hint_diagnostics)}`]),
       "",
     );
   });

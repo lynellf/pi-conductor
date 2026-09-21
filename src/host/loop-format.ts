@@ -157,7 +157,15 @@ export function formatAcceptedControlSeed(
       : control.reported_hints.verification.map((item) => `  verification: ${safeSeedLine(item)}`)),
     ...(control.ignored_hint_fields.length === 0
       ? []
-      : [`ignored optional fields: ${control.ignored_hint_fields.join(", ")}`]),
+      : [`ignored optional fields: ${control.ignored_hint_fields.map(safeSeedLine).join(", ")}`]),
+    ...(control.ignored_hint_diagnostics === undefined ||
+    control.ignored_hint_diagnostics.length === 0
+      ? []
+      : [
+          `ignored return diagnostics: ${control.ignored_hint_diagnostics
+            .map(safeSeedLine)
+            .join(", ")}`,
+        ]),
   ];
   appendContinuitySeed(lines, continuitySeed);
   return lines.join("\n");

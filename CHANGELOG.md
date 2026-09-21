@@ -4,6 +4,36 @@
 
 ### Features
 
+- Preserve the accepted worker-return's supported narrative in fresh orchestrator
+  handoff context (issue #137). A single documented return-envelope contract
+  (`reason` primary, `summary`, `verification`; TypeBox-bound with
+  `additionalProperties: true`) records unsupported custom fields
+  (`phase`, `tdd_stage`, `changed_paths`, `red_*`, `green_*`) in a stable
+  `${RETURN_ENVELOPE_DIAGNOSTIC_PREFIX}${field_name}` ignored list so a role
+  can self-correct without re-deriving the contract from a seam failure. The
+  production v2 accepted-control promotion persists the compatible ignored
+  field names and an additive `ignored_hint_diagnostics` list; both are
+  carried through observation and seed rendering.
+  `buildLastMessage` (`src/core/run-memory.ts`) reads the carried
+  `reported_hints.reason` first, then `reported_hints.summary`, then the
+  legacy `payload_summary.reason`, then `null` — a present non-empty `reason`
+  is always surfaced and never labeled `(worker omitted reason)`. Both fresh-
+  orchestrator seed surfaces render the carried reason as labelled
+  reported/untrusted text distinct from host continuity: `formatRunMemorySeed`
+  (`src/host/run-memory.ts`) injects a `reported hints:` sub-block inside the
+  `last_message:` block with `ignored optional fields:`; the v2 host-generated
+  continuity seed (`renderWorkObservationSeed` in
+  `src/persistence/work-observation-seed.ts`) makes the returned `reason`
+  mandatory (it is rendered before the byte budget can drop it and counted in
+  `omitted` only when the reason itself is truncated). The operator view
+  (`renderWorkObservationMarkdown`, `renderWorkObservationJson` in
+  `src/persistence/work-observation-report.ts`) surfaces `reported hints:` and
+  `ignored optional fields:` for every `role_return` observation. Both seed
+  surfaces are byte-stable across replay (live handoff + resume via
+  `formatIncomingHandoffSeed`). No reducer or transport-policy change; the
+  persisted `LastMessage.accepted_control` carries the full envelope through
+  the replay path.
+
 - Publish bounded, host-observed handoff evidence into the durable continuity
   seed for fresh recipients (issue #135). A strict, opt-in `handoff_evidence:`
   manifest block enables collection of read-only git worktree snapshots

@@ -20,6 +20,7 @@
  *   - run_id, goal, current_role, state — identity
  *   - end_request, can_end — completion authority
  *   - run_cost_to_date, remaining_budget, run_cost_cap — budget
+ *   - last_message — surfaced worker return (reported/untrusted)
  *   - visit_history — past sessions
  *   - per_role_cost — cost roll-up
  *   - configured_workers, next_candidates — top-level FSM handoff topology
@@ -28,6 +29,18 @@
  * The orchestrator is told explicitly what to do: dispatch top-level work via
  * `handoff(target_role=<worker>)`, use `delegate` only through its separately
  * admitted tool interface, and call `end` only when `can_end` is true.
+ *
+ * **Last message — reported/untrusted (issue #137 Phase 2).** The
+ * worker's return envelope's supported narrative fields (`reason`,
+ * `summary`, `verification`) are rendered under a `reported hints:`
+ * sub-block inside `last_message`, with the `ignored optional fields:`
+ * line below. The sub-block is labelled reported/untrusted and is
+ * visually/semantically distinct from the host continuity section
+ * (`continuity_seed:`). The legacy `text:` line is preserved for
+ * backward compatibility — it is the same value as `reported hints.reason`
+ * when reason is present; otherwise it falls back to the v1
+ * `payload_summary.reason`. The reported narrative is **never** labelled
+ * `(worker omitted reason)` while a non-empty reason is in scope.
  *
  * **Continuity seed rendering (spec §8, §11).** When the run memory carries
  * a `continuity_seed`, the formatter injects its `rendered` text and the
@@ -108,6 +121,7 @@ export function formatRunMemorySeed(
                 `    recipient_role: ${memory.last_message.accepted_handoff.recipient_role}`,
                 `    payload: ${JSON.stringify(recipientHandoffPayload(memory.last_message.accepted_handoff))}`,
               ].join("\n"),
+          ...formatReportedHints(memory.last_message),
         ].join("\n");
 
   return [
@@ -140,6 +154,68 @@ export function formatRunMemorySeed(
     terminalLine,
     ...(continuitySection === null ? [] : ["", continuitySection]),
   ].join("\n");
+}
+
+/**
+ * Issue #137 Phase 2: render the returned worker's reported narrative
+ * (`reported_hints`) and ignored optional fields under a labelled
+ * reported/untrusted sub-block inside the `last_message:` block. The
+ * sub-block is visually/semantically distinct from the host
+ * `continuity_seed:` section and the host-observed `visit_history` /
+ * `per_role_cost` lines. Legacy records (no `accepted_control`) emit
+ * nothing here — the `text:` line above already carries the v1
+ * `payload_summary.reason`. A present non-empty `reason` is always
+ * surfaced (never relabelled omitted); the section is omitted
+ * entirely when no reported narrative or ignored fields exist.
+ */
+function formatReportedHints(lastMessage: import("../core/run-memory.js").LastMessage): string[] {
+  const control = lastMessage.accepted_control;
+  if (control === undefined) return [];
+  const hints = control.reported_hints;
+  const lines: string[] = ["  reported hints: (reported/untrusted; distinct from host continuity)"];
+  let emitted = false;
+  if (typeof hints.reason === "string") {
+    lines.push(`    reason: ${hints.reason}`);
+    emitted = true;
+  }
+  if (typeof hints.summary === "string") {
+    lines.push(`    summary: ${hints.summary}`);
+    emitted = true;
+  }
+  if (hints.verification !== undefined) {
+    for (const item of hints.verification) {
+      lines.push(`    verification: ${item}`);
+      emitted = true;
+    }
+  }
+  if (
+    !emitted &&
+    control.ignored_hint_fields.length === 0 &&
+    (control.ignored_hint_diagnostics?.length ?? 0) === 0
+  )
+    return [];
+  if (control.ignored_hint_fields.length > 0) {
+    lines.push(
+      `    ignored optional fields: ${control.ignored_hint_fields
+        .map(safeReportedLine)
+        .join(", ")}`,
+    );
+  }
+  if (
+    control.ignored_hint_diagnostics !== undefined &&
+    control.ignored_hint_diagnostics.length > 0
+  ) {
+    lines.push(
+      `    ignored return diagnostics: ${control.ignored_hint_diagnostics
+        .map(safeReportedLine)
+        .join(", ")}`,
+    );
+  }
+  return lines;
+}
+
+function safeReportedLine(value: string): string {
+  return value.replace(/[\r\n]/g, (character) => (character === "\r" ? "\\r" : "\\n"));
 }
 
 function formatCandidateGuidance(memory: RunMemory): string {

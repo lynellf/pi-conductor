@@ -1,5 +1,17 @@
 /** Raw v2 control-argument boundary and best-effort hint extraction (§6.5–§6.6). */
 
+import { Value } from "typebox/value";
+import { returnEnvelopeArgsSchema } from "./schema.js";
+
+export type { ReturnEnvelopeArgs } from "./schema.js";
+// Issue #137 — re-export the documented worker-return envelope schema so a
+// caller can validate a captured emission against the contract boundary
+// without reaching into the schema module directly. The semantic parser
+// below (`parseReturnEnvelope`) validates against the same schema before
+// applying its stricter bounded-field policy; both surfaces share the single
+// source of truth defined in `schema.ts`.
+export { returnEnvelopeArgsSchema } from "./schema.js";
+
 /** Hard compact-JSON UTF-8 bound applied before semantic inspection. */
 export const RAW_CONTROL_ARGUMENT_MAX_UTF8_BYTES = 65_536;
 const MAX_IGNORED_FIELD_NAMES = 32;
@@ -7,6 +19,43 @@ const MAX_FIELD_NAME_CHARS = 64;
 const MAX_HINT_UTF8_BYTES = 2_048;
 const MAX_VERIFICATION_ITEMS = 16;
 const MAX_VERIFICATION_UTF8_BYTES = 256;
+
+// ─── Issue #137: return envelope (worker → orchestrator) ────────────
+
+/** Stable diagnostic prefix emitted for every ignored return-envelope field. */
+export const RETURN_ENVELOPE_DIAGNOSTIC_PREFIX = "ignored_return_field:";
+
+/** One recorded unsupported top-level field on the return envelope. */
+export interface ReturnEnvelopeIgnoredField {
+  /** Stable field name (≤ MAX_FIELD_NAME_CHARS code units). */
+  readonly name: string;
+  /** Stable diagnostic name; always `${RETURN_ENVELOPE_DIAGNOSTIC_PREFIX}${name}`. */
+  readonly diagnostic: string;
+}
+
+/** Validated worker-return envelope: supported narrative + explicitly ignored fields. */
+export interface ReturnEnvelope {
+  readonly supported: {
+    readonly reason?: string;
+    readonly summary?: string;
+    readonly verification?: readonly string[];
+  };
+  readonly ignored: readonly ReturnEnvelopeIgnoredField[];
+}
+
+/** Supported top-level narrative fields on the return envelope. */
+const RETURN_ENVELOPE_SUPPORTED_FIELDS: ReadonlySet<string> = new Set([
+  "reason",
+  "summary",
+  "verification",
+]);
+
+/** Bounded, frozen list of ignored-field entries from one parse call. */
+function freezeIgnored(
+  ignored: readonly ReturnEnvelopeIgnoredField[],
+): readonly ReturnEnvelopeIgnoredField[] {
+  return Object.freeze([...ignored]);
+}
 
 /** Mechanical reasons for rejecting a complete tool argument object. */
 export type RawControlArgumentRejection = "tool_arguments_not_json" | "tool_arguments_too_large";
@@ -124,9 +173,7 @@ export function sanitizeReportedHintsV2(
     hints: Object.freeze(hints),
     task_context: Object.freeze(task_context),
     ignored_fields: Object.freeze(
-      [...ignored]
-        .slice(0, MAX_IGNORED_FIELD_NAMES)
-        .map((field) => field.slice(0, MAX_FIELD_NAME_CHARS)),
+      [...ignored].slice(0, MAX_IGNORED_FIELD_NAMES).map((field) => boundFieldName(field)),
     ),
   });
 }
@@ -153,6 +200,129 @@ const RECOGNIZED_CONTROL_FIELDS = new Set([
   "open_questions",
   "next_steps",
 ]);
+
+/**
+ * Issue #137: validate one raw return-arguments object against the
+ * documented worker-return envelope.
+ *
+ * The supported narrative fields (`reason` primary, `summary`, `verification`)
+ * are returned in `supported`. Any other top-level key (or any malformed
+ * supported field) is recorded in `ignored` with a stable diagnostic name
+ * shaped `${RETURN_ENVELOPE_DIAGNOSTIC_PREFIX}${field_name}` so a role can
+ * self-correct without re-deriving the contract from a seam failure.
+ *
+ * Non-object inputs return an empty envelope rather than throwing — the
+ * return envelope is best-effort hint extraction, not a hard contract
+ * breach; the seam already rejects malformed tool-argument objects at the
+ * raw boundary (`readRawControlArguments`).
+ *
+ * The supported `reason` is **never silently displaced**: even when the
+ * envelope carries ignored custom fields, the parsed bounded
+ * `supported.reason` remains available to the host.
+ */
+export function parseReturnEnvelope(value: unknown): ReturnEnvelope {
+  if (!isJsonObject(value)) {
+    return Object.freeze({
+      supported: Object.freeze({}) as ReturnEnvelope["supported"],
+      ignored: Object.freeze([]) as readonly ReturnEnvelopeIgnoredField[],
+    });
+  }
+
+  // Validate the documented structural shape first. Semantic bounds (trim,
+  // UTF-8 length, and item count) are stricter and are applied below so an
+  // invalid optional field becomes an explicit diagnostic instead of dropping
+  // the complete return narrative.
+  const schemaValid = Value.Check(returnEnvelopeArgsSchema, value);
+
+  const supported: { reason?: string; summary?: string; verification?: readonly string[] } = {};
+  const ignored: ReturnEnvelopeIgnoredField[] = [];
+
+  const reason = boundedString(value.reason, MAX_HINT_UTF8_BYTES);
+  if (value.reason !== undefined) {
+    if (reason === undefined) {
+      addIgnored(ignored, "reason");
+    } else {
+      supported.reason = reason;
+    }
+  }
+
+  const summary = boundedString(value.summary, MAX_HINT_UTF8_BYTES);
+  if (value.summary !== undefined) {
+    if (summary === undefined) {
+      addIgnored(ignored, "summary");
+    } else {
+      supported.summary = summary;
+    }
+  }
+
+  if (value.verification !== undefined) {
+    if (!Array.isArray(value.verification)) {
+      addIgnored(ignored, "verification");
+    } else {
+      const verification: string[] = [];
+      let malformed = value.verification.length > MAX_VERIFICATION_ITEMS;
+      for (const item of value.verification) {
+        const bounded = boundedString(item, MAX_VERIFICATION_UTF8_BYTES);
+        if (bounded === undefined) {
+          malformed = true;
+          break;
+        }
+        if (verification.length < MAX_VERIFICATION_ITEMS) {
+          verification.push(bounded);
+        }
+      }
+      if (malformed || verification.length === 0) {
+        addIgnored(ignored, "verification");
+      } else {
+        supported.verification = Object.freeze(verification);
+      }
+    }
+  }
+
+  for (const key of Object.keys(value)) {
+    if (RETURN_ENVELOPE_SUPPORTED_FIELDS.has(key)) continue;
+    addIgnored(ignored, key);
+  }
+
+  if (!schemaValid && ignored.length === 0) {
+    addIgnored(ignored, "return_envelope");
+  }
+
+  return Object.freeze({
+    supported: Object.freeze(supported) as ReturnEnvelope["supported"],
+    ignored: freezeIgnored(ignored),
+  });
+}
+
+function addIgnored(ignored: ReturnEnvelopeIgnoredField[], name: string): void {
+  if (ignored.length >= MAX_IGNORED_FIELD_NAMES) return;
+  ignored.push(makeIgnored(name));
+}
+
+function makeIgnored(name: string): ReturnEnvelopeIgnoredField {
+  const bounded = boundFieldName(name);
+  return Object.freeze({
+    name: bounded,
+    diagnostic: `${RETURN_ENVELOPE_DIAGNOSTIC_PREFIX}${bounded}`,
+  });
+}
+
+function boundFieldName(value: string): string {
+  let printable = "";
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (character === "\r") printable += "\\r";
+    else if (character === "\n") printable += "\\n";
+    else printable += code < 32 || code === 127 ? "?" : character;
+  }
+  const byCharacters = printable.slice(0, MAX_FIELD_NAME_CHARS);
+  if (byCharacters.length === 0) return "<empty>";
+  const bytes = new TextEncoder().encode(byCharacters);
+  if (bytes.byteLength <= MAX_FIELD_NAME_CHARS) return byCharacters;
+  let end = MAX_FIELD_NAME_CHARS;
+  while (end > 0 && ((bytes[end] ?? 0) & 0xc0) === 0x80) end -= 1;
+  return new TextDecoder().decode(bytes.slice(0, end));
+}
 
 function boundedString(value: unknown, maxBytes: number): string | undefined {
   if (typeof value !== "string") return undefined;

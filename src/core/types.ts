@@ -195,6 +195,8 @@ export interface AcceptedControlV2 {
     readonly verification?: readonly string[];
   };
   readonly ignored_hint_fields: readonly string[];
+  /** Stable issue-137 diagnostics for ignored worker-return fields. */
+  readonly ignored_hint_diagnostics?: readonly string[];
   readonly utf8_bytes: number;
 }
 

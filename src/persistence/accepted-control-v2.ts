@@ -40,6 +40,9 @@ export const acceptedControlV2Schema = Type.Object(
     task,
     reported_hints: hints,
     ignored_hint_fields: Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { maxItems: 32 }),
+    ignored_hint_diagnostics: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 32 }),
+    ),
     utf8_bytes: Type.Integer({ minimum: 1, maximum: 16 * 1024 }),
   },
   { additionalProperties: false },
@@ -111,6 +114,8 @@ function withinHintUtf8Bytes(control: AcceptedControlShape): boolean {
     (summary === undefined || withinUtf8Bytes(summary, 2048)) &&
     (reason === undefined || withinUtf8Bytes(reason, 2048)) &&
     (verification === undefined || verification.every((item) => withinUtf8Bytes(item, 256))) &&
-    control.ignored_hint_fields.every((field) => withinUtf8Bytes(field, 64))
+    control.ignored_hint_fields.every((field) => withinUtf8Bytes(field, 64)) &&
+    (control.ignored_hint_diagnostics === undefined ||
+      control.ignored_hint_diagnostics.every((diagnostic) => withinUtf8Bytes(diagnostic, 128)))
   );
 }

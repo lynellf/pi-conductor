@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createAcceptedControlV2 } from "../../src/host/accepted-control-v2.js";
 import type { PersistedRecord } from "../../src/persistence/log.js";
 import { materializeWorkObservations } from "../../src/persistence/work-observation.js";
 import { renderWorkObservationSeed } from "../../src/persistence/work-observation-seed.js";
@@ -104,6 +105,33 @@ describe("host-generated v2 work observations", () => {
       provenance: { role: "worker", visit: 1 },
       observed: { terminal: "returned_control" },
     });
+  });
+
+  it("carries ignored return diagnostics into the recipient seed", () => {
+    const returnedControl = createAcceptedControlV2({
+      sourceRole: "worker",
+      orchestratorRole: "orchestrator",
+      recipientRole: "orchestrator",
+      reportedArguments: {
+        reason: "worker return",
+        phase: "Phase 2",
+      },
+    });
+    const [observation] = materializeWorkObservations(
+      [transition("worker", "worker-session", "orchestrator", 1, returnedControl)],
+      runId,
+    );
+    expect(observation?.ignored_hint_diagnostics).toEqual(["ignored_return_field:phase"]);
+
+    const seed = renderWorkObservationSeed({
+      runGoal: "ship the service",
+      recipientRole: "orchestrator",
+      task: returnedControl.task,
+      observations: observation === undefined ? [] : [observation],
+      maxBytes: 32_768,
+      maxObservations: 64,
+    });
+    expect(seed.rendered).toContain("ignored_return_field:phase");
   });
 
   it("renders newest-first historical context deterministically", () => {

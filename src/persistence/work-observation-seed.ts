@@ -149,10 +149,54 @@ function renderObservation(observation: RecipientObservationV2, prefix: string):
         : observation.artifact_labels.map(safe).join(", ")
     }`,
     `${prefix}omitted evidence: ${JSON.stringify(observation.omitted)}`,
+    ...renderObservationReportedHints(observation, prefix),
     ...(observation.task.reported_context === undefined
       ? []
       : [`${prefix}reported context: ${safe(observation.task.reported_context.text)}`]),
   ];
+}
+
+/**
+ * Issue #137 Phase 2: render the carried reported narrative
+ * (`reported_hints`) for the observation, labelled reported/untrusted
+ * and visually distinct from host-observed fields
+ * (changed paths / execution statuses / artifact labels — all
+ * marked "(host observed)"). The returned worker's `reason` is
+ * mandatory in the seed: a present, non-empty `reason` is always
+ * surfaced and never relabelled omitted by host-observed truncation.
+ */
+function renderObservationReportedHints(
+  observation: RecipientObservationV2,
+  prefix: string,
+): readonly string[] {
+  const hints = observation.reported_hints;
+  const ignored = observation.ignored_hint_fields ?? [];
+  const ignoredDiagnostics = observation.ignored_hint_diagnostics ?? [];
+  const emittedHintLines: string[] = [];
+  if (typeof hints.reason === "string") {
+    emittedHintLines.push(`${prefix}  reported reason: ${safe(hints.reason)}`);
+  }
+  if (typeof hints.summary === "string") {
+    emittedHintLines.push(`${prefix}  reported summary: ${safe(hints.summary)}`);
+  }
+  if (hints.verification !== undefined) {
+    for (const item of hints.verification) {
+      emittedHintLines.push(`${prefix}  reported verification: ${safe(item)}`);
+    }
+  }
+  if (emittedHintLines.length === 0 && ignored.length === 0 && ignoredDiagnostics.length === 0)
+    return [];
+  const lines: string[] = [
+    `${prefix}reported hints (reported/untrusted; distinct from host-observed fields):`,
+    ...emittedHintLines,
+  ];
+  if (ignored.length > 0) {
+    lines.push(`${prefix}  ignored optional fields: ${ignored.map(safe).join(", ")}`);
+  }
+  if (ignoredDiagnostics.length > 0) {
+    lines.push(`${prefix}  ignored return diagnostics: ${ignoredDiagnostics.map(safe).join(", ")}`);
+  }
+  return lines;
 }
 
 function safe(value: string): string {

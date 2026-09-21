@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import type { MachineDefinition } from "../../src/core/types.js";
+import { createAcceptedControlV2 } from "../../src/host/accepted-control-v2.js";
 import { SessionSeam } from "../../src/host/seam.js";
 import { createEndTool, createHandoffTool } from "../../src/host/tools.js";
 import {
@@ -116,6 +117,81 @@ describe("v2 tool promotion", () => {
       reason: 7,
     });
     expect(validateEmission(seam.read(), { protocol: "v2" })).toMatchObject({ kind: "ok" });
+  });
+});
+
+describe("production v2 return promotion", () => {
+  it("uses the return envelope parser and persists stable ignored-field diagnostics", () => {
+    const control = createAcceptedControlV2({
+      sourceRole: "worker",
+      orchestratorRole: "orchestrator",
+      recipientRole: "orchestrator",
+      reportedArguments: {
+        reason: "phase 2 is complete",
+        phase: "Phase 2",
+        changed_paths: ["src/host/accepted-control-v2.ts"],
+      },
+    });
+
+    expect(control.direction).toBe("return");
+    expect(control.reported_hints).toEqual({ reason: "phase 2 is complete" });
+    expect(control.ignored_hint_fields).toEqual(["phase", "changed_paths"]);
+    expect(control.ignored_hint_diagnostics).toEqual([
+      "ignored_return_field:phase",
+      "ignored_return_field:changed_paths",
+    ]);
+    expect(() => assertAcceptedControlV2(control, "orchestrator", "return")).not.toThrow();
+  });
+
+  it("preserves existing ignored-field compatibility for control fields", () => {
+    const control = createAcceptedControlV2({
+      sourceRole: "worker",
+      orchestratorRole: "orchestrator",
+      recipientRole: "orchestrator",
+      reportedArguments: {
+        target_role: "orchestrator",
+        status: "complete",
+        objective: "return the completed work",
+        requested_action: "review the host evidence",
+        reason: "worker return",
+        phase: "Phase 2",
+      },
+    });
+
+    expect(control.task.reported_objective).toBe("return the completed work");
+    expect(control.task.reported_action).toBe("review the host evidence");
+    expect(control.ignored_hint_fields).toEqual(["phase"]);
+    expect(control.ignored_hint_diagnostics).toEqual(["ignored_return_field:phase"]);
+  });
+
+  it("retains reason when optional envelope content triggers size pruning", () => {
+    const control = createAcceptedControlV2({
+      sourceRole: "worker",
+      orchestratorRole: "orchestrator",
+      recipientRole: "orchestrator",
+      reportedArguments: {
+        reason: "the primary return reason survives",
+        summary: "s".repeat(2048),
+        verification: Array.from({ length: 16 }, () => "v".repeat(256)),
+        objective: "o".repeat(2048),
+        requested_action: "a".repeat(2048),
+        ...Object.fromEntries(
+          Array.from({ length: 32 }, (_, index) => [
+            `custom_${"x".repeat(56)}_${index}`,
+            "ignored",
+          ]),
+        ),
+      },
+      reportedContext: {
+        text: "c".repeat(4096),
+        utf8_bytes: 4096,
+        truncated: false,
+      },
+    });
+
+    expect(control.reported_hints.reason).toBe("the primary return reason survives");
+    expect(control.ignored_hint_diagnostics).toBeDefined();
+    expect(() => assertAcceptedControlV2(control, "orchestrator", "return")).not.toThrow();
   });
 });
 
