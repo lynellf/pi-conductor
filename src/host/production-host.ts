@@ -63,6 +63,7 @@ import {
   persistRecord as persistRecordInModule,
   prepareFreshContinuityEnrichment as prepareFreshContinuityEnrichmentInModule,
   prepareFreshHostContinuityEnrichment as prepareFreshHostContinuityEnrichmentInModule,
+  prepareJevAssessment as prepareJevAssessmentInModule,
   runCostSoFar as runCostSoFarInModule,
   type StateHostContext,
   seedRunMemory as seedRunMemoryInModule,
@@ -444,6 +445,12 @@ export class ProductionHost extends ProductionHostContext implements Host {
     readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
   } {
     return ensurePhaseWorkPacketInModule(this.stateContext(), args);
+  }
+
+  prepareJevAssessment(args: {
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  }): Promise<import("../persistence/jev-assessment-record.js").JevAssessmentRecord | null> {
+    return prepareJevAssessmentInModule(this.stateContext(), args);
   }
 
   nextVisitIndex(role: Role): number {

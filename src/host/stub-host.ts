@@ -77,6 +77,7 @@ import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { SessionTerminalReason, SpawnRoleOptions } from "./host.js";
 import { createEndTool, createHandoffTool, SessionSeam } from "./index.js";
+import { prepareJevAssessment as prepareJevAssessmentImpl } from "./jev-assessment/prepare.js";
 import type { LoadedManifest } from "./manifest.js";
 import {
   composeSeedWithPacket,
@@ -124,6 +125,11 @@ export interface StubHostOptions {
    * to its default (`~/.pi/agent`) exactly as today.
    */
   readonly agentDir?: string;
+  /**
+   * Issue #139 Jev comment: override assessment adapter (tests inject
+   * a scripted enricher here instead of the TypeSafe HTTP adapter).
+   */
+  readonly jevAssessmentEnricher?: import("./jev-assessment/contracts.js").AssessmentEnricher;
 }
 
 /**
@@ -155,6 +161,10 @@ export class StubHost implements Host {
   private readonly roleTurnProducer: RoleTurnProducer;
   /** Issue #70: per-test isolated agent dir (test seam). */
   private readonly agentDirValue: string | undefined;
+  /** Issue #139 Jev comment: scripted assessment adapter override. */
+  private readonly jevAssessmentEnricherValue:
+    | import("./jev-assessment/contracts.js").AssessmentEnricher
+    | undefined;
 
   constructor(opts: StubHostOptions) {
     this.log = opts.log;
@@ -182,6 +192,7 @@ export class StubHost implements Host {
     this.cwd = opts.cwd ?? "/tmp/stub-cwd";
     this.displaySink = opts.displaySink;
     this.agentDirValue = opts.agentDir;
+    this.jevAssessmentEnricherValue = opts.jevAssessmentEnricher;
     this.roleTurnProducer = new RoleTurnProducer({
       runId: this.runId,
       log: this.log,
@@ -575,6 +586,24 @@ export class StubHost implements Host {
       throw new PhaseWorkPacketBlockedError(record, "phase work packet is blocked");
     }
     return { seedWithPacket: composeSeedWithPacket(args.seed, record), isNew, packet: record };
+  }
+
+  async prepareJevAssessment(args: {
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  }): Promise<import("../persistence/jev-assessment-record.js").JevAssessmentRecord | null> {
+    // Issue #139 Jev comment: replay-or-attempt against the host-owned
+    // log. Policy comes from the loaded manifest; tests inject a
+    // scripted enricher, otherwise the HTTP adapter runs on a null key
+    // (static `missing_api_key` outcome) without network access.
+    return prepareJevAssessmentImpl({
+      log: this.log,
+      runId: this.runId,
+      packet: args.packet,
+      policy: this.loadedManifestValue?.manifest.jev_assessment,
+      ...(this.jevAssessmentEnricherValue === undefined
+        ? {}
+        : { enricher: this.jevAssessmentEnricherValue }),
+    });
   }
 
   nextVisitIndex(role: Role): number {

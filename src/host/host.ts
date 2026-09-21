@@ -326,6 +326,19 @@ export interface Host {
   };
 
   /**
+   * Prepare-or-replay one advisory Jev assessment for a materialized
+   * phase work packet (issue #139 Jev comment). Returns the persisted
+   * terminal `jev_assessment` record, or null when no assessment
+   * should run (policy absent or no reported reason — legacy seed
+   * unchanged). The loop appends the advisory rendering; nothing
+   * branches on the judgments. Hosts that omit this hook keep legacy
+   * seed behavior byte-identically.
+   */
+  prepareJevAssessment?(args: {
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  }): Promise<import("../persistence/jev-assessment-record.js").JevAssessmentRecord | null>;
+
+  /**
    * Signal the session to stop its current operation (Task 18 / §11.7
    * cost-cap breach). The Host calls `session.abort()` on the SDK
    * session; the loop records `session_failed` separately based on

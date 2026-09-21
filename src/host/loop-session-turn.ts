@@ -12,6 +12,7 @@ import { formatControllerFailure } from "./controller/failure-diagnostic.js";
 import { runEndGuardAttempt } from "./end-guard-loop.js";
 import { formatNoEmissionRecovery } from "./handoff-contract.js";
 import type { SessionTerminalReason } from "./host.js";
+import { renderJevAdvisory } from "./jev-assessment/advisory.js";
 import {
   collectSessionArtifacts,
   formatDeferredEndPrompt,
@@ -108,6 +109,17 @@ export async function runSessionTurn(
         });
         ctx.nextSeed = ensured.seedWithPacket;
         currentPacket = ensured.packet;
+        // Issue #139 Jev comment: advisory assessment runs after the
+        // ready packet is ensured and before the prompt. A stale
+        // terminal fails closed (the turn throws); provider failures
+        // persist `unavailable` and change routing in no way — the
+        // advisory rendering is appended and nothing branches on it.
+        if (typeof host.prepareJevAssessment === "function") {
+          const assessment = await host.prepareJevAssessment({ packet: ensured.packet });
+          if (assessment !== null) {
+            ctx.nextSeed = `${ctx.nextSeed}\n\n${renderJevAdvisory(assessment)}`;
+          }
+        }
       }
     }
 

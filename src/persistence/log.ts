@@ -31,6 +31,7 @@ import type {
 import type { EndGuardRecord } from "./end-guard.js";
 import type { FileMutationRecord } from "./file-mutation.js";
 import type { HandoffEvidenceRecord } from "./handoff-evidence-schema.js";
+import type { JevAssessmentRecord } from "./jev-assessment-record.js";
 import type { OrchestratorContextRecord } from "./orchestrator-context.js";
 import type { PhaseWorkPacketRecord } from "./phase-work-packet.js";
 import type { ReconstructionSignalRecord } from "./reconstruction-signal.js";
@@ -507,7 +508,8 @@ export type PersistedRecord =
   | ReviewRouteRecord
   | ReviewApprovalInvalidatedRecord
   | PhaseWorkPacketRecord
-  | ReconstructionSignalRecord;
+  | ReconstructionSignalRecord
+  | JevAssessmentRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

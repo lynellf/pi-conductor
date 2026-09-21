@@ -19,6 +19,7 @@ import { terminalObservationV2Schema } from "./delegation-lifecycle-schema.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
 import { assertHandoffEvidenceRecord } from "./handoff-evidence-schema.js";
+import { assertJevAssessmentRecord } from "./jev-assessment-record.js";
 import { assertOrchestratorContextRecord } from "./orchestrator-context.js";
 import { assertPhaseWorkPacketRecord } from "./phase-work-packet.js";
 import { assertReconstructionSignalRecord } from "./reconstruction-signal.js";
@@ -149,6 +150,11 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
 
   if (record.type === "reconstruction_signal") {
     assertReconstructionSignalRecord(record);
+    return;
+  }
+
+  if (record.type === "jev_assessment") {
+    assertJevAssessmentRecord(record);
     return;
   }
 

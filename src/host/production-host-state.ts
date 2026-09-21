@@ -16,6 +16,7 @@ import { renderPersistedContextEnrichmentSeed } from "./context-enrichment/repla
 import type { SessionState } from "./cost.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import type { RoleSession, SessionTerminalReason } from "./host.js";
+import { prepareJevAssessment as prepareJevAssessmentImpl } from "./jev-assessment/prepare.js";
 import type { LoadedManifest } from "./manifest.js";
 import {
   composeSeedWithPacket,
@@ -94,6 +95,22 @@ export function ensurePhaseWorkPacket(
     throw new PhaseWorkPacketBlockedError(record, "phase work packet is blocked");
   }
   return { seedWithPacket: composeSeedWithPacket(args.seed, record), isNew, packet: record };
+}
+
+/** Prepare-or-replay one advisory Jev assessment (issue #139 Jev comment). */
+export async function prepareJevAssessment(
+  host: StateHostContext,
+  args: {
+    readonly packet: import("../persistence/phase-work-packet.js").PhaseWorkPacketRecord;
+  },
+): Promise<import("../persistence/jev-assessment-record.js").JevAssessmentRecord | null> {
+  return prepareJevAssessmentImpl({
+    log: host.log,
+    runId: host.runId,
+    packet: args.packet,
+    policy: host.loadedManifest.manifest.jev_assessment,
+    ...(host.typesafeApiKey !== undefined ? { apiKey: host.typesafeApiKey } : {}),
+  });
 }
 
 /** Append a host-owned record to the run log. */

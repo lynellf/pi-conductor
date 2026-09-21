@@ -174,6 +174,7 @@ export type {
   DelegationInterface,
   DelegationMode,
   DelegationPolicy,
+  JevAssessmentPolicy,
   LegacyDelegationPolicy,
   Manifest,
   ModelConfig,
@@ -447,6 +448,21 @@ export {
 /** Issue #135: host-only bounded projection of host-observed evidence into the continuity seed (Phase 4). */
 export type { HostEvidenceSeedItem } from "./persistence/handoff-evidence-seed.js";
 export { projectHandoffEvidence } from "./persistence/handoff-evidence-seed.js";
+/** Issue #139 Jev comment: bounded advisory assessment record (advisory-only telemetry). */
+export type {
+  JevAssessmentJudgments,
+  JevAssessmentRecord,
+} from "./persistence/jev-assessment-record.js";
+export {
+  assertJevAssessmentFresh,
+  assertJevAssessmentRecord,
+  findJevAssessmentConflicts,
+  findJevAssessmentReplay,
+  isJevAssessmentRecord,
+  JevAssessmentStaleError,
+  jevAssessmentRecordSchema,
+  sha256HexString,
+} from "./persistence/jev-assessment-record.js";
 export type {
   CheckpointSnapshot,
   PersistedRecord,
@@ -620,6 +636,15 @@ export {
   ContinuitySeedV2SizeError,
   renderWorkObservationSeed,
 } from "./persistence/work-observation-seed.js";
+export type {
+  JevAssessmentFailureCode,
+  JevAssessmentOutcome,
+  JevAssessmentWireJudgments,
+} from "./seam/jev-assessment.js";
+export {
+  JEV_ASSESSMENT_FAILURE_CODES,
+  JEV_ASSESSMENT_QUESTION_IDS,
+} from "./seam/jev-assessment.js";
 
 // ─── Run memory artifact (§8.4) ───────────────────────────────────────
 // Phase 3 Task 12. The orchestrator's externalized memory: a single

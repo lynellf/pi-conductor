@@ -158,6 +158,15 @@ export interface ContextEnrichmentPolicyV2 {
 
 export type ContextEnrichmentPolicy = ContextEnrichmentPolicyV1 | ContextEnrichmentPolicyV2;
 
+/** Issue #139 Jev comment: opt-in advisory semantic assessment policy. */
+export interface JevAssessmentPolicy {
+  readonly schema_version: 1;
+  readonly provider: "typesafe_jev";
+  readonly model: string;
+  readonly request_timeout_ms: number;
+  readonly max_attempts: number;
+}
+
 /** Shared trusted limits for a parent delegation policy. */
 interface DelegationPolicyBase {
   /** Issue #86: omitted in programmatic legacy inputs; fresh YAML is normalized to blocking. */
@@ -233,6 +242,8 @@ export interface Manifest {
   readonly continuity?: ContinuityPolicy;
   /** Opt-in Jev recipient-context ranking policy (spec §5). Absent preserves legacy behavior. */
   readonly context_enrichment?: ContextEnrichmentPolicy;
+  /** Issue #139 Jev comment: opt-in advisory assessment policy. Absent preserves legacy behavior. */
+  readonly jev_assessment?: JevAssessmentPolicy;
   /** Issue #124: opt-in host-owned phase review gates. */
   readonly review_gates?: readonly ReviewGateConfig[];
   /** Delegated verification §3.1: top-level verification recipe inventory. */
