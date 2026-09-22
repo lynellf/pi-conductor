@@ -117,22 +117,10 @@ async function signalMarkedMembers(
   return true;
 }
 
-async function terminateAfterLeaderExit(
+async function confirmAfterLeaderExit(
   identity: ProcessIdentity,
-  graceMs: number,
-  members: readonly ProcessIdentity[],
   scope?: ProcessObservationScope,
 ): Promise<SupervisedCleanupResult> {
-  // Short-lived pipeline descendants may depart on their own. No signal is
-  // necessary if the group settles during the grace period.
-  if (!(await waitForGroupGone(identity, graceMs))) {
-    if (!(await signalMarkedMembers(identity, "SIGTERM")))
-      return unconfirmed("cleanup_signal_failed", members);
-    if (!(await waitForGroupGone(identity, graceMs))) {
-      if (!(await signalMarkedMembers(identity, "SIGKILL")))
-        return unconfirmed("cleanup_signal_failed", members);
-    }
-  }
   if (await processGroupHasLiveMembers(identity.processGroupId)) {
     const remaining = await readProcessGroupMembers(identity.processGroupId);
     const marked = await Promise.all(
@@ -153,6 +141,25 @@ async function terminateAfterLeaderExit(
   return escaped.length === 0
     ? { cleanup: "confirmed" }
     : unconfirmed("escaped_owned_processes", escaped);
+}
+
+async function terminateAfterLeaderExit(
+  identity: ProcessIdentity,
+  graceMs: number,
+  members: readonly ProcessIdentity[],
+  scope?: ProcessObservationScope,
+): Promise<SupervisedCleanupResult> {
+  // Short-lived pipeline descendants may depart on their own. No signal is
+  // necessary if the group settles during the grace period.
+  if (!(await waitForGroupGone(identity, graceMs))) {
+    if (!(await signalMarkedMembers(identity, "SIGTERM")))
+      return unconfirmed("cleanup_signal_failed", members);
+    if (!(await waitForGroupGone(identity, graceMs))) {
+      if (!(await signalMarkedMembers(identity, "SIGKILL")))
+        return unconfirmed("cleanup_signal_failed", members);
+    }
+  }
+  return confirmAfterLeaderExit(identity, scope);
 }
 
 async function terminateOwnedGroup(
@@ -190,16 +197,12 @@ async function terminateOwnedGroup(
         return unconfirmed("cleanup_signal_failed", members);
     }
   } else {
-    for (const member of members) {
-      if (member.pid === identity.pid) continue;
-      if (!ownsProcessIdentity(await readProcessIdentity(member.pid), member)) continue;
-      try {
-        process.kill(member.pid, "SIGKILL");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-          return unconfirmed("cleanup_signal_failed", members);
-      }
-    }
+    // Group ownership was lost after SIGTERM. Only individually reverified,
+    // marker-bearing members can be signalled; unknown members remain unconfirmed.
+    if (!(await signalMarkedMembers(identity, "SIGKILL")))
+      return unconfirmed("cleanup_signal_failed", members);
+    await waitForGroupGone(identity, graceMs);
+    return confirmAfterLeaderExit(identity, scope);
   }
   if (!(await waitForGroupGone(identity, graceMs)))
     return unconfirmed("group_remained_live", members);

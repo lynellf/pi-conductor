@@ -128,6 +128,50 @@ describe("safe supervised cleanup diagnostics", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it("does not signal an unmarked member if the leader vanishes after group SIGTERM", async () => {
+    vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
+    vi.spyOn(identity, "readProcessIdentity").mockImplementation(async (pid, token) => {
+      if (pid === owner.pid) return token === owner.ownerToken ? owner : null;
+      return token === undefined ? member : null;
+    });
+    // First leader check succeeds; second (before SIGKILL) fails.
+    const read = vi.mocked(identity.readProcessIdentity);
+    read.mockResolvedValueOnce(owner).mockResolvedValueOnce(null);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(safeTerminateOwnedGroupDetailed(owner, -1)).resolves.toMatchObject({
+      cleanup: "unconfirmed",
+      diagnostic: { cleanup_cause: "leader_identity_unobserved" },
+    });
+    expect(kill.mock.calls).toEqual([[-owner.processGroupId, "SIGTERM"]]);
+  });
+
+  it("signals a reverified marked member after the leader vanishes following SIGTERM", async () => {
+    vi.spyOn(identity, "processGroupHasLiveMembers")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
+    const read = vi
+      .spyOn(identity, "readProcessIdentity")
+      .mockImplementation(async (pid, token) =>
+        pid === member.pid && token === owner.ownerToken ? { ...member, ownerToken: token } : null,
+      );
+    read.mockResolvedValueOnce(owner).mockResolvedValueOnce(null);
+    vi.spyOn(identity, "findProcessesByOwnerToken").mockResolvedValue([]);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(safeTerminateOwnedGroupDetailed(owner, -1)).resolves.toEqual({
+      cleanup: "confirmed",
+    });
+    expect(kill.mock.calls).toEqual([
+      [-owner.processGroupId, "SIGTERM"],
+      [member.pid, "SIGKILL"],
+    ]);
+  });
+
   it("does not expose an observation error message", async () => {
     vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
     vi.spyOn(identity, "readProcessGroupMembers").mockRejectedValue(

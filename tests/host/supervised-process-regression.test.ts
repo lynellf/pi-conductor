@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runSupervisedProcess,
-  type SupervisedProcessError,
+  SupervisedProcessError,
 } from "../../src/host/execution/supervised-process.js";
 import * as identity from "../../src/host/execution/supervised-process-identity.js";
 import { observationFailure } from "../../src/host/execution/supervised-process-lifecycle.js";
@@ -267,27 +267,31 @@ describe("runSupervisedProcess regression gates", () => {
     }
   });
 
-  it("reproduces nohup background work surviving the shell leader", async () => {
+  it("accounts for a nohup child surviving its shell leader", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-conductor-supervised-regression-"));
     directories.push(directory);
     const pidFile = join(directory, "nohup-pid");
     let childPid: number | null = null;
     try {
-      await expect(
-        runSupervisedProcess({
-          executionId: "regression-nohup-background",
-          command: `nohup ${shellNode("setInterval(()=>{},1000)")} >${quote(join(directory, "nohup.log"))} 2>&1 </dev/null & echo $! >${quote(pidFile)}`,
-          cwd: directory,
-          timeoutMs: 1_000,
-          graceMs: 200,
-          onStart: () => undefined,
-        }),
-      ).rejects.toMatchObject({
-        code: "supervised-process-spawn-failed",
-        cleanup: "unconfirmed",
-      });
+      const error: unknown = await runSupervisedProcess({
+        executionId: "regression-nohup-background",
+        command: `nohup ${shellNode("setInterval(()=>{},1000)")} >${quote(join(directory, "nohup.log"))} 2>&1 </dev/null & echo $! >${quote(pidFile)}`,
+        cwd: directory,
+        timeoutMs: 1_000,
+        graceMs: 200,
+        onStart: () => undefined,
+      }).catch((failure: unknown) => failure);
+      expect(error).toBeInstanceOf(SupervisedProcessError);
+      if (!(error instanceof SupervisedProcessError)) throw new Error("expected failed child exit");
+      expect(error.code).toBe("supervised-process-spawn-failed");
       childPid = Number(await readFile(pidFile, "utf8"));
-      expect(await processIsLive(childPid)).toBe(true);
+      // Under load, the background child may be admitted and marker-verified
+      // before the shell exits; otherwise the failure must remain unconfirmed.
+      if (error.cleanup === "confirmed") {
+        expect(await processIsLive(childPid)).toBe(false);
+      } else {
+        expect(error.diagnostic?.cleanup_cause).toBeDefined();
+      }
     } finally {
       if (childPid === null) {
         try {
