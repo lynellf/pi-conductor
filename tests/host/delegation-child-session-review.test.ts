@@ -71,6 +71,7 @@ describe("child SDK session lifecycle boundary", () => {
 
   afterEach(() => {
     vi.doUnmock("@earendil-works/pi-coding-agent");
+    vi.doUnmock("../../src/host/delegation/sandbox-child-context.js");
     vi.resetModules();
   });
 
@@ -80,11 +81,30 @@ describe("child SDK session lifecycle boundary", () => {
     readonly subscribe?: () => () => void;
     readonly abort?: () => Promise<void>;
     readonly dispose?: () => Promise<void>;
+    readonly sandboxContext?: {
+      closeToolAdmission(): Promise<void>;
+      cancel(): Promise<void>;
+      ingestAndInspect(): Promise<never>;
+      tools: [];
+    };
   }) {
+    let onEvent: ((event: { type: "agent_end" }) => void) | undefined;
+    if (overrides.sandboxContext !== undefined) {
+      vi.doMock("../../src/host/delegation/sandbox-child-context.js", () => ({
+        createSandboxChildContext: async () => overrides.sandboxContext,
+      }));
+    }
     const session = {
       sessionFile: "/tmp/child-session.jsonl",
-      subscribe: overrides.subscribe ?? (() => () => {}),
-      prompt: vi.fn(async () => {}),
+      subscribe:
+        overrides.subscribe ??
+        ((handler: (event: { type: "agent_end" }) => void) => {
+          onEvent = handler;
+          return () => {};
+        }),
+      prompt: vi.fn(async () => {
+        if (overrides.sandboxContext !== undefined) onEvent?.({ type: "agent_end" });
+      }),
       abort: vi.fn(overrides.abort ?? (async () => {})),
       dispose: vi.fn(overrides.dispose ?? (async () => {})),
     };
@@ -112,6 +132,13 @@ describe("child SDK session lifecycle boundary", () => {
     const opts = options(manager, persisted);
     const configured = {
       ...opts,
+      ...(overrides.sandboxContext === undefined
+        ? {}
+        : {
+            sandboxHostApproval: {} as NonNullable<
+              DelegateToolFactoryOptions["sandboxHostApproval"]
+            >,
+          }),
       persistRecord: (record: unknown) => {
         persisted.push(record);
         overrides.append(record);
@@ -120,6 +147,65 @@ describe("child SDK session lifecycle boundary", () => {
     } satisfies DelegateToolFactoryOptions;
     return { childSession, configured, manager, persisted, session };
   }
+
+  it.each([
+    "not-started",
+    "integration_incomplete",
+    "completed",
+  ] as const)("classifies sandbox ingestion %s without losing the original stage diagnostic (#120)", async (integration) => {
+    let failure: Error;
+    const ctx = await mockedChildSession({
+      append: () => {},
+      sandboxContext: {
+        tools: [],
+        closeToolAdmission: async () => {},
+        cancel: async () => {},
+        ingestAndInspect: async () => {
+          throw failure;
+        },
+      },
+    });
+    const { SandboxProjectIngestionError } = await import(
+      "../../src/host/execution/sandbox/project-ingestion.js"
+    );
+    const error = new SandboxProjectIngestionError(
+      "patch validation failed",
+      "/state/sandboxes/child/project/patch-1",
+      integration,
+      { cause: new Error("generated worktree identity changed") },
+    );
+    failure = error;
+    const spawn = ctx.childSession.buildSpawnCallback(ctx.configured);
+    const sandboxConfig = {
+      ...config,
+      profile: {
+        ...config.profile,
+        execution: { backend: "bubblewrap" as const, runtime_root: "runtime", writable_paths: [] },
+      },
+      sandbox: {
+        backend: "bubblewrap" as const,
+        execution_policy_digest: "a".repeat(64),
+        runtime_digest: "b".repeat(64),
+        materialization_id: "12345678-1234-4123-8123-123456789abc",
+      },
+    };
+    if (integration !== "not-started") {
+      await expect(spawn(sandboxConfig)).rejects.toMatchObject({
+        name: "DelegationOwnershipError",
+        cause: error,
+      });
+    } else {
+      const terminal = await spawn(sandboxConfig);
+      expect(terminal).toMatchObject({
+        started: true,
+        worktreeInspection: { state: "invalid" },
+        failureReason: expect.stringContaining(error.stagePath),
+      });
+      expect(terminal.failureReason).toContain("generated worktree identity changed");
+      expect(terminal.usage).toBeDefined();
+    }
+    expect(ctx.session.dispose).toHaveBeenCalledTimes(1);
+  });
 
   it.each([
     [

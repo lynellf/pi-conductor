@@ -13,6 +13,7 @@ import type { SubagentStartedRecord } from "../../persistence/log.js";
 import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import { SessionState } from "../cost.js";
 import { SandboxBackendUnavailableError } from "../execution/sandbox/enablement.js";
+import { SandboxProjectIngestionError } from "../execution/sandbox/project-ingestion.js";
 import { ToolExecutionController } from "../execution/tool-execution-controller.js";
 import { toToolExecutionModelError } from "../execution/tool-execution-model-error.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
@@ -21,6 +22,7 @@ import {
   observeChildTerminal,
   type ReportCapture,
 } from "./child-observation.js";
+import { capChildText } from "./child-result.js";
 import { buildReportResultTool, childTaskSeed } from "./child-sdk-tools.js";
 import { contextArtifactsAudit } from "./context-artifact-audit.js";
 import { DelegationOwnershipError } from "./delegate-error.js";
@@ -176,7 +178,27 @@ export function buildSpawnCallback(opts: DelegateChildFactoryOptions) {
             worktreeInspection: invalidWorktreeInspection(),
           };
         }
-        throw new DelegationOwnershipError("sandbox child integration is incomplete", cause);
+        if (cause instanceof SandboxProjectIngestionError && cause.integration === "not-started") {
+          const detail = cause.cause instanceof Error ? `; cause: ${cause.cause.message}` : "";
+          const failureReason = capChildText(
+            `sandbox ingestion ${cause.integration} at ${cause.stagePath}: ${cause.message}${detail}`,
+          ).text;
+          return {
+            ...observed,
+            sessionError: failureReason,
+            failureReason,
+            worktreeInspection: invalidWorktreeInspection(),
+          };
+        }
+        if (cause instanceof SandboxProjectIngestionError) {
+          throw new DelegationOwnershipError(
+            cause.integration === "completed"
+              ? "sandbox child integration was already completed"
+              : "sandbox child integration is incomplete",
+            cause,
+          );
+        }
+        throw new DelegationOwnershipError("sandbox child integration outcome is ambiguous", cause);
       }
     } catch (cause) {
       lifecycleCause = cause;

@@ -172,6 +172,45 @@ describe("sandbox admission preparation", () => {
     await expect(lstat(child.worktreePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("returns a normal failed child with the pre-application ingestion diagnostic (#120)", async () => {
+    const { root, promptRoot } = await fixture();
+    const prepared = await prepare(
+      root,
+      promptRoot,
+      profile({ backend: "bubblewrap", runtime_root: "runtime", writable_paths: [] }, undefined),
+      { capture: async () => ({ sandbox: descriptor }), verify: async () => {} },
+    );
+    const child = prepared.tasks[0];
+    if (child === undefined) throw new Error("missing child");
+    const diagnostic =
+      "sandbox ingestion not-started at /private/patch-1: generated worktree identity changed";
+    const result = await runPreparedChild({
+      prepared: child,
+      runId: "run",
+      parentRole: "orchestrator",
+      primaryCheckout: root,
+      parentMaterializedPaths: prepared.materializedParentPaths,
+      systemPromptRoot: promptRoot,
+      spawnAndRunChild: async () => ({
+        started: true,
+        model: "stub:model",
+        sessionFile: "/private/session.jsonl",
+        usage: { input: 1, output: 2, cache_read: 0, cache_write: 0, tokens: 3, cost: 0.01 },
+        sessionError: diagnostic,
+        failureReason: diagnostic,
+        worktreeInspection: { state: "invalid", headCommit: null },
+      }),
+    });
+    expect(result).toMatchObject({
+      status: "failed",
+      summary: diagnostic,
+      failureReason: diagnostic,
+      lifecycleStarted: true,
+      sessionFile: "/private/session.jsonl",
+      usage: { tokens: 3 },
+    });
+  });
+
   it("passes exact selected and complete tracked paths, then freezes the descriptor", async () => {
     const { root, promptRoot } = await fixture();
     let captured: { selectedPaths: readonly string[]; trackedPaths: readonly string[] } | undefined;

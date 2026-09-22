@@ -444,8 +444,12 @@ async function runSingleChild(options: RunSingleChildOptions): Promise<PoolChild
           ...(raw.reported_status === undefined ? {} : { reported_status: raw.reported_status }),
         }
       : undefined;
-  const summary = selectedSummary(raw, normalized.normalizationReason);
-  const failureReason = selectedFailureReason(raw, normalized.normalizationReason);
+  const summary =
+    normalized.status === "failed" && terminal.failureReason !== undefined
+      ? terminal.failureReason
+      : selectedSummary(raw, normalized.normalizationReason);
+  const failureReason =
+    terminal.failureReason ?? selectedFailureReason(raw, normalized.normalizationReason);
 
   if (normalized.status === "completed" || normalized.status === "no_changes") {
     return {
