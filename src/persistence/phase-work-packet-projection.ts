@@ -22,6 +22,7 @@
 
 import type { HandoffEvidencePolicy, Role } from "../core/types.js";
 import type { PersistedRecord } from "./log.js";
+import { projectPredecessorEvidence } from "./phase-work-packet-evidence.js";
 import { projectReviewGatePhase } from "./phase-work-packet-projection-gate.js";
 import {
   buildRecordKeyIndex,
@@ -78,6 +79,7 @@ export interface PhaseWorkPacketInput {
   readonly dispatch_source: PhaseWorkPacketSource;
   readonly cutoff_record_keys: readonly string[];
   readonly records: readonly PersistedRecord[];
+  readonly evidence_cutoff_dropped?: number | undefined;
   readonly handoff_evidence_policy?: HandoffEvidencePolicy | null | undefined;
   readonly reported_narrative?: PhaseWorkPacketReportedNarrativeInput | undefined;
 }
@@ -166,10 +168,12 @@ function findSourceRoute(
 export function projectPhaseWorkPacket(input: PhaseWorkPacketInput): ProjectedSections {
   const { keysByIndex } = buildRecordKeyIndex(input.records);
   const filtered: PersistedRecord[] = [];
+  const keyed: { key: string; record: PersistedRecord }[] = [];
   for (const key of input.cutoff_record_keys) {
     const record = keysByIndex.get(key);
     if (record === undefined) continue;
     filtered.push(record);
+    keyed.push({ key, record });
   }
 
   const pinnedGates = filterOfType(filtered, "review_gate_pinned");
@@ -179,6 +183,10 @@ export function projectPhaseWorkPacket(input: PhaseWorkPacketInput): ProjectedSe
   const evidence = filterOfType(filtered, "handoff_evidence");
 
   const omissions: PhaseWorkPacketOmission[] = [];
+  const cutoffDropped = input.evidence_cutoff_dropped ?? 0;
+  if (cutoffDropped > 0) {
+    omissions.push({ kind: "evidence_cutoff_dropped", count: cutoffDropped });
+  }
 
   const hostDirective = deriveHostDirective(input.dispatch_source, { keysByIndex }, input.records);
 
@@ -208,15 +216,25 @@ export function projectPhaseWorkPacket(input: PhaseWorkPacketInput): ProjectedSe
     );
   }
 
-  const hostObserved = projectHostObserved(
-    {
-      handoff_evidence_policy: input.handoff_evidence_policy,
-      evidence,
-      decisions,
-      pinnedGates,
-    },
-    omissions,
-  );
+  const predecessor = projectPredecessorEvidence(input.dispatch_source, keyed);
+  if (predecessor.omitted > 0) {
+    omissions.push({ kind: "evidence_refs_dropped", count: predecessor.omitted });
+  }
+  if (predecessor.references.length === 0) {
+    omissions.push({ kind: "predecessor_evidence_unavailable" });
+  }
+  const hostObserved: HostObservedSection = {
+    ...projectHostObserved(
+      {
+        handoff_evidence_policy: input.handoff_evidence_policy,
+        evidence,
+        decisions,
+        pinnedGates,
+      },
+      omissions,
+    ),
+    evidence_refs: predecessor.references,
+  };
   const reportedNarrative = projectReportedNarrative(input.reported_narrative);
 
   return {

@@ -206,12 +206,30 @@ export const verificationEntryArraySchema = Type.Array(verificationEntrySchema, 
 });
 export type VerificationEntry = Readonly<Static<typeof verificationEntrySchema>>;
 
+export const evidenceReferenceSchema = Type.Object(
+  {
+    source_key: idSchema,
+    kind: Type.Union([
+      Type.Literal("tool_outcome"),
+      Type.Literal("artifact"),
+      Type.Literal("file_mutation"),
+    ]),
+    ref: idSchema,
+    outcome: idSchema,
+  },
+  { additionalProperties: false },
+);
+/** Compact source-keyed reference; `completed` is not a passing verification. */
+export type EvidenceReference = Readonly<Static<typeof evidenceReferenceSchema>>;
+
 export const hostObservedSectionSchema = Type.Object(
   {
     label: Type.Literal("host_observed"),
     worktree: worktreeObservationSchema,
     commands: commandObservationArraySchema,
     verification: verificationEntryArraySchema,
+    // Optional for append-only replay of pre-#143 packet records.
+    evidence_refs: Type.Optional(Type.Array(evidenceReferenceSchema, { maxItems: 16 })),
   },
   { additionalProperties: false },
 );

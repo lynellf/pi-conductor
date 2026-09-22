@@ -120,6 +120,7 @@ export interface PhaseWorkPacketInput {
   readonly dispatch_source: PhaseWorkPacketSource;
   readonly cutoff_record_keys: readonly string[];
   readonly records: readonly PersistedRecord[];
+  readonly evidence_cutoff_dropped?: number | undefined;
   readonly handoff_evidence_policy?:
     | import("../core/types.js").HandoffEvidencePolicy
     | null
@@ -330,6 +331,7 @@ export function createPhaseWorkPacketRecord(input: PhaseWorkPacketInput): PhaseW
     dispatch_source: input.dispatch_source,
     cutoff_record_keys: input.cutoff_record_keys,
     records: input.records,
+    evidence_cutoff_dropped: input.evidence_cutoff_dropped,
     handoff_evidence_policy: input.handoff_evidence_policy,
     reported_narrative: clampReportedNarrative(input.reported_narrative),
   } satisfies ProjectionInput);
@@ -394,6 +396,12 @@ export function createPhaseWorkPacketRecord(input: PhaseWorkPacketInput): PhaseW
           commands: workingObserved.commands.slice(1),
         };
         droppedCommands += 1;
+      } else if ((workingObserved.evidence_refs?.length ?? 0) > 0) {
+        workingObserved = {
+          ...workingObserved,
+          evidence_refs: workingObserved.evidence_refs?.slice(1) ?? [],
+        };
+        incrementOmissionCount(omissions, "evidence_refs_dropped", 1);
       } else {
         break;
       }

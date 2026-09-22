@@ -14,6 +14,7 @@
 import { createHash } from "node:crypto";
 import type {
   CommandObservation,
+  EvidenceReference,
   HostObservedSection,
   PhaseProcessSection,
   PhaseWorkPacketOmission,
@@ -103,6 +104,14 @@ function commandLines(commands: readonly CommandObservation[]): string[] {
   return lines;
 }
 
+function evidenceLines(references: readonly EvidenceReference[]): string[] {
+  const lines = [`evidence_refs: ${String(references.length)}`];
+  for (const entry of references) {
+    lines.push(`- [${entry.source_key}] ${entry.kind} | ${entry.outcome} | ${entry.ref}`);
+  }
+  return lines;
+}
+
 function verificationLines(verification: readonly VerificationEntry[]): string[] {
   const lines: string[] = [`verification: ${String(verification.length)}`];
   for (const entry of verification) {
@@ -148,6 +157,7 @@ export function renderPhaseWorkPacket(options: RenderPacketOptions): string {
   lines.push(...worktreeLines(options.hostObserved.worktree));
   lines.push(...commandLines(options.hostObserved.commands));
   lines.push(...verificationLines(options.hostObserved.verification));
+  lines.push(...evidenceLines(options.hostObserved.evidence_refs ?? []));
 
   if (!options.dropReportedNarrative) {
     lines.push("");

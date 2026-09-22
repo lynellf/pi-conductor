@@ -66,6 +66,10 @@ const CUTOFF_RELEVANT_TYPES: ReadonlySet<string> = new Set([
   "review_route",
   "review_route_pending",
   "handoff_evidence",
+  "session_started",
+  "tool_execution_finished",
+  "artifact_collected",
+  "file_mutation",
 ]);
 
 /** Cutoff keys for relevant records through `throughIndex` inclusive.
@@ -82,6 +86,14 @@ export function cutoffKeysThrough(
     if (index === throughIndex || CUTOFF_RELEVANT_TYPES.has(record.type)) {
       keys.push(recordKeyAt(records, index));
     }
+  }
+  // Evidence references are optional: keep the latest bounded window plus
+  // the predecessor session start and dispatch, without evicting process keys.
+  const evidenceTypes = new Set(["tool_execution_finished", "artifact_collected", "file_mutation"]);
+  const evidenceKeys = keys.filter((key) => evidenceTypes.has(key.split(":")[0] ?? ""));
+  if (evidenceKeys.length > 64) {
+    const dropped = new Set(evidenceKeys.slice(0, -64));
+    return keys.filter((key) => !dropped.has(key));
   }
   return keys;
 }
@@ -277,6 +289,50 @@ export function materializePacketRecord(args: MaterializePacketArgs): {
   });
   if (existing !== null) return { record: existing, isNew: false };
   const cutoff = sourceIndex === null ? [] : cutoffKeysThrough(records, sourceIndex);
+  let postSourceArtifactsDropped = 0;
+  // Artifact collection runs after transition acceptance. Bind these later
+  // records to the same predecessor session, never to a later role visit.
+  if (source.kind === "accepted_handoff" && sourceIndex !== null) {
+    const accepted = records[sourceIndex];
+    const started =
+      accepted?.type === "transition_accepted"
+        ? records
+            .slice(0, sourceIndex)
+            .reverse()
+            .find(
+              (record) =>
+                record.type === "session_started" &&
+                record.run_id === runId &&
+                record.role === source.from_role &&
+                record.session_file === accepted.session_file,
+            )
+        : undefined;
+    if (started?.type === "session_started" && started.role_session_id !== undefined) {
+      const artifactKeys: string[] = [];
+      for (let i = sourceIndex + 1; i < records.length; i += 1) {
+        const record = records[i];
+        if (
+          record?.type === "artifact_collected" &&
+          record.run_id === runId &&
+          record.role === source.from_role &&
+          record.visit_index === started.visit_index &&
+          record.session_id === started.role_session_id
+        ) {
+          artifactKeys.push(recordKeyAt(records, i));
+        }
+      }
+      cutoff.push(...artifactKeys.slice(-16));
+      postSourceArtifactsDropped = Math.max(0, artifactKeys.length - 16);
+    }
+  }
+  const evidenceTypes = new Set(["tool_execution_finished", "artifact_collected", "file_mutation"]);
+  const evidenceThroughSource =
+    sourceIndex === null
+      ? 0
+      : records.slice(0, sourceIndex + 1).filter((record) => evidenceTypes.has(record.type)).length;
+  const evidenceCutoffDropped =
+    evidenceThroughSource -
+    cutoff.filter((key) => evidenceTypes.has(key.split(":")[0] ?? "")).length;
   const reportedNarrative = deriveReportedNarrative(records, sourceIndex);
   const record = createPhaseWorkPacketRecord({
     run_id: runId,
@@ -285,6 +341,7 @@ export function materializePacketRecord(args: MaterializePacketArgs): {
     dispatch_source: source,
     cutoff_record_keys: cutoff,
     records: cutoff.length === 0 ? [] : records,
+    evidence_cutoff_dropped: evidenceCutoffDropped + postSourceArtifactsDropped,
     ...(args.handoffEvidencePolicy === undefined
       ? {}
       : { handoff_evidence_policy: args.handoffEvidencePolicy }),

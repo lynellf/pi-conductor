@@ -4,6 +4,13 @@
 
 ### Features
 
+- Add bounded predecessor-session tool outcome, collected artifact SHA, and
+  file-mutation path-hash references to `phase_work_packet.host_observed`
+  (issue #143). References come from durable host records at the dispatch
+  cutoff, with explicit absence and dropped-entry counts; completed tool
+  execution is not labelled a passing verification. Previously persisted
+  packets remain valid and replay unchanged.
+
 - Add an optional advisory Jev assessment layer over phase work packets
   (issue #139 Jev comment). One bounded Jev request asks four questions
   over packet facts plus the reported reason — relevance, consistency,
