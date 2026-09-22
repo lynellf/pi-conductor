@@ -401,6 +401,7 @@ describe("shared SDK supervised executable tools", () => {
       ts: 5,
     });
     let executionVisitIndex: number | undefined;
+    let logicalVisitIndex: number | undefined;
     let workspaceVisitIndex: number | undefined;
     const handle = await resumeRun(manifestPath, runId, {
       baseDir,
@@ -422,7 +423,8 @@ describe("shared SDK supervised executable tools", () => {
         });
         const spawn = host.spawnRole.bind(host);
         host.spawnRole = async (role, options) => {
-          workspaceVisitIndex = options?.visitIndex;
+          logicalVisitIndex = options?.visitIndex;
+          workspaceVisitIndex = options?.workspaceVisitIndex;
           executionVisitIndex = options?.executionVisitIndex;
           return spawn(role, options);
         };
@@ -433,6 +435,7 @@ describe("shared SDK supervised executable tools", () => {
     expect(completion.exitReason, JSON.stringify({ completion, records: log.records(runId) })).toBe(
       "done",
     );
+    expect(logicalVisitIndex).toBe(2);
     expect(workspaceVisitIndex).toBe(1);
     expect(executionVisitIndex).toBe(2);
     expect(

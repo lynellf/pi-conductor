@@ -120,7 +120,10 @@ function settleModelFailure(child: HostFakeRpcChild, command: Record<string, unk
 function artifactSeedSection(seed: string): string {
   const start = seed.indexOf("## Artifacts from ");
   if (start === -1) throw new Error("expected a host-generated artifact seed section");
-  return seed.slice(start);
+  // A resumed role is a new logical visit and receives a new phase packet;
+  // only the persisted artifact inventory is expected to replay byte-for-byte.
+  const packet = seed.indexOf("## phase_work_packet", start);
+  return seed.slice(start, packet === -1 ? undefined : packet);
 }
 
 function handoff(artifacts: readonly Record<string, unknown>[]): Record<string, unknown> {

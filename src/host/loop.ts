@@ -147,6 +147,9 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
   const visitIndexByRole = new Map<Role, number>(
     Object.entries(opts.initialVisitIndexByRole ?? {}) as [Role, number][],
   );
+  const workspaceVisitIndexByRole = new Map<Role, number>(
+    Object.entries(opts.initialWorkspaceVisitIndexByRole ?? {}) as [Role, number][],
+  );
   const executionVisitIndexByRole = new Map<Role, number>(
     Object.entries(opts.initialExecutionVisitIndexByRole ?? {}) as [Role, number][],
   );
@@ -262,6 +265,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // incremented after the visit ends (below) so the next visit to
     // the same role gets the next index.
     const visitIndex = visitIndexByRole.get(role) ?? 1;
+    const workspaceVisitIndex = workspaceVisitIndexByRole.get(role) ?? visitIndex;
     const executionVisitIndex = executionVisitIndexByRole.get(role) ?? visitIndex;
     // This is scoped to one receiving visit, so every fresh process attempt
     // gets the same host-owned section while the host materializes only once.
@@ -276,6 +280,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
       host,
       role,
       visitIndex,
+      workspaceVisitIndex,
       executionVisitIndex,
       seed,
       checkpoint,
@@ -370,6 +375,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<RunLoopResult> {
     // same role gets the next index. Model retries within this
     // visit already shared the captured `visitIndex` above.
     visitIndexByRole.set(role, visitIndex + 1);
+    workspaceVisitIndexByRole.set(role, workspaceVisitIndex + 1);
     executionVisitIndexByRole.set(role, executionVisitIndex + 1);
   }
 

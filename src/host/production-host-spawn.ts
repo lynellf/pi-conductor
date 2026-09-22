@@ -332,6 +332,7 @@ export async function spawnRole(
         ? { legacyDelegationMode: true }
         : {}),
       visitIndex: opts.visitIndex,
+      workspaceVisitIndex: opts.workspaceVisitIndex ?? opts.visitIndex,
       executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
       priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
       persistRecord: (record) => host.persistRecord(record),

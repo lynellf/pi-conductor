@@ -48,6 +48,7 @@ export interface RunWithCompletionArgs {
   readonly initialTrajectorySeed?: string;
   /** Next lifecycle visit indexes reconstructed from durable starts. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
+  readonly initialWorkspaceVisitIndexByRole?: Readonly<Record<string, number>>;
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Optional host-pinned reviewer gate for this run. */
   readonly reviewGate?: ReviewGateOptions;
@@ -147,6 +148,9 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
       }),
       ...(args.initialVisitIndexByRole !== undefined && {
         initialVisitIndexByRole: args.initialVisitIndexByRole,
+      }),
+      ...(args.initialWorkspaceVisitIndexByRole !== undefined && {
+        initialWorkspaceVisitIndexByRole: args.initialWorkspaceVisitIndexByRole,
       }),
       ...(args.initialExecutionVisitIndexByRole !== undefined && {
         initialExecutionVisitIndexByRole: args.initialExecutionVisitIndexByRole,

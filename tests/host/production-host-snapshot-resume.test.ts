@@ -134,9 +134,10 @@ describe("ProductionHost.spawnRole — Issue #48 R2 pinned resume", () => {
       const workspace = log
         .records(runId)
         .find((record) => record.type === "workspace_provisioned");
-      expect(workspace).toMatchObject({ snapshot_commit: initialCommit });
+      expect(workspace).toMatchObject({ snapshot_commit: initialCommit, visit_index: 2 });
       if (workspace?.type !== "workspace_provisioned")
         throw new Error("expected resumed workspace");
+      expect(workspace.workspace_path).toContain("implementer-v1");
       await expect(gitRevision(workspace.workspace_path, "HEAD")).resolves.toBe(initialCommit);
     } finally {
       await killLeaseOwner(leaseOwner.process);

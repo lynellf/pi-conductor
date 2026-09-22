@@ -89,6 +89,7 @@ export async function spawnIsolatedRoleSession(options: {
   readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
   /** Loop-owned, 1-based index shared by every model attempt in this role invocation. */
   readonly visitIndex: number;
+  readonly workspaceVisitIndex?: number;
   readonly executionVisitIndex?: number;
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly sessionStates: Map<string, SessionState>;
@@ -101,7 +102,11 @@ export async function spawnIsolatedRoleSession(options: {
     | RpcContextRetentionBridge
     | { readonly log: import("../persistence/log.js").RecordLog };
 }): Promise<RoleSession> {
-  const { visitIndex, executionVisitIndex = visitIndex } = options;
+  const {
+    visitIndex,
+    workspaceVisitIndex = visitIndex,
+    executionVisitIndex = visitIndex,
+  } = options;
   const source = options.workspaceConfig.source ?? "snapshot";
   const progressiveDisclosure = options.workspaceConfig.progressive_disclosure;
   const requestFilesAuthorized =
@@ -117,7 +122,7 @@ export async function spawnIsolatedRoleSession(options: {
   );
   const workspaceResult = await provisionWorkspace({
     role: options.role,
-    visitIndex,
+    visitIndex: workspaceVisitIndex,
     backend: options.backend,
     source,
     commit,

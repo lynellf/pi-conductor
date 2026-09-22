@@ -28,6 +28,7 @@ export interface RoleVisitContext {
   readonly host: Host;
   readonly role: Role;
   readonly visitIndex: number;
+  readonly workspaceVisitIndex: number;
   readonly executionVisitIndex: number;
   readonly seed: string;
   readonly checkpoint: Checkpoint;
@@ -73,6 +74,7 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
     host,
     role,
     visitIndex,
+    workspaceVisitIndex,
     executionVisitIndex,
     seed,
     checkpoint: initialCheckpoint,
@@ -111,6 +113,7 @@ export async function runRoleVisit(ctx: RoleVisitContext): Promise<RoleVisitResu
         session = await host.spawnRole(role, {
           ...spawnDefaults,
           visitIndex,
+          workspaceVisitIndex,
           executionVisitIndex,
           modelIndex,
           getRunCostCap: opts.getRunCostCap ?? (() => opts.runCostCap ?? null),

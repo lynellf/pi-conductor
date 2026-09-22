@@ -146,6 +146,80 @@ describe("Task 13.5 — file-backed log + resume", () => {
     expect(reconstructed?.active_role_session).toBeNull();
   });
 
+  it("resumes a later Jev-assessed worker visit with a new durable logical identity", async () => {
+    await writeFile(
+      manifestPath,
+      `${VALID_MANIFEST_YAML}\njev_assessment:\n  schema_version: 1\n  provider: typesafe_jev\n  model: jev-latest\n  request_timeout_ms: 5000\n  max_attempts: 1\n`,
+      "utf8",
+    );
+    let firstRun = true;
+    const hostFactory = ({ runId, log, loadedManifest }: HostFactoryContext) => {
+      const host = new StubHost({
+        runId,
+        log,
+        loadedManifest,
+        steps: firstRun
+          ? [
+              { kind: "emit_handoff", target_role: "worker", reason: "First assignment" },
+              { kind: "emit_handoff", target_role: "orchestrator", reason: "First result" },
+              { kind: "emit_handoff", target_role: "worker", reason: "Second assignment" },
+            ]
+          : [
+              { kind: "emit_handoff", target_role: "orchestrator", reason: "Resumed result" },
+              { kind: "emit_end", reason: "Done" },
+            ],
+        agentDir: makeAndTrackIsolatedAgentDir("pi-conductor-jev-resume-"),
+      });
+      if (firstRun) {
+        const spawnRole = host.spawnRole.bind(host);
+        host.spawnRole = async (role, options) => {
+          const session = await spawnRole(role, options);
+          if (role === "worker" && options?.visitIndex === 2) {
+            session.prompt = async () => {
+              throw new Error("simulated interruption on second worker visit");
+            };
+          }
+          return session;
+        };
+      }
+      return host;
+    };
+
+    const started = await startRun(manifestPath, { goal: "Ship", baseDir, hostFactory });
+    await expect(started.completion()).rejects.toThrow("simulated interruption");
+    const log = new FileRecordLog({ baseDir });
+    const prior = log.records(started.runId);
+    expect(
+      prior.filter((r) => r.type === "jev_assessment" && r.recipient_role === "worker"),
+    ).toHaveLength(2);
+    firstRun = false;
+
+    const resumed = await resumeRun(manifestPath, started.runId, {
+      goal: "",
+      baseDir,
+      hostFactory,
+    });
+    expect((await resumed.completion()).exitReason).toBe("done");
+    const records = log.records(started.runId);
+    expect(
+      records
+        .filter(
+          (r): r is SessionLifecycleEvent => r.type === "session_started" && r.role === "worker",
+        )
+        .map((r) => r.visit_index),
+    ).toEqual([1, 2, 3]);
+    expect(
+      records
+        .filter((r) => r.type === "phase_work_packet" && r.recipient_role === "worker")
+        .map((r) => (r.type === "phase_work_packet" ? r.recipient_visit_index : 0)),
+    ).toEqual([1, 2, 3]);
+    expect(
+      records
+        .filter((r) => r.type === "jev_assessment" && r.recipient_role === "worker")
+        .map((r) => (r.type === "jev_assessment" ? r.recipient_visit_index : 0)),
+    ).toEqual([1, 2, 3]);
+  });
+
   it("resumeRun after a mid-worker-session crash reaches the same terminal state as a non-killed run", async () => {
     // Step 1: start a run and KILL it mid-worker-session (drop the
     // in-memory handle before completion). The worker has a

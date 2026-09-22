@@ -112,13 +112,11 @@ export interface SpawnRoleOptions {
   readonly sessionManager?: SessionManager;
   /** Working directory for the session (default: `process.cwd()`). */
   readonly cwd?: string;
-  /**
-   * Loop-owned, 1-based role visit index (§11.4). Isolated workspace
-   * provisioning must use this value so every model retry/fallback within
-   * one invocation stays in the same workspace. Shared sessions ignore it.
-   */
+  /** Loop-owned, 1-based logical role visit index (§11.4), shared by model retries. */
   readonly visitIndex?: number;
-  /** Fresh executable-tool invocation index; workspace identity remains visitIndex. */
+  /** Physical isolated workspace visit; may reopen an earlier workspace on resume. */
+  readonly workspaceVisitIndex?: number;
+  /** Fresh executable-tool invocation index, independent of logical and workspace visits. */
   readonly executionVisitIndex?: number;
   /**
    * 0-based index into the role's `models[]` list (Task 18, §8.2).

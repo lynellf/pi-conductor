@@ -53,6 +53,8 @@ export interface RunLoopOptions {
   readonly initialHandoffSeed?: string | null;
   /** Next visit index per role reconstructed from durable lifecycle starts on resume. */
   readonly initialVisitIndexByRole?: Readonly<Record<string, number>>;
+  /** Physical workspace index per role, separate from logical lifecycle identity. */
+  readonly initialWorkspaceVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Fresh executable invocation index per role for operator resume. */
   readonly initialExecutionVisitIndexByRole?: Readonly<Record<string, number>>;
   /** Ranked continuity to preserve when a resumed target is the orchestrator. */

@@ -473,24 +473,26 @@ export async function resumeRun(
     );
     const initialParentSessionId = trajectorySelector?.source_role_session_id ?? null;
     const initialTrajectorySeed = trajectorySelector?.target.seed ?? null;
-    // Workspace visits retain the legacy resume contract for ordinary runs:
-    // isolated workspaces reopen at their original default visit. Execution
-    // identity is reconstructed independently below. Trajectory resumes use
-    // the next durable visit index, while a materialized artifact receiver
-    // is pinned to the persisted delivery visit.
-    const nextVisits = nextVisitIndexes(resumedRecords, runId);
-    const workspaceVisits = initialParentSessionId === null ? undefined : nextVisits;
-    const initialVisitIndexByRole =
-      initialArtifactDelivery?.status === "materialized"
-        ? Object.freeze({
-            ...(workspaceVisits ?? {}),
-            [initialArtifactDelivery.receiver_role]: initialArtifactDelivery.visit_index,
-          })
-        : workspaceVisits;
+    // Logical visit identity comes from durable lifecycle starts on every
+    // resume, including ordinary fresh spawns. Artifact delivery retains its
+    // own persisted source identity; executable-tool identity is separate.
+    const initialVisitIndexByRole = nextVisitIndexes(resumedRecords, runId);
+    // Ordinary isolated resumes reopen their original workspace. A selected
+    // trajectory targets a new environment; materialized delivery retains its
+    // pinned physical receiver visit without changing logical lifecycle IDs.
+    const initialWorkspaceVisitIndexByRole =
+      initialParentSessionId === null
+        ? {
+            ...Object.fromEntries(Object.keys(initialVisitIndexByRole).map((role) => [role, 1])),
+            ...(initialArtifactDelivery?.status === "materialized"
+              ? { [initialArtifactDelivery.receiver_role]: initialArtifactDelivery.visit_index }
+              : {}),
+          }
+        : initialVisitIndexByRole;
     const initialExecutionVisitIndexByRole = nextExecutionVisitIndexes(
       resumedRecords,
       runId,
-      nextVisits,
+      initialVisitIndexByRole,
     );
 
     // Only mutate the durable budget after all resume admission and
@@ -525,7 +527,8 @@ export async function resumeRun(
       initialArtifactDelivery,
       initialParentSessionId,
       ...(initialTrajectorySeed !== null && { initialTrajectorySeed }),
-      ...(initialVisitIndexByRole !== undefined && { initialVisitIndexByRole }),
+      initialVisitIndexByRole,
+      ...(initialWorkspaceVisitIndexByRole !== undefined && { initialWorkspaceVisitIndexByRole }),
       initialExecutionVisitIndexByRole,
       endGuardEpoch,
       ...(reviewGate === undefined ? {} : { reviewGate }),
