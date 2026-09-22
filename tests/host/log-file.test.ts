@@ -34,6 +34,7 @@ import {
   type ControllerDefinitionPinnedRecord,
   controllerDefinitionDigest,
 } from "../../src/persistence/controller-records.js";
+import type { JevAssessmentRecord } from "../../src/persistence/jev-assessment-record.js";
 import { WorkspaceGuaranteeError } from "../../src/persistence/log.js";
 
 let baseDir: string | undefined;
@@ -237,6 +238,29 @@ describe("FileRecordLog", () => {
     log.append(record);
 
     expect(log.records("run-22")).toEqual([record]);
+  });
+
+  it("reopens a valid jev assessment record from a file-backed log", async () => {
+    baseDir = await mkdtemp(join(tmpdir(), "conductor-file-record-log-"));
+    const record: JevAssessmentRecord = {
+      type: "jev_assessment",
+      schema_version: 1,
+      run_id: "run-jev-assessment",
+      recipient_role: "implementer",
+      recipient_visit_index: 1,
+      packet_sha256: "a".repeat(64),
+      reason_sha256: "b".repeat(64),
+      input_sha256: "c".repeat(64),
+      dispatch_source_kind: "accepted_handoff",
+      dispatch_source_ts: 1,
+      status: "unavailable",
+      failure: { code: "missing_api_key", attempts: 0 },
+      requested_model: "jev-latest",
+      ts: 2,
+    };
+    new FileRecordLog({ baseDir }).append(record);
+
+    expect(new FileRecordLog({ baseDir }).records(record.run_id)).toEqual([record]);
   });
 
   it("rejects an untrusted sandbox workspace record before it reaches JSONL storage", async () => {
