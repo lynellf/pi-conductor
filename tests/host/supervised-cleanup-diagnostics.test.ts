@@ -46,6 +46,88 @@ describe("safe supervised cleanup diagnostics", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it("confirms cleanup when a marked member exits after its leader", async () => {
+    vi.spyOn(identity, "processGroupHasLiveMembers")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
+    vi.spyOn(identity, "readProcessIdentity").mockImplementation(async (pid, token) =>
+      pid === member.pid && token === owner.ownerToken ? { ...member, ownerToken: token } : null,
+    );
+    vi.spyOn(identity, "findProcessesByOwnerToken").mockResolvedValue([]);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(safeTerminateOwnedGroupDetailed(owner, 0)).resolves.toEqual({
+      cleanup: "confirmed",
+    });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("signals only a reverified marked member after its leader exits", async () => {
+    vi.spyOn(identity, "processGroupHasLiveMembers")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
+    vi.spyOn(identity, "readProcessIdentity").mockImplementation(async (pid, token) =>
+      pid === member.pid && token === owner.ownerToken ? { ...member, ownerToken: token } : null,
+    );
+    vi.spyOn(identity, "findProcessesByOwnerToken").mockResolvedValue([]);
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(safeTerminateOwnedGroupDetailed(owner, 0)).resolves.toEqual({
+      cleanup: "confirmed",
+    });
+    expect(kill).toHaveBeenCalledWith(member.pid, "SIGTERM");
+    expect(kill.mock.calls.every(([pid]) => pid === member.pid)).toBe(true);
+  });
+
+  it.each([
+    ["reused PID", { ...member, startTime: "999", ownerToken: owner.ownerToken }],
+    ["changed group", { ...member, processGroupId: 99, ownerToken: owner.ownerToken }],
+    ["missing marker", null],
+  ])("does not signal a member with %s after leader exit", async (_case, current) => {
+    vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
+    vi.spyOn(identity, "readProcessIdentity").mockImplementation(async (pid, token) =>
+      pid === member.pid && token === owner.ownerToken ? current : null,
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(safeTerminateOwnedGroupDetailed(owner, 0)).resolves.toMatchObject({
+      cleanup: "unconfirmed",
+      diagnostic: {
+        cleanup_cause: "leader_identity_unobserved",
+        observed_members: [{ pid: member.pid, start_time: member.startTime }],
+      },
+    });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes a missing member observation from a signal failure", async () => {
+    vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
+    vi.spyOn(identity, "readProcessIdentity").mockImplementation(async (pid) => {
+      if (pid === owner.pid) return null;
+      throw Object.assign(new Error("private process"), {
+        operation: "read_environ",
+        code: "EPERM",
+        pid,
+      });
+    });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await expect(safeTerminateOwnedGroupDetailed(owner, 0)).resolves.toMatchObject({
+      cleanup: "unconfirmed",
+      diagnostic: {
+        cleanup_cause: "cleanup_observation_failed",
+        observation_error: { operation: "read_environ", code: "EPERM", pid: member.pid },
+      },
+    });
+    expect(kill).not.toHaveBeenCalled();
+  });
+
   it("does not expose an observation error message", async () => {
     vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
     vi.spyOn(identity, "readProcessGroupMembers").mockRejectedValue(

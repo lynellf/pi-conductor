@@ -91,6 +91,70 @@ async function escapedProcesses(
     : findProcessesByOwnerToken(identity.ownerToken, identity.startTime, scope);
 }
 
+// A vanished leader cannot authorize a group signal. Re-scan and verify both the
+// recorded PID/start/group and the execution marker immediately before each PID signal.
+async function signalMarkedMembers(
+  identity: ProcessIdentity,
+  signal: "SIGTERM" | "SIGKILL",
+): Promise<boolean> {
+  const members = await readProcessGroupMembers(identity.processGroupId);
+  for (const member of members) {
+    if (
+      member.pid === identity.pid ||
+      identity.ownerToken === undefined ||
+      BigInt(member.startTime) < BigInt(identity.startTime)
+    )
+      continue;
+    const current = await readProcessIdentity(member.pid, identity.ownerToken);
+    if (!ownsProcessIdentity(current, member)) continue;
+    try {
+      process.kill(member.pid, signal);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") continue;
+      return false;
+    }
+  }
+  return true;
+}
+
+async function terminateAfterLeaderExit(
+  identity: ProcessIdentity,
+  graceMs: number,
+  members: readonly ProcessIdentity[],
+  scope?: ProcessObservationScope,
+): Promise<SupervisedCleanupResult> {
+  // Short-lived pipeline descendants may depart on their own. No signal is
+  // necessary if the group settles during the grace period.
+  if (!(await waitForGroupGone(identity, graceMs))) {
+    if (!(await signalMarkedMembers(identity, "SIGTERM")))
+      return unconfirmed("cleanup_signal_failed", members);
+    if (!(await waitForGroupGone(identity, graceMs))) {
+      if (!(await signalMarkedMembers(identity, "SIGKILL")))
+        return unconfirmed("cleanup_signal_failed", members);
+    }
+  }
+  if (await processGroupHasLiveMembers(identity.processGroupId)) {
+    const remaining = await readProcessGroupMembers(identity.processGroupId);
+    const marked = await Promise.all(
+      remaining.map(async (member) =>
+        member.pid !== identity.pid &&
+        identity.ownerToken !== undefined &&
+        BigInt(member.startTime) >= BigInt(identity.startTime)
+          ? ownsProcessIdentity(await readProcessIdentity(member.pid, identity.ownerToken), member)
+          : false,
+      ),
+    );
+    return unconfirmed(
+      marked.some(Boolean) ? "group_remained_live" : "leader_identity_unobserved",
+      remaining,
+    );
+  }
+  const escaped = await escapedProcesses(identity, scope);
+  return escaped.length === 0
+    ? { cleanup: "confirmed" }
+    : unconfirmed("escaped_owned_processes", escaped);
+}
+
 async function terminateOwnedGroup(
   identity: ProcessIdentity,
   graceMs: number,
@@ -104,7 +168,7 @@ async function terminateOwnedGroup(
   }
   const members = await readProcessGroupMembers(identity.processGroupId);
   if (!ownsProcessGroup(await readProcessIdentity(identity.pid, identity.ownerToken), identity)) {
-    return unconfirmed("leader_identity_unobserved", members);
+    return terminateAfterLeaderExit(identity, graceMs, members, scope);
   }
   try {
     process.kill(-identity.processGroupId, "SIGTERM");

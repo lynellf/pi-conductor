@@ -426,22 +426,20 @@ export async function runSupervisedProcess(
       try {
         if (await processGroupHasLiveMembers(identity.processGroupId)) {
           const cleanupResult = await cleanupOwned();
-          if (cleanupResult.cleanup !== "confirmed") {
-            settled = true;
-            clearTimeout(timer);
-            options.signal?.removeEventListener("abort", onAbort);
-            reject(
-              new SupervisedProcessError(
-                "supervised-process-spawn-failed",
-                "process group remained active after child exit",
-                cleanupResult.cleanup,
-                identity,
-                result.elapsedMs,
-                cleanupResult.diagnostic,
-              ),
-            );
-            return;
-          }
+          settled = true;
+          clearTimeout(timer);
+          options.signal?.removeEventListener("abort", onAbort);
+          reject(
+            new SupervisedProcessError(
+              "supervised-process-spawn-failed",
+              "process group remained active after child exit",
+              cleanupResult.cleanup,
+              identity,
+              result.elapsedMs,
+              cleanupResult.diagnostic,
+            ),
+          );
+          return;
         }
         const escaped = await findProcessesByOwnerToken(
           options.executionId,

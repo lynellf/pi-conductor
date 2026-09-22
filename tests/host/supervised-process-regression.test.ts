@@ -223,7 +223,7 @@ describe("runSupervisedProcess regression gates", () => {
     }
   });
 
-  it("does not report a clean exit while a redirected background child remains", async () => {
+  it("reports a failed exit with confirmed cleanup for a marked background child", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-conductor-supervised-regression-"));
     directories.push(directory);
     const pidFile = join(directory, "background-pid");
@@ -244,11 +244,11 @@ describe("runSupervisedProcess regression gates", () => {
         }),
       ).rejects.toMatchObject({
         code: "supervised-process-spawn-failed",
-        cleanup: "unconfirmed",
+        cleanup: "confirmed",
       });
       const spawnedPid = Number(await readFile(pidFile, "utf8"));
       childPid = spawnedPid;
-      expect(() => process.kill(spawnedPid, 0)).not.toThrow();
+      expect(await processIsLive(spawnedPid)).toBe(false);
     } finally {
       if (childPid === null) {
         try {
