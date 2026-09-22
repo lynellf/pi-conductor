@@ -221,6 +221,53 @@ function makeStartRunMock(opts: {
   };
 }
 
+/**
+ * `resumeRun` mock that resolves with a fake handle. The run-id comes
+ * from the second argument (mirroring the real host seam).
+ */
+function makeResumeRunMock(opts: {
+  failWith?: Error;
+  runId?: string;
+  finalRole?: string;
+  exitReason?: "done" | "session_failed" | "aborted";
+  latestResponse?: {
+    role: string;
+    text: string;
+    completedAt: number;
+  } | null;
+  runStats?: Readonly<Record<string, unknown>>;
+  warnings?: readonly unknown[];
+}): (manifestPath: string, runId: string, options: unknown) => Promise<RunHandle> {
+  const failWith = opts.failWith;
+  return async (_manifestPath, runId, _options) => {
+    if (failWith) throw failWith;
+    const finalRole = opts.finalRole ?? "done";
+    const exitReason = opts.exitReason ?? "done";
+    return {
+      runId: opts.runId ?? runId ?? "test-run-1",
+      completion: async () => ({
+        finalCheckpoint: { current_role: finalRole },
+        exitReason,
+      }),
+      latestResponse: () => opts.latestResponse ?? null,
+      runStats: () =>
+        opts.runStats ?? {
+          state: finalRole,
+          exitReason,
+          recordsCount: 1,
+        },
+      runConfig: () => {},
+      abort: () => {},
+      loadedManifest: {
+        def: {} as Record<string, unknown>,
+        manifest: {} as Record<string, unknown>,
+        warnings: opts.warnings ?? [],
+        manifestDir: null,
+        manifestVersion: 1,
+      } as never,
+    } as unknown as RunHandle;
+  };
+}
 // ─── argv parsing ───────────────────────────────────────────────────────
 
 describe("runCli argv parsing", () => {
@@ -229,6 +276,7 @@ describe("runCli argv parsing", () => {
     const c = makeConsole();
     const code = await runCli([], {
       startRun: makeStartRunMock({}),
+      resumeRun: makeResumeRunMock({}),
       modelRegistry: stubModelRegistry,
       console: c,
       exit: exit.fn,
@@ -244,6 +292,7 @@ describe("runCli argv parsing", () => {
     const c = makeConsole();
     const code = await runCli(["manifest.yaml"], {
       startRun: makeStartRunMock({}),
+      resumeRun: makeResumeRunMock({}),
       modelRegistry: stubModelRegistry,
       console: c,
       exit: exit.fn,
@@ -259,6 +308,7 @@ describe("runCli argv parsing", () => {
     const c = makeConsole();
     const code = await runCli(["manifest.yaml", "   "], {
       startRun: makeStartRunMock({}),
+      resumeRun: makeResumeRunMock({}),
       modelRegistry: stubModelRegistry,
       console: c,
       exit: exit.fn,
@@ -285,6 +335,7 @@ describe("runCli argv parsing", () => {
         ],
         {
           startRun,
+          resumeRun: makeResumeRunMock({}),
           modelRegistry: stubModelRegistry,
           console: makeConsole(),
           exit: makeExit().fn,
@@ -305,6 +356,7 @@ describe("runCli argv parsing", () => {
     const c = makeConsole();
     const code = await runCli(["--log-dir"], {
       startRun: makeStartRunMock({}),
+      resumeRun: makeResumeRunMock({}),
       modelRegistry: stubModelRegistry,
       console: c,
       exit: exit.fn,
@@ -322,6 +374,7 @@ describe("runCli argv parsing", () => {
       const startRun = vi.fn(makeStartRunMock({}));
       const code = await runCli(["manifest.yaml", "apply", "--json"], {
         startRun,
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: makeConsole(),
         exit: makeExit().fn,
@@ -347,6 +400,7 @@ describe("runCli manifest existence", () => {
       const c = makeConsole();
       const code = await runCli([fakeManifest, "goal"], {
         startRun: makeStartRunMock({}),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: exit.fn,
@@ -553,6 +607,7 @@ describe("runCli delegation to startRun", () => {
       const startRun = vi.fn(makeStartRunMock({}));
       const code = await runCli(["--log-dir", "nested/records", "manifest.yaml", "goal"], {
         startRun,
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: makeConsole(),
         exit: makeExit().fn,
@@ -576,6 +631,7 @@ describe("runCli delegation to startRun", () => {
       const c = makeConsole();
       const code = await runCli(["--log-dir", "not-a-directory", "manifest.yaml", "goal"], {
         startRun,
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -620,9 +676,15 @@ describe("runCli delegation to startRun", () => {
 
       expect(code).toBe(0);
       expect(c.stdoutLines).toEqual([]);
-      const document = stdout.chunks.join("");
-      expect(document.trim().split("\n")).toHaveLength(1);
-      expect(JSON.parse(document)).toEqual({
+      const lines = stdout.chunks.join("").trim().split("\n");
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[0] ?? "")).toEqual({
+        schema_version: 1,
+        event: "run_started",
+        run_id: "run-json-1",
+        log_dir: join(dir, ".pi-conductor", "runs"),
+      });
+      expect(JSON.parse(lines[1] ?? "")).toEqual({
         schema_version: 1,
         run_id: "run-json-1",
         exit_reason: "done",
@@ -643,17 +705,25 @@ describe("runCli delegation to startRun", () => {
     const dir = makeManifestDir();
     try {
       const chunks: string[] = [];
-      const writeStarted = makeDeferred<void>();
-      let releaseWrite!: () => void;
+      const terminalStarted = makeDeferred<void>();
+      let releaseTerminal!: () => void;
+      let seenFirst = false;
       const stdout = new Writable({
         write(chunk, _encoding, callback) {
-          chunks.push(String(chunk));
-          releaseWrite = () => callback();
-          writeStarted.resolve();
+          const text = String(chunk);
+          chunks.push(text);
+          if (!seenFirst) {
+            seenFirst = true;
+            callback();
+            return;
+          }
+          releaseTerminal = () => callback();
+          terminalStarted.resolve();
         },
       });
       const run = runCli(["--json", "manifest.yaml", "goal"], {
         startRun: makeStartRunMock({ runId: "run-json-flush" }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: makeConsole(),
         exit: makeExit().fn,
@@ -663,13 +733,18 @@ describe("runCli delegation to startRun", () => {
       const settled = vi.fn();
       void run.then(settled);
 
-      await writeStarted.promise;
+      await terminalStarted.promise;
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
 
-      releaseWrite();
+      releaseTerminal();
       expect(await run).toBe(0);
-      expect(JSON.parse(chunks.join(""))).toMatchObject({ run_id: "run-json-flush" });
+      expect(chunks).toHaveLength(2);
+      expect(JSON.parse(chunks[0] ?? "")).toMatchObject({
+        event: "run_started",
+        run_id: "run-json-flush",
+      });
+      expect(JSON.parse(chunks[1] ?? "")).toMatchObject({ run_id: "run-json-flush" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -686,6 +761,7 @@ describe("runCli delegation to startRun", () => {
           exitReason: "session_failed",
           latestResponse: null,
         }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: makeConsole(),
         exit: makeExit().fn,
@@ -694,7 +770,14 @@ describe("runCli delegation to startRun", () => {
       });
 
       expect(code).toBe(1);
-      expect(JSON.parse(stdout.chunks.join(""))).toMatchObject({
+      const failedLines = stdout.chunks.join("").trim().split("\n");
+      expect(failedLines).toHaveLength(2);
+      expect(JSON.parse(failedLines[0] ?? "")).toMatchObject({
+        schema_version: 1,
+        event: "run_started",
+        run_id: "run-json-failed",
+      });
+      expect(JSON.parse(failedLines[1] ?? "")).toMatchObject({
         schema_version: 1,
         run_id: "run-json-failed",
         exit_reason: "session_failed",
@@ -728,7 +811,13 @@ describe("runCli delegation to startRun", () => {
         stdout,
       });
 
-      const result = JSON.parse(stdout.chunks.join("")) as CliJsonResult;
+      const driftLines = stdout.chunks.join("").trim().split("\n");
+      expect(driftLines).toHaveLength(2);
+      expect(JSON.parse(driftLines[0] ?? "")).toMatchObject({
+        event: "run_started",
+        run_id: "run-json-drift",
+      });
+      const result = JSON.parse(driftLines[1] ?? "") as CliJsonResult;
       expect(code).toBe(1);
       expect(result.exit_reason).toBe("session_failed");
       expect(result.run_stats.exitReason).toBe("session_failed");
@@ -772,7 +861,13 @@ describe("runCli delegation to startRun", () => {
       expect(code).toBe(0);
       expect(answer).toBe("blue");
       expect(stderr.chunks.join("")).toContain("Which color?:");
-      expect(JSON.parse(stdout.chunks.join(""))).toMatchObject({
+      const promptLines = stdout.chunks.join("").trim().split("\n");
+      expect(promptLines).toHaveLength(2);
+      expect(JSON.parse(promptLines[0] ?? "")).toMatchObject({
+        event: "run_started",
+        run_id: "run-json-prompt",
+      });
+      expect(JSON.parse(promptLines[1] ?? "")).toMatchObject({
         schema_version: 1,
         run_id: "run-json-prompt",
       });
@@ -788,6 +883,7 @@ describe("runCli delegation to startRun", () => {
       const c = makeConsole();
       const code = await runCli(["--json", "manifest.yaml", "goal"], {
         startRun: makeStartRunMock({ failWith: new Error("startup failed") }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -813,6 +909,7 @@ describe("runCli delegation to startRun", () => {
           finalRole: "done",
           exitReason: "done",
         }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -884,6 +981,7 @@ describe("runCli delegation to startRun", () => {
       const c = makeConsole();
       const code = await runCli(["manifest.yaml", "goal"], {
         startRun: makeStartRunMock({ failWith: new FakeModelNotFoundError() }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -906,6 +1004,7 @@ describe("runCli delegation to startRun", () => {
         startRun: makeStartRunMock({
           failWith: new Error("ManifestParseError: role 'orchestrator' has no models"),
         }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -933,6 +1032,7 @@ describe("CLI preflight unregistered-provider warning (T2.12)", () => {
           finalRole: "done",
           exitReason: "done",
         }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -956,6 +1056,7 @@ describe("CLI preflight unregistered-provider warning (T2.12)", () => {
           finalRole: "done",
           exitReason: "done",
         }),
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: c,
         exit: makeExit().fn,
@@ -995,6 +1096,7 @@ describe("runCli process signals", () => {
 
       const run = runCli(["manifest.yaml", "goal"], {
         startRun,
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: makeConsole(),
         exit: exit.fn,
@@ -1041,6 +1143,7 @@ describe("runCli process signals", () => {
 
       const run = runCli(["manifest.yaml", "goal"], {
         startRun,
+        resumeRun: makeResumeRunMock({}),
         modelRegistry: stubModelRegistry,
         console: makeConsole(),
         exit: exit.fn,

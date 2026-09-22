@@ -88,14 +88,34 @@ conduct \
 ```
 
 `--non-interactive` makes `ask_user` fail immediately instead of reading
-stdin. `--log-dir <path>` selects the persistent run-log directory and creates
-missing parents. `--json` reserves stdout for one versioned terminal JSON
-document; prompts, warnings, and diagnostics use stderr. Normal conductor
-terminal outcomes (`done`, `session_failed`, and `aborted`) retain exit code 0
+stdin. When `--log-dir <path>` is omitted, the CLI writes durable run logs to
+`<cwd>/.pi-conductor/runs` (creating missing parents); `--log-dir <path>`
+selects an explicit persistent run-log directory and creates missing parents.
+In both text and `--json` modes the CLI writes one immediate `run_started`
+NDJSON event to stdout once the run handle resolves and before completion:
+`{"schema_version":1,"event":"run_started","run_id":"…","log_dir":"…"}` with an
+absolute `log_dir`. Under `--json`, stdout is therefore an NDJSON stream of two
+documents: that `run_started` event followed by the existing versioned terminal
+JSON result; prompts, warnings, and diagnostics use stderr. In text mode the
+same `run_started` line is followed by the existing human-readable terminal
+line. Normal conductor terminal outcomes (`done`, `session_failed`, and
+`aborted`) retain exit code 0
 and are distinguished by `exit_reason`; setup and unexpected runtime errors
 remain nonzero. While a run is active, the first `SIGINT` or `SIGTERM` requests
 a graceful abort so terminal state can be persisted; a second signal exits
 immediately.
+
+Resume a previously started run from its durable log:
+
+```bash
+conduct resume [options] <manifestPath> <runId>
+conduct resume --log-dir /tmp/pi-conductor/run-123 .pi/conductor.yaml <run_id>
+```
+
+`resume` accepts the same `--non-interactive`, `--log-dir`, `--json`, and
+approval options as start, resolves the log directory with the same default
+and override rules, restores the original goal from the durable log, and emits
+the same immediate `run_started` event plus the same terminal result.
 
 The engine is the same in all three surfaces — extension, CLI, and library.
 

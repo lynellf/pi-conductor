@@ -9,6 +9,8 @@
  * Usage:
  *   conduct [--non-interactive] [--log-dir <path>] [--json]
  *     <manifestPath> <goal...>
+ *   conduct resume [--non-interactive] [--log-dir <path>] [--json]
+ *     <manifestPath> <runId>
  *
  * Exit codes:
  *   0 — run completed successfully or was explicitly aborted
@@ -40,35 +42,30 @@
  *
  * ## Module size
  *
- * Kept below the repo's ~400 LOC ceiling by placing UI and signal
- * adapters in sibling modules. Orchestration lives in `src/host/`.
+ * CLI dispatch (argv parsing + start/resume/continuity/reconcile
+ * routing) stays here as one coherent surface; run/output helpers live
+ * in `cli-run-shared.ts` and UI/signal adapters in sibling modules.
+ * Kept under the 500 LOC allowance with that split justification;
+ * orchestration lives in `src/host/`.
  */
 
-import { access, mkdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
 import type { Readable, Writable } from "node:stream";
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { loadControllerHostApproval } from "../host/controller/host-approval.js";
-import type { SandboxHostApproval } from "../host/execution/sandbox/host-approval.js";
-import { loadSandboxHostApproval } from "../host/execution/sandbox/host-approval.js";
 import {
-  createProductionHost,
-  type Host,
-  type HostFactoryContext,
+  type ResumeRunOptions,
   type RunHandle,
+  resumeRun,
   type StartRunOptions,
   startRun,
 } from "../index.js";
 import { runContinuityCli } from "./cli-continuity.js";
 import { createCliModelRegistry } from "./cli-model-registry.js";
 import { runReconcileCli } from "./cli-reconcile.js";
-import {
-  type CliSignalSource,
-  installCliSignalHandlers,
-  processSignalSource,
-} from "./cli-signals.js";
-import { createCliUiContext, createNonInteractiveUiContext } from "./cli-ui.js";
+import { prepareRunContext, runStarterCommand } from "./cli-run-shared.js";
+import { type CliSignalSource, processSignalSource } from "./cli-signals.js";
+
+export type { CliJsonResult } from "./cli-run-shared.js";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -82,6 +79,16 @@ import { createCliUiContext, createNonInteractiveUiContext } from "./cli-ui.js";
 export interface CliDeps {
   /** `startRun` impl. Tests pass a mock that resolves a fake handle. */
   readonly startRun: (manifestPath: string, opts: StartRunOptions) => Promise<RunHandle>;
+  /**
+   * `resumeRun` impl. Only used when the command is `resume`; omitted by
+   * callers of `runCli` that only ever start runs. Tests pass a mock that
+   * resolves a fake handle.
+   */
+  readonly resumeRun?: (
+    manifestPath: string,
+    runId: string,
+    opts: ResumeRunOptions,
+  ) => Promise<RunHandle>;
   /** ModelRegistry passed through to the host factory. */
   readonly modelRegistry: ModelRegistry;
   /** Console for stdout/stderr. Tests pass a recorder. */
@@ -104,27 +111,18 @@ export interface CliDeps {
   readonly signals?: CliSignalSource;
 }
 
-/** Versioned machine-readable terminal response emitted by `conduct --json`. */
-export interface CliJsonResult {
-  readonly schema_version: 1;
-  readonly run_id: string;
-  readonly exit_reason: "done" | "session_failed" | "aborted";
-  readonly final_role: string;
-  readonly latest_response: {
-    readonly role: string;
-    readonly text: string;
-    readonly completed_at: number;
-  } | null;
-  readonly run_stats: ReturnType<RunHandle["runStats"]>;
-}
-
 // ─── Argv parsing ──────────────────────────────────────────────────────
 
-const USAGE =
-  "Usage: conduct [--non-interactive] [--log-dir <path>] [--sandbox-approval <path>] [--controller-approval <path>] [--json] <manifestPath> <goal...>";
+const USAGE = [
+  "Usage: conduct [--non-interactive] [--log-dir <path>] [--sandbox-approval <path>] [--controller-approval <path>] [--json] <manifestPath> <goal...>",
+  "Usage: conduct resume [--non-interactive] [--log-dir <path>] [--sandbox-approval <path>] [--controller-approval <path>] [--json] <manifestPath> <run-id>",
+].join("\n");
 
 interface ParsedArgs {
+  readonly command: "start" | "resume";
   readonly manifestPath: string;
+  /** Present for `resume`; the run-id to resume. Always "" for `start`. */
+  readonly runId?: string;
   readonly goal: string;
   readonly nonInteractive: boolean;
   readonly logDir?: string;
@@ -139,8 +137,11 @@ type ParseArgvResult =
 
 /**
  * Parse recognized options before the positional manifest + goal.
- * Once the manifest is found, every remaining word belongs to the
- * goal so legacy goals containing option-looking text are unchanged.
+ * `resume` is detected as a real command before ordinary start
+ * arguments: leading options, then an optional `resume` token, then
+ * resume options, then `<manifestPath> <run-id>`. Once the start
+ * manifest is found, every remaining word belongs to the goal so
+ * legacy goals containing option-looking text are unchanged.
  */
 function parseArgv(argv: readonly string[]): ParseArgvResult {
   let index = 0;
@@ -150,48 +151,84 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
   let controllerApproval: string | undefined;
   let json = false;
 
-  while (index < argv.length) {
-    const arg = argv[index];
-    if (arg === "--non-interactive") {
-      nonInteractive = true;
-      index += 1;
-      continue;
-    }
-    if (arg === "--json") {
-      json = true;
-      index += 1;
-      continue;
-    }
-    if (arg === "--log-dir") {
-      const value = argv[index + 1];
-      if (value === undefined || value.startsWith("--")) {
-        return { ok: false, message: "pi-conductor: --log-dir requires a path" };
+  const parseOptions = (): ParseArgvResult | undefined => {
+    while (index < argv.length) {
+      const arg = argv[index];
+      if (arg === "--non-interactive") {
+        nonInteractive = true;
+        index += 1;
+        continue;
       }
-      logDir = value;
-      index += 2;
-      continue;
+      if (arg === "--json") {
+        json = true;
+        index += 1;
+        continue;
+      }
+      if (arg === "--log-dir") {
+        const value = argv[index + 1];
+        if (value === undefined || value.startsWith("--")) {
+          return { ok: false, message: "pi-conductor: --log-dir requires a path" };
+        }
+        logDir = value;
+        index += 2;
+        continue;
+      }
+      if (arg === "--sandbox-approval") {
+        const value = argv[index + 1];
+        if (value === undefined || value.startsWith("--"))
+          return { ok: false, message: "pi-conductor: --sandbox-approval requires a path" };
+        sandboxApproval = value;
+        index += 2;
+        continue;
+      }
+      if (arg === "--controller-approval") {
+        const value = argv[index + 1];
+        if (value === undefined || value.startsWith("--"))
+          return { ok: false, message: "pi-conductor: --controller-approval requires a path" };
+        controllerApproval = value;
+        index += 2;
+        continue;
+      }
+      break;
     }
-    if (arg === "--sandbox-approval") {
-      const value = argv[index + 1];
-      if (value === undefined || value.startsWith("--"))
-        return { ok: false, message: "pi-conductor: --sandbox-approval requires a path" };
-      sandboxApproval = value;
-      index += 2;
-      continue;
-    }
-    if (arg === "--controller-approval") {
-      const value = argv[index + 1];
-      if (value === undefined || value.startsWith("--"))
-        return { ok: false, message: "pi-conductor: --controller-approval requires a path" };
-      controllerApproval = value;
-      index += 2;
-      continue;
-    }
-    break;
+    return undefined;
+  };
+
+  const leadingError = parseOptions();
+  if (leadingError !== undefined) return leadingError;
+
+  let command: "start" | "resume" = "start";
+  if (argv[index] === "resume") {
+    command = "resume";
+    index += 1;
+    const resumeError = parseOptions();
+    if (resumeError !== undefined) return resumeError;
   }
 
   const manifestPath = argv[index];
   if (!manifestPath) return { ok: false };
+
+  if (command === "resume") {
+    const runId = argv[index + 1];
+    if (runId === undefined || runId.startsWith("--")) {
+      return { ok: false, message: "pi-conductor: <run-id> is required for resume" };
+    }
+    return {
+      ok: true,
+      args: {
+        command: "resume",
+        manifestPath,
+        runId,
+        goal: "",
+        nonInteractive,
+        ...(logDir !== undefined && { logDir }),
+        ...(sandboxApproval !== undefined && { sandboxApproval }),
+        ...(controllerApproval !== undefined && { controllerApproval }),
+        json,
+      },
+    };
+  }
+
   const goalWords = argv.slice(index + 1);
   const goal = goalWords.join(" ").trim();
   if (goal.length === 0) return { ok: false };
@@ -199,6 +236,7 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
   return {
     ok: true,
     args: {
+      command: "start",
       manifestPath,
       goal,
       nonInteractive,
@@ -206,37 +244,30 @@ function parseArgv(argv: readonly string[]): ParseArgvResult {
       ...(sandboxApproval !== undefined && { sandboxApproval }),
       ...(controllerApproval !== undefined && { controllerApproval }),
       json,
+      runId: "",
     },
   };
 }
 
-function writeOutput(stream: Writable, value: string): Promise<void> {
-  return new Promise((resolveWrite, rejectWrite) => {
-    stream.write(value, (error) => {
-      if (error !== null && error !== undefined) {
-        rejectWrite(error);
-        return;
-      }
-      resolveWrite();
-    });
-  });
-}
-
 // ─── runCli ────────────────────────────────────────────────────────────
 
-/**
- * Run the CLI with injectable deps. Returns the exit code the
- * caller should propagate. Never calls `process.exit` itself —
- * the entrypoint at the bottom of this file does that. Tests
- * pass a recording `exit` and assert on the returned code +
- * recorded codes.
- *
- * Warnings from the load-time `unregistered-provider` check are
- * written to stderr before the run begins.
- */
+/** Run-stream deps shared by the start and resume bodies. */
+interface RunStreamDeps {
+  readonly cwd: string;
+  readonly stdin: Readable;
+  readonly stdout: Writable;
+  readonly stderr: Writable;
+  readonly signals: CliSignalSource;
+  readonly console: Console;
+  readonly exit: (code: number) => void;
+  readonly modelRegistry: ModelRegistry;
+}
+
+/** Run the CLI with injectable deps. Returns the exit code to propagate. */
 export async function runCli(argv: readonly string[], deps: CliDeps): Promise<number> {
   const {
     startRun: startRunImpl,
+    resumeRun: resumeRunImpl,
     modelRegistry,
     console: out,
     exit,
@@ -264,168 +295,113 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
   }
   const parsed = parseResult.args;
 
-  // Verify the manifest exists on disk. `startRun` would also
-  // fail, but with a less specific error; fail fast with a clear
-  // path so the user can fix the typo.
-  const manifestAbs = resolve(cwd, parsed.manifestPath);
-  try {
-    await access(manifestAbs);
-  } catch {
-    out.error(`Manifest not found: ${parsed.manifestPath}`);
-    exit(3);
-    return 3;
-  }
-
-  let baseDir: string | undefined;
-  if (parsed.logDir !== undefined) {
-    baseDir = resolve(cwd, parsed.logDir);
-    try {
-      await mkdir(baseDir, { recursive: true });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      out.error(`pi-conductor: Cannot create log directory '${parsed.logDir}': ${message}`);
+  if (parsed.command === "resume") {
+    if (resumeRunImpl === undefined) {
+      out.error("resumeRun is not available in this CLI dependency set");
+      exit(1);
       return 1;
     }
-  }
-  let sandboxHostApproval: SandboxHostApproval | undefined;
-  if (parsed.sandboxApproval !== undefined) {
-    try {
-      sandboxHostApproval = await loadSandboxHostApproval(resolve(cwd, parsed.sandboxApproval));
-    } catch (error) {
-      out.error(
-        `pi-conductor: invalid sandbox approval: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return 1;
-    }
-  }
-  let loadCurrentControllerApproval:
-    | (() => ReturnType<typeof loadControllerHostApproval>)
-    | undefined;
-  if (parsed.controllerApproval !== undefined) {
-    const approvalPath = resolve(cwd, parsed.controllerApproval);
-    loadCurrentControllerApproval = () => loadControllerHostApproval(approvalPath);
-    try {
-      await loadCurrentControllerApproval();
-    } catch (error) {
-      out.error(
-        `pi-conductor: invalid controller approval: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return 1;
-    }
-  }
-
-  const uiContext = parsed.nonInteractive
-    ? createNonInteractiveUiContext()
-    : createCliUiContext(stdin, parsed.json ? stderr : stdout);
-
-  // Build a host factory that constructs a `ProductionHost` from
-  // the registry + cwd. The factory is called once per `startRun`
-  // invocation — the host is bound to a single run; it is NOT
-  // reused across resumes.
-  const hostFactory = (factoryCtx: HostFactoryContext): Host =>
-    createProductionHost({
-      extension: {
-        modelRegistry,
-        cwd,
-        uiContext,
-        ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),
-        ...(loadCurrentControllerApproval === undefined
-          ? {}
-          : { loadControllerHostApproval: loadCurrentControllerApproval }),
-      },
-      run: {
-        log: factoryCtx.log,
-        loadedManifest: factoryCtx.loadedManifest,
-        runId: factoryCtx.runId,
-        ...(baseDir === undefined
-          ? {}
-          : { sessionDir: join(baseDir, factoryCtx.runId, "sessions") }),
-      },
-    });
-
-  try {
-    const handle = await startRunImpl(manifestAbs, {
-      goal: parsed.goal,
-      hostFactory,
-      modelRegistry,
-      ...(baseDir !== undefined && { baseDir }),
-    });
-
-    const removeSignalHandlers = installCliSignalHandlers({
-      handle,
-      source: signals,
+    return runResume(parsed, {
+      resumeRun: resumeRunImpl,
+      cwd,
+      stdin,
+      stdout,
+      stderr,
+      signals,
+      console: out,
       exit,
-      onAbortError: (error, signal) => {
-        const message = error instanceof Error ? error.message : String(error);
-        out.error(`pi-conductor: abort requested by ${signal} failed: ${message}`);
-      },
+      modelRegistry,
     });
-
-    try {
-      // Surface any load-time provider-registration warnings (advisory only).
-      // Warnings are printed to stderr before `runLoop` so the user sees
-      // the preflight result before any runtime errors. The aggregated
-      // message names every affected role + entry.
-      const unregisteredWarnings = handle.loadedManifest.warnings.filter(
-        (w) => w.code === "unregistered-provider",
-      );
-      if (unregisteredWarnings.length > 0) {
-        const entries = unregisteredWarnings.map((w) => w.message).join("; ");
-        out.error(
-          `pi-conductor: ${unregisteredWarnings.length} unregistered provider warning(s): ${entries}`,
-        );
-      }
-
-      const { finalCheckpoint, exitReason } = await handle.completion();
-      if (parsed.json) {
-        const stats = handle.runStats();
-        // `completion()` is the authoritative terminal result. Cleanup and
-        // observability records can trail the terminal lifecycle record, so a
-        // fresh record projection may still report `running`.
-        const terminalStats = stats.exitReason === exitReason ? stats : { ...stats, exitReason };
-        const latestResponse = handle.latestResponse();
-        const result: CliJsonResult = {
-          schema_version: 1,
-          run_id: handle.runId,
-          exit_reason: exitReason,
-          final_role: finalCheckpoint.current_role,
-          latest_response:
-            latestResponse === null
-              ? null
-              : {
-                  role: latestResponse.role,
-                  text: latestResponse.text,
-                  completed_at: latestResponse.completedAt,
-                },
-          run_stats: terminalStats,
-        };
-        await writeOutput(stdout, `${JSON.stringify(result)}\n`);
-      } else {
-        const finalization = handle.runStats().finalizationFailure;
-        const finalizationDiagnostic =
-          finalization === undefined
-            ? ""
-            : ` finalization=${finalization.phase}:${finalization.code} recovery=${
-                finalization.recovery === "inspect_disposal"
-                  ? "inspect and stop remaining resources on original host, then start a fresh run"
-                  : "resume with --reset-orchestrator-context"
-              } failure_detail=${finalization.diagnostic}`;
-        out.log(
-          `pi-conductor: run_id=${handle.runId} reached state=${finalCheckpoint.current_role} reason=${exitReason}${finalizationDiagnostic}`,
-        );
-      }
-      return exitReason === "session_failed" ? 1 : 0;
-    } finally {
-      removeSignalHandlers();
-    }
-  } catch (err) {
-    // Typed errors carry the role + missing value in their
-    // message (Phase 7A.1 acceptance). Surfacing the full message
-    // is more useful than just the error class name.
-    const message = err instanceof Error ? err.message : String(err);
-    out.error(`pi-conductor: ${message}`);
-    return 1;
   }
+
+  return runStart(parsed, {
+    startRun: startRunImpl,
+    cwd,
+    stdin,
+    stdout,
+    stderr,
+    signals,
+    console: out,
+    exit,
+    modelRegistry,
+  });
+}
+
+interface StartCommandDeps extends RunStreamDeps {
+  readonly startRun: (manifestPath: string, opts: StartRunOptions) => Promise<RunHandle>;
+}
+
+interface ResumeCommandDeps extends RunStreamDeps {
+  readonly resumeRun: (
+    manifestPath: string,
+    runId: string,
+    opts: ResumeRunOptions,
+  ) => Promise<RunHandle>;
+}
+
+/** Shared preparation for the start/resume bodies. */
+async function prepareFromParsed(parsed: ParsedArgs, deps: RunStreamDeps) {
+  return prepareRunContext({
+    cwd: deps.cwd,
+    manifestPath: parsed.manifestPath,
+    logDir: parsed.logDir,
+    sandboxApproval: parsed.sandboxApproval,
+    controllerApproval: parsed.controllerApproval,
+    nonInteractive: parsed.nonInteractive,
+    json: parsed.json,
+    stdin: deps.stdin,
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+    modelRegistry: deps.modelRegistry,
+    console: deps.console,
+    exit: deps.exit,
+  });
+}
+
+/** Normal start: shared preparation, `startRun`, one event, shared terminal. */
+async function runStart(parsed: ParsedArgs, deps: StartCommandDeps): Promise<number> {
+  const { stdout, signals, console: out, exit, modelRegistry } = deps;
+  const prepared = await prepareFromParsed(parsed, deps);
+  if (prepared.ok === false) return prepared.exitCode;
+  const { manifestAbs, hostFactory } = prepared.context;
+  return runStarterCommand({
+    prepared: prepared.context,
+    start: () =>
+      deps.startRun(manifestAbs, {
+        goal: parsed.goal,
+        hostFactory,
+        modelRegistry,
+        baseDir: prepared.context.baseDir,
+      }),
+    stdout,
+    signals,
+    exit,
+    console: out,
+    json: parsed.json,
+  });
+}
+
+/** Resume: same preparation/terminal as start with `goal: ""` via `resumeRun`. */
+async function runResume(parsed: ParsedArgs, deps: ResumeCommandDeps): Promise<number> {
+  const { stdout, signals, console: out, exit, modelRegistry } = deps;
+  const prepared = await prepareFromParsed(parsed, deps);
+  if (prepared.ok === false) return prepared.exitCode;
+  const { manifestAbs, hostFactory } = prepared.context;
+  return runStarterCommand({
+    prepared: prepared.context,
+    start: () =>
+      deps.resumeRun(manifestAbs, String(parsed.runId ?? ""), {
+        goal: "",
+        hostFactory,
+        baseDir: prepared.context.baseDir,
+        modelRegistry,
+      }),
+    stdout,
+    signals,
+    exit,
+    console: out,
+    json: parsed.json,
+  });
 }
 
 // ─── Entrypoint ────────────────────────────────────────────────────────
@@ -445,6 +421,7 @@ export async function main(): Promise<number> {
   }
   return runCli(argv, {
     startRun,
+    resumeRun,
     modelRegistry: await createCliModelRegistry(),
     console: globalThis.console,
     exit: (code) => process.exit(code),

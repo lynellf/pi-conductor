@@ -145,6 +145,7 @@ it.each([
     `
 const reason = ${JSON.stringify(exitReason)};
 export const createProductionHost = () => { throw new Error('host factory should not run'); };
+export const resumeRun = async () => { throw new Error('resumeRun should not run for a start'); };
 export const startRun = async () => ({
   runId: 'packed-entrypoint-status',
   loadedManifest: { warnings: [] },
@@ -171,7 +172,11 @@ registerHooks({ resolve(specifier, context, nextResolve) {
     NODE_OPTIONS: `--import ${preload}`,
   });
   expect(result.status, result.stderr).toBe(expectedStatus);
-  const document = JSON.parse(result.stdout) as {
+  const lines = result.stdout.trim().split("\n");
+  expect(lines).toHaveLength(2);
+  const started = JSON.parse(lines[0] ?? "") as { event: string; run_id: string };
+  expect(started).toMatchObject({ event: "run_started", run_id: "packed-entrypoint-status" });
+  const document = JSON.parse(lines[lines.length - 1] ?? "") as {
     exit_reason: string;
     run_stats: { exitReason: string };
   };
