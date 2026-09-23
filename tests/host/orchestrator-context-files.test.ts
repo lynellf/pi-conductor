@@ -92,6 +92,78 @@ describe("orchestrator context session file boundary", () => {
     expect(restored.manager.buildSessionContext().messages).toHaveLength(4);
   });
 
+  it("captures and restores Pi system prompt/tool declarations without altering history", async () => {
+    const source = await makeSessionFile();
+    const entries = (await readFile(source.file, "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const firstUser = entries.find((entry) => entry.type === "message");
+    if (!firstUser) throw new Error("expected user entry");
+    const systemEntry = {
+      type: "message",
+      id: "pi-system",
+      parentId: firstUser.parentId,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "system",
+        content: "",
+        sections: { preamble: "Current prompt", tools: "<tools>read</tools>" },
+        toolsAdded: [{ name: "read", description: "Read a file", parameters: {} }],
+        timestamp: 1,
+      },
+    };
+    firstUser.parentId = systemEntry.id;
+    entries.splice(entries.indexOf(firstUser), 0, systemEntry);
+    await writeFile(source.file, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+    const boundary = await captureOrchestratorContextBoundary({
+      roleSessionId: "system-message",
+      sessionFile: source.file,
+      conversationId: source.manager.getSessionId(),
+      leafId: source.tip,
+    });
+    const restored = await restoreOrchestratorContextBoundary({
+      boundary: boundary.reference,
+      destinationSessionDir: makeAndTrackIsolatedAgentDir("pi-system-message-destination-"),
+      cwd: process.cwd(),
+    });
+    expect(restored.manager.buildSessionContext().messages[0]).toEqual(systemEntry.message);
+  });
+
+  it.each([
+    ["content", { content: [{ type: "toolCall", id: "bad", name: "write", arguments: {} }] }],
+    ["sections", { sections: { preamble: 42 } }],
+    ["toolsAdded", { toolsAdded: [{ name: "write", description: "Write a file" }] }],
+    ["toolsRemoved", { toolsRemoved: [{ name: 42 }] }],
+  ])("rejects malformed Pi system %s before restoring context", async (_field, malformed) => {
+    const source = await makeSessionFile();
+    const entries = (await readFile(source.file, "utf8"))
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const last = entries.at(-1);
+    if (!last) throw new Error("expected last entry");
+    const system = {
+      type: "message",
+      id: "invalid-system",
+      parentId: last.id,
+      timestamp: new Date(5).toISOString(),
+      message: { role: "system", content: "", timestamp: 5, ...malformed },
+    };
+    await writeFile(
+      source.file,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n${JSON.stringify(system)}\n`,
+    );
+    await expect(
+      captureOrchestratorContextBoundary({
+        roleSessionId: "invalid-system",
+        sessionFile: source.file,
+        conversationId: source.manager.getSessionId(),
+        leafId: system.id,
+      }),
+    ).rejects.toMatchObject({ code: "invalid_entry" });
+  });
+
   it("excludes an uncommitted suffix and rejects a changed source hash", async () => {
     const source = await makeSessionFile();
     const boundary = await captureOrchestratorContextBoundary({

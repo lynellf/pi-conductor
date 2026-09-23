@@ -87,6 +87,48 @@ export function validateOrchestratorContextMessage(
     );
   }
   const role = message.role;
+  if (role === "system") {
+    if (
+      typeof message.content !== "string" &&
+      (!Array.isArray(message.content) ||
+        message.content.some(
+          (block) => !isRecord(block) || block.type !== "text" || typeof block.text !== "string",
+        ))
+    ) {
+      throw new OrchestratorContextFileError(
+        "invalid_entry",
+        `system message ${index} content is invalid`,
+      );
+    }
+    if (
+      (message.sections !== undefined &&
+        (!isRecord(message.sections) ||
+          Object.values(message.sections).some(
+            (value) => value !== null && typeof value !== "string",
+          ))) ||
+      (message.toolsAdded !== undefined &&
+        (!Array.isArray(message.toolsAdded) ||
+          message.toolsAdded.some(
+            (tool) =>
+              !isRecord(tool) ||
+              typeof tool.name !== "string" ||
+              tool.name.length === 0 ||
+              typeof tool.description !== "string" ||
+              !isRecord(tool.parameters),
+          ))) ||
+      (message.toolsRemoved !== undefined &&
+        (!Array.isArray(message.toolsRemoved) ||
+          message.toolsRemoved.some(
+            (tool) => !isRecord(tool) || typeof tool.name !== "string" || tool.name.length === 0,
+          )))
+    ) {
+      throw new OrchestratorContextFileError(
+        "invalid_entry",
+        `system message ${index} update is invalid`,
+      );
+    }
+    return;
+  }
   if (role === "user") {
     validateContent(message.content, index, false, true);
     return;
