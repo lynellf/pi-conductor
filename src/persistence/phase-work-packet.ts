@@ -34,16 +34,13 @@
 import { Value } from "typebox/value";
 import type { Role } from "../core/types.js";
 import type { PersistedRecord } from "./log.js";
+import { renderBoundedPhaseWorkPacket } from "./phase-work-packet-budget.js";
 import {
   type PhaseWorkPacketInput as ProjectionInput,
   type PhaseWorkPacketReportedNarrativeInput as ProjectionReportedNarrativeInput,
   projectPhaseWorkPacket,
 } from "./phase-work-packet-projection.js";
-import {
-  type PhaseWorkPacketIdentityHeader,
-  renderPhaseWorkPacket,
-  utf8Bytes,
-} from "./phase-work-packet-render.js";
+import { type PhaseWorkPacketIdentityHeader, utf8Bytes } from "./phase-work-packet-render.js";
 import type {
   CommandObservation,
   HostObservedSection,
@@ -225,31 +222,6 @@ function resolveMaxBytes(value: number | undefined): number {
   return Math.min(value, MAX_UTF8_BYTES_LIMIT);
 }
 
-/** Find an omission entry by kind and return its count (defaulting to 1). */
-function omissionCount(omissions: readonly PhaseWorkPacketOmission[], kind: string): number {
-  for (const entry of omissions) {
-    if (entry.kind === kind) return entry.count ?? 1;
-  }
-  return 0;
-}
-
-function incrementOmissionCount(
-  omissions: PhaseWorkPacketOmission[],
-  kind: string,
-  count: number,
-): void {
-  const existing = omissions.find((entry) => entry.kind === kind);
-  if (existing === undefined) {
-    omissions.push({ kind, count: Math.max(count, 1) });
-    return;
-  }
-  const prior = existing.count ?? 1;
-  omissions[omissions.indexOf(existing)] = {
-    ...existing,
-    count: prior + Math.max(count, 1),
-  };
-}
-
 /**
  * Construct a deterministic, strict phase-work-packet record from input
  * records and an explicit dispatch-source identity. Pure; performs no I/O.
@@ -345,82 +317,16 @@ export function createPhaseWorkPacketRecord(input: PhaseWorkPacketInput): PhaseW
     cutoff_record_keys: input.cutoff_record_keys,
   };
 
-  // First pass: render full content.
-  const omissions: PhaseWorkPacketOmission[] = projected.omissions.slice();
-  let dropReported = false;
-  let rendered = renderPhaseWorkPacket({
-    header,
-    phaseProcess: projected.phaseProcess,
-    hostObserved: projected.hostObserved,
-    reportedNarrative: projected.reportedNarrative,
-    omissions,
-    dropReportedNarrative: dropReported,
-  });
-
-  // Second pass: drop reported-narrative section when the rendered text
-  // exceeds the budget. The renderer always retains identity and process
-  // state; reported narrative is the lowest-priority section.
-  if (utf8Bytes(rendered) > maxBytes) {
-    if (omissionCount(omissions, "reported_narrative_truncated") === 0) {
-      omissions.push({ kind: "reported_narrative_truncated", count: 1 });
-    }
-    dropReported = true;
-    rendered = renderPhaseWorkPacket({
+  const { rendered, omissions } = renderBoundedPhaseWorkPacket(
+    {
       header,
       phaseProcess: projected.phaseProcess,
       hostObserved: projected.hostObserved,
       reportedNarrative: projected.reportedNarrative,
-      omissions,
-      dropReportedNarrative: dropReported,
-    });
-  }
-
-  // Third pass: if the reported narrative section was already empty but other
-  // content still exceeds the budget (e.g. a large worktree snapshot), drop
-  // verification entries and then commands before falling back. Identity and
-  // process state are never dropped. The actual drop count is preserved.
-  if (utf8Bytes(rendered) > maxBytes) {
-    let workingObserved = projected.hostObserved;
-    let droppedCommands = 0;
-    let droppedVerification = 0;
-    while (utf8Bytes(rendered) > maxBytes) {
-      if (workingObserved.verification.length > 0) {
-        workingObserved = {
-          ...workingObserved,
-          verification: workingObserved.verification.slice(1),
-        };
-        droppedVerification += 1;
-      } else if (workingObserved.commands.length > 0) {
-        workingObserved = {
-          ...workingObserved,
-          commands: workingObserved.commands.slice(1),
-        };
-        droppedCommands += 1;
-      } else if ((workingObserved.evidence_refs?.length ?? 0) > 0) {
-        workingObserved = {
-          ...workingObserved,
-          evidence_refs: workingObserved.evidence_refs?.slice(1) ?? [],
-        };
-        incrementOmissionCount(omissions, "evidence_refs_dropped", 1);
-      } else {
-        break;
-      }
-      rendered = renderPhaseWorkPacket({
-        header,
-        phaseProcess: projected.phaseProcess,
-        hostObserved: workingObserved,
-        reportedNarrative: projected.reportedNarrative,
-        omissions,
-        dropReportedNarrative: dropReported,
-      });
-    }
-    if (droppedVerification > 0) {
-      incrementOmissionCount(omissions, "verification_dropped", droppedVerification);
-    }
-    if (droppedCommands > 0) {
-      incrementOmissionCount(omissions, "commands_dropped", droppedCommands);
-    }
-  }
+      omissions: projected.omissions,
+    },
+    maxBytes,
+  );
 
   const usedBytes = utf8Bytes(rendered);
   const record: PhaseWorkPacketRecord = {

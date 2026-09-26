@@ -44,7 +44,13 @@ export function redactPath(path: string): string {
   return createHash("sha256").update(path).digest("hex").slice(0, 12);
 }
 
-export function identityHeaderText(header: PhaseWorkPacketIdentityHeader): string {
+export function identityHeaderText(
+  header: PhaseWorkPacketIdentityHeader,
+  summarizeCutoff = false,
+): string {
+  const cutoff = summarizeCutoff
+    ? `cutoff_record_keys: ${header.cutoff_record_keys.length} keys (full list in record); sha256=${createHash("sha256").update(JSON.stringify(header.cutoff_record_keys)).digest("hex")}\ndispatch_source.source_record_key: ${header.dispatch_source.kind === "initial_run" ? "not_applicable" : header.dispatch_source.source_record_key}`
+    : `cutoff_record_keys: [${header.cutoff_record_keys.join(", ")}] (${String(header.cutoff_record_keys.length)})`;
   return [
     `status: ${header.status}`,
     `run_id: ${header.run_id}`,
@@ -52,7 +58,7 @@ export function identityHeaderText(header: PhaseWorkPacketIdentityHeader): strin
     `recipient_visit_index: ${String(header.recipient_visit_index)}`,
     `dispatch_source.kind: ${header.dispatch_source.kind}`,
     `dispatch_source.ts: ${String(header.dispatch_source.ts)}`,
-    `cutoff_record_keys: [${header.cutoff_record_keys.join(", ")}] (${String(header.cutoff_record_keys.length)})`,
+    cutoff,
   ].join("\n");
 }
 
@@ -63,6 +69,7 @@ export interface RenderPacketOptions {
   readonly reportedNarrative: ReportedNarrativeSection;
   readonly omissions: readonly PhaseWorkPacketOmission[];
   readonly dropReportedNarrative: boolean;
+  readonly summarizeCutoff?: boolean;
 }
 
 const COMMAND_OUTCOME_LABELS: Record<CommandObservation["outcome"], string> = {
@@ -126,7 +133,7 @@ function verificationLines(verification: readonly VerificationEntry[]): string[]
 export function renderPhaseWorkPacket(options: RenderPacketOptions): string {
   const lines: string[] = [];
   lines.push("## phase_work_packet");
-  lines.push(identityHeaderText(options.header));
+  lines.push(identityHeaderText(options.header, options.summarizeCutoff));
 
   lines.push("");
   lines.push("### phase_process");
