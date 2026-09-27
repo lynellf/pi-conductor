@@ -198,6 +198,11 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
   })().finally(async () => {
     try {
       runControl.close();
+      try {
+        await host.drainDelegationAdvisories?.();
+      } catch {
+        // Advisory drain is best-effort; it must not replace the run outcome.
+      }
     } finally {
       await lease.release();
     }

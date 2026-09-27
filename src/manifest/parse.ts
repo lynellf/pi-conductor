@@ -29,6 +29,7 @@ import { DEFAULT_MODEL_EFFORT, type ModelEffort } from "../core/types.js";
 import { parseContextArtifactLimits } from "./context-artifact-limits.js";
 import { parseContextEnrichmentPolicy } from "./context-enrichment.js";
 import { parseControllerConfig } from "./controller.js";
+import { parseDelegationAdvisoryPolicy } from "./delegation-advisory.js";
 import { parseDelegationAssignments, parseDelegationInterface } from "./delegation-assignment.js";
 import { parseEndGuardConfig } from "./end-guard.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
@@ -110,7 +111,14 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     obj.verification_recipes === undefined
       ? undefined
       : parseVerificationRecipes(obj.verification_recipes, "verification_recipes");
-  const subagents = subagentsRaw !== undefined ? parseSubagentProfiles(subagentsRaw) : undefined;
+  const delegation_advisory =
+    obj.delegation_advisory === undefined
+      ? undefined
+      : parseDelegationAdvisoryPolicy(obj.delegation_advisory);
+  const subagents =
+    subagentsRaw !== undefined
+      ? parseSubagentProfiles(subagentsRaw, delegation_advisory !== undefined)
+      : undefined;
   // Absent policy is the immutable empty policy, not an optional runtime
   // branch. This makes the all-fresh default a normalized manifest contract.
   const handoffs = obj.handoffs === undefined ? Object.freeze([]) : parseHandoffs(obj.handoffs);
@@ -147,6 +155,7 @@ export function parseManifestFromObject(raw: unknown): Manifest {
     ...(controller === undefined ? {} : { controller }),
     ...(continuity === undefined ? {} : { continuity }),
     ...(context_enrichment === undefined ? {} : { context_enrichment }),
+    ...(delegation_advisory === undefined ? {} : { delegation_advisory }),
     ...(review_gates === undefined ? {} : { review_gates }),
     ...(handoff_evidence === undefined ? {} : { handoff_evidence }),
     ...(jev_assessment === undefined ? {} : { jev_assessment }),
@@ -191,18 +200,22 @@ function parseHandoffPolicy(raw: unknown, index: number): HandoffPolicy {
 
 // ─── Delegation lite §3: subagent profile parsing ───────────────────────
 
-function parseSubagentProfiles(raw: unknown): SubagentProfile[] {
+function parseSubagentProfiles(raw: unknown, retainDescriptions: boolean): SubagentProfile[] {
   if (!Array.isArray(raw)) {
     throw new ManifestParseError("`subagents:` must be an array");
   }
   const profiles: SubagentProfile[] = [];
   for (const [i, entry] of raw.entries()) {
-    profiles.push(parseSubagentProfile(entry, i));
+    profiles.push(parseSubagentProfile(entry, i, retainDescriptions));
   }
   return profiles;
 }
 
-function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
+function parseSubagentProfile(
+  raw: unknown,
+  index: number,
+  retainDescription: boolean,
+): SubagentProfile {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
     throw new ManifestParseError(`subagents[${index}] must be a YAML mapping (object)`);
   }
@@ -219,6 +232,10 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     `${path}.max_session_cost_usd`,
   );
   const system_prompt = toNonEmptyString(entry.system_prompt, `${path}.system_prompt`);
+  const description =
+    !retainDescription || entry.description === undefined
+      ? undefined
+      : parseSubagentDescription(entry.description, `${path}.description`);
   const completion_protocol = parseChildCompletionProtocol(
     entry.completion_protocol,
     `${path}.completion_protocol`,
@@ -250,6 +267,7 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     models,
     max_session_cost_usd,
     system_prompt,
+    ...(description === undefined ? {} : { description }),
     completion_protocol,
     ...(tool_execution === undefined ? {} : { tool_execution }),
     ...(workspace === undefined ? {} : { workspace }),
@@ -257,6 +275,17 @@ function parseSubagentProfile(raw: unknown, index: number): SubagentProfile {
     ...(tools === undefined ? {} : { tools }),
     ...(verificationRecipes === undefined ? {} : { verification_recipes: verificationRecipes }),
   }) as SubagentProfile;
+}
+
+function parseSubagentDescription(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw new ManifestParseError(`${path} must be a single-paragraph string (1–500 characters)`);
+  }
+  const description = value.trim();
+  if (description.length === 0 || description.length > 500 || /[\r\n]/.test(description)) {
+    throw new ManifestParseError(`${path} must be a single-paragraph string (1–500 characters)`);
+  }
+  return description;
 }
 
 function parseChildCompletionProtocol(value: unknown, path: string): "report_result" | "minimal" {

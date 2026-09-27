@@ -18,6 +18,8 @@ import type { PersistedRecord } from "../persistence/log.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
 import { createProductionControllerSession } from "./controller/production-session-factory.js";
 import { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
+import { DelegationAdvisoryShadow } from "./delegation-advisory/shadow.js";
+import { createTypesafeDelegationAdvisor } from "./delegation-advisory/typesafe-delegation-client.js";
 import type { EndGuardRunRequest, EndGuardRunResult } from "./end-guard-runner.js";
 import {
   captureRunEvidenceBaselineInModule,
@@ -52,6 +54,7 @@ import {
   type DelegateHostContext,
   getOrCreateSnapshotPin as getOrCreateSnapshotPinInModule,
 } from "./production-host-delegation.js";
+import type { ProductionHostOptions as ProductionHostConstructorOptions } from "./production-host-options.js";
 import { type SpawnRoleContext, spawnRole as spawnRoleInModule } from "./production-host-spawn.js";
 import {
   captureUsage as captureUsageInModule,
@@ -103,6 +106,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
    */
   private unavailableRole: Role | null = null;
   private readonly delegation = new ProductionDelegationCoordinator();
+  private readonly delegationAdvisoryShadow: DelegationAdvisoryShadow | undefined;
   private readonly delegationSessionKeys = new Map<string, string>();
   private readonly inactiveDelegationSessions = new Set<string>();
   /**
@@ -123,6 +127,27 @@ export class ProductionHost extends ProductionHostContext implements Host {
       evidenceBaseline: this.evidenceBaseline,
       persistRecord: (record) => this.persistRecord(record),
     };
+  }
+
+  constructor(options: ProductionHostConstructorOptions) {
+    super(options);
+    const policy = options.loadedManifest.manifest.delegation_advisory;
+    this.delegationAdvisoryShadow =
+      policy === undefined
+        ? undefined
+        : new DelegationAdvisoryShadow({
+            advisor:
+              options.delegationAdvisor ??
+              createTypesafeDelegationAdvisor({
+                apiKey: this.typesafeApiKey,
+                requestTimeoutMs: policy.request_timeout_ms,
+                maxAttempts: policy.max_attempts,
+              }),
+            policy,
+            runId: options.runId,
+            // Advisory records are intentionally persisted without generic live-record fan-out.
+            persistRecord: (record) => this.log.append(record),
+          });
   }
 
   // ─── Host methods ──────────────────────────────────────────────────
@@ -290,6 +315,9 @@ export class ProductionHost extends ProductionHostContext implements Host {
       displaySink: this.displaySink,
       log: this.log,
       delegation: this.delegation,
+      ...(this.delegationAdvisoryShadow === undefined
+        ? {}
+        : { delegationAdvisoryShadow: this.delegationAdvisoryShadow }),
       runCostSoFar: () => this.runCostSoFar(),
       persistRecord: (record) => this.persistRecord(record),
       adaptDelegateToolResult,
@@ -360,6 +388,11 @@ export class ProductionHost extends ProductionHostContext implements Host {
 
   captureUsage(session: RoleSession): UsageRecord {
     return captureUsageInModule(this.stateContext(), session);
+  }
+
+  /** Drain shadow-only advisory jobs before run close. */
+  drainDelegationAdvisories(): Promise<void> {
+    return this.delegationAdvisoryShadow?.drain() ?? Promise.resolve();
   }
 
   sessionTerminalReason(session: RoleSession): SessionTerminalReason {

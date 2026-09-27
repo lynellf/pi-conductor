@@ -108,5 +108,7 @@ const PERSISTED_RECORD_TYPES: ReadonlySet<string> = new Set([
   "review_approval_invalidated",
   "phase_work_packet",
   "jev_assessment",
+  "delegation_dispatch_advisory",
+  "delegation_result_advisory",
   "reconstruction_signal",
 ]);

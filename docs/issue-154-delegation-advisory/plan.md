@@ -20,10 +20,13 @@ appended advisory records and the offline report.
 
 ## Design decisions
 
-1. **Shadow only, by construction.** Advisory records carry no admission,
-   status, verdict, or routing field. No prompt renderer, scheduler branch,
-   `child-result.ts` normalization, or delegate tool result reads them.
-   Negative tests assert this (grep + behavior).
+1. **Shadow only, by construction.** Advisory records carry no authoritative
+   admission or child-lifecycle status, verdict, or routing field. The record
+   contract may carry the advisory request outcome (`completed | unavailable`)
+   and a copied host terminal status solely for offline joining; neither is an
+   admission decision or runtime authority. No prompt renderer, scheduler
+   branch, `child-result.ts` normalization, or delegate tool result reads these
+   records. Negative tests assert this (grep + behavior).
 2. **Never on the critical path.** Advisory requests start after the
    authoritative record is persisted (`delegation_submission_accepted` /
    `subagent_completed|subagent_failed`) and run concurrently with child
@@ -161,69 +164,127 @@ reports numbers only.
 
 ### Phase A — policy, profile description, records
 
-- [ ] **RED:** `tests/manifest/delegation-advisory.test.ts` (omission,
+- [x] **RED:** `tests/manifest/delegation-advisory.test.ts` (omission,
   bounds, unknown keys, `mode` literal, requires a delegation policy,
   profile `description` bounds);
   `tests/persistence/delegation-advisory-record.test.ts` (schema, duplicates
   rejected, no text-bearing fields, no verdict/status-authority fields).
-- [ ] **GREEN:** `src/manifest/delegation-advisory.ts` + `types/parse/validate`
+- [x] **GREEN:** `src/manifest/delegation-advisory.ts` + `types/parse/validate`
   wiring; profile `description`; `src/seam/delegation-advisory.ts` (question
   constants, answer schemas, failure codes);
   `src/persistence/delegation-advisory-record.ts`; `log.ts`,
   `record-materialization.ts`, barrel. No pi imports.
-- [ ] **Acceptance:** absent policy parses to identical `MachineDefinition`;
-  records cannot encode admission/status/routing.
-- [ ] **Verify:** focused suites, `pnpm typecheck`, `pnpm lint`.
+- [x] **Acceptance:** absent policy parses to identical `MachineDefinition`;
+  records cannot encode authoritative admission/status/routing.
+- [x] **Verify:** focused suites, `pnpm typecheck`, `pnpm lint`.
 
 ### Phase B — state builders and HTTP adapter
 
-- [ ] **RED:** `tests/host/delegation-advisory-state.test.ts` (redaction,
-  truncation, prohibited-field absence, `profile_fit` inclusion/omission
-  rules, adversarial task text cannot alter question set);
-  `tests/host/delegation-advisory-typesafe.test.ts` (one request per
-  advisory, exact question set, MAP-keyed answer validation,
-  probability sums, label mismatch, status mapping, retry bounds, fixed
-  origin, key only in `Authorization`).
-- [ ] **GREEN:** `src/host/delegation-advisory/{contracts,state,typesafe-delegation-client}.ts`.
-- [ ] **Acceptance:** malformed answers ⇒ typed `unavailable`, never partial
+- [ ] **RED (historical execution unverified; not recovered):**
+  `tests/host/delegation-advisory-state.test.ts` (redaction, truncation,
+  prohibited-field absence, `profile_fit` inclusion/omission rules, adversarial
+  task text cannot alter question set);
+  `tests/host/delegation-advisory-typesafe.test.ts` (one request per advisory,
+  exact question set, MAP-keyed answer validation, probability sums, label
+  mismatch, status mapping, retry bounds, fixed origin, key only in
+  `Authorization`). Original Phase B RED execution evidence is unavailable. By
+  explicit user authorization, replace this gate with retrospective independent
+  test review and targeted behavioral mutation checks in an isolated temporary
+  copy. Mutation evidence is not historical RED evidence; do not rewrite working
+  code or tests to manufacture TDD provenance.
+- [x] **Substitute gate (authorized replacement for RED above):** retrospective
+  test review plus 24 targeted mutations of `state.ts`, `typesafe-wire.ts`,
+  `typesafe-delegation-client.ts`, and the Noul schema, run in an isolated
+  scratch copy against both Phase B suites. 20 were killed on the first pass.
+  Two survivors exposed real gaps (the answer-id set check on the
+  `profile_fit`-omitted path; an empty-string API key). Two tests were added
+  (no production change), and both mutants are now killed. The two remaining
+  survivors are equivalent: `labels.includes(choice)` is implied by the exact-key
+  plus probability-maximum checks, and an extra loop iteration is unreachable
+  because every attempt path returns or continues within `max_attempts`.
+- [x] **GREEN:** `src/host/delegation-advisory/{contracts,state,typesafe-delegation-client}.ts`.
+- [x] **Acceptance:** malformed answers ⇒ typed `unavailable`, never partial
   judgments; no raw bodies/exceptions escape.
-- [ ] **Verify:** focused suites, `pnpm typecheck`, `pnpm lint`.
+- [x] **Verify:** focused suites, `pnpm typecheck`, `pnpm lint`.
 
 ### Phase C — shadow wiring
 
-- [ ] **RED:** `tests/host/delegation-advisory-shadow.test.ts` — with an
-  injected fake advisor: dispatch advisory recorded after
-  `delegation_submission_accepted`; result advisory after
-  `subagent_completed|subagent_failed`; a never-resolving advisor does not
-  delay spawn, `wait`, or result; advisor rejection/unavailable yields one
-  `unavailable` record and zero other deltas; pending set drained or dropped
-  (no record) at run close; resume issues zero requests; policy absent ⇒
-  record log and every parent/child prompt byte-identical.
-- [ ] **GREEN:** `src/host/delegation-advisory/shadow.ts` (bounded pending set,
-  `max_parallel`, drain) and minimal hooks at the two persistence points
-  (expected: `scheduler.ts` acceptance path and `factory-records.ts` terminal
-  path — confirm before editing); production host constructs the TypeSafe
-  advisor only when policy present.
-- [ ] **Acceptance:** grep + tests show no reader of advisory records outside
-  persistence/report; scheduler and `child-result.ts` behavior unchanged.
-- [ ] **Verify:** focused suites, `pnpm typecheck`, `pnpm lint`, delegation
+- [x] **RED:** `tests/host/delegation-advisory-shadow.test.ts` — with an
+  injected fake advisor: dispatch hooks run after
+  `delegation_submission_accepted`; result hooks run after
+  `subagent_completed|subagent_failed`; never-resolving advisor work does not
+  delay spawn, `wait`, or result. Assertion-level RED was observed for both the
+  absent dispatch hook, projection work occurring before the next event-loop
+  turn, and unbounded pending overflow. The suite also verifies result rejection mapping,
+  drain/drop, bounded/redacted records, strict result projection, and no replay
+  request.
+- [x] **GREEN:** `src/host/delegation-advisory/shadow.ts` (bounded pending set,
+  `max_parallel`, a hard pending cap of four jobs per parallel slot, and drain;
+  state projection, redaction, hashing, and advisor call deferred to a later
+  immediate turn) and minimal hooks at the confirmed seams:
+  `scheduler.ts` acceptance and the terminal `onTerminal` callback after
+  `factory-records.ts` appends the child record; production host constructs the
+  TypeSafe advisor only with policy.
+- [x] **Acceptance:** grep + tests show no reader of advisory records outside
+  persistence/report; scheduler admission/terminal handling and `child-result.ts`
+  behavior remain authoritative and unchanged.
+- [x] **Verify:** focused suites, `pnpm typecheck`, `pnpm lint`, delegation
   test directories.
 
 ### Phase D — report, docs, final integration
 
-- [ ] **RED:** `tests/persistence/delegation-advisory-report.test.ts` (fixture
+- [x] **RED:** `tests/persistence/delegation-advisory-report.test.ts` (fixture
   logs: bucketing, joins, missing/unavailable coverage, deterministic output).
-- [ ] **GREEN:** report module + `conduct advisory-report` subcommand;
+- [x] **GREEN:** report module + `conduct advisory-report` subcommand;
   `docs/issue-154-delegation-advisory/operator-disclosure.md` (mirrors the
   context-ranking disclosure); README manifest reference; CHANGELOG entry for
   the new manifest block and public records.
-- [ ] **Regression:** `context_enrichment` and `jev_assessment` suites
+- [x] **Regression:** `context_enrichment` and `jev_assessment` suites
   untouched and green; reducer/handoff/delegate schemas unchanged (grep).
-- [ ] **Repository gates:** `pnpm typecheck`, `pnpm build`, four foreground
+- [x] **Repository gates:** `pnpm typecheck`, `pnpm build`, four foreground
   `pnpm exec vitest run --shard=N/4`, `pnpm lint`, `pnpm format:check`,
   `pnpm audit --audit-level high`, `git diff --check`.
-- [ ] **Review gate:** independent review of shadow-only enforcement,
+- [x] **Review gate:** independent review of shadow-only enforcement,
   disclosure bounds, critical-path independence, and report determinism.
+
+> **Review gate outcome:** no blocking findings.
+> - *Shadow-only:* the only references to advisory record types are the shadow
+>   writer, log parsing/validation (`log-file*`, `in-memory-log`,
+>   `record-materialization`), the barrel, and the offline report. No prompt,
+>   scheduler branch, `child-result.ts`, or delegate tool result reads them.
+>   Append-time duplicate rejection is swallowed by `DelegationAdvisoryShadow`,
+>   so a load-time history check can only see records that already passed it.
+> - *Critical path:* scheduler hooks are synchronous enqueues wrapped in
+>   `try/catch` after the authoritative append. State projection and the advisor
+>   call are deferred to `setImmediate`. Drain runs only in `runWithCompletion`
+>   close, before lease release, and errors there are swallowed.
+> - *Disclosure:* matches the state builders. Correction made: result requests
+>   always send an empty host `verification` list (the terminal seam has no
+>   host-observed recipe outcomes), so `operator-disclosure.md` now says so and
+>   notes that `claims_supported` will lean toward `not_assessable` in v1.
+> - *Report determinism:* pure over records, with sorted run IDs and grouped
+>   keys, fixed buckets and statuses, and argmax ties broken lexically.
+> - *Non-blocking notes for v2:* (1) the drain budget
+>   `request_timeout_ms × max_attempts` excludes retry backoff (≤1.5 s) and
+>   queued jobs behind `max_parallel`, so these surface as `missing` coverage;
+>   (2) dropped in-flight requests are not aborted and finish in the background
+>   within their own per-attempt timeouts, with results discarded; (3) an
+>   unexpected advisor rejection is recorded as `network_error` with 1 attempt.
+
+> **Initial Phase D gate attempt:** `pnpm typecheck`, `pnpm build`, `pnpm lint`,
+> `pnpm format:check`, `pnpm audit --audit-level high`, and `git diff --check`
+> passed, as did Vitest shards 2/4, 3/4, and 4/4. Shard 1/4 and an isolated run
+> exposed an environment-sensitive failure in the existing Issue #57
+> minimal-child retry test: unisolated SDK settings prevented the scripted
+> provider retry, while an empty isolated agent directory passed. The test now
+> supplies isolated SDK retry settings using a temporary `PI_CODING_AGENT_DIR`;
+> no production code or Issue #154 behavior was changed.
+>
+> **Phase D repository gate rerun:** the focused Issue #57 suite passes (10/10).
+> All four foreground Vitest shards pass (1/4: 105 files, 1097 tests; 2/4: 105
+> files, 1160 tests; 3/4: 105 files, 1132 tests; 4/4: 102 files, 1052 tests).
+> Typecheck, build, lint, format check, high-severity audit, and diff check pass.
+> The independent review gate remains open.
 
 ## Failure handling
 

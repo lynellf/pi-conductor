@@ -2,6 +2,7 @@
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { RecordLog } from "../persistence/log.js";
 import type { ControllerHostApproval } from "./controller/host-approval.js";
+import type { DelegationAdvisor } from "./delegation-advisory/contracts.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -77,4 +78,6 @@ export interface ProductionHostOptions {
    * propagated through the manifest, persisted record, or diagnostics.
    */
   readonly env?: Record<string, string | undefined>;
+  /** Optional provider-neutral advisor override, primarily for deterministic host tests. */
+  readonly delegationAdvisor?: DelegationAdvisor;
 }

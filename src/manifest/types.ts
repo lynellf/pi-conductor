@@ -43,6 +43,8 @@ export interface SubagentProfile {
   readonly models: readonly ModelConfig[];
   readonly max_session_cost_usd: number;
   readonly system_prompt: string;
+  /** Issue #154: declared profile-fit criteria; never inferred from `system_prompt`. */
+  readonly description?: string;
   /** Issue #57: profile-pinned child terminal contract; default is legacy report_result. */
   readonly completion_protocol: ChildCompletionProtocol;
   /** Issue #76: pinned executable-tool deadline policy. */
@@ -167,6 +169,17 @@ export interface JevAssessmentPolicy {
   readonly max_attempts: number;
 }
 
+/** Issue #154: opt-in shadow-only delegation advisory policy. */
+export interface DelegationAdvisoryPolicy {
+  readonly schema_version: 1;
+  readonly provider: "typesafe_jev";
+  readonly model: string;
+  readonly mode: "shadow";
+  readonly max_parallel: number;
+  readonly request_timeout_ms: number;
+  readonly max_attempts: number;
+}
+
 /** Shared trusted limits for a parent delegation policy. */
 interface DelegationPolicyBase {
   /** Issue #86: omitted in programmatic legacy inputs; fresh YAML is normalized to blocking. */
@@ -244,6 +257,8 @@ export interface Manifest {
   readonly context_enrichment?: ContextEnrichmentPolicy;
   /** Issue #139 Jev comment: opt-in advisory assessment policy. Absent preserves legacy behavior. */
   readonly jev_assessment?: JevAssessmentPolicy;
+  /** Issue #154: opt-in shadow-only delegation advisory policy. */
+  readonly delegation_advisory?: DelegationAdvisoryPolicy;
   /** Issue #124: opt-in host-owned phase review gates. */
   readonly review_gates?: readonly ReviewGateConfig[];
   /** Delegated verification §3.1: top-level verification recipe inventory. */

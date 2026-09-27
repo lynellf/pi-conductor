@@ -98,6 +98,8 @@ export type ManifestErrorCode =
   | "delegation-missing-delegate-task-tool"
   | "delegation-missing-control-tool"
   | "delegation-assignment-legacy-tool"
+  /** Issue #154: advisory policy requires at least one delegated parent role. */
+  | "delegation-advisory-requires-delegation"
   /** Issue #87: context retention must be a trusted literal. */
   | "invalid-context-retention"
   /** Issue #87: only the designated orchestrator may retain context. */
@@ -333,6 +335,15 @@ export function validateManifest(m: Manifest): ManifestReport {
 
   // ─── Delegation lite §3: collect role and subagent names ───────────
   const roleNames = new Set(m.roles.map((r) => r.name));
+  if (
+    m.delegation_advisory !== undefined &&
+    !m.roles.some((role) => role.delegation !== undefined)
+  ) {
+    errors.push({
+      code: "delegation-advisory-requires-delegation",
+      message: "`delegation_advisory` requires at least one role with a `delegation` policy",
+    });
+  }
   validateHandoffPolicies(
     m,
     roleNames,

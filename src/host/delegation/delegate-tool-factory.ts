@@ -15,6 +15,7 @@ import type {
   SubagentProfile,
   VerificationRecipe,
 } from "../../manifest/types.js";
+import type { DelegationSubmissionAcceptedRecord } from "../../persistence/delegation-task.js";
 import type { PersistedRecord } from "../../persistence/log.js";
 import {
   type DelegateArgs,
@@ -30,6 +31,7 @@ import {
 import type { DisplaySink } from "../display-sink.js";
 import type { SandboxHostApproval } from "../execution/sandbox/host-approval.js";
 import { formatHostRejection, type HostRejection } from "../host-rejection.js";
+import type { PreparedDelegateChild } from "./admission.js";
 import {
   DelegationAssignmentResolutionError,
   resolveDelegationAssignment,
@@ -85,6 +87,19 @@ export interface DelegateChildFactoryOptions {
   readonly captureTaskOutputs?: (
     result: PoolChildResult,
   ) => Promise<import("../../persistence/child-output-records.js").ChildOutputCapture | undefined>;
+  /** Issue #154 shadow work, invoked only after authoritative records are appended. */
+  readonly advisoryShadow?: {
+    readonly dispatchAccepted: (
+      accepted: DelegationSubmissionAcceptedRecord,
+      task: PreparedDelegateChild,
+      allowedProfiles: readonly SubagentProfile[],
+    ) => void;
+    readonly childTerminal: (
+      result: PoolChildResult,
+      task: PreparedDelegateChild,
+      logicalParentId: string,
+    ) => void;
+  };
   /** Advisory notification after the durable child terminal is appended. */
   readonly onTaskTerminal?: (result: PoolChildResult) => void;
   /** Optional #77 scheduler supplied by the host-owned lifecycle. */

@@ -116,6 +116,7 @@ export {
   controllerRequestSchema,
   controllerResponseSchema,
 } from "./manifest/controller-protocol.js";
+export { parseDelegationAdvisoryPolicy } from "./manifest/delegation-advisory.js";
 export {
   assertDelegationMode,
   DEFAULT_DELEGATION_MODE,
@@ -170,6 +171,7 @@ export type {
   ContinuityPolicy,
   ContinuityPolicyV1,
   ContinuityPolicyV2,
+  DelegationAdvisoryPolicy,
   DelegationAssignment,
   DelegationInterface,
   DelegationMode,
@@ -402,6 +404,19 @@ export {
   contextEnrichmentRecordV2Schema,
   orderWorkObservationHistory,
 } from "./persistence/context-enrichment-v2.js";
+/** Issue #154: strict shadow-only dispatch/result advisory persistence records. */
+export type {
+  DelegationAdvisoryRecord,
+  DelegationDispatchAdvisoryRecord,
+  DelegationResultAdvisoryRecord,
+} from "./persistence/delegation-advisory-record.js";
+export {
+  assertDelegationAdvisoryHistory,
+  assertDelegationAdvisoryRecord,
+  DelegationAdvisoryRecordError,
+  delegationDispatchAdvisoryRecordSchema,
+  delegationResultAdvisoryRecordSchema,
+} from "./persistence/delegation-advisory-record.js";
 export type {
   DelegationAcceptedChild,
   DelegationSubmissionAcceptedRecord,
@@ -636,6 +651,33 @@ export {
   ContinuitySeedV2SizeError,
   renderWorkObservationSeed,
 } from "./persistence/work-observation-seed.js";
+export type {
+  DelegationAdvisoryClaimsAnswer,
+  DelegationAdvisoryFailureCode,
+  DelegationAdvisoryNoulAnswer,
+  DelegationAdvisoryProfileFitAnswer,
+  DelegationAdvisoryScopeAnswer,
+  DelegationAdvisoryUsage,
+  DelegationDispatchAdvisoryAnswers,
+  DelegationResultAdvisoryAnswers,
+} from "./seam/delegation-advisory.js";
+export {
+  DELEGATION_ADVISORY_CLAIMS_OPTIONS,
+  DELEGATION_ADVISORY_FAILURE_CODES,
+  DELEGATION_ADVISORY_QUESTION_INSTRUCTIONS,
+  DELEGATION_ADVISORY_SCOPE_OPTIONS,
+  DELEGATION_DISPATCH_QUESTION_IDS,
+  DELEGATION_RESULT_QUESTION_IDS,
+  delegationAdvisoryClaimsAnswerSchema,
+  delegationAdvisoryFailureCodeSchema,
+  delegationAdvisoryNoulAnswerSchema,
+  delegationAdvisoryProfileFitAnswerSchema,
+  delegationAdvisoryProfileFitOmissionSchema,
+  delegationAdvisoryScopeAnswerSchema,
+  delegationAdvisoryUsageSchema,
+  delegationDispatchAdvisoryAnswersSchema,
+  delegationResultAdvisoryAnswersSchema,
+} from "./seam/delegation-advisory.js";
 export type {
   JevAssessmentFailureCode,
   JevAssessmentOutcome,

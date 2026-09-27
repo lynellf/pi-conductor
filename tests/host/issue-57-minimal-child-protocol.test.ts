@@ -116,6 +116,23 @@ async function execute(
   return { result: JSON.parse(content.text) as Record<string, unknown>, log };
 }
 
+async function withIsolatedSdkRetrySettings<T>(action: () => Promise<T>): Promise<T> {
+  const agentDir = await mkdtemp(join(tmpdir(), "pi-conductor-issue-57-sdk-settings-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  try {
+    await writeFile(
+      join(agentDir, "settings.json"),
+      JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 } }),
+    );
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    return await action();
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(agentDir, { recursive: true, force: true });
+  }
+}
+
 function firstResult(result: Record<string, unknown>): Record<string, unknown> {
   const results = result.results;
   if (!Array.isArray(results) || results[0] === undefined || typeof results[0] !== "object") {
@@ -247,14 +264,16 @@ describe("Issue #57 minimal delegated-child protocol — real SDK child lifecycl
   it("a retryable provider error followed by normal file work completes from the final settlement", async () => {
     const primaryCheckout = await repository();
     const finalResponse = `Recovered normally.\n${"detail\n".repeat(600)}`;
-    const { result, log } = await execute(primaryCheckout, profile("minimal"), [
-      { kind: "fail", errorMessage: "service unavailable" },
-      {
-        kind: "emit_tool_calls",
-        calls: [{ name: "write", arguments: { path: "README.md", content: "recovered\\n" } }],
-      },
-      { kind: "emit_text", text: finalResponse },
-    ]);
+    const { result, log } = await withIsolatedSdkRetrySettings(() =>
+      execute(primaryCheckout, profile("minimal"), [
+        { kind: "fail", errorMessage: "service unavailable" },
+        {
+          kind: "emit_tool_calls",
+          calls: [{ name: "write", arguments: { path: "README.md", content: "recovered\\n" } }],
+        },
+        { kind: "emit_text", text: finalResponse },
+      ]),
+    );
 
     const child = firstResult(result);
     expect(child).toMatchObject({
