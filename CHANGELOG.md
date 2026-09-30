@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.22.0] - 2026-09-30
 
 ### Features
 
@@ -127,6 +127,15 @@
 
 ### Bug fixes
 
+- Keep v2 host-generated continuity working after a role exhausts its
+  approved models. The host's synthesized `role_unavailable` handoff has no
+  agent envelope, so it is no longer validated as one
+  (`accepted_control_v2_invalid_schema`). A restart at that handoff now seeds
+  the orchestrator the same way the live route does.
+- Keep long-run phase work packets within their 4,096-byte budget (#139).
+  When the cutoff-key list alone overflows the rendered packet, it is replaced
+  by its count, SHA-256, and dispatch source key. The full list stays in the
+  durable record, and saved packets are never re-rendered.
 - Clear intermediate parent model errors only on SDK-confirmed retry; retain usage
   and terminal guards, block terminal work/delegation admission, and report specific
   bounded host rejection causes instead of schema errors (#112).
