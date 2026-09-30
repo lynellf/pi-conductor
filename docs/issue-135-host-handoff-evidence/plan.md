@@ -1,6 +1,6 @@
 # Implementation plan: issue #135 host-materialized bounded handoff evidence
 
-Authority: Forgejo issue #135 and the acknowledged
+Authority: issue #135 and the acknowledged
 `docs/durable-continuity/spec.md` (v2 host-generated continuity). If this plan
 conflicts with either, the issue's acceptance criteria and the durable
 continuity spec remain authoritative.

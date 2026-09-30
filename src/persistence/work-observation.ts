@@ -2,6 +2,7 @@
 
 import type { RecipientTaskContextV2 } from "../core/types.js";
 import { assertAcceptedControlV2 } from "./accepted-control-v2.js";
+import { isRoleUnavailableRecovery } from "./host-recovery-handoff.js";
 import type { PersistedRecord } from "./log.js";
 import { sha256Canonical } from "./trajectory-records.js";
 import {
@@ -126,6 +127,8 @@ export function materializeWorkObservations(
     if (record === undefined || recordRunId(record) !== runId) continue;
     if (record.type === "transition_accepted") {
       if (record.event !== "handoff") continue;
+      // Exhaustion is already represented by session_failed, not a successful role return.
+      if (options.requireV2Control && isRoleUnavailableRecovery(records, index)) continue;
       if (options.requireV2Control) {
         assertAcceptedControlV2(
           record.accepted_control,
