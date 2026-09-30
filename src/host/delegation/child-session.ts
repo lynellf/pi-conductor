@@ -7,6 +7,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { resolveToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { SubagentStartedRecord } from "../../persistence/log.js";
@@ -318,9 +319,13 @@ async function initializeSdkChild(
   getController: () => ToolExecutionController | null,
   setController: (controller: ToolExecutionController) => void,
 ): Promise<CreatedChild> {
+  // One host-agentDir settings source for loader and session; without it the
+  // SDK session reads the user's global Pi settings (e.g. retry) (#159).
+  const settingsManager = SettingsManager.create(config.worktreePath, opts.agentDir);
   const loader = new DefaultResourceLoader({
     cwd: config.worktreePath,
     agentDir: opts.agentDir,
+    settingsManager,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
@@ -362,6 +367,7 @@ async function initializeSdkChild(
     modelRegistry: opts.modelRegistry,
     ...(runtime !== undefined && { modelRuntime: runtime }),
     resourceLoader: loader,
+    settingsManager,
     sessionManager: SessionManager.create(config.worktreePath, opts.sessionDir),
     customTools: [...childTools, ...reportTool],
     tools:

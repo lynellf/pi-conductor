@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Bug fixes
+
+- Stop role sessions and delegated children from reading or writing the
+  user's global Pi settings (`~/.pi/agent/settings.json`) (#159). They now use
+  the host `agentDir`, matching their resource loader and the retained-context
+  and trajectory sessions. Previously, continuing a trajectory could save the
+  role's model as the user's default Pi provider and model, and global
+  settings such as `retry` changed how children behaved.
+
 ## [0.22.0] - 2026-09-30
 
 ### Features

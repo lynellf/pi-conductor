@@ -13,6 +13,7 @@ import {
   type ExtensionUIContext,
   type ModelRegistry,
   SessionManager,
+  SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { HandoffContextRef, MachineDefinition, ModelEffort, Role } from "../core/types.js";
@@ -111,11 +112,13 @@ export async function spawnSharedSdkRoleSession(options: {
   // changes this controller only while idle so trajectory roles replace, not
   // append, instructions on their next native turn.
   let activeSystemPrompt = options.systemPrompt ?? undefined;
+  // Always pass settings from the host agentDir: without one, the SDK reads
+  // and persists (e.g. on `setModel`) the user's global Pi settings (#159).
   const settingsManager =
     options.contextRetention?.prepared.settingsManager ??
     (options.disableAutoCompaction === true || options.isTrajectory === true
       ? createTrajectorySettingsManager({ cwd: options.cwd, agentDir: options.agentDir })
-      : undefined);
+      : SettingsManager.create(options.cwd, options.agentDir));
   const retainedCompactionSettings =
     options.contextRetention === undefined
       ? undefined

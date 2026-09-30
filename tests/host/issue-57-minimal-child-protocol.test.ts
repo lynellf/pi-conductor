@@ -65,6 +65,7 @@ function tool(
   steps: Parameters<typeof makeModelRegistryWithStub>[0],
   log: InMemoryRecordLog,
   manager = new DelegationManager(),
+  agentDir = primaryCheckout,
 ): ReturnType<typeof createDelegateTool> {
   return createDelegateTool({
     role,
@@ -76,7 +77,7 @@ function tool(
     primaryCheckout,
     runStateDir: join(primaryCheckout, ".pi-conductor", "runs", runId),
     persistRecord: (record) => log.append(record),
-    agentDir: primaryCheckout,
+    agentDir,
     systemPromptRoot: primaryCheckout,
     modelRegistry: makeModelRegistryWithStub(steps),
     sessionDir: join(primaryCheckout, ".pi-conductor", "sessions"),
@@ -101,35 +102,49 @@ async function execute(
   primaryCheckout: string,
   childProfile: SubagentProfile,
   steps: Parameters<typeof makeModelRegistryWithStub>[0],
+  agentDir = primaryCheckout,
 ): Promise<{ readonly result: Record<string, unknown>; readonly log: InMemoryRecordLog }> {
   const log = new InMemoryRecordLog();
-  const result = await tool(primaryCheckout, childProfile, steps, log).execute(
-    "delegate",
-    task(),
-    undefined,
-    undefined,
-    {} as never,
-  );
+  const result = await tool(
+    primaryCheckout,
+    childProfile,
+    steps,
+    log,
+    new DelegationManager(),
+    agentDir,
+  ).execute("delegate", task(), undefined, undefined, {} as never);
   const content = result.content[0];
   if (content === undefined || content.type !== "text")
     throw new Error("delegate did not return text");
   return { result: JSON.parse(content.text) as Record<string, unknown>, log };
 }
 
-async function withIsolatedSdkRetrySettings<T>(action: () => Promise<T>): Promise<T> {
-  const agentDir = await mkdtemp(join(tmpdir(), "pi-conductor-issue-57-sdk-settings-"));
+/**
+ * Give the child fast retry through its own agentDir while the user's global
+ * Pi settings disable retry. The child must follow its agentDir (#159).
+ */
+async function withIsolatedSdkRetrySettings<T>(
+  action: (childAgentDir: string) => Promise<T>,
+): Promise<T> {
+  const childAgentDir = await mkdtemp(join(tmpdir(), "pi-conductor-issue-57-sdk-settings-"));
+  const userAgentDir = await mkdtemp(join(tmpdir(), "pi-conductor-issue-57-user-settings-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   try {
     await writeFile(
-      join(agentDir, "settings.json"),
+      join(childAgentDir, "settings.json"),
       JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 0 } }),
     );
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    return await action();
+    await writeFile(
+      join(userAgentDir, "settings.json"),
+      JSON.stringify({ retry: { enabled: false } }),
+    );
+    process.env.PI_CODING_AGENT_DIR = userAgentDir;
+    return await action(childAgentDir);
   } finally {
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    await rm(agentDir, { recursive: true, force: true });
+    await rm(childAgentDir, { recursive: true, force: true });
+    await rm(userAgentDir, { recursive: true, force: true });
   }
 }
 
@@ -264,15 +279,20 @@ describe("Issue #57 minimal delegated-child protocol — real SDK child lifecycl
   it("a retryable provider error followed by normal file work completes from the final settlement", async () => {
     const primaryCheckout = await repository();
     const finalResponse = `Recovered normally.\n${"detail\n".repeat(600)}`;
-    const { result, log } = await withIsolatedSdkRetrySettings(() =>
-      execute(primaryCheckout, profile("minimal"), [
-        { kind: "fail", errorMessage: "service unavailable" },
-        {
-          kind: "emit_tool_calls",
-          calls: [{ name: "write", arguments: { path: "README.md", content: "recovered\\n" } }],
-        },
-        { kind: "emit_text", text: finalResponse },
-      ]),
+    const { result, log } = await withIsolatedSdkRetrySettings((childAgentDir) =>
+      execute(
+        primaryCheckout,
+        profile("minimal"),
+        [
+          { kind: "fail", errorMessage: "service unavailable" },
+          {
+            kind: "emit_tool_calls",
+            calls: [{ name: "write", arguments: { path: "README.md", content: "recovered\\n" } }],
+          },
+          { kind: "emit_text", text: finalResponse },
+        ],
+        childAgentDir,
+      ),
     );
 
     const child = firstResult(result);
