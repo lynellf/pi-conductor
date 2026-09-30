@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.22.1] - 2026-09-30
 
 ### Bug fixes
 
@@ -10,6 +10,13 @@
   and trajectory sessions. Previously, continuing a trajectory could save the
   role's model as the user's default Pi provider and model, and global
   settings such as `retry` changed how children behaved.
+
+### Compatibility
+
+- Plain role sessions and delegated children no longer pick up global Pi
+  settings such as `retry`, transport, or timeouts. Put settings that should
+  apply to conductor roles in the host agent dir (default
+  `<cwd>/.pi-conductor/agent/settings.json`).
 
 ## [0.22.0] - 2026-09-30
 
