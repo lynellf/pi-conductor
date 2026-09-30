@@ -1,6 +1,6 @@
 # Report: issue #137 preserve supported worker-return narrative
 
-**Issue:** Forgejo #137.  **Authority:** the issue acceptance criteria and
+**Issue:** #137.  **Authority:** the issue acceptance criteria and
 `docs/issue-137-return-narrative-preservation/plan.md`.
 
 ## Outcome
@@ -79,7 +79,7 @@ exceptions.
 Host-observed execution, workspace, persistence, and gate facts remain
 authoritative. The supported return narrative and ignored-field diagnostics
 are reported/untrusted context only. The advisory Jev enhancement was posted
-to Forgejo issue #139 separately; Jev cannot approve gates, synthesize host
+to issue #139 separately; Jev cannot approve gates, synthesize host
 evidence, or override missing/failed checks.
 
 ## Scope

@@ -23,7 +23,7 @@ This is deliberately a host feature. Manifest parsing and validation stay pure i
 | --- | --- | --- |
 | Checkout package, `node_modules/.bin/pi --version` | `@earendil-works/pi-coding-agent` 0.80.6 / `0.80.6` | Sole SDK API and behavior basis. |
 | Checkout package companions | `@earendil-works/pi-ai` 0.80.6 and `@earendil-works/pi-agent-core` 0.80.6, resolved beneath coding-agent | Required by the 0.80.6 session experiment. |
-| Active PATH CLI, `pi --version` | `0.84.3` at `/home/lynellf/.nvm/versions/node/v26.5.0/bin/pi` | Separate operational fact only. Re-run the spike before using its API surface. |
+| Active PATH CLI, `pi --version` | `0.84.3` | Separate operational fact only. Re-run the spike before using its API surface. |
 | Node | `v26.5.0` | Spike runner environment. |
 
 Version commands recorded for this checkout were:

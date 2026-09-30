@@ -1,6 +1,6 @@
 # Implementation plan: issue #137 preserve supported worker-return narrative in fresh handoff context
 
-Authority: Forgejo issue [#137](https://git.eznas.link/lynellf/pi-conductor/issues/137).
+Authority: issue #137.
 If this plan conflicts with the issue's acceptance criteria, the issue is
 authoritative.
 
