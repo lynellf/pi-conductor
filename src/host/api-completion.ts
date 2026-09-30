@@ -10,6 +10,7 @@ import { continuityItemIndexFromRecords } from "../persistence/continuity.js";
 import { materializeContinuity } from "../persistence/continuity-materialization.js";
 import { renderContinuitySeed } from "../persistence/continuity-seed.js";
 import { type EndGuardRecord, endGuardRequestId } from "../persistence/end-guard.js";
+import { isRoleUnavailableRecovery } from "../persistence/host-recovery-handoff.js";
 import type { ArtifactDeliveryRecord, RecordLog } from "../persistence/log.js";
 import type { ContinuitySeedV2 } from "../persistence/work-observation-seed.js";
 import {
@@ -26,7 +27,11 @@ import { recordBackedContinuityAuthority } from "./continuity-record-authority.j
 import type { Host } from "./host.js";
 import type { RunExecutionLease } from "./log-file.js";
 import { runLoop } from "./loop.js";
-import { type ContinuitySeedSection, formatIncomingHandoffSeed } from "./loop-format.js";
+import {
+  type ContinuitySeedSection,
+  formatIncomingHandoffSeed,
+  formatRoleUnavailableSeed,
+} from "./loop-format.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { ReviewGateOptions } from "./review.js";
 import { RunControl } from "./run-control.js";
@@ -198,6 +203,11 @@ export async function runWithCompletion(args: RunWithCompletionArgs): Promise<Ru
   })().finally(async () => {
     try {
       runControl.close();
+      try {
+        await host.drainDelegationAdvisories?.();
+      } catch {
+        // Advisory drain is best-effort; it must not replace the run outcome.
+      }
     } finally {
       await lease.release();
     }
@@ -243,6 +253,16 @@ async function prepareRestartHandoffSeed(
   const policy = args.loadedManifest.manifest.context_enrichment;
   const acceptedIndex = findIncomingAcceptedHandoff(records, args.runId, recipientRole);
   const accepted = acceptedIndex === null ? undefined : records[acceptedIndex];
+  if (
+    args.host.controlProtocol === "v2" &&
+    isHostGeneratedContinuityPolicy(args.loadedManifest.manifest.continuity) &&
+    acceptedIndex !== null &&
+    accepted?.type === "transition_accepted" &&
+    isRoleUnavailableRecovery(records, acceptedIndex)
+  ) {
+    // Match the live exhaustion route: there was no model-authored terminal handoff.
+    return { seed: formatRoleUnavailableSeed(accepted.role, args.def.end_request_roles === null) };
+  }
   const incoming = incomingAcceptedHandoff(records, args.runId, recipientRole);
   const envelope = incoming?.envelope;
   if (

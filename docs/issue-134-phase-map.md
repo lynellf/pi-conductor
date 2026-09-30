@@ -1,6 +1,6 @@
 # Issue #134 — implementation phase map
 
-**Authority:** Forgejo issue #134, *Standalone CLI runs are not durably
+**Authority:** issue #134, *Standalone CLI runs are not durably
 discoverable, resumable, or ledger-visible by default*.
 
 ## Decisions and boundaries

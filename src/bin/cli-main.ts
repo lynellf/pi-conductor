@@ -59,6 +59,7 @@ import {
   type StartRunOptions,
   startRun,
 } from "../index.js";
+import { runAdvisoryReportCli } from "./cli-advisory-report.js";
 import { runContinuityCli } from "./cli-continuity.js";
 import { createCliModelRegistry } from "./cli-model-registry.js";
 import { runReconcileCli } from "./cli-reconcile.js";
@@ -278,6 +279,10 @@ export async function runCli(argv: readonly string[], deps: CliDeps): Promise<nu
     signals = processSignalSource,
   } = deps;
 
+  if (argv[0] === "advisory-report") {
+    return runAdvisoryReportCli(argv, out);
+  }
+
   if (argv[0] === "continuity-report") {
     return runContinuityCli(argv, out);
   }
@@ -413,6 +418,9 @@ async function runResume(parsed: ParsedArgs, deps: ResumeCommandDeps): Promise<n
 export async function main(): Promise<number> {
   const argv = process.argv.slice(2);
 
+  if (argv[0] === "advisory-report") {
+    return runAdvisoryReportCli(argv, globalThis.console);
+  }
   if (argv[0] === "continuity-report") {
     return runContinuityCli(argv, globalThis.console);
   }

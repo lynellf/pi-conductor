@@ -27,6 +27,7 @@ import type { AssignmentDelegationTools } from "./delegation/delegate-tool-facto
 import type { PoolChildResult } from "./delegation/pool.js";
 import type { ProductionDelegationCoordinator } from "./delegation/production-delegation.js";
 import { createSandboxAdmissionAdapter } from "./delegation/sandbox-admission.js";
+import type { DelegationAdvisoryShadow } from "./delegation-advisory/shadow.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import { initializeProtectedRunLayout } from "./execution/sandbox/protected-run-layout.js";
@@ -57,6 +58,7 @@ export interface DelegateHostContext {
   readonly displaySink: DisplaySink | undefined;
   readonly log: RecordLog;
   readonly delegation: ProductionDelegationCoordinator;
+  readonly delegationAdvisoryShadow?: DelegationAdvisoryShadow;
   readonly runCostSoFar: () => number;
   readonly persistRecord: (record: PersistedRecord) => void;
   readonly adaptDelegateToolResult: (result: {
@@ -136,6 +138,9 @@ export async function createControllerAdmission(
       primaryCheckout: ctx.cwd,
       runStateDir,
       persistRecord: ctx.persistRecord,
+      ...(ctx.delegationAdvisoryShadow === undefined
+        ? {}
+        : { advisoryShadow: ctx.delegationAdvisoryShadow }),
       agentDir: ctx.agentDir,
       systemPromptRoot: delegationPromptRoot(ctx.loadedManifest, ctx.cwd),
       modelRegistry: ctx.modelRegistry,
@@ -330,6 +335,9 @@ async function buildDelegationFactoryOptions(
     primaryCheckout,
     runStateDir,
     persistRecord: (record: PersistedRecord) => ctx.persistRecord(record),
+    ...(ctx.delegationAdvisoryShadow === undefined
+      ? {}
+      : { advisoryShadow: ctx.delegationAdvisoryShadow }),
     agentDir: ctx.agentDir,
     systemPromptRoot: delegationPromptRoot(ctx.loadedManifest, ctx.cwd),
     modelRegistry: ctx.modelRegistry,

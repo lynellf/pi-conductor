@@ -15,6 +15,7 @@ import {
   isControllerEffectRecord,
 } from "./controller-effect-records.js";
 import { assertControllerRecord, isControllerRecord } from "./controller-records.js";
+import { assertDelegationAdvisoryRecord } from "./delegation-advisory-record.js";
 import { terminalObservationV2Schema } from "./delegation-lifecycle-schema.js";
 import { assertDelegationSubmissionAccepted } from "./delegation-task.js";
 import { assertEndGuardRecord } from "./end-guard.js";
@@ -155,6 +156,13 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
 
   if (record.type === "jev_assessment") {
     assertJevAssessmentRecord(record);
+    return;
+  }
+  if (
+    record.type === "delegation_dispatch_advisory" ||
+    record.type === "delegation_result_advisory"
+  ) {
+    assertDelegationAdvisoryRecord(record);
     return;
   }
 

@@ -1,6 +1,6 @@
 # Report: issue #135 host-materialized bounded handoff evidence
 
-**Issue:** Forgejo #135. **Authority:** the issue's acceptance criteria + the
+**Issue:** #135. **Authority:** the issue's acceptance criteria + the
 acknowledged `docs/durable-continuity/spec.md` (v2 host-generated continuity).
 **Author:** implementer (Tiel-Coder / Ornith-1.5-35B-A3B variant), Phase 5
 (integration, docs, public exports, final repository gate).

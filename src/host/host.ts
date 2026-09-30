@@ -224,6 +224,9 @@ export interface Host {
    */
   persistRecord(record: PersistedRecord): void;
 
+  /** Drain opt-in shadow-only delegation advisories before the run lease closes. */
+  drainDelegationAdvisories?(): Promise<void>;
+
   /**
    * Build the orchestrator's run-memory artifact (§8.4) for the next
    * orchestrator session. Pure over the current checkpoint + records.

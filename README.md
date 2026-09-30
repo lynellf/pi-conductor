@@ -91,7 +91,15 @@ conduct \
 stdin. When `--log-dir <path>` is omitted, the CLI writes durable run logs to
 `<cwd>/.pi-conductor/runs` (creating missing parents); `--log-dir <path>`
 selects an explicit persistent run-log directory and creates missing parents.
-In both text and `--json` modes the CLI writes one immediate `run_started`
+The separate offline advisory report reads every `*.jsonl` log in a runs
+directory and does not make network requests or mutate the logs:
+
+```bash
+conduct advisory-report <runs-dir>
+conduct advisory-report <runs-dir> --json
+```
+
+In both text and `--json` run modes the CLI writes one immediate `run_started`
 NDJSON event to stdout once the run handle resolves and before completion:
 `{"schema_version":1,"event":"run_started","run_id":"…","log_dir":"…"}` with an
 absolute `log_dir`. Under `--json`, stdout is therefore an NDJSON stream of two
@@ -249,6 +257,39 @@ roles:
     tools: [read, grep, handoff, end]
 ```
 
+### Optional shadow-only delegation advisory
+
+An operator may opt into bounded, advisory-only TypeSafe judgments by adding
+this strict block to the top level of a manifest that already has a role with a
+`delegation` policy:
+
+```yaml
+delegation_advisory:
+  schema_version: 1
+  provider: typesafe_jev
+  model: jev-latest
+  mode: shadow
+  max_parallel: 4
+  request_timeout_ms: 5000
+  max_attempts: 1
+```
+
+Add a short `description` (1–500 characters) to each allowed subagent profile
+to make it eligible for profile-fit comparison. For example, add this field to
+an existing `subagents:` entry:
+
+```yaml
+- name: api-implementer
+  description: Implements one bounded API contract and its tests.
+```
+
+Profile fit is asked only when the parent allows at least two profiles and each
+allowed profile has a description; the host never uses `system_prompt` as a
+substitute.
+The advisory records never affect admission, prompts, scheduling, child-result
+normalization, or routing. Read the [operator disclosure](docs/issue-154-delegation-advisory/operator-disclosure.md)
+before enabling the block; it details the outbound data boundary and rollback.
+
 ### 3. Write role prompts
 
 Each role's system prompt is a plain-prose `.md` file at the declared
@@ -308,6 +349,8 @@ The reference material is split into focused pages:
 - [Worktree subagent delegation](docs/delegation.md) — assignment-based
   delegation by default, legacy compatibility, child profiles, projections,
   optional Bubblewrap commands, artifacts, and branch integration.
+- [Shadow-only delegation advisory disclosure](docs/issue-154-delegation-advisory/operator-disclosure.md)
+  — opt-in TypeSafe data disclosure, record limits, and the offline calibration report.
 - [Per-role isolated workspaces](docs/workspaces.md) — workspace backends,
   artifacts, mounts, and progressive disclosure.
 - [Sandboxed repository controllers](docs/controller.md) — fixed-argv planner

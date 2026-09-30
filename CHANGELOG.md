@@ -4,6 +4,14 @@
 
 ### Features
 
+- Add the opt-in `delegation_advisory:` manifest block for issue #154's
+  shadow-only, bounded Jev Choice/Noul judgments over admitted delegated tasks
+  and their results. Strict public dispatch/result records append beside the
+  authoritative child records but never affect admission, prompts, status,
+  verdict, or routing; `conduct advisory-report <runs-dir>` provides an offline
+  aggregate calibration view. See
+  `docs/issue-154-delegation-advisory/operator-disclosure.md` before enabling it.
+
 - Add bounded predecessor-session tool outcome, collected artifact SHA, and
   file-mutation path-hash references to `phase_work_packet.host_observed`
   (issue #143). References come from durable host records at the dispatch

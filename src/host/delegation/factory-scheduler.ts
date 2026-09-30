@@ -59,6 +59,9 @@ function createNativeDelegateScheduler(
   origin?: DelegationSchedulerOrigin,
 ): DelegationScheduler {
   const materializedPaths = new Map<string, readonly string[]>();
+  const allowedProfiles = opts.subagents.filter((profile) =>
+    opts.delegationPolicy.allowed_subagents.includes(profile.name),
+  );
   const scheduler = new DelegationScheduler({
     identity: {
       runId: opts.runId,
@@ -155,6 +158,16 @@ function createNativeDelegateScheduler(
       }
     },
     onTerminal: (result) => persistTerminal(opts, result),
+    ...(opts.advisoryShadow === undefined
+      ? {}
+      : {
+          advisoryShadow: {
+            dispatchAccepted: (record, task) =>
+              opts.advisoryShadow?.dispatchAccepted(record, task, allowedProfiles),
+            childTerminal: (result, task) =>
+              opts.advisoryShadow?.childTerminal(result, task, logicalParentId),
+          },
+        }),
     ...(opts.onFatal === undefined ? {} : { onFatal: opts.onFatal }),
     ...(opts.isBudgetExhausted === undefined ? {} : { isBudgetExhausted: opts.isBudgetExhausted }),
     ...(opts.getHostRejection === undefined

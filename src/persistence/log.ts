@@ -22,6 +22,7 @@ import type { ContextEnrichmentRecordV2 } from "./context-enrichment-v2.js";
 import type { ChildContinuitySibling } from "./continuity.js";
 import type { ControllerEffectRecord } from "./controller-effect-records.js";
 import type { ControllerRecord } from "./controller-records.js";
+import type { DelegationAdvisoryRecord } from "./delegation-advisory-record.js";
 import type { DelegationSubmissionAcceptedRecord } from "./delegation-task.js";
 import type {
   DelegatedEffectiveTools,
@@ -509,7 +510,8 @@ export type PersistedRecord =
   | ReviewApprovalInvalidatedRecord
   | PhaseWorkPacketRecord
   | ReconstructionSignalRecord
-  | JevAssessmentRecord;
+  | JevAssessmentRecord
+  | DelegationAdvisoryRecord;
 
 // ─── RecordLog interface ───────────────────────────────────────────────
 

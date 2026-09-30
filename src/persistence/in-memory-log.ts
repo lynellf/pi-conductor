@@ -7,6 +7,7 @@ import { assertControllerEffectHistory } from "./controller-effect-history.js";
 import { isControllerEffectRecord } from "./controller-effect-records.js";
 import { isControllerRecord } from "./controller-records.js";
 import { reconstructControllerTimeline } from "./controller-timeline.js";
+import { assertDelegationAdvisoryHistory } from "./delegation-advisory-record.js";
 import { assertDelegationTaskTimeline } from "./delegation-task.js";
 import { assertEndGuardAppend, type EndGuardRecord } from "./end-guard.js";
 import type { PersistedRecord, RecordLog } from "./log.js";
@@ -39,6 +40,12 @@ export class InMemoryRecordLog implements RecordLog {
     }
     if (isDelegationTaskRecord(snapshot)) {
       assertDelegationTaskTimeline([...this.records(runId), snapshot]);
+    }
+    if (
+      snapshot.type === "delegation_dispatch_advisory" ||
+      snapshot.type === "delegation_result_advisory"
+    ) {
+      assertDelegationAdvisoryHistory([...this.records(runId), snapshot]);
     }
     if (isControllerEffectRecord(snapshot))
       assertControllerEffectHistory([...this.records(runId), snapshot]);

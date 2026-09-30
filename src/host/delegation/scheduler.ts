@@ -63,6 +63,14 @@ export interface DelegationSchedulerOptions {
   ) => Promise<PreparedDelegateSubmission>;
   readonly runTask: (task: PreparedDelegateChild, signal: AbortSignal) => Promise<PoolChildResult>;
   readonly onTerminal: (result: PoolChildResult) => void;
+  /** Fire-and-forget issue #154 hooks; they observe but never control scheduling. */
+  readonly advisoryShadow?: {
+    readonly dispatchAccepted: (
+      record: DelegationSubmissionAcceptedRecord,
+      task: PreparedDelegateChild,
+    ) => void;
+    readonly childTerminal: (result: PoolChildResult, task: PreparedDelegateChild) => void;
+  };
   readonly onFatal?: (cause: unknown) => void;
   readonly isBudgetExhausted?: () => boolean;
   /** Synchronous host guard checked at both sides of asynchronous preparation. */
@@ -220,6 +228,13 @@ export class DelegationScheduler {
     } catch (cause) {
       this.fail(cause);
       throw cause;
+    }
+    for (const task of tasks) {
+      try {
+        this.options.advisoryShadow?.dispatchAccepted(accepted, task);
+      } catch {
+        // A shadow scheduling failure cannot undo acceptance or block child admission.
+      }
     }
     const states = tasks.map((task) => {
       const state: TaskState = {
@@ -442,6 +457,13 @@ export class DelegationScheduler {
   private async finish(state: TaskState, result: PoolChildResult): Promise<void> {
     if (state.result !== undefined) return;
     this.options.onTerminal(result);
+    if (state.task !== null) {
+      try {
+        this.options.advisoryShadow?.childTerminal(result, state.task);
+      } catch {
+        // Advisory capture must not delay waiter settlement or child result delivery.
+      }
+    }
     state.result = result;
     state.status =
       result.status === "completed" || result.status === "no_changes"

@@ -58,6 +58,7 @@ import { assertControllerEffectHistory } from "../persistence/controller-effect-
 import { isControllerEffectRecord } from "../persistence/controller-effect-records.js";
 import { isControllerRecord } from "../persistence/controller-records.js";
 import { reconstructControllerTimeline } from "../persistence/controller-timeline.js";
+import { assertDelegationAdvisoryHistory } from "../persistence/delegation-advisory-record.js";
 import { assertDelegationTaskTimeline } from "../persistence/delegation-task.js";
 import {
   assertEndGuardAppend,
@@ -131,6 +132,12 @@ export class FileRecordLog implements RecordLog {
     }
     if (isDelegationTaskRecord(materialized.record)) {
       assertDelegationTaskTimeline([...this.records(runId), materialized.record]);
+    }
+    if (
+      materialized.record.type === "delegation_dispatch_advisory" ||
+      materialized.record.type === "delegation_result_advisory"
+    ) {
+      assertDelegationAdvisoryHistory([...this.records(runId), materialized.record]);
     }
     if (isControllerEffectRecord(materialized.record))
       assertControllerEffectHistory([...this.records(runId), materialized.record]);
@@ -258,6 +265,7 @@ export class FileRecordLog implements RecordLog {
     }
     const endGuardRecords = records.filter(isEndGuardRecord);
     unfinishedEndGuardAttempts(endGuardRecords);
+    assertDelegationAdvisoryHistory(records);
     assertDelegationTaskTimeline(records);
     reconstructChildOutputTimeline(records);
     assertControllerEffectHistory(records);
