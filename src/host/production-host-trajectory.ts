@@ -31,6 +31,7 @@ import {
 import { assertTrajectorySdkSupported } from "./trajectory-sdk-capability.js";
 export interface TrajectoryResumeContext {
   readonly modelRegistry: ModelRegistry;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly cwd: string;
   readonly agentDir: string;
   readonly sessionDir: string;
@@ -60,6 +61,7 @@ export async function resumeTrajectoryRole(
     assertTrajectoryEffortSupported(resolved.model, persisted.target.requested_effort);
     session = await spawnSharedSdkRoleSession({
       role,
+      ...(host.executionTier === undefined ? {} : { executionTier: host.executionTier }),
       roleConfig,
       model: resolved.model,
       logicalModel: persisted.target.model,

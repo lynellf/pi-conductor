@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+- Detect host execution capabilities before role/model work. Ordinary SDK file
+  tools, foreground commands and end guards have a portable bounded baseline;
+  Linux enhanced supervision keeps its existing guarantees. Degradation is
+  visible and durable, never a silent runtime fallback.
+- Add closed `execution_policy: {mode: portable | strict}` and separate baseline
+  execution records. Interrupted baseline calls block resume/replacement without
+  claiming cleanup or accepting an acknowledgment override. Explicit unavailable
+  controller, delegation, sandbox and container requirements fail preflight.
+- Bound long supervision timers and attempt owned cleanup after close-observation
+  errors while retaining uncertainty. Schedule Linux CI on its registered label.
+
 ## [0.22.1] - 2026-09-30
 
 ### Bug fixes

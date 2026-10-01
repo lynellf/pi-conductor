@@ -10,8 +10,8 @@ import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { EndGuardRunner } from "./end-guard-runner.js";
 import { assertFileToolWorkerRuntime } from "./execution/file-tool-worker.js";
+import { admitProductionExecution } from "./execution/production-execution-admission.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
-import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import type { LoadedManifest } from "./manifest.js";
 import type { ProductionHostOptions } from "./production-host-options.js";
 import { ProductionSessionState } from "./production-session-state.js";
@@ -25,6 +25,7 @@ import { assertTrajectorySdkSupportedForHandoffs } from "./trajectory-sdk-capabi
 /** Shared run-scoped SDK state used by the production Host facade. */
 export class ProductionHostContext {
   readonly modelRegistry: ModelRegistry;
+  readonly executionTier: "enhanced" | "baseline";
   readonly cwd: string;
   readonly continuityRepositoryPath: string;
   readonly log: RecordLog;
@@ -56,6 +57,7 @@ export class ProductionHostContext {
   protected readonly typesafeApiKey: string | null;
 
   constructor(opts: ProductionHostOptions) {
+    this.executionTier = admitProductionExecution(opts);
     // Fail before the orchestration loop admits a role session. The worker
     // cannot recover from a host/package mismatch by retrying a model.
     const usesSupervisedFileTools = opts.loadedManifest.manifest.roles.some(
@@ -100,10 +102,7 @@ export class ProductionHostContext {
       telemetry: opts.roleTurnTelemetry,
     });
     this.nodeRoleSessionFactory = opts.nodeRoleSessionFactory ?? createNodeRoleSession;
-    if (this.loadedManifest.manifest.end_guard !== undefined && !isSupervisedProcessSupported()) {
-      throw new Error("end_guard requires a platform with supervised process cleanup");
-    }
-    this.endGuardRunner = new EndGuardRunner(this.cwd);
+    this.endGuardRunner = new EndGuardRunner(this.cwd, undefined, this.executionTier);
     this.sessionState = new ProductionSessionState(this.sessionStates, this.agentsBySessionId);
     // SessionManager writes JSONL directly and does not create its parent.
     mkdirSync(this.sessionDir, { recursive: true, mode: 0o700 });

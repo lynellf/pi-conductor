@@ -53,6 +53,8 @@ export interface FileToolWorkerInput {
   readonly cwd: string;
   readonly model?: FileToolWorkerModel;
   readonly supervision: FileToolWorkerSupervision;
+  /** Host-selected backend; never retry an enhanced failure as baseline (§3). */
+  readonly processRunner?: typeof runSupervisedProcess;
 }
 
 type WorkerErrorCode =
@@ -287,7 +289,7 @@ export async function runFileToolWorker(input: FileToolWorkerInput): Promise<Fil
     );
   }
 
-  const result = await runSupervisedProcess({
+  const result = await (input.processRunner ?? runSupervisedProcess)({
     ...input.supervision,
     file: process.execPath,
     args: ["--input-type=module", "--eval", FIXED_BOOTSTRAP],

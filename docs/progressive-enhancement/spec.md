@@ -35,7 +35,7 @@ model commands, download tools, install software or expose environment values.
 | Foreground `bash` | Existing detached Linux supervision, marker/identity observations, owned TERM/KILL and settlement | Plain Node spawn; POSIX process-group TERM/KILL where possible, child termination elsewhere; no descendant-cleanup proof |
 | Durable tool admission and reconciliation | Existing boot/namespaces/original evidence and existing schemas | Separate baseline start/terminal records, no fabricated admission witness, no `cleanup_confirmed` |
 | `end_guard` | Durable attempt, bounded output and confirmed supervised cleanup | Execute the declared command and enforce its deadline; record baseline tier and `not-guaranteed` cleanup; do not omit the guard |
-| Bubblewrap delegated commands/verification | Explicit pinned sandbox policy and existing approval, probe, namespace and protected-file checks | Unavailable without the existing Linux backend; explicit requests fail preflight, never ordinary spawn |
+| Bubblewrap delegated commands/verification | Explicit pinned sandbox policy and existing approval, probe, namespace and protected-file checks; the command backend is still build-gated closed | Unavailable in this build on every OS; enabled delegation requesting such a profile fails preflight, never ordinary spawn |
 | Repository controller, local effects, privileged Git/remote effects | Controller ownership/approval plus protected descriptors, trusted Git and supervised effects | Unavailable on non-Linux hosts in this change; an explicit controller fails preflight, even if its first step looks portable |
 | Delegation, exact/snapshot child authority and child cancellation | Existing protected Git/artifact admission, original child authority and cleanup contract | Non-Linux delegation is unavailable in this change: its protected `/proc/self/fd` and settlement dependencies cannot be replaced by weaker reads. Declared delegation fails preflight, not silently removed |
 | Worktree/copy role workspaces and file confinement | Existing Git snapshot/projection and path checks, public RPC tools | Preserve confinement and selected backend; use baseline file workers. Missing Git/backend support is an error, never switch to shared/unconfined execution |
@@ -98,7 +98,7 @@ enhanced semantics; legacy passed guards still require confirmed cleanup.
 
 Normal baseline completion permits the next tool/transition without pretending
 the descendant set is empty. A successful guard establishes exit-zero only under
-the recorded baseline contract. Timeout, abort, transport/persistence uncertainty
+the recorded baseline contract. Timeout, abort, unexpected foreground signal or transport/persistence uncertainty
 seals admission and stops the invocation. No timeout-recovery allowance can
 justify another attempt with potentially live prior work.
 
@@ -122,7 +122,7 @@ Resume options considered:
 3. Block unresolved baseline work: safest small feature-detection change.
 
 **Decision: option 3.** An unmatched baseline start, or terminal timeout/abort/
-transport uncertainty, blocks resume and replacement before any model/tool work.
+unexpected foreground signal or transport uncertainty, blocks resume and replacement before any model/tool work.
 Ordinary durably completed/failed calls permit checkpoint resume. There is no
 baseline reconcile-tools proof or acknowledgment override in this change. The
 operator inspects partial effects/survivors and may intentionally start a new run;

@@ -7,6 +7,8 @@ import {
   reconcileToolExecutionCleanup,
   type ToolExecutionCleanupInspection,
 } from "../host/execution/tool-execution-reconciliation.js";
+import { FileRecordLog } from "../host/log-file.js";
+import { assertBaselineExecutionsSettled } from "../persistence/baseline-execution.js";
 import { formatObservationDiagnostic } from "./cli-observation-diagnostic.js";
 
 /** Usage and acknowledgment semantics for the reconciliation CLI. */
@@ -111,6 +113,19 @@ export async function runReconcileCli(
     return 1;
   }
   try {
+    const records = new FileRecordLog({ baseDir: args.baseDir }).records(args.runId);
+    if (
+      args.executionId !== undefined &&
+      records.some(
+        (record) =>
+          record.type === "baseline_execution_started" && record.execution_id === args.executionId,
+      )
+    )
+      throw new Error(
+        "baseline execution has no reconciliation proof or acknowledgment override; inspect partial effects before deliberately starting a new run",
+      );
+    if (args.executionId === undefined && args.actionId === undefined)
+      assertBaselineExecutionsSettled(records);
     if (
       args.actionId !== undefined &&
       args.note !== undefined &&

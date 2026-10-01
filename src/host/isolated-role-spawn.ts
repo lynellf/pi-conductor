@@ -8,7 +8,6 @@
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
 import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { RoleConfig, WorkspaceConfig } from "../manifest/types.js";
@@ -17,14 +16,16 @@ import { workspaceProvisioned } from "../persistence/log.js";
 import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
+import type { RoleExecutionController } from "./execution/baseline-controller.js";
+import { createRoleToolExecutionController } from "./execution/role-tool-execution-binding.js";
 import { createSupervisedTools } from "./execution/supervised-tools.js";
-import { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import type { RoleSession } from "./host.js";
 import {
   type PreparedIsolatedContextRetention,
   prepareIsolatedContextRetention,
 } from "./isolated-context-retention.js";
+import { boundedBridgeTimeout, toExecutionBridgeTool } from "./isolated-execution-bridge.js";
 import { createRequestFilesBridgeHandler } from "./request-files-controller.js";
 import type { ReviewGateOptions } from "./review.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
@@ -35,7 +36,6 @@ import {
   type DelegateTaskBridgeHandler,
   type DelegationControlBridgeHandler,
 } from "./rpc/delegate-bridge.js";
-import type { ExecutionBridgeToolDefinition } from "./rpc/execution-bridge.js";
 import {
   loadMachineToolsConfig,
   MACHINE_TOOLS_CONFIG_ENV,
@@ -56,6 +56,7 @@ import { captureProgressiveProjectionGitAuthority } from "./workspace/progressiv
 /** Spawn one isolated role process in its provisioned worktree or copy. */
 export async function spawnIsolatedRoleSession(options: {
   readonly role: Role;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly orchestratorRole?: Role;
   readonly controlProtocol?: "v1" | "v2";
   readonly reviewGate?: ReviewGateOptions;
@@ -144,12 +145,13 @@ export async function spawnIsolatedRoleSession(options: {
   });
   const confinedTools = buildConfinedTools(guarantee.projection, options.roleConfig?.tools);
   const executionPolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
-  let executionController: ToolExecutionController | null = null;
+  let executionController: RoleExecutionController | null = null;
   const supervisedTools = createSupervisedTools({
     cwd: workspaceResult.workspacePath,
     declaredTools: confinedTools.activeNames,
     getController: () => executionController,
     getPolicy: () => executionPolicy,
+    ...(options.executionTier === undefined ? {} : { executionTier: options.executionTier }),
     wrapFileTool: (raw) => confineToolDefinition(raw, guarantee.projection),
   });
   const workspace = Object.freeze({
@@ -448,9 +450,11 @@ export async function spawnIsolatedRoleSession(options: {
   executionController =
     confinedTools.activeNames.length === 0
       ? null
-      : new ToolExecutionController({
+      : createRoleToolExecutionController({
           runId: options.runId,
-          logicalSessionId: JSON.stringify([options.runId, options.role, executionVisitIndex]),
+          role: options.role,
+          visitIndex: executionVisitIndex,
+          ...(options.executionTier === undefined ? {} : { executionTier: options.executionTier }),
           roleSessionId: session.sessionId,
           policy: executionPolicy,
           persist: options.persistRecord,
@@ -489,26 +493,4 @@ export async function spawnIsolatedRoleSession(options: {
     ...(options.displaySink !== undefined && { onDisplay: options.displaySink }),
   });
   return session;
-}
-
-function boundedBridgeTimeout(timeoutSeconds: number, graceSeconds: number): number {
-  const milliseconds = timeoutSeconds * 1_000 + graceSeconds * 2_000 + 5_000;
-  return Math.min(2_147_483_647, Math.max(1, Math.floor(milliseconds)));
-}
-
-function toExecutionBridgeTool(tool: ToolDefinition): ExecutionBridgeToolDefinition {
-  return {
-    name: tool.name as ExecutionBridgeToolDefinition["name"],
-    parameters: tool.parameters,
-    execute: (toolCallId, params, signal, modelInput) =>
-      tool.execute(toolCallId, params as never, signal, undefined, {
-        model:
-          typeof modelInput === "object" &&
-          modelInput !== null &&
-          "input" in modelInput &&
-          Array.isArray(modelInput.input)
-            ? { input: modelInput.input }
-            : undefined,
-      } as unknown as ExtensionContext),
-  };
 }

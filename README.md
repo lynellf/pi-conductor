@@ -127,6 +127,24 @@ the same immediate `run_started` event plus the same terminal result.
 
 The engine is the same in all three surfaces — extension, CLI, and library.
 
+### Portable execution and progressive enhancement
+
+Ordinary role tools and `end_guard` work wherever Pi and Node work. On Linux with
+usable procfs/admission interfaces, the existing enhanced supervision remains in
+place. Other hosts use bounded SDK file workers and foreground subprocesses with
+best-effort cancellation: **descendant cleanup is not guaranteed**. Selection is
+recorded before model work and degradation is shown in the UI or on stderr.
+
+`execution_policy: { mode: strict }` requires enhanced execution for tools/guards;
+the default is `portable`. Interrupted baseline work blocks resume/replacement:
+inspect partial effects and survivors before deliberately starting a new run.
+There is no baseline cleanup acknowledgment override. Explicit controller,
+delegation, sandbox or unavailable container requirements fail preflight rather
+than becoming unconfined execution. Non-Linux delegation/controllers remain
+unavailable; the staged Bubblewrap command backend remains disabled in this build.
+See [execution controls](docs/execution-controls.md) and the
+[design record](docs/progressive-enhancement/spec.md).
+
 ### Opt-in delegated command sandbox
 
 Delegated children remain file-only unless their subagent profile declares an

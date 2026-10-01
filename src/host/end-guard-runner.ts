@@ -3,6 +3,7 @@
 import { StringDecoder } from "node:string_decoder";
 import { type EndGuardConfig, resolveEndGuardConfig } from "../manifest/end-guard.js";
 import { capErrorDiagnostic } from "./bounded-diagnostic.js";
+import { runBaselineProcess } from "./execution/baseline-process.js";
 
 export type { EndGuardConfig } from "../manifest/end-guard.js";
 
@@ -43,7 +44,7 @@ export interface EndGuardRunResult {
   readonly elapsedMs: number;
   readonly output: string;
   readonly truncated: boolean;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
+  readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
 }
 
 interface ActiveRun {
@@ -86,6 +87,7 @@ export class EndGuardRunner {
   constructor(
     private readonly cwd: string,
     private readonly env?: NodeJS.ProcessEnv,
+    private readonly executionTier: "enhanced" | "baseline" = "enhanced",
   ) {}
 
   /** Execute a guard with bounded combined diagnostics and confirmed cleanup. */
@@ -106,7 +108,7 @@ export class EndGuardRunner {
         elapsedMs: 0,
         output: "end guard was aborted",
         truncated: false,
-        cleanup: "not-started",
+        cleanup: this.executionTier === "baseline" ? "not-guaranteed" : "not-started",
       });
     }
     const controller = new AbortController();
@@ -144,11 +146,14 @@ export class EndGuardRunner {
     let cleanup: EndGuardRunResult["cleanup"] = "not-started";
     let supervisorEntered = false;
     const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
-    if (!isSupervisedProcessSupported()) throw new Error("end guard supervision is unsupported");
+    if (this.executionTier === "enhanced" && !isSupervisedProcessSupported())
+      throw new Error("end guard supervision is unsupported");
     try {
       const config = resolveEndGuardConfig(request.config);
       supervisorEntered = true;
-      const result = await runSupervisedProcess({
+      const result = await (this.executionTier === "baseline"
+        ? runBaselineProcess
+        : runSupervisedProcess)({
         command: config.command,
         cwd: this.cwd,
         ...(this.env !== undefined ? { env: this.env } : {}),
@@ -161,7 +166,7 @@ export class EndGuardRunner {
         onOutput: (stream, chunk) =>
           appendBounded(output, Buffer.from(decoders[stream].write(chunk))),
       });
-      cleanup = "confirmed";
+      cleanup = this.executionTier === "baseline" ? "not-guaranteed" : "confirmed";
       appendBounded(output, Buffer.from(decoders.stdout.end() + decoders.stderr.end()));
       if (output.chunks.length === 0) {
         const diagnostic = capErrorDiagnostic(`${result.stdout}${result.stderr}`);
@@ -184,15 +189,18 @@ export class EndGuardRunner {
       appendBounded(output, Buffer.from(decoders.stdout.end() + decoders.stderr.end()));
       const processError = error instanceof SupervisedProcessError ? error : null;
       cleanup = processError?.cleanup ?? (supervisorEntered ? "unconfirmed" : "not-started");
-      if (cleanup === "unconfirmed") this.globallyClosed = true;
-      const outcome: EndGuardOutcome =
-        cleanup === "unconfirmed"
-          ? "cleanup_unconfirmed"
-          : processError?.code === "supervised-process-timeout"
-            ? "timed_out"
-            : processError?.code === "supervised-process-aborted"
-              ? "aborted"
-              : "spawn_error";
+      const uncertain =
+        cleanup === "unconfirmed" ||
+        (this.executionTier === "baseline" && processError?.code === "supervised-process-timeout");
+      if (uncertain) this.globallyClosed = true;
+      if (this.executionTier === "baseline") cleanup = "not-guaranteed";
+      const outcome: EndGuardOutcome = uncertain
+        ? "cleanup_unconfirmed"
+        : processError?.code === "supervised-process-timeout"
+          ? "timed_out"
+          : processError?.code === "supervised-process-aborted"
+            ? "aborted"
+            : "spawn_error";
       return {
         attemptId: request.attemptId,
         roleSessionId: request.roleSessionId,

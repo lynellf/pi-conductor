@@ -7,48 +7,37 @@
 
 import { randomUUID } from "node:crypto";
 
-import type { Model } from "@earendil-works/pi-ai";
 import {
   type createAgentSession,
-  type ExtensionUIContext,
-  type ModelRegistry,
   SessionManager,
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { HandoffContextRef, MachineDefinition, ModelEffort, Role } from "../core/types.js";
 import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
-import type { RoleConfig } from "../manifest/types.js";
+import { assertBaselineExecutionsSettled } from "../persistence/baseline-execution.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import { isToolExecutionRecord, type ToolExecutionRecord } from "../persistence/tool-execution.js";
+import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { createAskUserTool } from "./ask-user-tool.js";
 import { SessionState } from "./cost.js";
-import type { AssignmentDelegationTools } from "./delegation/delegate-tool-factory.js";
-import type { DisplaySink } from "./display-sink.js";
+import type { RoleExecutionController } from "./execution/baseline-controller.js";
 import { bindLiveRoleToolExecution } from "./execution/role-tool-execution-binding.js";
 import { createSupervisedTools } from "./execution/supervised-tools.js";
-import type { ToolExecutionController } from "./execution/tool-execution-controller.js";
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import { createHandoffContextTool } from "./handoff-context-tool.js";
 import type { RoleSession, TrajectoryContinuationOptions } from "./host.js";
-import type {
-  OrchestratorContextCoordinator,
-  PreparedOrchestratorContext,
-} from "./orchestrator-context-coordinator.js";
 import { buildToolsAllowlist } from "./production-host-resolve.js";
-import type { ReviewGateOptions } from "./review.js";
 import { createApproveTool, createRequestChangesTool } from "./review-tools.js";
 import { createRoleSessionAdapter } from "./role-session.js";
-import type { RoleTurnProducer } from "./role-turn-producer.js";
 import { SessionSeam } from "./seam.js";
-import { createCaptureRejector, type SessionEventSource } from "./session-event-handler.js";
+import { createCaptureRejector } from "./session-event-handler.js";
 import { createSharedCompactionWiring } from "./shared-sdk-compaction-wiring.js";
 import {
   createSharedSdkRetainedPrompt,
   createSharedSdkSession,
 } from "./shared-sdk-context-session.js";
 import { createSharedRoleResourceLoader } from "./shared-sdk-role-loader.js";
+import type { SharedSdkRoleOptions } from "./shared-sdk-role-options.js";
 import { bindSharedSdkStartupRole } from "./shared-sdk-startup-binding.js";
 import {
   createSharedSdkStartupCleanup,
@@ -59,55 +48,9 @@ import { createEndTool, createHandoffTool } from "./tools.js";
 import { createTrajectorySettingsManager } from "./trajectory-settings.js";
 
 /** Spawn one shared role using the existing in-process Pi SDK path. */
-export async function spawnSharedSdkRoleSession(options: {
-  readonly role: Role;
-  readonly roleConfig: RoleConfig | undefined;
-  readonly model: Model<never> | undefined;
-  readonly logicalModel: string | null;
-  readonly effort: ModelEffort;
-  readonly retries: number;
-  readonly retryDelayMs: number;
-  readonly systemPrompt: string | null;
-  readonly modelRegistry: ModelRegistry;
-  readonly cwd: string;
-  readonly agentDir: string;
-  readonly sessionDir: string;
-  readonly runId: string;
-  /** Used only by durable trajectory resume; fresh roles create a new manager. */
-  readonly sessionManager?: SessionManager;
-  /** Host-minted logical invocation identity for durable trajectory resume. */
-  readonly roleSessionId?: string;
-  /** Marks a re-opened trajectory target so model failure cannot fresh-fallback. */
-  readonly isTrajectory?: boolean;
-  /** Persisted trajectory target allowlist; never inferred from current role defaults on resume. */
-  readonly activeToolNames?: readonly string[];
-  /** Disable SDK auto-compaction before a role with an outgoing trajectory can prompt. */
-  readonly disableAutoCompaction?: boolean;
-  /** Exact persisted physical conversation identity required for a resumed target. */
-  readonly expectedTrajectoryConversation?: { readonly id: string; readonly file: string };
-  readonly machineDefinition: MachineDefinition;
-  /** Pinned run control protocol; absent keeps direct legacy callers on v1. */
-  readonly controlProtocol?: "v1" | "v2";
-  readonly handoffContextRef?: HandoffContextRef;
-  readonly reviewGate?: ReviewGateOptions;
-  readonly delegateTool: ToolDefinition | null;
-  readonly assignmentDelegationTools?: AssignmentDelegationTools;
-  readonly uiContext?: ExtensionUIContext;
-  readonly isUiContextCurrent?: () => boolean;
-  readonly displaySink?: DisplaySink;
-  readonly persistRecord: (record: PersistedRecord) => void;
-  readonly sessionStates: Map<string, SessionState>;
-  readonly agentsBySessionId: Map<string, SessionEventSource>;
-  /** Issue #68: run-owned producer shared across every logical invocation. */
-  readonly roleTurnProducer: RoleTurnProducer;
-  readonly visitIndex?: number;
-  readonly executionVisitIndex?: number;
-  readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
-  readonly contextRetention?: {
-    readonly coordinator: OrchestratorContextCoordinator;
-    readonly prepared: PreparedOrchestratorContext;
-  };
-}): Promise<RoleSession> {
+export async function spawnSharedSdkRoleSession(
+  options: SharedSdkRoleOptions,
+): Promise<RoleSession> {
   // The session retains one public extension hook for its lifetime. The host
   // changes this controller only while idle so trajectory roles replace, not
   // append, instructions on their next native turn.
@@ -182,11 +125,15 @@ export async function spawnSharedSdkRoleSession(options: {
   );
   const guardTool = (tool: ToolDefinition): ToolDefinition =>
     wrapToolWithSeal(tool, () => activeSeam.isSealed, rejector.getRejection);
-  let controller: ToolExecutionController | null = null;
+  let controller: RoleExecutionController | null = null;
   let activePolicy = resolveToolExecutionPolicy(options.roleConfig?.tool_execution);
-  const executionRecords = [...(options.priorToolExecutionRecords ?? [])];
+  const executionRecords: PersistedRecord[] = [...(options.priorToolExecutionRecords ?? [])];
   const persistExecutionRecord = (record: PersistedRecord): void => {
-    if (isToolExecutionRecord(record)) {
+    if (
+      isToolExecutionRecord(record) ||
+      record.type === "baseline_execution_started" ||
+      record.type === "baseline_execution_finished"
+    ) {
       executionRecords.push(record);
     }
     options.persistRecord(record);
@@ -195,6 +142,7 @@ export async function spawnSharedSdkRoleSession(options: {
     cwd: options.cwd,
     getController: () => controller,
     getPolicy: () => activePolicy,
+    ...(options.executionTier === undefined ? {} : { executionTier: options.executionTier }),
   });
   const restoredActiveToolNames =
     options.activeToolNames === undefined
@@ -340,6 +288,7 @@ export async function spawnSharedSdkRoleSession(options: {
       visitIndex: options.executionVisitIndex ?? options.visitIndex ?? 1,
       roleSessionId: sessionId,
       policy: activePolicy,
+      ...(options.executionTier === undefined ? {} : { executionTier: options.executionTier }),
       ...(options.priorToolExecutionRecords === undefined
         ? {}
         : { priorRecords: options.priorToolExecutionRecords }),
@@ -368,7 +317,8 @@ export async function spawnSharedSdkRoleSession(options: {
     if (!session.isIdle) {
       throw new Error("trajectory reconfiguration requires an idle source session");
     }
-    assertNoUnfinishedToolExecutions(executionRecords);
+    assertBaselineExecutionsSettled(executionRecords);
+    assertNoUnfinishedToolExecutions(executionRecords.filter(isToolExecutionRecord));
     // All mutations follow a preflight performed by ProductionHost. The
     // assertions turn Pi's silent unknown-tool behavior into a hard failure.
     await session.setModel(target.model);
@@ -409,6 +359,7 @@ export async function spawnSharedSdkRoleSession(options: {
       visitIndex: target.executionVisitIndex ?? target.visitIndex,
       roleSessionId: targetSessionId,
       policy: activePolicy,
+      ...(options.executionTier === undefined ? {} : { executionTier: options.executionTier }),
       ...(options.priorToolExecutionRecords === undefined
         ? {}
         : { priorRecords: options.priorToolExecutionRecords }),

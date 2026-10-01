@@ -4,11 +4,9 @@ import type { PersistedRecord } from "../persistence/log.js";
 import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
+import type { RoleExecutionController } from "./execution/baseline-controller.js";
 import { bindLiveRoleToolExecution } from "./execution/role-tool-execution-binding.js";
-import type {
-  ToolExecutionController,
-  ToolExecutionError,
-} from "./execution/tool-execution-controller.js";
+import type { ToolExecutionError } from "./execution/tool-execution-controller.js";
 import { toToolExecutionModelError } from "./execution/tool-execution-model-error.js";
 import type { RoleTurnProducer } from "./role-turn-producer.js";
 import type { CaptureRejector, SessionEventSource } from "./session-event-handler.js";
@@ -20,6 +18,7 @@ export interface SharedSdkStartupBindingOptions {
   readonly visitIndex: number;
   readonly roleSessionId: string;
   readonly policy: Readonly<Required<ToolExecutionPolicy>>;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly priorRecords?: readonly ToolExecutionRecord[];
   readonly persist: (record: PersistedRecord) => void;
   readonly session: SessionEventSource;
@@ -37,7 +36,7 @@ export interface SharedSdkStartupBindingOptions {
 
 /** Bind startup accounting and event handling for one shared SDK session. */
 export function bindSharedSdkStartupRole(options: SharedSdkStartupBindingOptions): {
-  readonly controller: ToolExecutionController;
+  readonly controller: RoleExecutionController;
   readonly unsubscribe: () => void;
 } {
   return bindLiveRoleToolExecution({
@@ -46,6 +45,7 @@ export function bindSharedSdkStartupRole(options: SharedSdkStartupBindingOptions
     visitIndex: options.visitIndex,
     roleSessionId: options.roleSessionId,
     policy: options.policy,
+    ...(options.executionTier === undefined ? {} : { executionTier: options.executionTier }),
     ...(options.priorRecords === undefined ? {} : { priorRecords: options.priorRecords }),
     persist: options.persist,
     session: options.session,
