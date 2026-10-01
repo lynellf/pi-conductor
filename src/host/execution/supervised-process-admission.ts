@@ -1,5 +1,6 @@
 /** Bounded arbitration for process identity races at the spawn boundary. */
 
+import { armDeadline } from "./deadline-timer.js";
 import { SupervisedProcessError } from "./supervised-process-contract.js";
 import {
   type ProcessObservationScope,
@@ -35,7 +36,7 @@ export async function waitForAdmissionSettlement(options: {
   if (options.signal?.aborted) return "aborted";
   const remaining = Math.max(0, options.deadlineMs - Date.now());
   if (remaining === 0) return "deadline";
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancelTimer: (() => void) | undefined;
   let resolveAbort!: () => void;
   const aborted = new Promise<void>((resolve) => {
     resolveAbort = resolve;
@@ -47,12 +48,12 @@ export async function waitForAdmissionSettlement(options: {
       options.closeObserved.then(() => "closed" as const),
       aborted.then(() => "aborted" as const),
       new Promise<AdmissionWaitResult>((resolve) => {
-        timer = setTimeout(() => resolve("deadline"), remaining);
+        cancelTimer = armDeadline(options.deadlineMs, () => resolve("deadline"));
       }),
     ]);
     return result;
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    cancelTimer?.();
     options.signal?.removeEventListener("abort", onAbort);
   }
 }

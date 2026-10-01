@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { hrtime } from "node:process";
+import { armDeadline } from "./deadline-timer.js";
 import {
   snapshotAdmissionScope,
   waitForAdmissionSettlement,
@@ -271,7 +272,7 @@ export async function runSupervisedProcess(
     );
   }
   let admissionCleanup: Promise<SupervisedCleanupResult> | undefined;
-  let admissionTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelAdmissionTimer: (() => void) | undefined;
   let abortAdmission: (() => void) | undefined;
   let admissionReason: "timeout" | "aborted" | undefined;
   const startCleanup = (): Promise<SupervisedCleanupResult> => {
@@ -279,14 +280,11 @@ export async function runSupervisedProcess(
     return admissionCleanup;
   };
   const admissionControl = new Promise<never>((_, reject) => {
-    admissionTimer = setTimeout(
-      () => {
-        admissionReason = "timeout";
-        void startCleanup();
-        reject(new Error("supervised process admission deadline exceeded"));
-      },
-      Math.max(0, processDeadline - Date.now()),
-    );
+    cancelAdmissionTimer = armDeadline(processDeadline, () => {
+      admissionReason = "timeout";
+      void startCleanup();
+      reject(new Error("supervised process admission deadline exceeded"));
+    });
     abortAdmission = () => {
       admissionReason = "aborted";
       void startCleanup();
@@ -303,7 +301,7 @@ export async function runSupervisedProcess(
       admissionControl,
     ]);
   } catch (error) {
-    if (admissionTimer !== undefined) clearTimeout(admissionTimer);
+    cancelAdmissionTimer?.();
     if (abortAdmission !== undefined) options.signal?.removeEventListener("abort", abortAdmission);
     const cleanupResult = await startCleanup();
     const cleanup = cleanupResult.cleanup;
@@ -332,7 +330,7 @@ export async function runSupervisedProcess(
       cleanupResult.diagnostic,
     );
   }
-  if (admissionTimer !== undefined) clearTimeout(admissionTimer);
+  cancelAdmissionTimer?.();
   if (abortAdmission !== undefined) options.signal?.removeEventListener("abort", abortAdmission);
   if (admissionCleanup !== undefined) {
     const cleanupResult = await admissionCleanup;
@@ -394,23 +392,23 @@ export async function runSupervisedProcess(
               cleanupResult.diagnostic,
             )
           : new SupervisedProcessAbortError(cleanup, identity, elapsedMs, cleanupResult.diagnostic);
-      clearTimeout(timer);
+      cancelTimer();
       reject(error);
     };
     const onAbort = () => void finishFailure("supervised-process-aborted");
-    const timer = setTimeout(
+    const cancelTimer = armDeadline(
+      processDeadline,
       () =>
         void finishFailure(
           options.signal?.aborted ? "supervised-process-aborted" : "supervised-process-timeout",
         ),
-      Math.max(0, processDeadline - Date.now()),
     );
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) void finishFailure("supervised-process-aborted");
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cancelTimer();
       options.signal?.removeEventListener("abort", onAbort);
       reject(
         new SupervisedProcessError(
@@ -427,7 +425,7 @@ export async function runSupervisedProcess(
         if (await processGroupHasLiveMembers(identity.processGroupId)) {
           const cleanupResult = await cleanupOwned();
           settled = true;
-          clearTimeout(timer);
+          cancelTimer();
           options.signal?.removeEventListener("abort", onAbort);
           reject(
             new SupervisedProcessError(
@@ -449,7 +447,7 @@ export async function runSupervisedProcess(
         if (escaped.length > 0) {
           const cleanupResult = await cleanupOwned();
           settled = true;
-          clearTimeout(timer);
+          cancelTimer();
           options.signal?.removeEventListener("abort", onAbort);
           reject(
             new SupervisedProcessError(
@@ -479,8 +477,10 @@ export async function runSupervisedProcess(
           return;
         }
         settled = true;
-        clearTimeout(timer);
+        cancelTimer();
         options.signal?.removeEventListener("abort", onAbort);
+        // Observation failure is never cleanup proof, even if this attempt succeeds.
+        await cleanupOwned().catch(() => undefined);
         reject(
           new SupervisedProcessError(
             "supervised-process-spawn-failed",
@@ -495,7 +495,7 @@ export async function runSupervisedProcess(
       }
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cancelTimer();
       options.signal?.removeEventListener("abort", onAbort);
       resolve(result);
     });

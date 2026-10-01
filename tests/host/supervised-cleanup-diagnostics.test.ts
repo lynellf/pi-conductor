@@ -48,6 +48,7 @@ describe("safe supervised cleanup diagnostics", () => {
 
   it("confirms cleanup when a marked member exits after its leader", async () => {
     vi.spyOn(identity, "processGroupHasLiveMembers")
+      .mockResolvedValue(false)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(false);
     vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([member]);
@@ -65,6 +66,7 @@ describe("safe supervised cleanup diagnostics", () => {
 
   it("signals only a reverified marked member after its leader exits", async () => {
     vi.spyOn(identity, "processGroupHasLiveMembers")
+      .mockResolvedValue(false)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
       .mockResolvedValueOnce(true)
