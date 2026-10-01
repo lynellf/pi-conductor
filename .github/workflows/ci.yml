@@ -18,10 +18,6 @@ jobs:
     name: lint + typecheck + test
     runs-on: docker-build
     timeout-minutes: 10
-    env:
-      # Docker runners may default to a workspace-local store; keep generated
-      # dependency indexes out of Biome inputs and source-package fixtures.
-      npm_config_store_dir: ${{ runner.temp }}/pnpm-store
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,6 +26,13 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.1
+
+      # Docker runners may default to a workspace-local store. Set this before
+      # setup-node queries the cache path, without unsupported job-level contexts.
+      - name: Keep generated pnpm cache outside source inputs
+        run: |
+          : "${RUNNER_TEMP:?missing runner temp}" "${GITHUB_ENV:?missing environment file}"
+          echo "npm_config_store_dir=$RUNNER_TEMP/pnpm-store" >> "$GITHUB_ENV"
 
       # Node 22.19.0 is the minimum supported runtime for the locked pi SDK
       # stack (`@earendil-works/pi-*` / `undici@8.5.0`).

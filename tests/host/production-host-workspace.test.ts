@@ -133,11 +133,13 @@ roles:
     const nodeRoleSessionFactory = vi.fn(async () => {
       throw new Error("container role session factory must not run");
     });
-    const host = new ProductionHost({
-      modelRegistry: makeModelRegistryWithStub(),
-      cwd: workdir,
-      log,
-      loadedManifest: loadManifestFromString(`
+    expect(
+      () =>
+        new ProductionHost({
+          modelRegistry: makeModelRegistryWithStub(),
+          cwd: workdir,
+          log,
+          loadedManifest: loadManifestFromString(`
 version: 1
 roles:
   - name: orchestrator
@@ -153,20 +155,18 @@ roles:
       backend: container
       image: docker.io/example/role:latest
 `),
-      runId,
-      nodeRoleSessionFactory,
-      // Issue #70: isolate from `~/.pi/agent` so user extensions never
-      // load into this test's extension runner.
-      agentDir: makeAndTrackIsolatedAgentDir(),
-    });
-
-    await expect(host.spawnRole("implementer")).rejects.toMatchObject({
-      name: "WorkspaceError",
-      code: "container-unavailable",
-    });
+          runId,
+          nodeRoleSessionFactory,
+          // Issue #70: isolate from `~/.pi/agent` so user extensions never
+          // load into this test's extension runner.
+          agentDir: makeAndTrackIsolatedAgentDir(),
+        }),
+    ).toThrow("container workspace requires an unavailable backend");
     expect(nodeRoleSessionFactory).not.toHaveBeenCalled();
     expect(log.records(runId)).toEqual([]);
-    await expect(readdir(host.sessionDir)).resolves.toEqual([]);
+    await expect(
+      readdir(join(workdir, ".pi-conductor", "runs", runId, "sessions")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
       readFile(join(workdir, ".pi-conductor", "runs", runId, "workspaces", "implementer-v1")),
     ).rejects.toMatchObject({ code: "ENOENT" });

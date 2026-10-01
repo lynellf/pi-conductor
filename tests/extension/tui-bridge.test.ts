@@ -130,6 +130,7 @@ function makeLoadedManifest(): ReturnType<typeof loadManifestFromString> {
 function makeCtx(cwd: string) {
   return {
     cwd,
+    hasUI: true,
     getFlag: () => undefined,
     modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
     ui: {
@@ -236,6 +237,23 @@ describe("extension shell — Phase 1 uiContext bridge", () => {
     expect(bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.displaySink).toBe(
       displaySink,
     );
+  });
+
+  it("does not route headless capability warnings into a no-op UI", async () => {
+    const ctx = { ...makeCtx(cwd), hasUI: false };
+    bridgeMocks.createProductionHost.mockReturnValue({} as never);
+    bridgeMocks.startRun.mockImplementation(async (_manifestPath, opts) => {
+      await opts.hostFactory({
+        log: new InMemoryRecordLog(),
+        loadedManifest: makeLoadedManifest(),
+        runId: "headless",
+      } as never);
+      return makeCompletionHandle("headless");
+    });
+    await handleStart("headless", ctx, { getFlag: () => undefined });
+    expect(
+      bridgeMocks.createProductionHost.mock.calls[0]?.[0]?.extension?.uiContext,
+    ).toBeUndefined();
   });
 
   it("passes ctx.ui through /conduct:resume to createProductionHost", async () => {
