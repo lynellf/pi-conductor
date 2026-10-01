@@ -32,6 +32,7 @@ import { parseControllerConfig } from "./controller.js";
 import { parseDelegationAdvisoryPolicy } from "./delegation-advisory.js";
 import { parseDelegationAssignments, parseDelegationInterface } from "./delegation-assignment.js";
 import { parseEndGuardConfig } from "./end-guard.js";
+import { parseExecutionCapabilityPolicy } from "./execution-capability-policy.js";
 import { parseToolExecutionPolicy } from "./execution-policy.js";
 import { parseHandoffEvidencePolicy } from "./handoff-evidence.js";
 import { parseJevAssessmentPolicy } from "./jev-assessment.js";
@@ -145,8 +146,13 @@ export function parseManifestFromObject(raw: unknown): Manifest {
   const jev_assessment =
     obj.jev_assessment === undefined ? undefined : parseJevAssessmentPolicy(obj.jev_assessment);
 
+  const execution_policy =
+    obj.execution_policy === undefined
+      ? undefined
+      : parseExecutionCapabilityPolicy(obj.execution_policy);
   const manifest = Object.freeze({
     version,
+    ...(execution_policy === undefined ? {} : { execution_policy }),
     ...(end_request_roles !== undefined && { end_request_roles }),
     handoffs,
     roles: Object.freeze(roles),

@@ -20,6 +20,7 @@ import type { HandoffEvidencePolicy, ModelEffort, Role } from "../core/types.js"
 import type { ChildCompletionProtocol } from "../persistence/child-completion.js";
 import type { ControllerConfig } from "./controller.js";
 import type { EndGuardConfig } from "./end-guard.js";
+import type { ExecutionCapabilityPolicy } from "./execution-capability-policy.js";
 import type { ToolExecutionPolicy } from "./execution-policy.js";
 import type { SubagentExecutionConfig } from "./subagent-execution-policy.js";
 import type { ChildToolName, SubagentToolPolicy } from "./subagent-tool-policy.js";
@@ -238,6 +239,8 @@ export interface HandoffPolicy {
 }
 
 export interface Manifest {
+  /** Host-only strict opt-in; no OS inspection enters the reducer (§3). */
+  readonly execution_policy?: ExecutionCapabilityPolicy;
   /** §10: human-bumped integer, pinned at run-start, never mutated. */
   readonly version: number;
   /** Authorized worker roles that may request completion through handoff. */
