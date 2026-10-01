@@ -2,7 +2,6 @@
 import type { ProductionHostOptions } from "../production-host-options.js";
 import {
   detectExecutionCapabilities,
-  ExecutionCapabilityError,
   executionDegradationNotice,
   preflightExecution,
 } from "./execution-capabilities.js";
@@ -13,14 +12,6 @@ export function admitProductionExecution(options: ProductionHostOptions): "enhan
     options.loadedManifest.manifest,
     detectExecutionCapabilities(),
   );
-  if (
-    capabilities.execution_tier === "baseline" &&
-    (options.defaultWorkspace?.backend === "copy" ||
-      options.defaultWorkspace?.backend === "worktree")
-  )
-    throw new ExecutionCapabilityError(
-      "host-required protected workspace requires enhanced Linux capabilities; no unconfined fallback",
-    );
   options.log.append({
     type: "execution_capabilities",
     schema_version: 1,
