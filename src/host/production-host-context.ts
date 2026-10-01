@@ -10,6 +10,7 @@ import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import { EndGuardRunner } from "./end-guard-runner.js";
 import { assertFileToolWorkerRuntime } from "./execution/file-tool-worker.js";
+import { assertProductionExecutionCapabilities } from "./execution/production-capabilities.js";
 import type { SandboxHostApproval } from "./execution/sandbox/host-approval.js";
 import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import type { LoadedManifest } from "./manifest.js";
@@ -56,6 +57,7 @@ export class ProductionHostContext {
   protected readonly typesafeApiKey: string | null;
 
   constructor(opts: ProductionHostOptions) {
+    assertProductionExecutionCapabilities(opts.loadedManifest.manifest);
     // Fail before the orchestration loop admits a role session. The worker
     // cannot recover from a host/package mismatch by retrying a model.
     const usesSupervisedFileTools = opts.loadedManifest.manifest.roles.some(

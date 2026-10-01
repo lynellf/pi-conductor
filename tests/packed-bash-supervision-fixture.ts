@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   findProcessesByOwnerToken,
+  type ProcessObservationScope,
   processGroupHasLiveMembers,
   readProcessIdentity,
 } from "../src/host/execution/supervised-process-identity.js";
@@ -83,8 +84,11 @@ export default function probe(pi) { for (const tool of tools) pi.registerTool(to
 }
 
 /** Kill only descendants whose marker and PID start time were observed by this test. */
-export async function killOwnedProcesses(executionId: string): Promise<void> {
-  const observed = await ownedProcesses(executionId);
+export async function killOwnedProcesses(
+  executionId: string,
+  scope?: ProcessObservationScope,
+): Promise<void> {
+  const observed = await ownedProcesses(executionId, scope);
   for (const process of observed) {
     const identity = await readProcessIdentity(process.pid, executionId);
     if (
@@ -101,7 +105,7 @@ export async function killOwnedProcesses(executionId: string): Promise<void> {
     }
   }
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    const remaining = await ownedProcesses(executionId);
+    const remaining = await ownedProcesses(executionId, scope);
     const groupLive = await Promise.all(
       observed.map((process) => processGroupHasLiveMembers(process.processGroupId)),
     );
@@ -114,10 +118,26 @@ export async function killOwnedProcesses(executionId: string): Promise<void> {
 /** Inspect marker-owned processes without failing on unrelated /proc entries. */
 export async function ownedProcesses(
   executionId: string,
+  scope?: ProcessObservationScope,
 ): Promise<readonly { pid: number; startTime: string; processGroupId: number }[]> {
   const parent = await readProcessIdentity(globalThis.process.pid);
   if (parent === null) throw new Error("could not identify test runner");
-  return findProcessesByOwnerToken(executionId, parent.startTime);
+  try {
+    return await findProcessesByOwnerToken(executionId, parent.startTime, scope);
+  } catch (error) {
+    const evidence = error as {
+      operation?: string;
+      code?: string;
+      pid?: number;
+      startTime?: string;
+      startTimeKind?: string;
+      processGroupId?: number;
+    };
+    throw new Error(
+      `fixture observation failed: ${JSON.stringify({ operation: evidence.operation, code: evidence.code, pid: evidence.pid, startTime: evidence.startTime, startTimeKind: evidence.startTimeKind, processGroupId: evidence.processGroupId })}`,
+      { cause: error },
+    );
+  }
 }
 
 export function disposePackedBashFixture(fixture: PackedBashFixture): void {

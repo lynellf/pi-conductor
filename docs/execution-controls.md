@@ -19,7 +19,8 @@ but cannot extend it. Output and CPU activity do not reset the clock.
 The deadline includes file-path confinement and any wait for an earlier mutation
 of the same file. Bash processes run in owned process groups. File tools run in
 separate Node workers so synchronous file processing cannot block the host's
-deadline timer. This currently requires Linux. Fresh workers add approximately
+deadline timer. Linux uses procfs; macOS uses a packaged native observer built
+with installed Xcode Command Line Tools/full Xcode. Fresh workers add approximately
 0.6 seconds per file call on the development host; the exact cost depends on the
 machine and installed SDK.
 
@@ -53,7 +54,12 @@ snapshot. The cause distinguishes a surviving process group, escaped
 descendants, lost identity, and process-observation or termination-signal
 failures. `leader_observed` means only that the leader identity was admitted
 historically; it does not mean the leader is alive now. Each observation
-contains a Linux PID, `start_time` in Linux start ticks, and process group ID.
+contains a PID, an original-platform `start_time`, and process group ID. Linux
+uses Linux start ticks. Darwin identities with the observer's effective UID use
+raw Mach ticks; other-effective-UID observations use separately identified wallclock
+microseconds, never comparable
+with Mach admission boundaries. A Darwin observation error labels its
+`start_time_kind`.
 At most 32 members are recorded, with no command arguments, environment values,
 marker contents, or output. Observations can age, and group membership alone
 does not prove execution ownership. Before operator action, revalidate the
@@ -68,7 +74,9 @@ persistent failure remains unconfirmed unless a call-scoped pre-spawn PID/start
 snapshot, or a freshly verified pre-existing session, proves the inaccessible
 process is unrelated. Genuinely unresolved or owned candidates remain
 unconfirmed. The snapshot exists only for the live invocation; restart has no
-original snapshot and remains conservative. An `observation_error` may include the
+original full snapshot and remains conservative. Darwin admission preserves
+original session-leader witnesses separately; recovery does not create new ones.
+An `observation_error` may include the
 actual operation, errno, and optional target PID, observed start ticks, and
 process group. Namespace failures may have no PID. An empty
 `observed_members` list is not cleanup confirmation, and a finished execution
@@ -123,8 +131,9 @@ lacks the recorded identities needed to verify the original sandbox. Leave
 the run blocked and preserve its records for investigation.
 
 The confirmation command never kills a process or replays a tool. The explicit
-acknowledgment attests that the operator ran the command on the original Linux
-host and PID/network namespaces and canonical storage, stopped all original
+acknowledgment attests that the operator ran the command on the original host,
+boot and observation context (including PID/network namespaces on Linux) and
+canonical storage, stopped all original
 processes (including unmarked descendants), and inspected workspace partial
 effects. Owner-marker absence supports the attestation but is not independent
 proof. Live marked processes, unsupported or
@@ -133,7 +142,7 @@ confirmation. Original records remain unchanged; a correlated confirmation is
 appended only after verification. Then use `/conduct:resume <run-id>` (with the
 usual manifest resolution), repeating reconciliation for each unresolved ID.
 New executable-tool start records retain identity-only admission evidence for
-later `reconcile-tools` inspection (issue #103). Before launching the tool, the
+later `reconcile-tools` inspection (issues #103/#165). On Linux, before launching the tool, the
 host saves a conservative start-tick boundary from a completed process snapshot,
 bound to the original boot, PID namespace and its init process, observer time
 namespace, and network namespace. Recovery validates that origin before using
@@ -146,7 +155,23 @@ Equal/newer ticks and uncertain identities still fail closed; the age of a
 session leader alone does not grant the durable exemption. Live supervision
 retains its separate exact pre-spawn snapshot checks.
 
-Legacy records without admission evidence retain conservative observation.
+Darwin uses a separate strict v2 admission shape: `platform: darwin`, original
+boot UUID and observer UID, a raw Mach boundary, and original session-leader
+identities with their time representations. Recovery restores only those witnesses
+and freshly rechecks the original leader and candidate before a session exclusion.
+The unknown-marker global scan matches Linux's **real-UID** trust boundary:
+validated different-real-UID candidates are outside its same-account scope.
+Effective UID alone is not an exemption: a same-real-UID setuid process remains
+unknown unless original evidence excludes it. Positive markers always win, and
+owned group/session settlement observes all members regardless of UID. Privileged
+out-of-session workloads and service activation remain unsupported, not contained
+by this boundary. A new restricted same-real-UID process in a new session remains
+unverified, including an unrelated service lacking original exclusion proof. Do not
+compare other-effective-UID wallclock values with the Mach boundary.
+Historical Linux evidence and absent-evidence legacy executions
+cannot authorize Darwin reconciliation.
+
+Legacy Linux records without admission evidence retain conservative observation.
 Restarting Pi does not retrofit evidence into those logs. Corrupt evidence or a
 different boot/PID/time/network namespace refuses inspection with repair
 guidance. Do not edit old records to manufacture a boundary. Use intact
@@ -155,7 +180,7 @@ not evidence that a process exited.
 
 Observation failures report `operation`, `code`, and the observed `pid`,
 `start_time` (ticks since boot), and `process_group_id` when available. They
-identify the failed `/proc` path and provide `ps`/`ls` commands restricted to
+identify the failed `/proc` path on Linux and provide `ps`/`ls` commands restricted to
 metadata. These diagnostics omit command lines, environment contents, owner
 markers, raw errors, and stack traces. Runtime failures do not print syntax
 usage; use `conduct reconcile-tools --help` for argument help.
@@ -260,8 +285,25 @@ not cover provider-backed campaigns or trajectory workflows. Run it with
 `CONDUCTOR_SMOKE_NODE` and `CONDUCTOR_SMOKE_PI_ROOT` optionally select the Node
 binary and host Pi package root.
 
+macOS acceptance for #165 remains open. The overseer approved Linux-equivalent
+real-UID scope, and the unchanged 40-command desktop campaign passes after that
+change. Broader verification and independent safety review remain incomplete;
+same-real-UID restricted observations still fail closed. See the
+[verification notes and approved trust boundary](issue-165-macos-supervision/verification.md).
+Do not interpret passing subsets as completed compatibility acceptance.
+
+Native macOS verification for #165 uses macOS 26.5.2/arm64, SIP enabled, Node
+25.6.0 and Pi 0.80.6, with all six packed file tools, foreground bash, end guards,
+timeout/abort cleanup and original-evidence reconciliation. Intel, Rosetta and
+older macOS versions are not verified; dedicated macOS CI is deferred. The
+observer requires installed Xcode Command Line Tools/full Xcode, uses public SDK
+interfaces, and validates a private source/architecture-keyed cache. Missing
+compiler, unsafe cache, changed observer or incomplete observation fails closed.
+There is no automatic installer, privilege escalation or security-setting change.
+
 The supported runtime is a Node npm installation with an importable, on-disk
-Pi SDK. Linux is required for supervised workers. Preflight validates the host
+Pi SDK. Supervised workers support Linux and the verified native macOS configuration.
+Preflight validates the host
 package name, version, export, and file-tool factories before a file-tool or
 delegation campaign starts. Repair the Pi installation or `PI_PACKAGE_DIR`
 override and restart Pi when preflight fails. Standalone bundled installations

@@ -127,6 +127,33 @@ the same immediate `run_started` event plus the same terminal result.
 
 The engine is the same in all three surfaces — extension, CLI, and library.
 
+### Execution platforms
+
+**macOS acceptance is still open for #165.** The approved real-UID boundary now
+matches Linux for unknown-marker scans, and the unchanged 40-command desktop
+campaign passes. Broader verification and safety review remain open; restricted
+same-real-UID processes can still produce cleanup uncertainty. See
+[the current gate and measurements](docs/issue-165-macos-supervision/verification.md);
+this is not a completed compatibility claim.
+
+Ordinary supervised `read`, `write`, `edit`, `ls`, `find`, `grep`, foreground
+`bash`, and end guards have Linux and macOS backends. macOS needs installed
+Xcode Command Line Tools or full Xcode; conductor compiles its packaged native
+observer into a private `~/.pi-conductor-native` cache. It does not download a
+binary, install developer tools, elevate privileges, or require disabling SIP.
+
+Native verification for #165 uses macOS 26.5.2/arm64 with SIP enabled, Node
+25.6.0 and Pi 0.80.6, including the packed extension loader and all six file
+tools. Intel, Rosetta and older macOS versions are not verified. Missing native
+capabilities fail before role/model work. Restricted or redacted observations
+can still stop a run with cleanup unconfirmed; command exit is not cleanup proof.
+See [Executable tool controls](docs/execution-controls.md).
+
+Bubblewrap delegated commands and controller sandbox execution remain
+Linux-only. Required sandbox features fail explicitly on macOS; there is no
+unsandboxed fallback. Delegated worktree/projection features also retain their
+existing Git requirements; platform support does not supply a newer Git.
+
 ### Opt-in delegated command sandbox
 
 Delegated children remain file-only unless their subagent profile declares an

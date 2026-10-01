@@ -38,7 +38,13 @@ async function subject(changes: Record<string, string | Error> = {}, entries = [
     readdir: vi.fn().mockResolvedValue(entries),
   }));
   const module = await import("../../src/host/execution/tool-admission.js");
-  return { ...module, read };
+  // Procfs mocks exercise Linux's unchanged contract even on the development Mac.
+  return {
+    ...module,
+    read,
+    captureToolAdmission: module.captureLinuxToolAdmission,
+    restoreToolAdmission: module.restoreLinuxToolAdmission,
+  };
 }
 
 describe("persisted admission origin", () => {

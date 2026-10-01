@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Add native macOS supervision for ordinary executable role tools and end guards
+  (#165), with a packaged public-SDK observer compiled by installed Xcode tools
+  into a private cache. Preserve deadline/abort cleanup, hold command effects
+  until owned admission, and treat redacted ownership evidence as unknown.
+- Add separately versioned Darwin admission and original session-leader witnesses
+  for conservative restart inspection; preserve historical Linux v1 evidence.
+  Referenced Bubblewrap and controller sandbox features remain Linux-only and
+  never fall back to unsandboxed execution.
+
+### Compatibility
+
+- Match Linux's approved real-UID trust boundary for unknown-marker scans;
+  effective-UID changes alone never exempt same-real-UID setuid processes.
+  Positive markers and group/session settlement remain authoritative.
+- macOS acceptance remains open pending broader verification and safety review,
+  including Linux runtime regressions; this entry does not mark the feature released.
+- Native tests use macOS 26.5.2/arm64, SIP enabled, Node 25.6.0 and Pi 0.80.6,
+  including packed file tools and bash. Intel, Rosetta and older macOS versions
+  are not verified. Dedicated macOS CI infrastructure remains deferred.
+
 ## [0.22.1] - 2026-09-30
 
 ### Bug fixes

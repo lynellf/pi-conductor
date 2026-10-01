@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,7 +40,7 @@ describe("runSupervisedProcess", () => {
 
     expect(result.outcome).toBe("exited");
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe(`${cwd}:ok`);
+    expect(result.stdout).toBe(`${await realpath(cwd)}:ok`);
     expect(result.truncated).toBe(false);
   });
 
@@ -118,7 +118,7 @@ describe("runSupervisedProcess", () => {
         executionId: "pipeline",
         command: `${nodeCommand(`setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'late'), 500); setInterval(() => {}, 1000)`)} | cat`,
         cwd: process.cwd(),
-        timeoutMs: 60,
+        timeoutMs: process.platform === "darwin" ? 200 : 60,
         graceMs: 100,
         onStart: () => undefined,
       }),
@@ -142,7 +142,7 @@ describe("runSupervisedProcess", () => {
             `const {spawn}=require('node:child_process'); const {writeFileSync}=require('node:fs'); const child=spawn(process.execPath,['-e',${JSON.stringify("process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)")}],{detached:true,stdio:'ignore'}); writeFileSync(${JSON.stringify(pidFile)},String(child.pid)); setInterval(()=>{},1000)`,
           ],
           cwd: directory,
-          timeoutMs: 80,
+          timeoutMs: process.platform === "darwin" ? 400 : 80,
           graceMs: 100,
           onStart: () => undefined,
         }),

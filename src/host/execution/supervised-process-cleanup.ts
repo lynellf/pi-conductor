@@ -1,6 +1,9 @@
-/** Cleanup is proven only within this Linux host and the inspectable process namespace. */
+/** Cleanup is proven only within the original host's inspectable process context (#76/#165). */
 
-import type { SupervisedProcessDiagnostic } from "./supervised-process-contract.js";
+import {
+  isSupervisedProcessSupported,
+  type SupervisedProcessDiagnostic,
+} from "./supervised-process-contract.js";
 import {
   findProcessesByOwnerToken,
   ownsProcessGroup,
@@ -28,6 +31,7 @@ function observationDiagnostic(
     readonly code?: string;
     readonly pid?: number;
     readonly startTime?: string;
+    readonly startTimeKind?: string;
     readonly processGroupId?: number;
   };
   const code =
@@ -61,6 +65,11 @@ function observationDiagnostic(
         ? { start_time: observed.startTime }
         : targetPid === identity.pid
           ? { start_time: identity.startTime }
+          : {}),
+      ...(observed.startTimeKind === "mach" || observed.startTimeKind === "wallclock"
+        ? { start_time_kind: observed.startTimeKind }
+        : targetPid === identity.pid && identity.startTimeKind !== undefined
+          ? { start_time_kind: identity.startTimeKind }
           : {}),
       ...(typeof observed.processGroupId === "number" &&
       Number.isInteger(observed.processGroupId) &&
@@ -102,7 +111,8 @@ async function signalMarkedMembers(
     if (
       member.pid === identity.pid ||
       identity.ownerToken === undefined ||
-      BigInt(member.startTime) < BigInt(identity.startTime)
+      (member.startTimeKind === identity.startTimeKind &&
+        BigInt(member.startTime) < BigInt(identity.startTime))
     )
       continue;
     const current = await readProcessIdentity(member.pid, identity.ownerToken);
@@ -127,7 +137,8 @@ async function confirmAfterLeaderExit(
       remaining.map(async (member) =>
         member.pid !== identity.pid &&
         identity.ownerToken !== undefined &&
-        BigInt(member.startTime) >= BigInt(identity.startTime)
+        (member.startTimeKind !== identity.startTimeKind ||
+          BigInt(member.startTime) >= BigInt(identity.startTime))
           ? ownsProcessIdentity(await readProcessIdentity(member.pid, identity.ownerToken), member)
           : false,
       ),
@@ -259,6 +270,6 @@ export async function cleanupSupervisedProcess(
   identity: ProcessIdentity,
   graceMs = 2_000,
 ): Promise<"confirmed" | "unconfirmed"> {
-  if (process.platform !== "linux" || identity.ownerToken === undefined) return "unconfirmed";
+  if (!isSupervisedProcessSupported() || identity.ownerToken === undefined) return "unconfirmed";
   return safeTerminateOwnedGroup(identity, graceMs);
 }

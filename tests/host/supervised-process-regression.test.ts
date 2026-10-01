@@ -26,6 +26,7 @@ const waitForFile = async (path: string, deadlineMs = 1_000): Promise<void> => {
   throw new Error(`timed out waiting for marker ${path}`);
 };
 const processIsLive = async (pid: number): Promise<boolean> => {
+  if (process.platform === "darwin") return (await identity.readProcessIdentity(pid)) !== null;
   try {
     const stat = await readFile(`/proc/${pid}/stat`, "utf8");
     const state = stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[0];
@@ -110,7 +111,7 @@ describe("runSupervisedProcess regression gates", () => {
   it("returns successfully for /bin/true", async () => {
     const result = await runSupervisedProcess({
       executionId: "regression-true",
-      file: "/bin/true",
+      file: process.platform === "darwin" ? "/usr/bin/true" : "/bin/true",
       cwd: process.cwd(),
       timeoutMs: 1_000,
       onStart: () => undefined,
@@ -149,7 +150,7 @@ describe("runSupervisedProcess regression gates", () => {
       executionId: "regression-late-write",
       command: `${shellNode(`setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(marker)}, "late"), 300); setInterval(() => {}, 1000)`)} | cat`,
       cwd: directory,
-      timeoutMs: 60,
+      timeoutMs: process.platform === "darwin" ? 150 : 60,
       graceMs: 200,
       onStart: () => undefined,
       onSpawn: async () => {
@@ -196,10 +197,12 @@ describe("runSupervisedProcess regression gates", () => {
             `const {spawn}=require("node:child_process"); const {writeFileSync}=require("node:fs"); const child=spawn(process.execPath,["-e",${JSON.stringify("process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)")}],{stdio:"ignore"}); writeFileSync(${JSON.stringify(pidFile)},String(child.pid)); writeFileSync(${JSON.stringify(join(directory, "ready"))},"ready"); process.on("SIGTERM",()=>process.exit(0)); setInterval(()=>{},1000)`,
           ],
           cwd: directory,
-          timeoutMs: 80,
+          timeoutMs: process.platform === "darwin" ? 400 : 80,
           graceMs: 200,
           onStart: () => undefined,
-          onSpawn: () => waitForFile(join(directory, "ready")),
+          // Darwin intentionally releases workload effects only after this callback.
+          onSpawn: () =>
+            process.platform === "darwin" ? undefined : waitForFile(join(directory, "ready")),
         }),
       ).rejects.toMatchObject({ code: "supervised-process-timeout", cleanup: "confirmed" });
       descendantPid = Number(await readFile(pidFile, "utf8"));

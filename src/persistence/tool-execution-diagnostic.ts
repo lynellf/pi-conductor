@@ -20,6 +20,7 @@ const observationError = Type.Object(
     code: Type.String({ pattern: "^[A-Z][A-Z0-9_]{0,31}$", minLength: 1, maxLength: 32 }),
     pid: Type.Optional(Type.Integer({ minimum: 1 })),
     start_time: Type.Optional(Type.String({ pattern: "^[0-9]+$", minLength: 1, maxLength: 64 })),
+    start_time_kind: Type.Optional(Type.Union([Type.Literal("mach"), Type.Literal("wallclock")])),
     process_group_id: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },

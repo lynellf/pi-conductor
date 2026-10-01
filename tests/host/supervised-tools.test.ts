@@ -91,7 +91,9 @@ describe("createSupervisedTools", () => {
     expect(
       records
         .filter((record) => record.type === "tool_execution_started")
-        .every((record) => record.admission?.schema_version === 1),
+        .every(
+          (record) => record.admission?.schema_version === (process.platform === "darwin" ? 2 : 1),
+        ),
     ).toBe(true);
     expect(await readFile(join(cwd, "sample.txt"), "utf8")).toBe("hello\n");
   });
@@ -109,7 +111,10 @@ describe("createSupervisedTools", () => {
 
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect(updates.length).toBeGreaterThan(0);
-    expect(records[0]).toHaveProperty("admission.schema_version", 1);
+    expect(records[0]).toHaveProperty(
+      "admission.schema_version",
+      process.platform === "darwin" ? 2 : 1,
+    );
     expect(result.content[0]).toMatchObject({ text: expect.any(String) });
   });
 

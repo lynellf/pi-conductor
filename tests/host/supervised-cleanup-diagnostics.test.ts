@@ -86,6 +86,10 @@ describe("safe supervised cleanup diagnostics", () => {
   it.each([
     ["reused PID", { ...member, startTime: "999", ownerToken: owner.ownerToken }],
     ["changed group", { ...member, processGroupId: 99, ownerToken: owner.ownerToken }],
+    [
+      "changed time representation",
+      { ...member, startTimeKind: "wallclock" as const, ownerToken: owner.ownerToken },
+    ],
     ["missing marker", null],
   ])("does not signal a member with %s after leader exit", async (_case, current) => {
     vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
@@ -170,6 +174,42 @@ describe("safe supervised cleanup diagnostics", () => {
       [-owner.processGroupId, "SIGTERM"],
       [member.pid, "SIGKILL"],
     ]);
+  });
+
+  it.each([
+    "signal",
+    "final group verification",
+  ])("does not age-exempt an unreadable wallclock member using a Mach birth during %s", async (phase) => {
+    const machOwner = { ...owner, startTimeKind: "mach" as const };
+    const wallclockMember = { ...member, startTime: "1", startTimeKind: "wallclock" as const };
+    const live = vi.spyOn(identity, "processGroupHasLiveMembers").mockResolvedValue(true);
+    if (phase === "final group verification")
+      live.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    vi.spyOn(identity, "readProcessGroupMembers").mockResolvedValue([wallclockMember]);
+    vi.spyOn(identity, "readProcessIdentity").mockImplementation(async (pid) => {
+      if (pid === owner.pid) return null;
+      throw new identity.ProcessObservationError(
+        "read_environ",
+        { code: "EACCES" },
+        pid,
+        wallclockMember,
+      );
+    });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    await expect(safeTerminateOwnedGroupDetailed(machOwner, -1)).resolves.toMatchObject({
+      cleanup: "unconfirmed",
+      diagnostic: {
+        cleanup_cause: "cleanup_observation_failed",
+        observation_error: {
+          operation: "read_environ",
+          code: "EACCES",
+          pid: member.pid,
+          start_time: "1",
+          start_time_kind: "wallclock",
+        },
+      },
+    });
+    expect(kill).not.toHaveBeenCalled();
   });
 
   it("does not expose an observation error message", async () => {

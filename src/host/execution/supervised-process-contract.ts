@@ -3,7 +3,7 @@ import type { ProcessIdentity } from "./supervised-process-identity.js";
 
 export type SupervisedProcessDiagnostic = ToolExecutionDiagnostic;
 
-/** Inputs for one Linux process-group-supervised executable invocation. */
+/** Inputs for one platform-supported, process-group-supervised invocation. */
 export interface SupervisedProcessOptions {
   /** Durable caller identity reserved before any process is spawned. */
   readonly executionId: string;
@@ -117,9 +117,9 @@ export class SupervisedProcessAbortError extends SupervisedProcessError {
   }
 }
 
-/** Report whether this implementation can prove Linux process-group cleanup. */
+/** Report supported OS families; macOS additionally requires native-observer preflight. */
 export function isSupervisedProcessSupported(
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  return platform === "linux";
+  return platform === "linux" || platform === "darwin";
 }

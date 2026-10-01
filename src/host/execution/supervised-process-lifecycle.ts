@@ -74,6 +74,7 @@ export function observationFailure(
     readonly code?: string;
     readonly pid?: number;
     readonly startTime?: string;
+    readonly startTimeKind?: string;
     readonly processGroupId?: number;
   };
   const safeCode =
@@ -110,6 +111,10 @@ export function observationFailure(
       : {
           pid: targetPid,
           ...(effectiveStartTime === undefined ? {} : { start_time: effectiveStartTime }),
+          ...(effectiveStartTime !== undefined &&
+          (observed.startTimeKind === "mach" || observed.startTimeKind === "wallclock")
+            ? { start_time_kind: observed.startTimeKind }
+            : {}),
           ...(effectiveGroupId === undefined ? {} : { process_group_id: effectiveGroupId }),
         };
   return {

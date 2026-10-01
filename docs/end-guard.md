@@ -12,8 +12,11 @@ end_guard:
 The deadline defaults to 60 seconds and accepts a finite positive number up to
 3,600 seconds. The run's manifest snapshot pins both command and deadline. The
 host executes trusted repository configuration in the primary checkout with its
-environment, using the Linux process supervision described in
-[Executable tool controls](execution-controls.md).
+environment, using the Linux or native macOS process supervision described in
+[Executable tool controls](execution-controls.md). macOS requires installed Xcode
+Command Line Tools/full Xcode; required observer preparation happens before role
+work. Verified native coverage is macOS 26.5.2/arm64 with SIP enabled. A hidden
+marker, exited command or exited native keeper never proves descendant cleanup.
 
 The guard runs only after the reducer establishes that a role-issued
 orchestrator `end` is legal. It does not run for worker ends or a missing required

@@ -13,7 +13,10 @@ function positiveInteger(value: number | undefined): number | undefined {
 }
 
 /** Render identity-only evidence and recovery steps for the approved §76 cleanup contract. */
-export function formatObservationDiagnostic(error: ProcessObservationError): string {
+export function formatObservationDiagnostic(
+  error: ProcessObservationError,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const operation = Object.hasOwn(PROC_FILES, error.operation) ? error.operation : undefined;
   const code = Object.hasOwn(constants.errno, error.code) ? error.code : "UNKNOWN";
   const pid = positiveInteger(error.pid);
@@ -26,6 +29,23 @@ export function formatObservationDiagnostic(error: ProcessObservationError): str
   if (pid !== undefined) evidence.push(`pid=${pid}`);
   if (start !== undefined) evidence.push(`start_time=${start}`);
   if (group !== undefined) evidence.push(`process_group_id=${group}`);
+  if (platform === "darwin") {
+    if (
+      start !== undefined &&
+      (error.startTimeKind === "mach" || error.startTimeKind === "wallclock")
+    )
+      evidence.push(`start_time_kind=${error.startTimeKind}`);
+    return [
+      `macOS process observation failed: ${evidence.join(" ")}`,
+      "Cleanup remains unconfirmed; no confirmation was written. A redacted/empty environment is not proof of marker absence.",
+      "start_time is raw Mach ticks for same-user identities or separately labeled wallclock microseconds for other UIDs. Never compare these representations or Linux ticks.",
+      "Inspect on the original Mac/boot with the private native observer available. Do not disable SIP, dump environments, or signal a PID from this diagnostic alone.",
+      ...(pid === undefined
+        ? []
+        : [`Inspect process metadata only: ps -p ${pid} -o pid=,ppid=,pgid=,uid=,stat=`]),
+      "Retry conduct reconcile-tools --log-dir <path> <run-id> --execution <id> without confirmation; confirm only after complete observation and inspection of all original processes and partial effects.",
+    ].join("\n");
+  }
   const procPath =
     operation === "list_processes"
       ? "/proc"

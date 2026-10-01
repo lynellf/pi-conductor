@@ -21,6 +21,7 @@
     "extensions",
     "src",
     "resources/sandbox",
+    "resources/macos",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

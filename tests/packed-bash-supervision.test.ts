@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
+import { snapshotProcessNamespace } from "../src/host/execution/supervised-process-identity.js";
 
 import {
   createPackedBashFixture,
@@ -57,19 +58,20 @@ if (!tool) throw new Error("missing packaged bash tool");
 const toolContext = { model: undefined, sessionManager: { getSessionId: () => "packed-bash-session", getSessionFile: () => undefined } };
 const invoke = async command => { try { const value = await tool.execute("packed-bash", { command, timeout: 1 }, undefined, undefined, toolContext); return { result: value.content.map(part => part.type === "text" ? part.text : "").join("") }; } catch (error) { return { error: { message: error?.message, code: error?.code, cleanup: error?.cleanup } }; } };
 const node = JSON.stringify(process.execPath);
-const { readProcessIdentity, findProcessesByOwnerToken } = await import(${JSON.stringify(`${fixture.packageRoot}/dist/host/execution/supervised-process-identity.js`)});
+const { readProcessIdentity, findProcessesByOwnerToken, snapshotProcessNamespace } = await import(${JSON.stringify(`${fixture.packageRoot}/dist/host/execution/supervised-process-identity.js`)});
+const originalScope = await snapshotProcessNamespace();
 const runnerIdentity = await readProcessIdentity(process.pid);
 if (runnerIdentity === null) throw new Error("could not identify smoke runner");
 const foreground = await invoke(node + ' -e "setTimeout(() => {}, 3000)"');
 const records = JSON.parse((await import("node:fs")).readFileSync(${JSON.stringify(fixture.state)}, "utf8"));
 const supervision = records.find(record => record.type === "tool_execution_started")?.supervision_id;
 if (supervision === undefined) throw new Error("foreground start record omitted supervision ID");
-const foregroundOwned = (await findProcessesByOwnerToken(supervision, runnerIdentity.startTime)).length;
+const foregroundOwned = (await findProcessesByOwnerToken(supervision, runnerIdentity.startTime, originalScope)).length;
 const background = await invoke(${launcher === "delayed" ? `'nohup ' + node + ' -e "setTimeout(() => {}, 10000)" >/dev/null 2>&1 & sleep .2; echo done'` : `'nohup ' + node + ' -e "setTimeout(() => {}, 10000)" >/dev/null 2>&1 & echo $!'`});
 const afterBackground = JSON.parse((await import("node:fs")).readFileSync(${JSON.stringify(fixture.state)}, "utf8"));
 const backgroundStart = afterBackground.filter(record => record.type === "tool_execution_started").at(-1)?.supervision_id;
 if (backgroundStart === undefined) throw new Error("background start record omitted supervision ID");
-const backgroundOwned = await findProcessesByOwnerToken(backgroundStart, runnerIdentity.startTime);
+const backgroundOwned = await findProcessesByOwnerToken(backgroundStart, runnerIdentity.startTime, originalScope);
 console.log(JSON.stringify({ foreground, background, foregroundOwned, backgroundOwned }));
 `;
   const output = execFileSync(
@@ -92,6 +94,7 @@ console.log(JSON.stringify({ foreground, background, foregroundOwned, background
 }
 
 it("supervises packed bash foreground and background process boundaries", async () => {
+  const originalScope = await snapshotProcessNamespace();
   const fixture = createPackedBashFixture();
   const supervisionIds: string[] = [];
   try {
@@ -147,8 +150,8 @@ it("supervises packed bash foreground and background process boundaries", async 
         ).toBe(true);
       }
       for (const supervisionId of new Set(supervisionIds)) {
-        await killOwnedProcesses(supervisionId);
-        expect(await ownedProcesses(supervisionId)).toHaveLength(0);
+        await killOwnedProcesses(supervisionId, originalScope);
+        expect(await ownedProcesses(supervisionId, originalScope)).toHaveLength(0);
       }
     }
   } finally {
@@ -164,8 +167,8 @@ it("supervises packed bash foreground and background process boundaries", async 
       } catch {}
       const uniqueSupervisionIds = [...new Set(supervisionIds)];
       for (const supervisionId of uniqueSupervisionIds) {
-        await killOwnedProcesses(supervisionId);
-        expect(await ownedProcesses(supervisionId)).toHaveLength(0);
+        await killOwnedProcesses(supervisionId, originalScope);
+        expect(await ownedProcesses(supervisionId, originalScope)).toHaveLength(0);
       }
     } finally {
       disposePackedBashFixture(fixture);

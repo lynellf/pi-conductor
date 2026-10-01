@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import { hrtime } from "node:process";
+import { observeMacWorkloadOutcome, releaseMacLeader } from "./macos/command-transport.js";
 import {
   snapshotAdmissionScope,
   waitForAdmissionSettlement,
@@ -29,10 +29,11 @@ import {
   elapsedMs,
   leaderIdentityUnobserved,
   observationFailure,
-  observeProcessClose,
   validateSupervisedProcessOptions,
 } from "./supervised-process-lifecycle.js";
 import { appendOutput, createOutputCapture, finishOutput } from "./supervised-process-output.js";
+import { settleSupervisedProcess } from "./supervised-process-settlement.js";
+import { spawnSupervisedChild } from "./supervised-process-transport.js";
 
 // One owner keeps spawn, admission, cleanup, and close settlement coherent;
 // identity, cleanup, and output helpers remain split below the module-size cap.
@@ -46,14 +47,14 @@ export {
   type SupervisedProcessResult,
   SupervisedProcessTimeoutError,
 } from "./supervised-process-contract.js";
-/** Run an executable with a deadline and owned Linux process-group cleanup. */
+/** Run an executable with a deadline and verified platform-owned process-group cleanup. */
 export async function runSupervisedProcess(
   options: SupervisedProcessOptions,
 ): Promise<SupervisedProcessResult> {
   if (!isSupervisedProcessSupported()) {
     throw new SupervisedProcessError(
       "supervised-process-unsupported",
-      "supervised process cleanup requires Linux",
+      "supervised process cleanup requires Linux or a prepared macOS observer",
       "not-started",
       null,
     );
@@ -88,29 +89,9 @@ export async function runSupervisedProcess(
   const stdout = createOutputCapture();
   const stderr = createOutputCapture();
   const total = { bytes: 0 };
-  const child = options.file
-    ? spawn(options.file, options.args ?? [], {
-        cwd: options.cwd,
-        env: {
-          ...(options.inheritEnv === false ? {} : process.env),
-          ...options.env,
-          PI_CONDUCTOR_EXECUTION_ID: options.executionId,
-        },
-        shell: false,
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      })
-    : spawn(options.command ?? "", {
-        cwd: options.cwd,
-        env: {
-          ...(options.inheritEnv === false ? {} : process.env),
-          ...options.env,
-          PI_CONDUCTOR_EXECUTION_ID: options.executionId,
-        },
-        shell: true,
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+  const child = spawnSupervisedChild(options);
+  const workloadOutcome =
+    process.platform === "darwin" ? observeMacWorkloadOutcome(child) : undefined;
   let spawnError: Error | undefined;
   let closed: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
   let resolveClose!: () => void;
@@ -244,10 +225,20 @@ export async function runSupervisedProcess(
           },
         );
       }
+      const nativeOutcome = workloadOutcome?.();
+      if (workloadOutcome !== undefined && nativeOutcome?.kind !== "exited") {
+        throw new SupervisedProcessError(
+          "supervised-process-spawn-failed",
+          "workload terminal status unavailable",
+          "confirmed",
+          null,
+          elapsedMs(startedAt),
+        );
+      }
       return {
         outcome: "exited",
-        exitCode: closed.exitCode,
-        signal: closed.signal,
+        exitCode: nativeOutcome?.kind === "exited" ? nativeOutcome.exitCode : closed.exitCode,
+        signal: nativeOutcome?.kind === "exited" ? nativeOutcome.signal : closed.signal,
         stdout: finishOutput(stdout),
         stderr: finishOutput(stderr),
         truncated: stdout.truncated || stderr.truncated,
@@ -371,133 +362,32 @@ export async function runSupervisedProcess(
   }
   if (options.stdin !== undefined && options.deferStdinUntilSpawn === true)
     child.stdin?.end(options.stdin);
-  return await new Promise<SupervisedProcessResult>((resolve, reject) => {
-    let settled = false;
-    let cleanupPromise: Promise<SupervisedCleanupResult> | undefined;
-    const cleanupOwned = (): Promise<SupervisedCleanupResult> =>
-      (cleanupPromise ??= safeTerminateOwnedGroupDetailed(identity, graceMs, observationScope));
-    const finishFailure = async (
-      code: "supervised-process-timeout" | "supervised-process-aborted",
-    ) => {
-      if (settled) return;
-      settled = true;
-      const cleanupResult = await cleanupOwned();
-      const cleanup = cleanupResult.cleanup;
-      options.signal?.removeEventListener("abort", onAbort);
-      const elapsedMs = Number(hrtime.bigint() - startedAt) / 1_000_000;
-      const error =
-        code === "supervised-process-timeout"
-          ? new SupervisedProcessTimeoutError(
-              cleanup,
-              identity,
-              elapsedMs,
-              cleanupResult.diagnostic,
-            )
-          : new SupervisedProcessAbortError(cleanup, identity, elapsedMs, cleanupResult.diagnostic);
-      clearTimeout(timer);
-      reject(error);
-    };
-    const onAbort = () => void finishFailure("supervised-process-aborted");
-    const timer = setTimeout(
-      () =>
-        void finishFailure(
-          options.signal?.aborted ? "supervised-process-aborted" : "supervised-process-timeout",
-        ),
-      Math.max(0, processDeadline - Date.now()),
-    );
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    if (options.signal?.aborted) void finishFailure("supervised-process-aborted");
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      reject(
-        new SupervisedProcessError(
-          "supervised-process-spawn-failed",
-          error.message,
-          "not-started",
-          identity,
-        ),
+  if (process.platform === "darwin") {
+    try {
+      releaseMacLeader(child, options);
+    } catch {
+      const result = await safeTerminateOwnedGroupDetailed(identity, graceMs, observationScope);
+      throw new SupervisedProcessError(
+        "supervised-process-spawn-failed",
+        "native workload release failed",
+        result.cleanup,
+        identity,
+        elapsedMs(startedAt),
+        result.diagnostic,
       );
-    });
-    observeProcessClose(child, startedAt, stdout, stderr, closed, async (result) => {
-      if (settled) return;
-      try {
-        if (await processGroupHasLiveMembers(identity.processGroupId)) {
-          const cleanupResult = await cleanupOwned();
-          settled = true;
-          clearTimeout(timer);
-          options.signal?.removeEventListener("abort", onAbort);
-          reject(
-            new SupervisedProcessError(
-              "supervised-process-spawn-failed",
-              "process group remained active after child exit",
-              cleanupResult.cleanup,
-              identity,
-              result.elapsedMs,
-              cleanupResult.diagnostic,
-            ),
-          );
-          return;
-        }
-        const escaped = await findProcessesByOwnerToken(
-          options.executionId,
-          identity.startTime,
-          observationScope,
-        );
-        if (escaped.length > 0) {
-          const cleanupResult = await cleanupOwned();
-          settled = true;
-          clearTimeout(timer);
-          options.signal?.removeEventListener("abort", onAbort);
-          reject(
-            new SupervisedProcessError(
-              "supervised-process-spawn-failed",
-              "owned descendant remained after child exit",
-              "unconfirmed",
-              identity,
-              result.elapsedMs,
-              cleanupResult.diagnostic ?? {
-                cleanup_cause: "escaped_owned_processes",
-                leader_observed: true,
-                observed_members: escaped
-                  .slice(0, 32)
-                  .map(({ pid, startTime, processGroupId }) => ({
-                    pid,
-                    start_time: startTime,
-                    process_group_id: processGroupId,
-                  })),
-              },
-            ),
-          );
-          return;
-        }
-      } catch (error) {
-        if (settled) {
-          await cleanupOwned();
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        options.signal?.removeEventListener("abort", onAbort);
-        reject(
-          new SupervisedProcessError(
-            "supervised-process-spawn-failed",
-            error instanceof Error ? error.message : "could not observe owned descendants",
-            "unconfirmed",
-            identity,
-            result.elapsedMs,
-            observationFailure(error, "list_processes", identity),
-          ),
-        );
-        return;
-      }
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      resolve(result);
-    });
+    }
+  }
+  return await settleSupervisedProcess({
+    options,
+    child,
+    identity,
+    startedAt,
+    processDeadline,
+    graceMs,
+    observationScope,
+    stdout,
+    stderr,
+    closed,
+    ...(workloadOutcome === undefined ? {} : { workloadOutcome }),
   });
 }

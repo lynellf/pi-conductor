@@ -113,10 +113,10 @@ async function inspectWithLog(
 ): Promise<ToolExecutionCleanupInspection> {
   if (!log.listRunIds().includes(runId))
     throw new ToolExecutionReconciliationError("run_not_found", `run '${runId}' does not exist`);
-  if (process.platform !== "linux")
+  if (process.platform !== "linux" && process.platform !== "darwin")
     throw new ToolExecutionReconciliationError(
       "unsupported_platform",
-      "cleanup observation requires Linux",
+      "cleanup observation requires Linux or the macOS native observer",
     );
   const records = log.records(runId).filter(isToolExecutionRecord);
   const timeline = reconstructToolExecutionTimeline(records);
@@ -127,7 +127,17 @@ async function inspectWithLog(
     if (executionId !== undefined && executionId !== started.execution_id) continue;
     // Record timestamps are wall-clock milliseconds; /proc startTime is a
     // boot-relative tick count, so they cannot be compared directly.
+    if (started.sandbox !== undefined && process.platform !== "linux")
+      throw new ToolExecutionReconciliationError(
+        "unsupported_platform",
+        "Bubblewrap cleanup requires the original Linux host",
+      );
     const sandbox = started.sandbox === undefined ? undefined : await inspectSandboxCleanup(entry);
+    if (process.platform === "darwin" && sandbox === undefined && started.admission === undefined)
+      throw new ToolExecutionReconciliationError(
+        "admission_origin_unavailable",
+        "Legacy execution has no macOS origin evidence; inspect on its original host, not a new process baseline",
+      );
     const scope =
       sandbox !== undefined || started.admission === undefined
         ? undefined
