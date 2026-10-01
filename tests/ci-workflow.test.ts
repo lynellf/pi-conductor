@@ -17,4 +17,10 @@ it("sets an external pnpm store before cache lookup without an invalid job conte
   expect(store).toBeGreaterThanOrEqual(0);
   expect(store).toBeLessThan(node);
   expect(job.steps[store]?.run).toContain('>> "$GITHUB_ENV"');
+  expect(job.steps[store]?.run).toContain("npm_config_package_import_method=copy");
+  expect(
+    job.steps.some((step) =>
+      step.run?.includes('chmod 555 "$RUNNER_TEMP/conductor-node/bin/node"'),
+    ),
+  ).toBe(true);
 });

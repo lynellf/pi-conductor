@@ -33,6 +33,7 @@ jobs:
         run: |
           : "${RUNNER_TEMP:?missing runner temp}" "${GITHUB_ENV:?missing environment file}"
           echo "npm_config_store_dir=$RUNNER_TEMP/pnpm-store" >> "$GITHUB_ENV"
+          echo "npm_config_package_import_method=copy" >> "$GITHUB_ENV"
 
       # Node 22.19.0 is the minimum supported runtime for the locked pi SDK
       # stack (`@earendil-works/pi-*` / `undici@8.5.0`).
@@ -41,10 +42,32 @@ jobs:
           node-version: 22.19.0
           cache: pnpm
 
+      # The shared tool cache need not have the job user's ownership. Do not
+      # weaken protected-runtime checks or mutate the shared cache: copy the
+      # pinned executable to this job's private directory with explicit modes.
+      - name: Use a job-owned pinned Node executable
+        run: |
+          mkdir -p "$RUNNER_TEMP/conductor-node/bin"
+          chmod 700 "$RUNNER_TEMP/conductor-node" "$RUNNER_TEMP/conductor-node/bin"
+          cp "$(command -v node)" "$RUNNER_TEMP/conductor-node/bin/node"
+          chmod 555 "$RUNNER_TEMP/conductor-node/bin/node"
+          echo "$RUNNER_TEMP/conductor-node/bin" >> "$GITHUB_PATH"
+
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm lint
 
       - run: pnpm typecheck
+
+      - name: Record bounded runtime protection evidence
+        run: |
+          node --input-type=module <<'JS'
+          import {lstatSync, realpathSync} from 'node:fs';
+          import {fileURLToPath} from 'node:url';
+          for (const [label, path] of [['node', process.execPath], ['typebox', fileURLToPath(import.meta.resolve('typebox'))]]) {
+            const s=lstatSync(path);
+            console.log(JSON.stringify({label, canonical:realpathSync(path)===path, uid:s.uid, currentUid:process.getuid(), mode:s.mode&4095, nlink:s.nlink, regular:s.isFile()}));
+          }
+          JS
 
       - run: pnpm test

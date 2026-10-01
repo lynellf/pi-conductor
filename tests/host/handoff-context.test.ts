@@ -90,10 +90,14 @@ describe("createHandoffContextTool", () => {
   });
 
   it("has no path parameter and reports an unreadable predecessor explicitly", async () => {
+    // A directory is unreadable as JSONL even when CI runs as root; a missing
+    // path may be opened as a new empty SDK session instead of throwing.
+    const cwd = await mkdtemp(join(tmpdir(), "pi-conductor-unreadable-predecessor-"));
+    tempDirs.push(cwd);
     const tool = createHandoffContextTool({
       run_id: "run-14",
       source_role: "planner",
-      source_session_file: "/does/not/exist.jsonl",
+      source_session_file: cwd,
     });
 
     expect(Value.Check(tool.parameters, {})).toBe(true);
