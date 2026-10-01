@@ -139,7 +139,7 @@ recorded before model work and degradation is shown in the UI or on stderr.
 the default is `portable`. Interrupted baseline work blocks resume/replacement:
 inspect partial effects and survivors before deliberately starting a new run.
 There is no baseline cleanup acknowledgment override. Explicit controller,
-delegation, sandbox or unavailable container requirements fail preflight rather
+delegation, protected worktree/copy, sandbox or unavailable container requirements fail preflight rather
 than becoming unconfined execution. Non-Linux delegation/controllers remain
 unavailable; the staged Bubblewrap command backend remains disabled in this build.
 See [execution controls](docs/execution-controls.md) and the

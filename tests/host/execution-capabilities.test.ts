@@ -57,6 +57,15 @@ describe("execution capability selection", () => {
       preflightExecution(manifest as typeof ordinary, detectExecutionCapabilities("darwin")),
     ).toThrow("requires");
   });
+  it("rejects required protected workspaces without enhanced host interfaces", () => {
+    const manifest = {
+      ...ordinary,
+      roles: [{ ...firstRole, workspace: { backend: "copy" as const } }],
+    };
+    expect(() => preflightExecution(manifest, detectExecutionCapabilities("darwin"))).toThrow(
+      "requires",
+    );
+  });
   it("rejects the staged Bubblewrap backend even on enhanced Linux", () => {
     const manifest = {
       ...ordinary,

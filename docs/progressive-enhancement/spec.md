@@ -38,7 +38,7 @@ model commands, download tools, install software or expose environment values.
 | Bubblewrap delegated commands/verification | Explicit pinned sandbox policy and existing approval, probe, namespace and protected-file checks; the command backend is still build-gated closed | Unavailable in this build on every OS; enabled delegation requesting such a profile fails preflight, never ordinary spawn |
 | Repository controller, local effects, privileged Git/remote effects | Controller ownership/approval plus protected descriptors, trusted Git and supervised effects | Unavailable on non-Linux hosts in this change; an explicit controller fails preflight, even if its first step looks portable |
 | Delegation, exact/snapshot child authority and child cancellation | Existing protected Git/artifact admission, original child authority and cleanup contract | Non-Linux delegation is unavailable in this change: its protected `/proc/self/fd` and settlement dependencies cannot be replaced by weaker reads. Declared delegation fails preflight, not silently removed |
-| Worktree/copy role workspaces and file confinement | Existing Git snapshot/projection and path checks, public RPC tools | Preserve confinement and selected backend; use baseline file workers. Missing Git/backend support is an error, never switch to shared/unconfined execution |
+| Worktree/copy role workspaces and file confinement | Existing protected Git snapshot/projection and path checks, public RPC tools | Required protected workspace needs enhanced Linux interfaces in this change; reject baseline hosts before model work, never switch to shared/unconfined execution. Isolated tool routing still retains confinement and tier-aware workers |
 | Container workspace / container shell | Already unavailable backend | Still explicit preflight failure on every host; not an implicit enhancement |
 | Artifact collection, progressive disclosure, sparse Git | Existing checked roots, limits and required external programs/options | Keep checks; do not loosen trusted Git/descriptor predicates. Detectable unsupported explicit configurations fail, runtime dependency failures remain errors |
 | Optional repository evidence / advisory enrichment | Existing bounded evidence and advisory semantics | Existing unavailable-evidence reporting remains; no new privilege or tool implementation |
@@ -68,7 +68,7 @@ execution_policy:
 
 `strict` rejects any requested executable tool or guard that would be baseline.
 A handoff/end-only run does not require enhanced process support. Explicit
-sandbox, controller, delegation or unavailable workspace requirements reject
+sandbox, controller, delegation or protected/unavailable workspace requirements reject
 independently of this mode. A configured timeout remains enforced on baseline;
 its presence alone is not a requirement for proved descendant cleanup.
 

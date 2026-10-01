@@ -65,10 +65,14 @@ export function preflightExecution(
 ): ExecutionCapabilities {
   const delegationRequired = manifest.roles.some((role) => role.delegation !== undefined);
   const profiles = delegationRequired ? (manifest.subagents ?? []) : [];
-  const requiresLinux = manifest.controller !== undefined || delegationRequired;
+  const protectedWorkspaceRequired = manifest.roles.some(
+    (role) => role.workspace?.backend === "copy" || role.workspace?.backend === "worktree",
+  );
+  const requiresLinux =
+    manifest.controller !== undefined || delegationRequired || protectedWorkspaceRequired;
   if (requiresLinux && capabilities.execution_tier !== "enhanced") {
     throw new ExecutionCapabilityError(
-      "configured controller, delegation or Bubblewrap requires enhanced Linux capabilities; no unsandboxed fallback",
+      "configured controller, delegation or protected workspace requires enhanced Linux capabilities; no unsandboxed fallback",
     );
   }
   if (profiles.some((profile) => profile.execution?.backend === "bubblewrap"))

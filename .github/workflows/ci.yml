@@ -18,6 +18,10 @@ jobs:
     name: lint + typecheck + test
     runs-on: docker-build
     timeout-minutes: 10
+    env:
+      # Docker runners may default to a workspace-local store; keep generated
+      # dependency indexes out of Biome inputs and source-package fixtures.
+      npm_config_store_dir: ${{ runner.temp }}/pnpm-store
     steps:
       - uses: actions/checkout@v4
         with:

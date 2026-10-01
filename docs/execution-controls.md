@@ -8,7 +8,7 @@ Ordinary tools default to portable execution. Production preflight selects
 baseline degradation through the UI or stderr. Enhanced runtime failures never
 retry under baseline. Use `execution_policy: { mode: strict }` to require enhanced
 cleanup for executable tools/guards; handoff/end-only runs need neither backend.
-Required unavailable controller/delegation/sandbox/container features reject
+Required unavailable controller/delegation/protected-workspace/sandbox/container features reject
 preflight, with no unconfined or unsandboxed fallback.
 
 Baseline uses the same isolated public SDK file tools and bounded foreground
