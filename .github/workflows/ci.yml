@@ -16,7 +16,7 @@ concurrency:
 jobs:
   verify:
     name: lint + typecheck + test
-    runs-on: ubuntu-latest
+    runs-on: docker-build
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
