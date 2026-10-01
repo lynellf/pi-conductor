@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProcessObservationScope } from "../../src/host/execution/supervised-process-identity.js";
+import type { ProcessObservationScope } from "../../src/host/execution/process-identity-contract.js";
 
 const denied = Object.assign(new Error("denied"), { code: "EACCES" });
 const uid = process.getuid?.() ?? 1000;
@@ -9,15 +9,13 @@ const stat = (pid: number, sessionId: number, startTime: number, state = "S") =>
 async function withIdentityModule<T>(
   readFile: ReturnType<typeof vi.fn>,
   readdir: ReturnType<typeof vi.fn>,
-  run: (
-    module: typeof import("../../src/host/execution/supervised-process-identity.js"),
-  ) => Promise<T>,
+  run: (module: typeof import("../../src/host/execution/linux-process-identity.js")) => Promise<T>,
 ): Promise<T> {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   vi.resetModules();
   vi.doMock("node:fs/promises", () => ({ ...actual, readFile, readdir }));
   try {
-    return await run(await import("../../src/host/execution/supervised-process-identity.js"));
+    return await run(await import("../../src/host/execution/linux-process-identity.js"));
   } finally {
     vi.doUnmock("node:fs/promises");
     vi.resetModules();

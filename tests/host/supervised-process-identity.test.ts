@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ProcessObservationScope } from "../../src/host/execution/supervised-process-identity.js";
+import type { ProcessObservationScope } from "../../src/host/execution/process-identity-contract.js";
 
 const stat = (pid: number, sessionId: number, startTime: number, state = "S") =>
   `${pid} (worker) ${state} 0 ${pid} ${sessionId} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 ${startTime}`;
@@ -18,7 +18,7 @@ async function findWithMock(
   }));
   try {
     const { findProcessesByOwnerToken } = await import(
-      "../../src/host/execution/supervised-process-identity.js"
+      "../../src/host/execution/linux-process-identity.js"
     );
     return await findProcessesByOwnerToken("execution", "100", scope);
   } finally {
@@ -42,7 +42,7 @@ describe("readProcessIdentity permission races", () => {
     vi.doMock("node:fs/promises", () => ({ ...actual, readFile: readFileMock }));
     try {
       const { readProcessIdentity } = await import(
-        "../../src/host/execution/supervised-process-identity.js"
+        "../../src/host/execution/linux-process-identity.js"
       );
       await expect(readProcessIdentity(123, "execution")).resolves.toBeNull();
       expect(readFileMock.mock.calls).toEqual([
@@ -71,7 +71,7 @@ describe("readProcessIdentity observation boundaries", () => {
     vi.doMock("node:fs/promises", () => ({ ...actual, readFile: readFileMock }));
     try {
       const { readProcessIdentity } = await import(
-        "../../src/host/execution/supervised-process-identity.js"
+        "../../src/host/execution/linux-process-identity.js"
       );
       await expect(readProcessIdentity(123, "execution")).resolves.toMatchObject({
         pid: 123,
@@ -93,7 +93,7 @@ describe("readProcessIdentity observation boundaries", () => {
     vi.doMock("node:fs/promises", () => ({ ...actual, readFile: readFileMock }));
     try {
       const { readProcessIdentity } = await import(
-        "../../src/host/execution/supervised-process-identity.js"
+        "../../src/host/execution/linux-process-identity.js"
       );
       await expect(readProcessIdentity(123, "execution")).rejects.toMatchObject({
         operation: "read_environ",
@@ -120,7 +120,7 @@ describe("readProcessIdentity observation boundaries", () => {
     vi.doMock("node:fs/promises", () => ({ ...actual, readFile: readFileMock }));
     try {
       const { readProcessIdentity } = await import(
-        "../../src/host/execution/supervised-process-identity.js"
+        "../../src/host/execution/linux-process-identity.js"
       );
       await expect(readProcessIdentity(1, "execution")).resolves.toMatchObject({
         pid: 1,
@@ -145,7 +145,7 @@ describe("readProcessIdentity observation boundaries", () => {
     vi.doMock("node:fs/promises", () => ({ ...actual, readFile: readFileMock }));
     try {
       const { readProcessIdentity } = await import(
-        "../../src/host/execution/supervised-process-identity.js"
+        "../../src/host/execution/linux-process-identity.js"
       );
       await expect(readProcessIdentity(1, "execution")).rejects.toMatchObject({
         operation: "read_stat",
@@ -201,7 +201,7 @@ describe("findProcessesByOwnerToken permission races", () => {
     }));
     try {
       const { findProcessesByOwnerToken } = await import(
-        "../../src/host/execution/supervised-process-identity.js"
+        "../../src/host/execution/linux-process-identity.js"
       );
       const result = findProcessesByOwnerToken("execution", "100");
       if (expected === "absent") await expect(result).resolves.toEqual([]);
