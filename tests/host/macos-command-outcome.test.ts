@@ -21,6 +21,32 @@ describe.runIf(process.platform === "darwin")("Darwin keeper workload outcomes",
     expect(result).toMatchObject({ exitCode: null, signal, stdout: "before-signal", stderr: "" });
   });
 
+  it("does not activate keeper debug output from workload environment flags", async () => {
+    const result = await runSupervisedProcess({
+      executionId: randomUUID(),
+      file: "/bin/echo",
+      args: ["plain-output"],
+      cwd: process.cwd(),
+      inheritEnv: false,
+      env: { NODE_DEBUG: "child_process", PRIVATE_WORKLOAD_VALUE: "not-for-keeper" },
+      timeoutMs: 2_000,
+      onStart: () => undefined,
+    });
+    expect(result).toMatchObject({ exitCode: 0, stdout: "plain-output\n", stderr: "" });
+  });
+
+  it("does not expose the private keeper status FD to the workload", async () => {
+    const result = await runSupervisedProcess({
+      executionId: randomUUID(),
+      file: "/bin/sh",
+      args: ["-c", "if { : >&4; } 2>/dev/null; then exit 99; fi; exit 7"],
+      cwd: process.cwd(),
+      timeoutMs: 2_000,
+      onStart: () => undefined,
+    });
+    expect(result).toMatchObject({ exitCode: 7, signal: null, stderr: "" });
+  });
+
   it("never treats keeper death before release as a workload terminal outcome", async () => {
     const executionId = randomUUID();
     await expect(

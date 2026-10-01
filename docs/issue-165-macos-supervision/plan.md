@@ -61,6 +61,26 @@ scope. Native verification uses the SIP-enabled Apple Silicon development Mac.
      remaining limitations and tick only performed acceptance checks.
    - Verify: commands in `spec.md`, desktop campaign, git diff checks.
 
+## Draft follow-up performed
+
+- [x] Preserve the latest full-run result (334 failures / 60 files) and create a
+  count-checked [per-file inventory](failure-inventory.md); only 12 failures are
+  baseline-reproduced, and root-cause triage remains incomplete.
+- [x] Inspect the three full-run candidates while alive with matching identities;
+  retain same-real-UID/new-session unknown markers without name/signature exemptions.
+- [x] Reproduce and fix close/cancellation races, duplicate private members,
+  timer-delivery versus wall-deadline races, and post-admission transport errors.
+- [x] Reproduce keeper NODE_DEBUG argv/env leakage; minimize keeper startup env
+  while preserving the workload's environment after durable release.
+- [x] Correct per-test mock/cache lifetime under isolate:false and prove native
+  churn instrumentation is active (more than 200 actual observer invocations).
+- [x] Complete three fresh-context transport review cycles and first cache/recovery
+  reviews; [record findings and triage](review-findings.md), not whole-feature approval.
+- [ ] Correct/re-review open setup/cleanup/session findings and obtain actual Linux
+  execution; the review escalation limit and feasibility gate remain blockers.
+- [ ] Obtain design direction on same-real-UID restricted new-session provenance
+  and observer bootstrap settlement before advancing native enablement/acceptance.
+
 ## Current gate: blocked, not ready to ship
 
 See [verification.md](verification.md). The overseer approved matching Linux's
@@ -74,12 +94,18 @@ A shared time-representation issue was reproduced and fixed; the final focused r
 passed 149/149. The full suite completed with 332 failed tests; 12 baseline failures
 were separately reproduced. These failures remain under triage, not erased by green
 subsets. The peer-reviewed signal defects were subsequently reproduced and fixed;
-29 outcome/protocol regressions pass. The new scoped-churn campaign passed 200/200
-commands with 1,118 file updates and no recorded native races or unreadable-marker
-failures. Packed bash passed that run and five further runs, without reproducing
-the historical candidate; its root cause is still unestablished. A draft PR is
-authorized for review, not acceptance. Composite acceptance boxes remain unticked;
-Linux runtime verification and remaining independent safety review remain open.
+29 outcome/protocol regressions passed at that checkpoint. The first scoped-churn
+campaign passed 200/200 with 1,118 updates, and packed bash passed six runs. The
+latest full run then failed churn (198/200) and reproduced packed EACCES. The three
+live inspected candidates had matching Mach identities, both UIDs 501, unknown
+markers and independent sessions/groups; original exclusion proof was insufficient.
+Follow-up hardening passes 42 targeted tests; the latest broader run passes 155/156
+with another packed cleanup-unconfirmed EACCES. The later PID was gone before fresh
+inspection, which is not cleanup proof. Its instrumented campaign passed 200/200
+(1,018 updates, 1,027 native calls), without erasing the failed full campaign.
+A draft PR is open for review, not acceptance. Composite acceptance boxes remain
+unticked; Linux CI is waiting, root-cause triage is partial, and new cache/cleanup
+review findings remain open. Native feasibility requires design direction.
 
 ## Decisions and risks
 
@@ -92,7 +118,8 @@ Linux runtime verification and remaining independent safety review remain open.
   until command exit; this is supervision, not a sandbox.
 - A same-host boot UUID and raw Mach identity values must never be interpreted as
   Linux ticks. Recovery never manufactures an original snapshot.
-- Compiler setup is trusted, bounded, and non-triggering; it cannot silently install
-  tools or enable the backend after incomplete preparation.
+- Compiler setup must be trusted, bounded and non-triggering. Review found open
+  settlement, hard-timeout, tooling-trust and lock/publication gaps; the current
+  draft does not yet establish that contract. No automatic installation is allowed.
 - No new npm dependency or lockfile change. Intel/Rosetta/older-macOS verification
   and dedicated CI infrastructure are not represented as performed.

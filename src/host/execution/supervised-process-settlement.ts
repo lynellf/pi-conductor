@@ -54,7 +54,10 @@ export function settleSupervisedProcess(input: {
     const cleanupOwned = (): Promise<SupervisedCleanupResult> =>
       (cleanupPromise ??= safeTerminateOwnedGroupDetailed(identity, graceMs, observationScope));
     const finishFailure = async (
-      code: "supervised-process-timeout" | "supervised-process-aborted",
+      code:
+        | "supervised-process-timeout"
+        | "supervised-process-aborted"
+        | "supervised-process-spawn-failed",
     ) => {
       if (settled) return;
       settled = true;
@@ -62,17 +65,42 @@ export function settleSupervisedProcess(input: {
       const cleanup = cleanupResult.cleanup;
       options.signal?.removeEventListener("abort", onAbort);
       const elapsedMs = Number(hrtime.bigint() - startedAt) / 1_000_000;
-      const error =
-        code === "supervised-process-timeout"
-          ? new SupervisedProcessTimeoutError(
-              cleanup,
-              identity,
-              elapsedMs,
-              cleanupResult.diagnostic,
-            )
-          : new SupervisedProcessAbortError(cleanup, identity, elapsedMs, cleanupResult.diagnostic);
+      let error: SupervisedProcessError;
+      if (code === "supervised-process-timeout")
+        error = new SupervisedProcessTimeoutError(
+          cleanup,
+          identity,
+          elapsedMs,
+          cleanupResult.diagnostic,
+        );
+      else if (code === "supervised-process-aborted")
+        error = new SupervisedProcessAbortError(
+          cleanup,
+          identity,
+          elapsedMs,
+          cleanupResult.diagnostic,
+        );
+      else
+        error = new SupervisedProcessError(
+          code,
+          "owned process transport failed",
+          cleanup,
+          identity,
+          elapsedMs,
+          cleanupResult.diagnostic,
+        );
       clearTimeout(timer);
       reject(error);
+    };
+    const cancellationWon = (): boolean => {
+      if (settled) return true;
+      if (options.signal?.aborted || Date.now() >= processDeadline) {
+        void finishFailure(
+          options.signal?.aborted ? "supervised-process-aborted" : "supervised-process-timeout",
+        );
+        return true;
+      }
+      return false;
     };
     const onAbort = () => void finishFailure("supervised-process-aborted");
     const timer = setTimeout(
@@ -84,25 +112,17 @@ export function settleSupervisedProcess(input: {
     );
     options.signal?.addEventListener("abort", onAbort, { once: true });
     if (options.signal?.aborted) void finishFailure("supervised-process-aborted");
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      reject(
-        new SupervisedProcessError(
-          "supervised-process-spawn-failed",
-          error.message,
-          "not-started",
-          identity,
-        ),
-      );
+    // Identity is already admitted here. Node error also covers kill/transport
+    // failures after spawn; it cannot justify not-started or bypass owned cleanup.
+    child.once("error", () => {
+      if (!cancellationWon()) void finishFailure("supervised-process-spawn-failed");
     });
     observeProcessClose(child, startedAt, stdout, stderr, closed, async (result) => {
-      if (settled) return;
+      if (cancellationWon()) return;
       try {
         if (await processGroupHasLiveMembers(identity.processGroupId)) {
           const cleanupResult = await cleanupOwned();
+          if (cancellationWon()) return;
           settled = true;
           clearTimeout(timer);
           options.signal?.removeEventListener("abort", onAbort);
@@ -125,6 +145,7 @@ export function settleSupervisedProcess(input: {
         );
         if (escaped.length > 0) {
           const cleanupResult = await cleanupOwned();
+          if (cancellationWon()) return;
           settled = true;
           clearTimeout(timer);
           options.signal?.removeEventListener("abort", onAbort);
@@ -151,7 +172,7 @@ export function settleSupervisedProcess(input: {
           return;
         }
       } catch (error) {
-        if (settled) {
+        if (cancellationWon()) {
           await cleanupOwned();
           return;
         }
@@ -170,7 +191,7 @@ export function settleSupervisedProcess(input: {
         );
         return;
       }
-      if (settled) return;
+      if (cancellationWon()) return;
       settled = true;
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);

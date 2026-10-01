@@ -285,10 +285,10 @@ not cover provider-backed campaigns or trajectory workflows. Run it with
 `CONDUCTOR_SMOKE_NODE` and `CONDUCTOR_SMOKE_PI_ROOT` optionally select the Node
 binary and host Pi package root.
 
-macOS acceptance for #165 remains open. The overseer approved Linux-equivalent
-real-UID scope, and the unchanged 40-command desktop campaign passes after that
-change. Broader verification and independent safety review remain incomplete;
-same-real-UID restricted observations still fail closed. See the
+macOS remains an unaccepted draft for #165. The approved real-UID scope matches
+Linux, but the full native suite and packed bash remain red; desktop churn
+reproduced same-real-UID restricted new-session uncertainty. Cache/bootstrap,
+cleanup and session safety findings remain open; unknown observations fail closed. See the
 [verification notes and approved trust boundary](issue-165-macos-supervision/verification.md).
 Do not interpret passing subsets as completed compatibility acceptance.
 
@@ -302,8 +302,8 @@ compiler, unsafe cache, changed observer or incomplete observation fails closed.
 There is no automatic installer, privilege escalation or security-setting change.
 
 The supported runtime is a Node npm installation with an importable, on-disk
-Pi SDK. Supervised workers support Linux and the verified native macOS configuration.
-Preflight validates the host
+Pi SDK. Supervised workers retain Linux support; the native macOS backend is still
+an unaccepted draft, not verified compatibility. Preflight validates the host
 package name, version, export, and file-tool factories before a file-tool or
 delegation campaign starts. Repair the Pi installation or `PI_PACKAGE_DIR`
 override and restart Pi when preflight fails. Standalone bundled installations

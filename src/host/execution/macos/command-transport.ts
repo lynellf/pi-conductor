@@ -49,11 +49,10 @@ export function spawnMacLeader(options: SupervisedProcessOptions): ChildProcessW
   // https://nodejs.org/download/release/v22.19.0/docs/api/cli.html#--disable-sigusr1
   return spawn(process.execPath, ["--disable-sigusr1", "-e", BOOTSTRAP], {
     cwd: options.cwd,
-    env: Object.fromEntries(
-      Object.entries(workloadEnv(options)).filter(
-        ([key]) => key !== "NODE_OPTIONS" && !key.startsWith("DYLD_"),
-      ),
-    ),
+    // Startup flags (debugging, coverage, preloads and loader configuration) belong
+    // to the workload only. NODE_DEBUG can otherwise dump private argv/env to stderr.
+    // https://nodejs.org/download/release/v22.19.0/docs/api/cli.html#node_debugmodule
+    env: { PATH: "/usr/bin:/bin", LANG: "C", PI_CONDUCTOR_EXECUTION_ID: options.executionId },
     detached: true,
     stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
   }) as ChildProcessWithoutNullStreams;
@@ -116,7 +115,12 @@ export function observeMacWorkloadOutcome(
   child.stdio[4]?.once("end", () => {
     if (failed) return;
     try {
-      outcome = parseMacWorkloadOutcome(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      const payload = Buffer.concat(chunks).toString("utf8");
+      const parsed = parseMacWorkloadOutcome(JSON.parse(payload));
+      // The trusted emitter has one canonical form. Preserve duplicate-key evidence
+      // lost by JSON.parse rather than accepting a last-member-wins success frame.
+      if (parsed !== null && payload === JSON.stringify({ version: 1, ...parsed }))
+        outcome = parsed;
     } catch {
       outcome = null;
     }

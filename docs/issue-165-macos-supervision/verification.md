@@ -7,6 +7,66 @@
 - No new npm dependency, lockfile change, CI change, privilege escalation, or SIP change.
 - Draft review is authorized; implementation is not accepted for merge or release.
 
+## Latest draft follow-up: still blocked
+
+Draft PR #166 is open and must remain draft. The latest full native run at
+`869d82d` completed **334 failed / 4,228 passed / 5 skipped tests**, **60 failed /
+373 passed / 1 skipped files**, 434 files / 4,567 tests, **847.38 seconds**. The
+[per-file inventory](failure-inventory.md) covers all failed files and reconciles
+both full-run counts; only 12 failures in three files are baseline-reproduced.
+Remaining classifications explicitly retain needs-investigation cases.
+
+That run failed packed bash with `read_environ EACCES` and failed the scoped churn
+campaign: **198/200**, **1,226 updates**, two unreadable-marker failures. All three
+candidates were still alive for independent inspection with the **same PID/Mach
+birth/kind**, real/effective UID **501**, unknown markers and their own sessions/
+groups. Private system-program classification and parent PID 1 were not persisted
+as executable names/paths or used to exempt/signal them. The same-real-UID restricted
+new-session case is a demonstrated provenance/feasibility blocker; original proof
+was insufficient. Stop advancing acceptance and revisit the design, not the UID
+boundary or the meaning of unknown.
+
+Fresh-context review and deterministic RED tests found and corrected close-versus-
+cancellation ownership, duplicate private JSON members, overdue-timer versus wall-
+deadline delivery, and post-admission child-error cleanup. Native testing also
+reproduced NODE_DEBUG activating keeper argv/env dumps; the keeper now uses fixed
+minimal startup env, with the workload's complete intended env restored only after
+admission. The retained synthetic RED log has its ownership nonce redacted.
+**42/42 tests across four files** pass after these changes. See
+[review findings](review-findings.md) for the three-cycle escalation and new open
+long-timer, close-observation cleanup, cache/bootstrap and owned-session findings.
+No whole-feature approval was obtained.
+
+Under isolate:false, a new test mock initially leaked into native consumers and
+caused a 150-second timeout. Explicit per-test factory/module cleanup corrected the
+instrumentation lifecycle; a subsequent combined run retained **119/122**, with
+three native failures. This history is not erased or indiscriminately called
+baseline. A later native tracing/isolation run passed **38/38 across five files**,
+including 200/200 commands, 1,302 updates and **1,110 actual native calls**. After
+the final hardening, the latest broader run completed **155/156 across 21 files**:
+packed timeout returned cleanup-unconfirmed with another read_environ EACCES
+(PID 6646, Mach birth `171499176442717`, group 6646). That PID was gone by fresh
+inspection; disappearance proves neither ownership nor descendant cleanup. Its
+campaign passed **200/200**, **1,018 updates**, **1,027 actual native calls** and
+zero recorded races/native errors/terminal marker failures. Both active tracing
+runs assert more than 200 real invocations. Earlier zero counters lacked this
+explicit coverage assertion and do not independently establish complete tracing.
+
+Typecheck, build, full-repository Biome lint/format and diff checks passed after
+hardening. The first follow-up lint attempt failed on formatting and was corrected;
+it was not a green run. The latest production audit on the unchanged dependency
+graph passed; the earlier registry timeout remains failed history.
+
+Actual CI now exists: the draft commit has the pull-request check
+`CI / lint + typecheck + test (pull_request)`, and run **960** was still **waiting**
+at the latest check. There is no Linux execution/result yet. No workflow, runner,
+lockfile or dependency changes were made. Intel/Rosetta/older macOS, native minimum
+Node, actual no-CLT host, and cross-version apple[] parsing remain unverified.
+
+The following sections retain prior checkpoint evidence in chronological order;
+“latest” within those historical sections describes that checkpoint, not a later
+acceptance result.
+
 ## Approved real-UID boundary
 
 The overseer approved matching Linux's existing **real-UID** foreground trust
@@ -22,7 +82,8 @@ Only unknown-marker global-scan candidates with a freshly validated different
 real UID receive the same-account exclusion. Positive markers always win.
 Same-real-UID setuid candidates remain unknown without original exclusion proof;
 effective UID alone never exempts them. Group and originally owned session checks
-still retain all members regardless of UID. Privileged out-of-session workloads,
+must retain all members regardless of UID; the review identified session age/
+preexisting filtering for further investigation. Privileged out-of-session workloads,
 service activation and deliberately unmarked escapes remain unsupported, not
 contained by this boundary. Same-real-UID restricted processes can still stop a
 run conservatively.

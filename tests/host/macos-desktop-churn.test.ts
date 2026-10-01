@@ -2,39 +2,49 @@ import type { ExecFileException, ExecFileOptionsWithStringEncoding } from "node:
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { nativeObservationFailure } from "../../src/host/execution/macos/observer-protocol.js";
-import {
-  runSupervisedProcess,
-  SupervisedProcessError,
-} from "../../src/host/execution/supervised-process.js";
 
-const observations = vi.hoisted(() => ({ identityRaces: 0, otherNativeFailures: 0 }));
+const observations = { nativeCalls: 0, identityRaces: 0, otherNativeFailures: 0 };
+
+afterEach(() => {
+  vi.doUnmock("node:child_process");
+  vi.resetModules();
+});
 
 // Record native errors before the production retry discards them; execute the real helper unchanged.
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    execFile: (
-      file: string,
-      args: string[],
-      options: ExecFileOptionsWithStringEncoding,
-      callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
-    ) =>
-      actual.execFile(file, args, options, (error, stdout, stderr) => {
-        if (error !== null) {
-          if (nativeObservationFailure(stderr).code === "EAGAIN") observations.identityRaces++;
-          else observations.otherNativeFailures++;
-        }
-        callback(error, stdout, stderr);
-      }),
-  };
-});
+function traceNativeCalls(): void {
+  vi.resetModules();
+  vi.doMock("node:child_process", async () => {
+    const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    return {
+      ...actual,
+      execFile: (
+        file: string,
+        args: string[],
+        options: ExecFileOptionsWithStringEncoding,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) =>
+        actual.execFile(file, args, options, (error, stdout, stderr) => {
+          observations.nativeCalls++;
+          if (error !== null) {
+            if (nativeObservationFailure(stderr).code === "EAGAIN") observations.identityRaces++;
+            else observations.otherNativeFailures++;
+          }
+          callback(error, stdout, stderr);
+        }),
+    };
+  });
+}
 
 // Ordinary scoped file churn only: no service controls, reindexing, elevated privileges or process exemptions.
 describe.runIf(process.platform === "darwin")("macOS desktop churn feasibility", () => {
   it("completes 200 commands while updating an owned workspace directory", async () => {
+    // No Linux-skipped file installs a mock, and isolated consumers are rebuilt before native tracing.
+    traceNativeCalls();
+    const { runSupervisedProcess, SupervisedProcessError } = await import(
+      "../../src/host/execution/supervised-process.js"
+    );
     const directory = mkdtempSync(join(process.cwd(), "tmp-macos-165-churn-"));
     const commands = [
       "git status --porcelain",
@@ -78,6 +88,7 @@ describe.runIf(process.platform === "darwin")("macOS desktop churn feasibility",
     console.info(
       JSON.stringify({ campaign: 200, passed, writes, ...observations, unreadableMarkerFailures }),
     );
+    expect(observations.nativeCalls).toBeGreaterThan(200);
     expect(failures).toEqual([]);
   }, 120_000);
 });

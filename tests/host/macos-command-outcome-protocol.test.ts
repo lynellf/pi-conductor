@@ -64,6 +64,8 @@ describe("private Darwin workload outcome protocol", () => {
     "spawn_failed",
     "{}",
     `${JSON.stringify(exited)}${JSON.stringify(exited)}`,
+    '{"version":1,"kind":"exited","exitCode":42,"exitCode":0,"signal":null}',
+    '{"version":1,"version":1,"kind":"exited","exitCode":0,"signal":null}',
     " ".repeat(1025) + JSON.stringify(exited),
   ])("never turns missing, malformed, duplicate, or oversized status into success", async (payload) => {
     const { status, outcome } = capture();

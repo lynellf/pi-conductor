@@ -1,7 +1,10 @@
 # Issue #165: supervised execution on macOS
 
-Status: **Acknowledged by the overseer for implementation.** Native safety
-feasibility is a gate; dedicated macOS CI infrastructure is deferred.
+Status: **Acknowledged by the overseer for implementation; acceptance blocked.**
+Native safety feasibility is a gate; dedicated macOS CI infrastructure is deferred.
+Draft PR #166 remains open. Live same-real-UID restricted new-session candidates,
+failed full/packed runs and scoped safety-review findings require design direction;
+see [verification](verification.md) and [review findings](review-findings.md).
 Authority: issue #165; [FSM specification](../archive/orchestrator-fsm-spec.md)
 §§10–12; [approved execution controls](../open-issues-september/spec.md) #75/#76.
 
@@ -165,7 +168,11 @@ Workload signal outcomes must not be re-raised in the Node keeper: Node ignores
 SIGPIPE by default and reserves SIGUSR1 for inspector activation. Use a bounded,
 closed private terminal-status frame and disable SIGUSR1 inspector activation in
 the keeper. Missing, malformed or oversized status cannot establish workload
-success; deadline, abort and cleanup arbitration remain supervisor-owned.
+success; deadline, abort and cleanup arbitration remain supervisor-owned. Recheck
+wall-clock expiry when claiming a terminal: timer delivery order is not deadline
+proof. Once admitted, a child transport error cannot mean not-started or bypass
+owned cleanup. Keeper startup uses a fixed minimal environment; workload debug,
+coverage, loader and preload flags travel only through the admission-gated release.
 Sources: [Node signal behavior](https://nodejs.org/download/release/v22.19.0/docs/api/process.html#signal-events),
 [the inspector-disable flag](https://nodejs.org/download/release/v22.19.0/docs/api/cli.html#--disable-sigusr1),
 and [child close ordering](https://nodejs.org/download/release/v22.19.0/docs/api/child_process.html#event-close).
@@ -343,9 +350,15 @@ verification history, not erased by green subsets. See [verification notes](veri
 The peer-reviewed keeper signal defects were reproduced and fixed with native
 regressions. The draft-checkpoint focused run passed 241/241 tests across 31 files,
 including a 200-command scoped-churn campaign. Packed bash passed six subsequent
-runs without reproducing the earlier candidate; its root cause remains open.
-Linux runtime regression verification and remaining independent safety reviews
-are also pending. The overseer authorized a commit/push/draft PR checkpoint, not
+runs without reproducing the earlier candidate. The next full run then failed
+334 tests across 60 files, including packed EACCES and 198/200 churn. Three freshly
+inspected candidates had matching Mach births, both UIDs 501, unknown markers and
+independent sessions/groups; no original proof excluded them. The follow-up passes
+42 targeted tests but its broader run is 155/156 with another packed uncertainty.
+The later vanished PID is not cleanup proof. Scoped reviews found further cache/
+bootstrap, cleanup and session issues, and Linux CI is waiting, not executed.
+The native feasibility design must be revisited before enablement/acceptance;
+complete root-cause triage and independent safety gates remain open. The overseer authorized a commit/push/draft PR checkpoint, not
 merge, release, or acceptance based on passing native subsets.
 
 ## Boundaries

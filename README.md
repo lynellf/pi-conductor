@@ -129,12 +129,12 @@ The engine is the same in all three surfaces — extension, CLI, and library.
 
 ### Execution platforms
 
-**macOS acceptance is still open for #165.** The approved real-UID boundary now
-matches Linux for unknown-marker scans, and the unchanged 40-command desktop
-campaign passes. Broader verification and safety review remain open; restricted
-same-real-UID processes can still produce cleanup uncertainty. See
+**macOS remains an unaccepted draft for #165.** The real-UID boundary matches
+Linux, but ordinary desktop activity reproduced same-real-UID restricted
+new-session uncertainty. The full native suite and packed bash are red, and
+cache/bootstrap/cleanup safety findings remain open. See
 [the current gate and measurements](docs/issue-165-macos-supervision/verification.md);
-this is not a completed compatibility claim.
+passing subsets are not a completed compatibility claim.
 
 Ordinary supervised `read`, `write`, `edit`, `ls`, `find`, `grep`, foreground
 `bash`, and end guards have Linux and macOS backends. macOS needs installed
