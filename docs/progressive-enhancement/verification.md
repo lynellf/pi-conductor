@@ -1,6 +1,13 @@
 # Progressive enhancement verification
 
-## Current work
+## Current result
+
+Implementation is committed and published in PR #167. **Actual Linux CI run 972
+passes all 4,527 tests across 435 files**, plus frozen install/build, lint and
+strict typecheck, at code commit `ea47922`. Local feature acceptance is 85/85
+across 17 files, including the real packed extension on macOS. Full native macOS
+suite is **not green**; see the retained 477-failure run below. Windows/other
+platforms have selection fixtures, not native execution evidence. No merge/release.
 
 Design and implementation are authorized by corrected overseer direction.
 Branch is based on main at `00f09c8c795836d579df73122537dcefe0f9257e`;
@@ -101,5 +108,15 @@ or dependencies are changed. Missing predecessor SDK sessions can open as empty
 sessions: separately noted existing behavior, not fixed by this scoped change;
 the unreadable test uses an actual non-file source on every account.
 
-A follow-up full Linux run remains the final gate. The recurring local pnpm
+- Run 972, code `ea47922`: **4,527/4,527 tests, 435/435 files pass**. Frozen
+  install/build, lint and strict typecheck also pass under Node 22.19.0. Source and
+  private dependency permissions are tightened in this job only; all ownership,
+  cleanup and permission-denial assertions remain. No blanket skips or production
+  trust relaxations were added. This is real Linux execution, not a native-macOS
+  fixture or queued workflow.
+
+Final local gates pass: typecheck/build/lint/format, production audit (no known
+vulnerabilities), diff check and 85/85 feature tests. PR #167 is open against main;
+#166 remains parked/unmerged. No tool decoupling, dependency/lockfile updates,
+server/runner configuration changes, merge or release. The recurring local pnpm
 warning remains. No dedicated macOS CI is added.

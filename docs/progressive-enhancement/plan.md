@@ -25,7 +25,7 @@ approval stops. Base: `00f09c8c795836d579df73122537dcefe0f9257e`.
    Verify success/failure, retry accounting, uncertainty and resume blocking.
 9. [x] Exercise the actual packed extension on macOS and run portable focused
    regressions. Review correctness/security/architecture before final commit.
-10. [ ] Run typecheck/build/lint/format/audit/full tests, record failures honestly,
+10. [x] Run typecheck/build/lint/format/audit/full tests, record failures honestly,
     push and open the PR; obtain actual Linux CI execution and investigate results.
 
 Verification evidence belongs in `verification.md`. Do not tick unperformed
