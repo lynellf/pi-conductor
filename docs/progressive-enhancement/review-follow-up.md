@@ -30,6 +30,25 @@ scope. Report once after pushing the PR branch.
   `git worktree` itself is portable, but descriptor/Git-authority/confinement and
   child lifetime contracts must be preserved. Record only; do not implement here.
 
+## Deferred candidates — not implemented here
+
+The nonblocking platform-gate follow-up should inventory concrete requirements,
+then introduce named gates such as `linux-owned-procfs` for native ownership and
+reconciliation cases (`tests/host/supervised-process*.test.ts`,
+`tests/host/tool-execution-reconciliation.test.ts`,
+`tests/packed-bash-supervision.test.ts`) and `linux-protected-descriptors` for
+protected `/proc/self/fd` authority cases. These are candidate audit boundaries,
+not a declaration that every case/file in those families is Linux-only. Keep
+shared timers/pure record tests and baseline execution active on every platform;
+reproduce/classify failures before moving individual Linux-dependent cases behind
+gates, and require the full unchanged Linux gate. No gates/skips were added here.
+
+Portable protected macOS `git worktree` workspaces are the next enhancement
+candidate. First specify a public-API authority/confinement substitute that
+preserves descriptor, trusted-Git, artifact and child-lifetime contracts. Portable
+`git worktree` alone does not authorize dropping those safeguards or silently
+using shared workspaces. This is a recorded candidate, not implementation approval.
+
 ## Scoped review and regression evidence
 
 Three fresh-context, read-only static review passes examined the tracked recovery
@@ -64,6 +83,10 @@ is the source for foreground observation. It is not descendant-settlement proof.
   remain bounded and closed appropriately.
 - [x] Remove CI runtime debug step; document restricted-procfs Linux degradation
   and strict mode; update §5, README and execution/guard guidance.
-- [ ] Review changed contracts/tests; typecheck/build/lint/format/audit/diff checks,
+- [x] Review changed contracts/tests; typecheck/build/lint/format/audit/diff checks,
   focused native coverage and actual full Linux CI. Preserve native-suite caveat.
-- [ ] Commit/push PR branch, refresh PR evidence, and send one end report.
+- [x] Commit/push the recovery code on the existing PR branch and refresh PR evidence.
+
+All implementation gates passed at `8da0245` (Linux run 979: 4,547 tests/438 files;
+native focused: 144 tests/23 files). This acceptance record is documentation-only.
+The final end report is delivered once after this record is pushed; no merge/release.

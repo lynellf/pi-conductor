@@ -16,8 +16,19 @@ No full native suite was rerun or claimed green; the earlier 477-failure invento
 remains a limitation, not a reason to skip Linux assertions.
 
 Final local logs: `/private/tmp/progressive-feedback-final-{types,build,lint,format,audit,acceptance}.log`.
-Actual full Linux CI for this recovery revision is pending dispatch after the code
-push. Earlier runs below verify the initial implementation, **not these changes**.
+Actual full Linux CI **run 979** passed at recovery code commit
+**`8da0245bcec4ef25bdfdca73f3ac8f70b4bb7a93`**: **4,547/4,547 tests across
+438/438 files**, with frozen install/build, lint and strict typecheck under Node
+**22.19.0**, pnpm **10.33.1**. The full suite ran unprivileged, with no platform
+skips or weakened enhanced/protected assertions. Job 983 completed successfully;
+retained log: `/private/tmp/progressive-feedback-ci-979.log`.
+
+The acceptance/documentation follow-up changes only this file and
+`review-follow-up.md`; it does not change the code tested by run 979. Its separate
+CI rerun must be observed before claiming final-head CI, but is not substituted
+for the complete source-revision result. Earlier runs below verify the initial
+implementation, **not this recovery revision**. Initial documentation-only run
+973 at `2ad5327` was also confirmed successful during this follow-up.
 
 ## Initial PR acceptance (before recovery review follow-up)
 
