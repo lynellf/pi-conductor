@@ -7,8 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { MachineDefinition, Role } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
+import { isRoleToolExecutionRecord } from "../persistence/baseline-execution.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
-import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
 import {
   sha256Canonical,
@@ -88,7 +88,7 @@ export async function resumeTrajectoryRole(
       runId: host.runId,
       visitIndex: 1,
       executionVisitIndex,
-      priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
+      priorToolExecutionRecords: host.log.records(host.runId).filter(isRoleToolExecutionRecord),
       machineDefinition: host.loadedManifest.def,
       delegateTool: null,
       ...(host.uiContext !== undefined && { uiContext: host.uiContext }),

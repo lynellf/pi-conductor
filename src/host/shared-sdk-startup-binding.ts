@@ -1,7 +1,7 @@
 import type { Role } from "../core/types.js";
 import type { ToolExecutionPolicy } from "../manifest/execution-policy.js";
+import type { RoleToolExecutionRecord } from "../persistence/baseline-execution.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { RoleExecutionController } from "./execution/baseline-controller.js";
@@ -19,7 +19,7 @@ export interface SharedSdkStartupBindingOptions {
   readonly roleSessionId: string;
   readonly policy: Readonly<Required<ToolExecutionPolicy>>;
   readonly executionTier?: "enhanced" | "baseline";
-  readonly priorRecords?: readonly ToolExecutionRecord[];
+  readonly priorRecords?: readonly RoleToolExecutionRecord[];
   readonly persist: (record: PersistedRecord) => void;
   readonly session: SessionEventSource;
   readonly state: SessionState;

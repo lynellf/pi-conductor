@@ -270,7 +270,9 @@ function cleanupCertainty(
   cause: unknown,
   executionStarted: boolean,
 ): "confirmed" | "unconfirmed" | "not-started" {
-  if (cause instanceof ToolExecutionError) return cause.cleanup;
+  // Baseline evidence can never satisfy protected controller cleanup authority.
+  if (cause instanceof ToolExecutionError)
+    return cause.cleanup === "not-guaranteed" ? "unconfirmed" : cause.cleanup;
   if (
     typeof cause === "object" &&
     cause !== null &&

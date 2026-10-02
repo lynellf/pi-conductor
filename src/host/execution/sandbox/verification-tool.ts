@@ -224,7 +224,9 @@ function failedCommandEvidence(
 ): { readonly evidence: CommandEvidence; readonly uncertain: boolean } {
   const terminal = runner === undefined ? undefined : safeVerificationTerminal(runner);
   const toolError = cause instanceof ToolExecutionError ? cause : undefined;
-  const cleanup = toolError?.cleanup ?? terminal?.cleanup ?? "not-started";
+  const observedCleanup = toolError?.cleanup ?? terminal?.cleanup ?? "not-started";
+  // Protected verification still requires enhanced evidence; baseline is uncertain.
+  const cleanup = observedCleanup === "not-guaranteed" ? "unconfirmed" : observedCleanup;
   const timedOut =
     toolError?.code === "tool_timeout" || toolError?.code === "tool_timeout_exhausted";
   const cancelled = toolError?.code === "tool_aborted" || signalAborted;

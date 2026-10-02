@@ -1,11 +1,14 @@
-/** Portable call admission/terminals; no enhanced cleanup witnesses (§4–5). */
+/** Portable call admission/terminals; foreground settlement is not cleanup (§4–5). */
 import { randomUUID } from "node:crypto";
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
-import type {
-  BaselineExecutionFinishedRecord,
-  BaselineExecutionRecord,
-  BaselineExecutionStartedRecord,
+import {
+  assertBaselineExecutionsSettled,
+  type BaselineExecutionFinishedRecord,
+  type BaselineExecutionRecord,
+  type BaselineExecutionStartedRecord,
+  type BaselineForegroundStatus,
 } from "../../persistence/baseline-execution.js";
+import { BaselineProcessError } from "./baseline-process-error.js";
 import { armDeadline } from "./deadline-timer.js";
 import { SupervisedProcessError } from "./supervised-process-contract.js";
 import {
@@ -26,22 +29,35 @@ export interface RoleExecutionController {
   close(): Promise<void>;
 }
 
-/** Baseline controller configuration keeps its records separate from enhanced admission. */
+/** Baseline configuration keeps foreground evidence separate from enhanced admission. */
 export interface BaselineControllerOptions {
   readonly runId: string;
   readonly logicalSessionId: string;
   readonly roleSessionId: string;
   readonly policy: Readonly<Required<ToolExecutionPolicy>>;
   readonly persist: (record: BaselineExecutionRecord) => void;
+  readonly priorRecords?: readonly BaselineExecutionRecord[];
   readonly onFatal?: (error: ToolExecutionError) => void;
 }
 
-/** Admit only explicit calls; interrupted work seals the invocation instead of replaying. */
+/** Recover settled foreground interruptions within budget; never replay effects. */
 export class BaselineExecutionController implements RoleExecutionController {
   private closed = false;
+  private recoveryCount = 0;
   private readonly active = new Set<AbortController>();
+  private readonly cancelling = new Set<AbortController>();
   private readonly pending = new Set<Promise<unknown>>();
-  constructor(private readonly options: BaselineControllerOptions) {}
+
+  constructor(private readonly options: BaselineControllerOptions) {
+    assertBaselineExecutionsSettled(options.priorRecords ?? []);
+    this.recoveryCount = (options.priorRecords ?? []).filter(
+      (record) =>
+        record.type === "baseline_execution_finished" &&
+        record.run_id === options.runId &&
+        record.logical_session_id === options.logicalSessionId &&
+        (record.outcome === "timed_out" || record.outcome === "aborted"),
+    ).length;
+  }
 
   run<T>(
     name: string,
@@ -70,18 +86,16 @@ export class BaselineExecutionController implements RoleExecutionController {
       const error = new ToolExecutionError(
         "tool_persistence_ambiguous",
         "baseline execution persistence is ambiguous; resume is blocked",
-        { cleanup: "unconfirmed", cause },
+        { cleanup: "not-guaranteed", cause },
       );
       this.fatal(error);
       throw error;
     }
   }
-
   private seal(): void {
     this.closed = true;
     for (const controller of this.active) controller.abort();
   }
-
   private fatal(error: ToolExecutionError): void {
     this.seal();
     this.options.onFatal?.(error);
@@ -93,7 +107,13 @@ export class BaselineExecutionController implements RoleExecutionController {
     operation: (scope: ToolExecutionScope) => Promise<T>,
     options: ToolExecutionRunOptions,
   ): Promise<T> {
-    if (this.closed)
+    if (this.recoveryCount > this.options.policy.max_recoverable_timeouts)
+      throw new ToolExecutionError(
+        "tool_timeout_exhausted",
+        "baseline timeout recovery budget exhausted",
+        { cleanup: "not-guaranteed" },
+      );
+    if (this.closed || this.cancelling.size > 0)
       throw new ToolExecutionError("tool_closed", "baseline tool admission is closed");
     if (options.signal?.aborted)
       throw new ToolExecutionError("tool_aborted", "baseline tool was aborted before admission");
@@ -117,10 +137,18 @@ export class BaselineExecutionController implements RoleExecutionController {
     const deadline = started.ts + timeoutMs;
     const controller = new AbortController();
     this.active.add(controller);
-    const onAbort = () => this.seal();
-    options.signal?.addEventListener("abort", onAbort, { once: true });
+    const interrupt = () => {
+      this.cancelling.add(controller);
+      controller.abort();
+    };
+    options.signal?.addEventListener("abort", interrupt, { once: true });
     let timedOut = false;
-    let cancelTimer = () => {};
+    let foregroundStatus: BaselineForegroundStatus | undefined;
+    let activeForeground = 0;
+    let resolveForeground: (() => void) | undefined;
+    let invoked = false;
+    let taskSettled = false;
+    let taskError: unknown;
     let rejectAbort!: (error: unknown) => void;
     const aborted = new Promise<never>((_, reject) => {
       rejectAbort = reject;
@@ -132,19 +160,46 @@ export class BaselineExecutionController implements RoleExecutionController {
       supervisionId: started.execution_id,
       signal: controller.signal,
       graceMs: this.options.policy.termination_grace_seconds * 1000,
+      trackForeground: () => {
+        activeForeground++;
+        foregroundStatus = undefined;
+        let settled = false;
+        return (status) => {
+          if (settled) return;
+          settled = true;
+          activeForeground--;
+          if (activeForeground === 0) {
+            foregroundStatus = status;
+            resolveForeground?.();
+          }
+        };
+      },
       remainingTimeoutMs: () => Math.max(0, deadline - Date.now()),
       assertOpen: () => {
         if (this.closed || controller.signal.aborted || Date.now() >= deadline)
           throw new ToolExecutionError("tool_aborted", "baseline admission/deadline is closed", {
-            cleanup: "unconfirmed",
+            cleanup: "not-guaranteed",
           });
       },
     };
     const task = Promise.resolve().then(() => {
       scope.assertOpen();
+      invoked = true;
       return operation(scope);
     });
-    const finish = (outcome: BaselineExecutionFinishedRecord["outcome"]) => {
+    void task.then(
+      () => {
+        taskSettled = true;
+      },
+      (error) => {
+        taskSettled = true;
+        taskError = error;
+      },
+    );
+    const finish = (
+      outcome: BaselineExecutionFinishedRecord["outcome"],
+      status = foregroundStatus,
+    ) => {
       const { timeout_ms: _timeout, type: _type, ...identity } = started;
       this.persist({
         ...identity,
@@ -152,40 +207,60 @@ export class BaselineExecutionController implements RoleExecutionController {
         elapsed_ms: Math.max(0, Date.now() - started.ts),
         outcome,
         cleanup: "not-guaranteed",
+        ...(status === undefined ? {} : { foreground_status: status }),
         ts: Date.now(),
       });
     };
-    cancelTimer = armDeadline(deadline, () => {
+    const cancelTimer = armDeadline(deadline, () => {
       timedOut = true;
-      this.seal();
+      interrupt();
     });
-    if (options.signal?.aborted || this.closed) this.seal();
+    if (options.signal?.aborted || this.closed) interrupt();
     try {
       const value = await Promise.race([task, aborted]);
       if (Date.now() >= deadline) {
         timedOut = true;
-        this.seal();
+        interrupt();
         throw new Error("baseline deadline");
       }
       if (controller.signal.aborted) throw new Error("baseline cancellation");
+      if (activeForeground > 0) {
+        interrupt();
+        throw new Error("baseline task returned with active foreground work");
+      }
       finish("completed");
       return value;
     } catch (cause) {
       if (cause instanceof ToolExecutionError && cause.code === "tool_persistence_ambiguous")
         throw cause;
-      const processError = cause instanceof SupervisedProcessError ? cause : undefined;
-      timedOut ||= processError?.code === "supervised-process-timeout" || Date.now() >= deadline;
+      timedOut ||=
+        Date.now() >= deadline ||
+        (cause instanceof SupervisedProcessError && cause.code === "supervised-process-timeout");
       const interrupted =
-        timedOut || controller.signal.aborted || processError?.cleanup === "unconfirmed";
+        activeForeground > 0 ||
+        timedOut ||
+        controller.signal.aborted ||
+        (cause instanceof SupervisedProcessError &&
+          (cause.cleanup === "unconfirmed" || cause.code === "supervised-process-aborted"));
       if (!interrupted) {
         finish("failed");
-        throw cause;
+        throw new ToolExecutionError("tool_failed", "baseline tool execution failed", {
+          cleanup: "not-guaranteed",
+          executionId: started.execution_id,
+          cause,
+        });
       }
-      this.seal();
+      interrupt();
+      const foregroundSettlement =
+        activeForeground === 0
+          ? Promise.resolve()
+          : new Promise<void>((resolve) => {
+              resolveForeground = resolve;
+            });
       let cancelSettlement = () => {};
       try {
         await Promise.race([
-          task.catch(() => undefined),
+          Promise.all([task.catch(() => undefined), foregroundSettlement]),
           new Promise<void>((resolve) => {
             cancelSettlement = armDeadline(Date.now() + scope.graceMs * 2 + 2000, resolve);
           }),
@@ -193,25 +268,67 @@ export class BaselineExecutionController implements RoleExecutionController {
       } finally {
         cancelSettlement();
       }
-      finish(
-        timedOut
-          ? "timed_out"
-          : controller.signal.aborted && processError?.code !== "supervised-process-spawn-failed"
-            ? "aborted"
-            : "uncertain",
-      );
+      const processError =
+        taskError instanceof BaselineProcessError
+          ? taskError
+          : cause instanceof BaselineProcessError
+            ? cause
+            : undefined;
+      if (processError !== undefined) foregroundStatus = processError.foregroundStatus;
+      else if (!invoked) foregroundStatus = "not-started";
+      if (activeForeground > 0) foregroundStatus = "unobserved";
+      timedOut ||= processError?.code === "supervised-process-timeout" || Date.now() >= deadline;
+      const settled =
+        taskSettled &&
+        activeForeground === 0 &&
+        (foregroundStatus === "closed" || foregroundStatus === "not-started");
+      if (!settled) {
+        finish("uncertain", foregroundStatus ?? "unobserved");
+        const error = new ToolExecutionError(
+          "tool_cleanup_unconfirmed",
+          "baseline foreground/operation settlement was not observed; resume/replay is blocked. Inspect partial effects.",
+          { cleanup: "not-guaranteed", executionId: started.execution_id, cause },
+        );
+        this.fatal(error);
+        throw error;
+      }
+      const cancelled =
+        timedOut ||
+        options.signal?.aborted ||
+        this.closed ||
+        processError?.code === "supervised-process-aborted";
+      if (!cancelled) {
+        finish("failed");
+        throw new ToolExecutionError("tool_failed", "baseline foreground execution failed", {
+          cleanup: "not-guaranteed",
+          executionId: started.execution_id,
+          cause,
+        });
+      }
+      finish(timedOut ? "timed_out" : "aborted");
+      if (this.closed)
+        throw new ToolExecutionError("tool_aborted", "baseline invocation was closed", {
+          cleanup: "not-guaranteed",
+          executionId: started.execution_id,
+          cause,
+        });
+      const code =
+        this.recoveryCount++ >= this.options.policy.max_recoverable_timeouts
+          ? "tool_timeout_exhausted"
+          : "tool_timeout";
       const error = new ToolExecutionError(
-        "tool_cleanup_unconfirmed",
-        "baseline execution interrupted; descendant cleanup is not guaranteed. Resume/replay is blocked; inspect partial effects.",
-        { cleanup: "unconfirmed", executionId: started.execution_id, cause },
+        code,
+        "baseline foreground execution interrupted; descendant cleanup remains not-guaranteed. Inspect partial effects before an explicit retry.",
+        { cleanup: "not-guaranteed", executionId: started.execution_id, cause },
       );
-      this.fatal(error);
+      if (code === "tool_timeout_exhausted") this.fatal(error);
       throw error;
     } finally {
       cancelTimer();
-      options.signal?.removeEventListener("abort", onAbort);
+      options.signal?.removeEventListener("abort", interrupt);
       controller.signal.removeEventListener("abort", onOperationAbort);
       this.active.delete(controller);
+      this.cancelling.delete(controller);
     }
   }
 }

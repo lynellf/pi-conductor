@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { baselineForegroundStatusSchema } from "./baseline-execution.js";
 
 const id = Type.String({ minLength: 1 });
 const safePositive = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
@@ -34,6 +35,7 @@ export const endGuardStartedSchema = Type.Object(
 export const endGuardFinishedSchema = Type.Object(
   {
     type: Type.Literal("end_guard_finished"),
+    foreground_status: Type.Optional(baselineForegroundStatusSchema),
     execution_tier: Type.Optional(Type.Literal("baseline")),
     schema_version: Type.Literal(1),
     run_id: id,
@@ -139,6 +141,8 @@ export function assertEndGuardRecord(value: unknown): asserts value is EndGuardR
         throw new EndGuardRecordError("baseline end guard cannot claim confirmed cleanup");
       return;
     }
+    if (record.foreground_status !== undefined)
+      throw new EndGuardRecordError("foreground status requires explicit baseline execution tier");
     if (record.cleanup === "not-guaranteed")
       throw new EndGuardRecordError("baseline cleanup requires an explicit execution tier");
     if (record.outcome === "passed" && (record.exit_code !== 0 || record.cleanup !== "confirmed"))

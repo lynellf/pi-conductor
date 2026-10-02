@@ -101,6 +101,9 @@ export async function runEndGuardAttempt(
     role_session_id: result.roleSessionId,
     session_file: args.session.sessionFile,
     elapsed_ms: result.elapsedMs,
+    ...(args.host.executionTier === "baseline" && result.foregroundStatus !== undefined
+      ? { foreground_status: result.foregroundStatus }
+      : {}),
     outcome: result.outcome,
     exit_code: result.exitCode,
     signal: result.signal,

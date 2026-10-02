@@ -42,7 +42,6 @@ export function detectExecutionCapabilities(
         : [
             "descendant-cleanup-unavailable",
             "durable-reconciliation-unavailable",
-            "timeout-recovery-unavailable",
             ...(platform === "win32" ? ["process-group-termination-unavailable"] : []),
           ],
     ),
@@ -105,5 +104,5 @@ export function preflightExecution(
 
 /** Human-facing notice; baseline success never implies confirmed descendant cleanup. */
 export function executionDegradationNotice(capabilities: ExecutionCapabilities): string {
-  return `pi-conductor baseline execution on ${capabilities.platform}: ${capabilities.degradations.join(", ")}. Foreground deadlines and output bounds remain; descendant cleanup is NOT guaranteed. Interrupted calls block resume; inspect partial effects before starting new work.`;
+  return `pi-conductor baseline execution on ${capabilities.platform}: ${capabilities.degradations.join(", ")}. Foreground deadlines and output bounds remain; descendant cleanup is NOT guaranteed. Unobserved foreground close blocks resume; observed-close interruptions permit bounded recovery. Inspect partial effects before starting new work.`;
 }

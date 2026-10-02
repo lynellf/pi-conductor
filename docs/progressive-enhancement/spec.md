@@ -98,9 +98,9 @@ enhanced semantics; legacy passed guards still require confirmed cleanup.
 
 Normal baseline completion permits the next tool/transition without pretending
 the descendant set is empty. A successful guard establishes exit-zero only under
-the recorded baseline contract. Timeout, abort, unexpected foreground signal or transport/persistence uncertainty
-seals admission and stops the invocation. No timeout-recovery allowance can
-justify another attempt with potentially live prior work.
+the recorded baseline contract. The revised §5 policy permits bounded timeout/abort
+recovery after observed direct-child close. Foreground signal exits are ordinary
+failed calls. Unobserved close or persistence uncertainty seals admission.
 
 ## 5. Baseline lifetime and recovery decision
 
@@ -112,22 +112,46 @@ Output remains bounded; stdin errors are handled. On cancellation attempt group
 termination while the live child handle is available on POSIX, and direct-child
 termination elsewhere. Settle within a finite grace/force window and detach
 streams if descendants keep them open. Never signal a recovered numeric PID or
-claim that a missing process proves cleanup.
+claim that a missing process proves cleanup. Node's documented
+[`close` versus `exit`](https://nodejs.org/docs/v22.19.0/api/child_process.html#event-close)
+distinction observes process termination and closed stdio, not descendant settlement.
 
-Resume options considered:
+**Revised decision (overseer review of PR #167): foreground-close recovery.**
+The original policy blocked every timeout/abort, despite baseline nominal success
+also lacking descendant proof. Routine command deadlines must not permanently halt
+portable runs when the direct child closed after the finite TERM/KILL sequence.
 
-1. Continue from checkpoint: simplest, but may overlap a still-running side effect.
-2. Explicit acknowledgment override: makes uncertainty visible, but would need a
-   new operator-authority record/API, and is not ownership or cleanup proof.
-3. Block unresolved baseline work: safest small feature-detection change.
+- Persist `timed_out`/`aborted` plus optional additive `foreground_status: closed`
+  (or `not-started` when no child was launched), always with cleanup `not-guaranteed`.
+  Return recoverable `tool_timeout` to the model within `max_recoverable_timeouts`.
+  Timeout/per-call abort share that logical-invocation budget across physical
+  replacement/model fallback. Reconstructing the same invocation keeps its budget;
+  checkpoint resume that starts a new logical invocation begins a new budget, as
+  in the enhanced host. The next interruption beyond it returns `tool_timeout_exhausted`
+  and closes the invocation. No command is automatically retried or replayed.
+- A closed foreground signal exit is an ordinary failed result, not transport
+  uncertainty. File workers still report tool/protocol failure, not success.
+- Block new call admission during cancellation settlement, then reopen only when
+  foreground settlement is known for every child launched in the call, including
+  close observed during the controller's bounded settlement window. Earlier-child
+  close or duplicate delivery cannot settle a different child. All terminal paths
+  account for outstanding tracked foreground work. Explicit host/session close remains a hard
+  shutdown and does not reopen or trigger model retry.
+- Only unresolved execution (unmatched start, unobserved close/settlement) or
+  ambiguous persistence permanently seals baseline recovery. A fulfilled arbitrary
+  cancellation promise does not establish a process close. Persist unresolved
+  terminals as `uncertain` with `foreground_status: unobserved`.
+- Old timed-out/aborted records without foreground evidence remain blocked; no
+  inferred close, persisted-PID signal, cleanup proof, or acknowledgment override.
+- Guards use the same foreground evidence distinction with their existing attempt
+  budget, not the role-tool timeout allowance.
 
-**Decision: option 3.** An unmatched baseline start, or terminal timeout/abort/
-unexpected foreground signal or transport uncertainty, blocks resume and replacement before any model/tool work.
-Ordinary durably completed/failed calls permit checkpoint resume. There is no
-baseline reconcile-tools proof or acknowledgment override in this change. The
-operator inspects partial effects/survivors and may intentionally start a new run;
-the old execution never becomes `cleanup_confirmed`. This trades interrupted-run
-convenience for avoiding automatic ambiguous re-execution.
+Known completed/failed/settled-interruption records permit checkpoint resume.
+This is deliberately weaker than enhanced cleanup: descendants may survive even
+with observed close, just as they may after nominal baseline completion. The
+warning and `not-guaranteed` records remain truthful; callers must inspect partial
+effects before deliberately retrying. Unresolved old work requires inspecting
+survivors and intentionally starting a new run; it never becomes `cleanup_confirmed`.
 
 Enhanced unresolved records retain the existing reconciliation requirement even
 when resumed on a baseline host. Changing OS cannot reinterpret old records.
@@ -178,11 +202,13 @@ Commands: `pnpm typecheck`, `pnpm build`, `pnpm lint`, `pnpm format:check`,
 - Baseline real subprocess success, spawn failure, output bounds, hangs,
   abort/deadline races, no automatic replay and truthful terminal records.
 - Strict record validation and file-log round trips, crash starts and timed-out
-  terminals blocking resume, normal completion resuming, and enhanced legacy
+  terminals without foreground evidence blocking resume, observed-close interruption
+  recovery and pinned timeout budgets across replacement, normal completion resuming, and enhanced legacy
   records never acquiring baseline meaning.
 - Native macOS packed-extension E2E: ordinary tools and a legal handoff/end,
   visible and durable baseline selection, bounded guard success/failure and
-  timeout stop. No CLT/compiler/observer dependency.
+  bounded timeout correction after observed close, no-close stop and signal failures.
+  No CLT/compiler/observer dependency.
 - Existing Ubuntu/Linux full regression executes on CI with no weakened Linux
   assertions. macOS cannot turn Linux-only runtime tests into Linux evidence.
 

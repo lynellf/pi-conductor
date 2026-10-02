@@ -19,6 +19,7 @@ import {
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
 import type { RoleExecutionController } from "./baseline-controller.js";
 import { runBaselineProcess } from "./baseline-process.js";
+import { BaselineProcessError } from "./baseline-process-error.js";
 import { type FileToolWorkerModel, runFileToolWorker } from "./file-tool-worker.js";
 import { runSupervisedProcess, SupervisedProcessError } from "./supervised-process.js";
 import { captureToolAdmission } from "./tool-admission.js";
@@ -49,7 +50,7 @@ export interface SupervisedToolsOptions {
 /** Structured details returned for controller failures. */
 export interface SupervisedToolErrorDetails {
   readonly code: string;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
+  readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
   readonly executionId?: string;
 }
 
@@ -166,7 +167,11 @@ async function serializeMutation<T>(
     acquired = true;
     return await operation();
   } catch (error) {
-    if (error instanceof SupervisedProcessError && error.cleanup === "unconfirmed") {
+    if (
+      error instanceof SupervisedProcessError &&
+      error.cleanup === "unconfirmed" &&
+      !(error instanceof BaselineProcessError && error.foregroundStatus !== "unobserved")
+    ) {
       poisonMutationState(state);
       return Promise.reject(error);
     }
@@ -194,6 +199,14 @@ function sealedResult(): AgentToolResult<SupervisedToolErrorDetails> & { readonl
     isError: true,
     terminate: true,
   };
+}
+
+function baselineRunner(scope: ToolExecutionScope): typeof runSupervisedProcess {
+  return (options) =>
+    runBaselineProcess({
+      ...options,
+      ...(scope.trackForeground === undefined ? {} : { trackForeground: scope.trackForeground }),
+    });
 }
 
 function rawFileDefinition(
@@ -269,7 +282,7 @@ function supervisedFileDefinition(
               scope,
               policyFor(options),
               options.runFileToolWorker ?? runFileToolWorker,
-              options.executionTier === "baseline" ? runBaselineProcess : runSupervisedProcess,
+              options.executionTier === "baseline" ? baselineRunner(scope) : runSupervisedProcess,
             );
             const wrapped = options.wrapFileTool?.(raw) ?? raw;
             scope.assertOpen();
@@ -313,7 +326,7 @@ function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefiniti
                 exec: async (command, cwd, execOptions) => {
                   scope.assertOpen();
                   const result = await (options.executionTier === "baseline"
-                    ? runBaselineProcess
+                    ? baselineRunner(scope)
                     : runSupervisedProcess)({
                     executionId: scope.supervisionId,
                     command,
@@ -326,6 +339,12 @@ function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefiniti
                     onStart: () => scope.assertOpen(),
                     onOutput: (_stream, chunk) => execOptions.onData(chunk),
                   });
+                  if (options.executionTier === "baseline" && result.signal !== null)
+                    throw new RuntimeToolExecutionError(
+                      "tool_failed",
+                      `baseline command terminated by ${result.signal}`,
+                      { cleanup: "not-guaranteed", executionId: scope.executionId },
+                    );
                   return { exitCode: result.exitCode };
                 },
               },

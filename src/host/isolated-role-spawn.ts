@@ -11,9 +11,9 @@ import { join } from "node:path";
 import type { ModelEffort, Role, SessionWorkspaceDescriptor } from "../core/types.js";
 import { resolveToolExecutionPolicy } from "../manifest/execution-policy.js";
 import type { RoleConfig, WorkspaceConfig } from "../manifest/types.js";
+import type { RoleToolExecutionRecord } from "../persistence/baseline-execution.js";
 import type { PersistedRecord } from "../persistence/log.js";
 import { workspaceProvisioned } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import { SessionState } from "./cost.js";
 import type { DisplaySink } from "./display-sink.js";
 import type { RoleExecutionController } from "./execution/baseline-controller.js";
@@ -87,7 +87,7 @@ export async function spawnIsolatedRoleSession(options: {
   /** Explicit durable provenance for pre-#86 snapshots without a mode field. */
   readonly legacyDelegationMode?: boolean;
   /** Prior attempt records used to enforce timeout recovery across role replacement. */
-  readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
+  readonly priorToolExecutionRecords?: readonly RoleToolExecutionRecord[];
   /** Loop-owned, 1-based index shared by every model attempt in this role invocation. */
   readonly visitIndex: number;
   readonly workspaceVisitIndex?: number;

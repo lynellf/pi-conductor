@@ -8,8 +8,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { HandoffContextRef, MachineDefinition, ModelEffort, Role } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
+import type { RoleToolExecutionRecord } from "../persistence/baseline-execution.js";
 import type { PersistedRecord } from "../persistence/log.js";
-import type { ToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { SessionState } from "./cost.js";
 import type { AssignmentDelegationTools } from "./delegation/delegate-tool-factory.js";
 import type { DisplaySink } from "./display-sink.js";
@@ -61,7 +61,7 @@ export interface SharedSdkRoleOptions {
   readonly roleTurnProducer: RoleTurnProducer;
   readonly visitIndex?: number;
   readonly executionVisitIndex?: number;
-  readonly priorToolExecutionRecords?: readonly ToolExecutionRecord[];
+  readonly priorToolExecutionRecords?: readonly RoleToolExecutionRecord[];
   readonly contextRetention?: {
     readonly coordinator: OrchestratorContextCoordinator;
     readonly prepared: PreparedOrchestratorContext;

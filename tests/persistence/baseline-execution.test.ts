@@ -50,6 +50,29 @@ it.each([
     "baseline",
   );
 });
+it.each([
+  "timed_out",
+  "aborted",
+] as const)("permits baseline %s only with explicit settled foreground evidence", (outcome) => {
+  for (const foreground_status of ["closed", "not-started"] as const)
+    expect(() =>
+      assertBaselineExecutionsSettled([started, { ...finished, outcome, foreground_status }]),
+    ).not.toThrow();
+  expect(() =>
+    assertBaselineExecutionsSettled([
+      started,
+      { ...finished, outcome, foreground_status: "unobserved" },
+    ]),
+  ).toThrow("baseline");
+});
+it("never clears uncertain outcomes even if close metadata is present", () => {
+  expect(() =>
+    assertBaselineExecutionsSettled([
+      started,
+      { ...finished, outcome: "uncertain", foreground_status: "closed" },
+    ]),
+  ).toThrow("baseline");
+});
 it("blocks unmatched baseline starts before replay", () => {
   expect(() => assertBaselineExecutionsSettled([started])).toThrow("baseline");
 });

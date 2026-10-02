@@ -67,17 +67,6 @@ jobs:
 
       - run: pnpm typecheck
 
-      - name: Record bounded runtime protection evidence
-        run: |
-          node --input-type=module <<'JS'
-          import {lstatSync, realpathSync} from 'node:fs';
-          import {fileURLToPath} from 'node:url';
-          for (const [label, path] of [['node', process.execPath], ['typebox', fileURLToPath(import.meta.resolve('typebox'))]]) {
-            const s=lstatSync(path);
-            console.log(JSON.stringify({label, canonical:realpathSync(path)===path, uid:s.uid, currentUid:process.getuid(), mode:s.mode&4095, nlink:s.nlink, regular:s.isFile()}));
-          }
-          JS
-
       # Permission-denial fixtures must execute without root's DAC bypass.
       # Only this job's checkout/private runtime/home are changed, not the runner.
       - name: Run full suite as an unprivileged identity

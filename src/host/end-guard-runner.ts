@@ -2,8 +2,10 @@
 
 import { StringDecoder } from "node:string_decoder";
 import { type EndGuardConfig, resolveEndGuardConfig } from "../manifest/end-guard.js";
+import type { BaselineForegroundStatus } from "../persistence/baseline-execution.js";
 import { capErrorDiagnostic } from "./bounded-diagnostic.js";
 import { runBaselineProcess } from "./execution/baseline-process.js";
+import { BaselineProcessError } from "./execution/baseline-process-error.js";
 
 export type { EndGuardConfig } from "../manifest/end-guard.js";
 
@@ -45,6 +47,7 @@ export interface EndGuardRunResult {
   readonly output: string;
   readonly truncated: boolean;
   readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
+  readonly foregroundStatus?: BaselineForegroundStatus;
 }
 
 interface ActiveRun {
@@ -109,6 +112,7 @@ export class EndGuardRunner {
         output: "end guard was aborted",
         truncated: false,
         cleanup: this.executionTier === "baseline" ? "not-guaranteed" : "not-started",
+        ...(this.executionTier === "baseline" ? { foregroundStatus: "not-started" as const } : {}),
       });
     }
     const controller = new AbortController();
@@ -189,9 +193,12 @@ export class EndGuardRunner {
       appendBounded(output, Buffer.from(decoders.stdout.end() + decoders.stderr.end()));
       const processError = error instanceof SupervisedProcessError ? error : null;
       cleanup = processError?.cleanup ?? (supervisorEntered ? "unconfirmed" : "not-started");
+      const foregroundStatus =
+        error instanceof BaselineProcessError ? error.foregroundStatus : undefined;
       const uncertain =
-        cleanup === "unconfirmed" ||
-        (this.executionTier === "baseline" && processError?.code === "supervised-process-timeout");
+        this.executionTier === "baseline"
+          ? foregroundStatus !== "closed" && foregroundStatus !== "not-started"
+          : cleanup === "unconfirmed";
       if (uncertain) this.globallyClosed = true;
       if (this.executionTier === "baseline") cleanup = "not-guaranteed";
       const outcome: EndGuardOutcome = uncertain
@@ -208,6 +215,7 @@ export class EndGuardRunner {
         exitCode: null,
         signal: null,
         elapsedMs: processError?.elapsedMs ?? Date.now() - startedAt,
+        ...(foregroundStatus === undefined ? {} : { foregroundStatus }),
         output: (() => {
           if (output.chunks.length === 0) {
             const diagnostic = capErrorDiagnostic(

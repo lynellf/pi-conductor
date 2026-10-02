@@ -333,7 +333,9 @@ export async function resumeRun(
           record.type === "end_guard_finished" &&
           (record.outcome === "cleanup_unconfirmed" ||
             (record.execution_tier === "baseline" &&
-              (record.outcome === "aborted" || record.outcome === "timed_out"))),
+              (record.outcome === "aborted" || record.outcome === "timed_out") &&
+              record.foreground_status !== "closed" &&
+              record.foreground_status !== "not-started")),
       )
     ) {
       throw new Error("resumeRun: end_guard cleanup is unconfirmed; refusing unknown ownership");

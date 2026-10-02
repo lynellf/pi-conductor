@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { runBaselineProcess } from "../../src/host/execution/baseline-process.js";
 
-it("does not turn unexpected foreground signal termination into a nominal completion", async () => {
+it("returns observed foreground signal termination as an exited failed result", async () => {
   await expect(
     runBaselineProcess({
       executionId: "signal",
@@ -12,5 +12,5 @@ it("does not turn unexpected foreground signal termination into a nominal comple
       graceMs: 20,
       onStart: () => {},
     }),
-  ).rejects.toMatchObject({ cleanup: "unconfirmed", code: "supervised-process-spawn-failed" });
+  ).resolves.toMatchObject({ outcome: "exited", exitCode: null, signal: "SIGTERM" });
 });

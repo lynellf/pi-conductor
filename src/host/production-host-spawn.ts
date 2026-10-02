@@ -5,7 +5,10 @@ import type { ModelEffort, Role } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import { isHostGeneratedContinuityPolicy } from "../manifest/continuity.js";
 import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
-import { assertBaselineExecutionsSettled } from "../persistence/baseline-execution.js";
+import {
+  assertBaselineExecutionsSettled,
+  isRoleToolExecutionRecord,
+} from "../persistence/baseline-execution.js";
 import type { PersistedRecord, RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
 import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { TrajectoryResumeError } from "../persistence/trajectory-records.js";
@@ -328,7 +331,7 @@ export async function spawnRole(
       visitIndex: opts.visitIndex,
       workspaceVisitIndex: opts.workspaceVisitIndex ?? opts.visitIndex,
       executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-      priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
+      priorToolExecutionRecords: host.log.records(host.runId).filter(isRoleToolExecutionRecord),
       persistRecord: (record) => host.persistRecord(record),
       sessionStates: host.sessionStates,
       agentsBySessionId: host.agentsBySessionId,
@@ -437,7 +440,7 @@ export async function spawnRole(
     runId: host.runId,
     visitIndex: opts.visitIndex ?? 1,
     executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-    priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
+    priorToolExecutionRecords: host.log.records(host.runId).filter(isRoleToolExecutionRecord),
     machineDefinition: host.loadedManifest.def,
     controlProtocol: isHostGeneratedContinuityPolicy(host.loadedManifest.manifest.continuity)
       ? "v2"

@@ -31,19 +31,24 @@ it("keeps baseline guard failures correctable without claiming cleanup", async (
   });
   expect(result).toMatchObject({ outcome: "failed", exitCode: 2, cleanup: "not-guaranteed" });
 });
-it("bounds baseline guard timeout and refuses a replacement attempt", async () => {
+it("bounds baseline guard timeout and permits an explicit correction after observed close", async () => {
   const runner = new EndGuardRunner(process.cwd(), undefined, "baseline");
   const config = {
     command: `"${process.execPath}" -e "setInterval(() => {}, 1000)"`,
     timeout_seconds: 0.1,
   };
   expect(await runner.run({ ...common, config })).toMatchObject({
-    outcome: "cleanup_unconfirmed",
+    outcome: "timed_out",
+    foregroundStatus: "closed",
     cleanup: "not-guaranteed",
   });
-  await expect(runner.run({ ...common, attemptId: "replacement", config })).rejects.toThrow(
-    "closed",
-  );
+  await expect(
+    runner.run({
+      ...common,
+      attemptId: "replacement",
+      config: { command: "true", timeout_seconds: 1 },
+    }),
+  ).resolves.toMatchObject({ outcome: "passed", cleanup: "not-guaranteed" });
 });
 it("permits only explicitly baseline passed records without confirmed cleanup", () => {
   const record = {

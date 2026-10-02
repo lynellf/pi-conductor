@@ -1,12 +1,33 @@
 # Progressive enhancement verification
 
-## Current result
+## Recovery review follow-up — current revision
+
+The overseer's amended §5 now permits bounded recovery after observed foreground
+close without claiming descendant cleanup. See `review-follow-up.md` for scope,
+RED/GREEN history, three scoped static reviews and deferred platform/workspace work.
+
+Native macOS arm64, Node **25.6.0**, pnpm **10.32.1**: strict typecheck, build,
+lint, format check, production audit (no known vulnerabilities), and diff check
+passed. Focused final acceptance passed **144/144 tests across 23 files**, including
+actual packed-extension execution, known/unknown/late close, timeout/abort budget
+and real production model fallback, guard correction and resume, mutation-path
+recovery, persistence ambiguity, legacy barriers and enhanced uncertainty mapping.
+No full native suite was rerun or claimed green; the earlier 477-failure inventory
+remains a limitation, not a reason to skip Linux assertions.
+
+Final local logs: `/private/tmp/progressive-feedback-final-{types,build,lint,format,audit,acceptance}.log`.
+Actual full Linux CI for this recovery revision is pending dispatch after the code
+push. Earlier runs below verify the initial implementation, **not these changes**.
+
+## Initial PR acceptance (before recovery review follow-up)
 
 Implementation is committed and published in PR #167. **Actual Linux CI run 972
 passes all 4,527 tests across 435 files**, plus frozen install/build, lint and
 strict typecheck, at code commit `ea47922`. Local feature acceptance is 85/85
 across 17 files, including the real packed extension on macOS. Full native macOS
-suite is **not green**; see the retained 477-failure run below. Windows/other
+suite is **not green**; see the retained 477-failure run below. The overseer's
+subsequent recovery revision is tracked in `review-follow-up.md` and supersedes
+this initial all-interruptions-blocked policy; new verification is recorded below. Windows/other
 platforms have selection fixtures, not native execution evidence. No merge/release.
 
 Design and implementation are authorized by corrected overseer direction.

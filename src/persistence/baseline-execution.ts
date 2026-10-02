@@ -1,6 +1,7 @@
 /** Truthful portable execution records and conservative recovery — progressive-enhancement §4–5. */
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { isToolExecutionRecord, type ToolExecutionRecord } from "./tool-execution.js";
 
 const id = Type.String({ minLength: 1, maxLength: 1024 });
 const time = Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
@@ -15,6 +16,15 @@ const identity = {
   execution_tier: Type.Literal("baseline"),
   ts: time,
 };
+/** Foreground observation only, never evidence of descendant cleanup (§5). */
+export const baselineForegroundStatusSchema = Type.Union([
+  Type.Literal("closed"),
+  Type.Literal("not-started"),
+  Type.Literal("unobserved"),
+]);
+/** Direct child settlement reported by the portable runner. */
+export type BaselineForegroundStatus = Static<typeof baselineForegroundStatusSchema>;
+
 const started = Type.Object(
   {
     ...identity,
@@ -28,6 +38,7 @@ const finished = Type.Object(
     ...identity,
     type: Type.Literal("baseline_execution_finished"),
     elapsed_ms: time,
+    foreground_status: Type.Optional(baselineForegroundStatusSchema),
     outcome: Type.Union([
       Type.Literal("completed"),
       Type.Literal("failed"),
@@ -66,6 +77,15 @@ export type BaselineExecutionRecord =
   | BaselineExecutionStartedRecord
   | BaselineExecutionFinishedRecord;
 
+/** Role-call history carries both tiers without reinterpreting enhanced records. */
+export type RoleToolExecutionRecord = BaselineExecutionRecord | ToolExecutionRecord;
+/** Select validated role-call history for physical replacement and timeout budgets. */
+export function isRoleToolExecutionRecord(value: {
+  readonly type: string;
+}): value is RoleToolExecutionRecord {
+  return isBaselineExecutionRecord(value) || isToolExecutionRecord(value);
+}
+
 /** Validate exact baseline records at the log boundary. */
 export function assertBaselineExecutionRecord(
   value: unknown,
@@ -85,7 +105,16 @@ export function assertBaselineExecutionRecord(
     throw new Error("enhanced capability record cannot declare baseline degradation");
 }
 
-/** Validate identity/order and block resume of interrupted or unresolved baseline work. */
+/** Identify baseline call records already validated at the persistence boundary. */
+export function isBaselineExecutionRecord(value: {
+  readonly type: string;
+}): value is BaselineExecutionRecord {
+  return (
+    value.type === "baseline_execution_started" || value.type === "baseline_execution_finished"
+  );
+}
+
+/** Validate identity/order; interruptions require explicit foreground settlement (§5). */
 export function assertBaselineExecutionsSettled(records: readonly unknown[]): void {
   const starts = new Map<string, BaselineExecutionStartedRecord>();
   const terminals = new Set<string>();
@@ -115,7 +144,12 @@ export function assertBaselineExecutionsSettled(records: readonly unknown[]): vo
       )
         throw new Error("baseline terminal identity/order mismatch");
       terminals.add(record.execution_id);
-      uncertain ||= record.outcome !== "completed" && record.outcome !== "failed";
+      uncertain ||=
+        record.outcome === "uncertain" ||
+        record.foreground_status === "unobserved" ||
+        ((record.outcome === "timed_out" || record.outcome === "aborted") &&
+          record.foreground_status !== "closed" &&
+          record.foreground_status !== "not-started");
     }
   }
   if (uncertain || terminals.size !== starts.size) {

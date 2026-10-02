@@ -14,10 +14,19 @@ preflight, with no unconfined or unsandboxed fallback.
 Baseline uses the same isolated public SDK file tools and bounded foreground
 commands, but only finite best-effort cancellation. Its separate start/terminal
 records always say `cleanup: not-guaranteed`. Nominal completed/failed calls
-permit resume; unmatched starts, timeout, abort, unexpected foreground signal or
-uncertain terminal block resume and replacement. Timeout recovery allowances do
-not apply. `reconcile-tools` cannot confirm baseline cleanup or override this
-barrier. Inspect partial effects/survivors before deliberately starting a new run.
+permit resume. Timeout or per-call abort with an observed direct-child close
+(or known not-started) also permits resume and returns `tool_timeout` within the
+pinned `max_recoverable_timeouts` budget. The budget survives physical replacement
+of the same logical invocation (including model fallback). A checkpoint resume
+that creates a new logical invocation starts a new budget, as in enhanced mode;
+exhaustion returns `tool_timeout_exhausted` and
+stops that invocation. A foreground signal exit is a normal failure. None of this
+proves descendant cleanup or replays the call: inspect partial effects before an
+explicit retry. Cancellation temporarily blocks admission until foreground settlement.
+Explicit session/run close remains a hard shutdown, not an automatic retry.
+Unmatched starts, unobserved close, ambiguous persistence and legacy interruption
+records without foreground evidence still block resume/replacement.
+`reconcile-tools` cannot confirm baseline cleanup or override that barrier.
 Changing hosts never reinterprets historical enhanced records.
 
 ## Enhanced Linux execution

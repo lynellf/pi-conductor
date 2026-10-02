@@ -136,9 +136,13 @@ best-effort cancellation: **descendant cleanup is not guaranteed**. Selection is
 recorded before model work and degradation is shown in the UI or on stderr.
 
 `execution_policy: { mode: strict }` requires enhanced execution for tools/guards;
-the default is `portable`. Interrupted baseline work blocks resume/replacement:
-inspect partial effects and survivors before deliberately starting a new run.
-There is no baseline cleanup acknowledgment override. Explicit controller,
+the default is `portable` (including Linux with restricted `/proc`). Baseline
+calls whose direct child closed after cancellation return recoverable `tool_timeout`
+within `max_recoverable_timeouts`; foreground signal exits are ordinary failures.
+These calls retain `cleanup: not-guaranteed`, permit resume, and are never automatically
+replayed. Inspect partial effects before an explicit retry. Missing close observation,
+unmatched starts, old interruption records without foreground evidence, or ambiguous
+persistence still block resume/replacement. There is no baseline cleanup acknowledgment override. Explicit controller,
 delegation, protected worktree/copy, sandbox or unavailable container requirements fail preflight rather
 than becoming unconfined execution. Non-Linux delegation/controllers remain
 unavailable; the staged Bubblewrap command backend remains disabled in this build.

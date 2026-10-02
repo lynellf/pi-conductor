@@ -1,7 +1,11 @@
 import type { Role } from "../../core/types.js";
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
+import {
+  isBaselineExecutionRecord,
+  type RoleToolExecutionRecord,
+} from "../../persistence/baseline-execution.js";
 import type { PersistedRecord } from "../../persistence/log.js";
-import type { ToolExecutionRecord } from "../../persistence/tool-execution.js";
+import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import type { SessionState } from "../cost.js";
 import type { DisplaySink } from "../display-sink.js";
 import type { RoleTurnTelemetryAttachment } from "../role-turn-producer.js";
@@ -22,7 +26,7 @@ export interface RoleToolExecutionBindingOptions {
   readonly policy: Readonly<Required<ToolExecutionPolicy>>;
   readonly executionTier?: "enhanced" | "baseline";
   readonly persist: (record: PersistedRecord) => void;
-  readonly priorRecords?: readonly ToolExecutionRecord[];
+  readonly priorRecords?: readonly RoleToolExecutionRecord[];
   readonly onFatal?: (error: ToolExecutionError) => void;
 }
 
@@ -81,6 +85,7 @@ export function createRoleToolExecutionController(
       roleSessionId: options.roleSessionId,
       policy: options.policy,
       persist: options.persist,
+      priorRecords: options.priorRecords?.filter(isBaselineExecutionRecord) ?? [],
       ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
     });
   return new ToolExecutionController({
@@ -88,7 +93,9 @@ export function createRoleToolExecutionController(
     logicalSessionId: JSON.stringify([options.runId, options.role, options.visitIndex]),
     roleSessionId: options.roleSessionId,
     policy: options.policy,
-    ...(options.priorRecords === undefined ? {} : { priorRecords: options.priorRecords }),
+    ...(options.priorRecords === undefined
+      ? {}
+      : { priorRecords: options.priorRecords.filter(isToolExecutionRecord) }),
     persist: options.persist,
     ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
   });
