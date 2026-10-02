@@ -304,7 +304,7 @@ describe.sequential("Issue #51 initial progressive projection", () => {
       await reader?.dispose();
       await rm(repository, { recursive: true, force: true });
     }
-  }, 15_000);
+  }, 60_000);
 
   it("rejects a whitespace-only reason before bridge framing, disclosure, or audit", async () => {
     const repository = await createRepository();

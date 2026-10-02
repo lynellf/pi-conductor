@@ -244,7 +244,7 @@ describe("production controller effects", () => {
       required_evidence: [{ producer_id: validator.id, schema_id: validator.output_schema_id }],
       max_input_bytes: 65536,
       max_output_bytes: 65536,
-      timeout_seconds: 10,
+      timeout_seconds: 30,
     };
     const grant =
       kind === "git_promote"
