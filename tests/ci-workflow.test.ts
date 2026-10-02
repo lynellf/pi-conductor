@@ -23,4 +23,10 @@ it("sets an external pnpm store before cache lookup without an invalid job conte
       step.run?.includes('chmod 555 "$RUNNER_TEMP/conductor-node/bin/node"'),
     ),
   ).toBe(true);
+  expect(job.steps.some((step) => step.run?.includes("chmod go-w"))).toBe(true);
+  expect(
+    job.steps.some(
+      (step) => step.run?.includes("setpriv --reuid=65534") && step.run.includes("pnpm test"),
+    ),
+  ).toBe(true);
 });

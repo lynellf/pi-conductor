@@ -55,6 +55,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Private copies only: retain bytes while tightening published file modes.
+      - name: Protect job-local dependency bytes
+        run: find node_modules -type f -exec chmod go-w {} +
+
       - run: pnpm lint
 
       - run: pnpm typecheck
@@ -70,4 +74,13 @@ jobs:
           }
           JS
 
-      - run: pnpm test
+      # Permission-denial fixtures must execute without root's DAC bypass.
+      # Only this job's checkout/private runtime/home are changed, not the runner.
+      - name: Run full suite as an unprivileged identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/conductor-test-home"
+          chmod 700 "$RUNNER_TEMP/conductor-test-home"
+          chown -hR 65534:65534 "$GITHUB_WORKSPACE" "$RUNNER_TEMP/conductor-node" "$RUNNER_TEMP/conductor-test-home"
+          setpriv --reuid=65534 --regid=65534 --clear-groups \
+            env HOME="$RUNNER_TEMP/conductor-test-home" PATH="$RUNNER_TEMP/conductor-node/bin:$PATH" \
+            pnpm test
