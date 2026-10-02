@@ -282,7 +282,10 @@ export const phaseWorkPacketRecordSchema = Type.Object(
     recipient_role: idSchema,
     recipient_visit_index: Type.Integer({ minimum: 1 }),
     dispatch_source: phaseWorkPacketSourceSchema,
-    cutoff_record_keys: Type.Array(idSchema, { maxItems: 256 }),
+    // Uncapped by design (issue #155): entries are bounded by idSchema and the
+    // rendered header summarizes the list, but provenance keeps it in full, so
+    // arbitrarily long runs must still validate.
+    cutoff_record_keys: Type.Array(idSchema),
     status: Type.Union([Type.Literal("ready"), Type.Literal("blocked")]),
     phase_process: phaseProcessSectionSchema,
     host_observed: hostObservedSectionSchema,

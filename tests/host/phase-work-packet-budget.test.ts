@@ -240,3 +240,75 @@ describe("phase packet budget recovery", () => {
     expect(() => assertPhaseWorkPacketRecord(record)).toThrow("exceeds the configured budget");
   });
 });
+
+// ─── Arbitrarily long cutoff lists (issue #155 regression) ─────────────
+
+function repeatedHistory(keyCount: number): PersistedRecord[] {
+  const sessions = Math.max(0, keyCount - 1);
+  return [
+    ...Array.from(
+      { length: sessions },
+      (_, i): PersistedRecord => ({
+        type: "session_started",
+        run_id: runId,
+        role: "hub",
+        state: "hub",
+        visit_index: i + 1,
+        model: null,
+        parent_session: null,
+        session_file: `/sessions/hub-${i}.jsonl`,
+        ts: i,
+      }),
+    ),
+    {
+      type: "transition_accepted",
+      run_id: runId,
+      from: "hub",
+      to: "worker",
+      event: "handoff",
+      target_role: "worker",
+      role: "hub",
+      request_end: false,
+      end_authority: null,
+      end_requested_by: null,
+      suggests_next: null,
+      payload_summary: { field_names: [] },
+      guard: null,
+      effect: [],
+      session_file: `/sessions/hub-${String(sessions)}.jsonl`,
+      context_ref: null,
+      ts: sessions + 1,
+    },
+  ];
+}
+
+describe("arbitrarily long cutoff lists stay materializable (issue #155)", () => {
+  const cases = [
+    { keys: 2, summarized: false },
+    { keys: 64, summarized: false },
+    { keys: 201, summarized: true },
+    { keys: 257, summarized: true },
+    { keys: 1_000, summarized: true },
+    { keys: 5_000, summarized: true },
+  ];
+  for (const { keys, summarized } of cases) {
+    it(`materializes ${String(keys)} cutoff keys within budget`, () => {
+      const records = repeatedHistory(keys);
+      const { record } = materialize(records);
+      expect(record.cutoff_record_keys).toHaveLength(keys);
+      expect(record.budget.max_bytes).toBe(4096);
+      expect(record.utf8_bytes).toBeLessThanOrEqual(record.budget.max_bytes);
+      assertPhaseWorkPacketRecord(record);
+      const digest = createHash("sha256")
+        .update(JSON.stringify(record.cutoff_record_keys))
+        .digest("hex");
+      if (summarized) {
+        expect(record.rendered).toContain(digest);
+        expect(record.omissions).toContainEqual({
+          kind: "cutoff_keys_summarized",
+          count: keys,
+        });
+      }
+    });
+  }
+});

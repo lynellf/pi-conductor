@@ -73,8 +73,12 @@ const CUTOFF_RELEVANT_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /** Cutoff keys for relevant records through `throughIndex` inclusive.
- * Only process/review/evidence records enter the cutoff so long runs stay
- * within the 256-key schema bound; the source record is always included. */
+ * Only process/review/evidence records enter the cutoff; the source record is
+ * always included. The list is intentionally uncapped (issue #155): the
+ * rendered header summarizes it and the record keeps it in full for
+ * provenance, so no length ceiling may stand between a long run and its
+ * next legal dispatch. Evidence keys are windowed to the latest 64 to keep
+ * the projection focused, with the dropped count disclosed. */
 export function cutoffKeysThrough(
   records: readonly PersistedRecord[],
   throughIndex: number,
