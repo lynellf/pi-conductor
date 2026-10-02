@@ -17,6 +17,7 @@ import {
   SupervisedProcessTimeoutError,
 } from "./supervised-process-contract.js";
 import {
+  captureLineageContext,
   findProcessesByOwnerToken,
   type ProcessIdentity,
   processGroupHasLiveMembers,
@@ -78,7 +79,7 @@ export async function runSupervisedProcess(
   const processDeadline = Date.now() + options.timeoutMs;
   const supervisorIdentity = await readProcessIdentity(process.pid);
   const minimumOwnerStartTime = supervisorIdentity?.startTime;
-  const observationScope = await snapshotAdmissionScope();
+  let observationScope = await snapshotAdmissionScope();
   if (Date.now() >= processDeadline) {
     throw new SupervisedProcessTimeoutError("not-started", null, 0);
   }
@@ -148,6 +149,14 @@ export async function runSupervisedProcess(
       0,
       observationFailure(error, "read_stat", null),
     );
+  }
+  if (identity !== null) {
+    // #157: freeze the tool lineage while the leader is alive so later
+    // observation gaps can prove non-descendance.
+    observationScope = {
+      ...observationScope,
+      lineage: await captureLineageContext({ pid: identity.pid, startTime: identity.startTime }),
+    };
   }
   if (!identity) {
     const observedSpawnError = spawnError;

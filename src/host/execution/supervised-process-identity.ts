@@ -2,6 +2,12 @@
 // Kept together below 500 LOC so group/session scans share stat parsing and exclusion proofs.
 
 import { readdir, readFile } from "node:fs/promises";
+import {
+  classifyObservationGap,
+  type LineageContext,
+  type LineageNode,
+  type LineageRoot,
+} from "./supervised-process-lineage.js";
 
 /** Names the sanitized `/proc` operation that produced observation evidence. */
 export type ProcessObservationOperation =
@@ -52,6 +58,8 @@ export interface ProcessObservationScope {
   readonly preexisting: ReadonlyMap<number, ProcessIdentity>;
   /** Strict pre-launch cutoff restored only after original-origin validation (#103). */
   readonly preexistingBefore?: string;
+  /** Spawn-time tool lineage for observation-gap classification (#157). */
+  readonly lineage?: LineageContext;
 }
 
 function isGone(error: unknown): boolean {
@@ -72,6 +80,7 @@ function observationError(
 
 function parseStat(stat: string): {
   readonly state: string;
+  readonly parentPid: number;
   readonly processGroupId: number;
   readonly sessionId: number;
   readonly startTime: string;
@@ -79,13 +88,20 @@ function parseStat(stat: string): {
   const closing = stat.lastIndexOf(") ");
   if (closing < 0) throw new Error("invalid /proc stat");
   const fields = stat.slice(closing + 2).split(" ");
+  const parentPid = Number(fields[1]);
   const processGroupId = Number(fields[2]);
   const sessionId = Number(fields[3]);
   const startTime = fields[19];
   const state = fields[0];
-  if (!state || !Number.isInteger(processGroupId) || !Number.isInteger(sessionId) || !startTime)
+  if (
+    !state ||
+    !Number.isInteger(parentPid) ||
+    !Number.isInteger(processGroupId) ||
+    !Number.isInteger(sessionId) ||
+    !startTime
+  )
     throw new Error("invalid /proc stat fields");
-  return { state, processGroupId, sessionId, startTime };
+  return { state, parentPid, processGroupId, sessionId, startTime };
 }
 
 /** Capture process identities before spawning; this scope is never shared between calls. */
@@ -118,6 +134,47 @@ export async function snapshotProcessNamespace(): Promise<ProcessObservationScop
 
 function sameIdentity(left: ProcessIdentity, right: ProcessIdentity): boolean {
   return left.pid === right.pid && left.startTime === right.startTime;
+}
+
+/** Side-effecting: capture the root's live ancestry at spawn time (#157). */
+export async function captureLineageContext(root: LineageRoot): Promise<LineageContext> {
+  const ancestors: LineageNode[] = [];
+  let current = await readLineageNode(root.pid);
+  if (current === undefined || current.startTime !== root.startTime) return { root, ancestors };
+  for (let hops = 0; hops < 64; hops += 1) {
+    if (current.pid === 1) break;
+    const parent = await readLineageNode(current.parentPid);
+    if (parent === undefined) break;
+    ancestors.push(parent);
+    current = parent;
+  }
+  return { root, ancestors };
+}
+
+/** Side-effecting: capture one parent chain for classification (#157). */
+export async function captureChainNodes(
+  startPid: number,
+): Promise<ReadonlyMap<number, LineageNode>> {
+  const nodes = new Map<number, LineageNode>();
+  let current = await readLineageNode(startPid);
+  for (let hops = 0; hops < 64 && current !== undefined; hops += 1) {
+    nodes.set(current.pid, current);
+    if (current.pid === 1 || nodes.has(current.parentPid)) break;
+    current = await readLineageNode(current.parentPid);
+  }
+  return nodes;
+}
+
+async function readLineageNode(pid: number): Promise<LineageNode | undefined> {
+  try {
+    const parsed = parseStat(await readFile(`/proc/${pid}/stat`, "utf8"));
+    const status = await readFile(`/proc/${pid}/status`, "utf8");
+    const uid = /^Uid:\s+(\d+)/m.exec(status)?.[1];
+    if (uid === undefined) return undefined;
+    return { pid, parentPid: parsed.parentPid, uid: Number(uid), startTime: parsed.startTime };
+  } catch {
+    return undefined;
+  }
 }
 
 async function isProvenPreexisting(
@@ -309,6 +366,25 @@ export async function findProcessesByOwnerToken(
         const currentUid =
           typeof process.getuid === "function" ? String(process.getuid()) : undefined;
         if (uid !== undefined && currentUid !== undefined && uid !== currentUid) continue;
+        // #157: an unverifiable same-UID process is skipped only when its
+        // lineage proves it cannot descend from the tool root; anything
+        // ambiguous (orphaned, subreaper-shaped, incomplete) stays fail-closed.
+        const lineage = scope?.lineage;
+        if (
+          uid !== undefined &&
+          currentUid !== undefined &&
+          uid === currentUid &&
+          lineage !== undefined &&
+          lineage.ancestors.length > 0
+        ) {
+          const classification = classifyObservationGap(
+            Number(entry),
+            lineage,
+            await captureChainNodes(Number(entry)),
+            Number(currentUid),
+          );
+          if (classification.kind === "external") continue;
+        }
       }
       if (code !== "ENOENT" && code !== "ESRCH") {
         throw observationError("read_environ", error, Number(entry));
