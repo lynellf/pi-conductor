@@ -56,9 +56,12 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Private copies only: retain bytes while tightening published file modes.
-      - name: Protect job-local dependency bytes
-        run: find node_modules -type f -exec chmod go-w {} +
+      # Job-local checkout/private copies only: preserve bytes and executable bits
+      # while tightening permissions inherited from the Docker runner's umask.
+      - name: Protect job-local source and dependency bytes
+        run: |
+          find . -type f -exec chmod go-w {} +
+          find . -type d -exec chmod go-w {} +
 
       - run: pnpm lint
 

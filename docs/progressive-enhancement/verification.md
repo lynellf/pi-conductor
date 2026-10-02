@@ -61,8 +61,45 @@ proof or acceptance. Linux runtime verification remains a separate gate.
 
 ## Remaining gates
 
-CI label matches the observed registered `docker-build` label; no server changes.
-Native full suite is running; actual Linux CI execution and final quality gates
-are pending. The recurring pnpm override-sync warning remains; dependencies and
-lockfile have not been modified. Windows/other platforms are detection fixtures,
-not native execution evidence. No dedicated macOS CI is added.
+Latest local feature acceptance is **85/85 across 17 files**; typecheck, build,
+full Biome lint/format, production audit and diff check pass. Native full run:
+**477 failed / 4,034 passed / 11 pending**, 432 files, 88 failed files. It predates
+later fixture/capability/CLI follow-ups. Direct Linux supervision and protected
+backend tests remain nonportable; not every failed case has been baseline
+reproduced. Do not call the full macOS suite green or classify every failure as
+Linux-only. Three stale capability-record/UI/container expectations were corrected
+without weakening ownership/cleanup assertions. Windows/other platforms are
+selection fixtures, not native execution evidence.
+
+Actual Linux CI now executes on `docker-build`, Node 22.19.0 and pnpm 10.33.1:
+
+- Run 965 failed lint on generated workspace-local store indexes. External job
+  cache selection retains the frozen dependency graph and all lint inputs.
+- Runs 966/967 failed workflow validation: runner context is unavailable in
+  job-level env. Selection moved to an early step's environment file. An
+  intermediate nonexistent host option also failed local typecheck and was
+  removed; that failed result is not called verification.
+- Run 968: **27 failed / 4,500 passed**, 6 failed / 429 passed files. Protected
+  runtime/dependency inventories rejected CI cache/file metadata; the unreadable
+  predecessor fixture also depended on a non-root inaccessible absolute path.
+- Run 969: **7 failed / 4,520 passed**, 3 failed / 432 passed files. Job-owned pinned
+  Node and private dependency copies removed earlier runtime failures; remaining
+  protected dependency permissions and root DAC bypass stayed red.
+- Run 970 failed because the unprivileged identity could not access pnpm under
+  the root home. Its pinned setup destination moved into job temp.
+- Run 971: **7 failed / 4,520 passed**, 3 failed / 432 passed files. Permission
+  tests now execute unprivileged without skips. Remaining protected *source*
+  metadata and an introduced CLI controller-repair filesystem coupling were
+  identified. The existing CLI test reproduces RED locally; explicit controller
+  repair now retains its independent authority seam, while baseline inspection
+  and confirmation barriers remain enforced.
+
+CI corrections tighten job-local modes (never production trust predicates), use
+private copies of the pinned Node/pnpm, and run the unchanged full suite under an
+unprivileged identity. No shared runner/server settings, system binaries, lockfile
+or dependencies are changed. Missing predecessor SDK sessions can open as empty
+sessions: separately noted existing behavior, not fixed by this scoped change;
+the unreadable test uses an actual non-file source on every account.
+
+A follow-up full Linux run remains the final gate. The recurring local pnpm
+warning remains. No dedicated macOS CI is added.
