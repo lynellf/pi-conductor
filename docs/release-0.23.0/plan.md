@@ -26,7 +26,13 @@
 - [x] Document Linux artifact/native validation and separate publication steps.
 - [x] Run local quality commands and portable package/CLI checks (results below).
 - [x] Inspect a versioned package preview and review the preparation diff.
-- [ ] Confirm Linux CI for the release-preparation head before merging metadata.
+- [x] Confirm Linux CI for release metadata candidate
+  `f0ace5b80ef669d25438cec57cdb30e94ef6f87d`: run 1020, job 1024,
+  **4,585 tests / 440 files passed** with frozen install, lint/typecheck,
+  unprivileged full tests, and all five child-subreaper tests (including real activation).
+  The acceptance-record update changes only this unshipped plan; package/runtime
+  bytes are unchanged. The publisher-owned gate still requires passing CI on the
+  final PR head and the merged release commit.
 
 ### Evidence limits and retained findings
 
