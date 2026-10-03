@@ -2,11 +2,13 @@
 // Kept together below 500 LOC so group/session scans share stat parsing and exclusion proofs.
 
 import { readdir, readFile } from "node:fs/promises";
+import { childSubreaperState } from "./child-subreaper.js";
 import {
   classifyObservationGap,
   type LineageContext,
   type LineageNode,
   type LineageRoot,
+  type ObservationGapReason,
 } from "./supervised-process-lineage.js";
 
 /** Names the sanitized `/proc` operation that produced observation evidence. */
@@ -23,6 +25,8 @@ export class ProcessObservationError extends Error {
   readonly pid: number | undefined;
   readonly startTime: string | undefined;
   readonly processGroupId: number | undefined;
+  /** Lineage verdict that left this gap unresolved, when one was computed (#157). */
+  gapReason: ObservationGapReason | undefined;
 
   constructor(
     operation: ProcessObservationOperation,
@@ -41,6 +45,7 @@ export class ProcessObservationError extends Error {
     this.pid = pid;
     this.startTime = identity?.startTime;
     this.processGroupId = identity?.processGroupId;
+    this.gapReason = undefined;
   }
 }
 
@@ -136,8 +141,12 @@ function sameIdentity(left: ProcessIdentity, right: ProcessIdentity): boolean {
   return left.pid === right.pid && left.startTime === right.startTime;
 }
 
-/** Side-effecting: capture the root's live ancestry at spawn time (#157). */
-export async function captureLineageContext(root: LineageRoot): Promise<LineageContext> {
+/** Side-effecting: capture the root's live ancestry at spawn time (#157).
+ * Pass `subreaperPid` only when this process is a verified child subreaper. */
+export async function captureLineageContext(
+  root: LineageRoot,
+  subreaperPid?: number,
+): Promise<LineageContext> {
   const ancestors: LineageNode[] = [];
   let current = await readLineageNode(root.pid);
   if (current === undefined || current.startTime !== root.startTime) return { root, ancestors };
@@ -148,7 +157,11 @@ export async function captureLineageContext(root: LineageRoot): Promise<LineageC
     ancestors.push(parent);
     current = parent;
   }
-  return { root, ancestors };
+  return {
+    root,
+    ancestors,
+    ...(subreaperPid === undefined ? {} : { subreaperPid }),
+  };
 }
 
 /** Side-effecting: capture one parent chain for classification (#157). */
@@ -327,6 +340,7 @@ export async function findProcessesByOwnerToken(
       if (identity !== null) matches.push(identity);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
+      let gapReason: ObservationGapReason | undefined;
       if (code === "EACCES" || code === "EPERM") {
         let current: ReturnType<typeof parseStat>;
         try {
@@ -384,10 +398,13 @@ export async function findProcessesByOwnerToken(
             Number(currentUid),
           );
           if (classification.kind === "external") continue;
+          gapReason = classification.reason;
         }
       }
       if (code !== "ENOENT" && code !== "ESRCH") {
-        throw observationError("read_environ", error, Number(entry));
+        const wrapped = observationError("read_environ", error, Number(entry));
+        if (wrapped.gapReason === undefined) wrapped.gapReason = gapReason;
+        throw wrapped;
       }
     }
   }

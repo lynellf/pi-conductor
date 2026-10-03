@@ -21,6 +21,17 @@ const observationError = Type.Object(
     pid: Type.Optional(Type.Integer({ minimum: 1 })),
     start_time: Type.Optional(Type.String({ pattern: "^[0-9]+$", minLength: 1, maxLength: 64 })),
     process_group_id: Type.Optional(Type.Integer({ minimum: 1 })),
+    gap_reason: Type.Optional(
+      Type.Union([
+        Type.Literal("lineage_ancestor"),
+        Type.Literal("foreign_uid_parent"),
+        Type.Literal("disjoint_tree"),
+        Type.Literal("descendant"),
+        Type.Literal("orphan"),
+        Type.Literal("ambiguous_lineage"),
+        Type.Literal("incomplete_snapshot"),
+      ]),
+    ),
   },
   { additionalProperties: false },
 );

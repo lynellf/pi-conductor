@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { hrtime } from "node:process";
+import { ensureChildSubreaper } from "./child-subreaper.js";
 import {
   snapshotAdmissionScope,
   waitForAdmissionSettlement,
@@ -61,6 +62,10 @@ export async function runSupervisedProcess(
   }
   validateSupervisedProcessOptions(options);
   if (!options.executionId) throw new RangeError("executionId must be non-empty");
+  // #157 option 1: become the nearest subreaper before any supervised child
+  // can orphan, so escaped children reparent here and non-descendance is
+  // provable. Degraded state keeps the fail-closed classifier and warns.
+  const subreaper = ensureChildSubreaper();
   await options.onStart({
     executionId: options.executionId,
     effectiveDeadlineMs: Date.now() + options.timeoutMs,
@@ -155,7 +160,10 @@ export async function runSupervisedProcess(
     // observation gaps can prove non-descendance.
     observationScope = {
       ...observationScope,
-      lineage: await captureLineageContext({ pid: identity.pid, startTime: identity.startTime }),
+      lineage: await captureLineageContext(
+        { pid: identity.pid, startTime: identity.startTime },
+        subreaper.active ? process.pid : undefined,
+      ),
     };
   }
   if (!identity) {

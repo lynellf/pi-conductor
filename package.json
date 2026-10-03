@@ -55,7 +55,7 @@
     "claude"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/build-child-subreaper.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts",

@@ -4,8 +4,12 @@
 // from parent chains: fork descendants are same-UID-parented, orphans reparent
 // only to ancestor subreapers or init, and ancestors predate their descendants.
 // The root ancestry is captured at spawn time because the root is usually gone
-// by cleanup. Assumption (documented, not verified): no foreign-UID ancestor of
-// the tool root acts as a subreaper holding reparented escapes.
+// by cleanup. When the host is a verified child subreaper (`subreaperPid`),
+// escapes reparent to the host itself, so chains that leave the tool tree
+// below any ancestor of the host are provably external. Without that verified
+// reaper the classifier keeps the documented conservative assumption: no
+// foreign-UID ancestor of the tool root acts as a subreaper holding reparented
+// escapes.
 
 /** Process metadata required to reason about one parent chain. */
 export interface LineageNode {
@@ -25,6 +29,8 @@ export interface LineageRoot {
 export interface LineageContext {
   readonly root: LineageRoot;
   readonly ancestors: readonly LineageNode[];
+  /** Verified PR_SET_CHILD_SUBREAPER host pid; escapes can only adopt here. */
+  readonly subreaperPid?: number | undefined;
 }
 
 /** Why an observation gap was skipped as external or retained as unresolved. */
@@ -41,6 +47,21 @@ export type ObservationGapReason =
 export type ObservationGapClassification =
   | { readonly kind: "external"; readonly reason: ObservationGapReason }
   | { readonly kind: "unresolved"; readonly reason: ObservationGapReason };
+
+const observationGapReasons: readonly string[] = [
+  "lineage_ancestor",
+  "foreign_uid_parent",
+  "disjoint_tree",
+  "descendant",
+  "orphan",
+  "ambiguous_lineage",
+  "incomplete_snapshot",
+];
+
+/** Narrow an untrusted diagnostic field to a known verdict name. */
+export function isObservationGapReason(value: unknown): value is ObservationGapReason {
+  return typeof value === "string" && observationGapReasons.includes(value);
+}
 
 const MAX_CHAIN_HOPS = 64;
 
@@ -78,20 +99,31 @@ export function classifyObservationGap(
   }
   const visited = new Set<number>([candidatePid]);
   let current: LineageNode = candidate;
+  const hostIndex =
+    lineage.subreaperPid === undefined
+      ? -1
+      : lineage.ancestors.findIndex((ancestor) => ancestor.pid === lineage.subreaperPid);
   for (let hops = 0; hops < MAX_CHAIN_HOPS; hops += 1) {
     if (current.parentPid === 1) {
-      // Reparented orphans land here, indistinguishable from daemonized escapes.
-      return current.pid === candidatePid ? unresolved("orphan") : external("disjoint_tree");
+      // Reparented orphans land here, indistinguishable from daemonized escapes
+      // unless the host is a verified subreaper: then our orphans reparent to
+      // the host, and an init child provably is not ours.
+      if (current.pid === candidatePid && hostIndex < 0) return unresolved("orphan");
+      return external("disjoint_tree");
     }
     const parent = nodes.get(current.parentPid);
     if (parent === undefined || visited.has(parent.pid)) return unresolved("incomplete_snapshot");
     visited.add(parent.pid);
     if (matchesRoot(parent, lineage.root)) return unresolved("descendant");
     // A same-UID root ancestor may be a subreaper holding a reparented escape.
+    // Above a verified subreaper host that cannot happen: escapes adopt to the
+    // host itself, so only the host (or nodes below it) stay ambiguous.
     if (
       parent.uid === ownerUid &&
       lineage.ancestors.some((ancestor) => matchesRoot(parent, ancestor))
     ) {
+      const parentIndex = lineage.ancestors.findIndex((ancestor) => matchesRoot(parent, ancestor));
+      if (hostIndex >= 0 && parentIndex > hostIndex) return external("disjoint_tree");
       return unresolved("ambiguous_lineage");
     }
     // Fork descendants are same-UID-parented; a foreign-UID live parent (or

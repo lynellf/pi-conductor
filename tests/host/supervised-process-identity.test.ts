@@ -404,4 +404,70 @@ describe("findProcessesByOwnerToken lineage exclusions (#157)", () => {
       vi.resetModules();
     }
   });
+
+  async function expectScan(
+    nodes: Readonly<Record<string, NodeFixture>>,
+    subreaperPid: number | undefined,
+  ) {
+    const { readFileMock, entries } = findWithLineage(nodes);
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actual,
+      readFile: readFileMock,
+      readdir: vi.fn().mockResolvedValue(entries),
+    }));
+    try {
+      const { captureLineageContext, findProcessesByOwnerToken } = await import(
+        "../../src/host/execution/supervised-process-identity.js"
+      );
+      const lineage = await captureLineageContext({ pid: 100, startTime: "100" }, subreaperPid);
+      return await findProcessesByOwnerToken("execution", undefined, {
+        preexisting: new Map(),
+        lineage,
+      });
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  }
+
+  const sessionTree = {
+    "1": { parentPid: 0, startTime: "1", uid: foreignUid, environ: "" },
+    "10": { parentPid: 1, startTime: "10", uid: foreignUid, environ: "" },
+    "20": { parentPid: 10, startTime: "20", uid, environ: "" },
+    "50": { parentPid: 20, startTime: "50", uid, environ: "" },
+    "100": { parentPid: 50, startTime: "100", uid, environ: "" },
+    "600": { parentPid: 20, startTime: "600", uid, environ: "denied" },
+  } as const;
+
+  it("skips an inaccessible same-session client above a verified subreaper host", async () => {
+    await expect(expectScan(sessionTree, 50)).resolves.toEqual([]);
+  });
+
+  it("keeps failing closed for an inaccessible child of the reaper host", async () => {
+    await expect(
+      expectScan(
+        {
+          ...sessionTree,
+          "600": { parentPid: 50, startTime: "600", uid, environ: "denied" },
+        },
+        50,
+      ),
+    ).rejects.toMatchObject({
+      operation: "read_environ",
+      code: "EACCES",
+      pid: 600,
+      gapReason: "ambiguous_lineage",
+    });
+  });
+
+  it("keeps failing closed for the same client without a verified reaper", async () => {
+    await expect(expectScan(sessionTree, undefined)).rejects.toMatchObject({
+      operation: "read_environ",
+      code: "EACCES",
+      pid: 600,
+      gapReason: "ambiguous_lineage",
+    });
+  });
 });

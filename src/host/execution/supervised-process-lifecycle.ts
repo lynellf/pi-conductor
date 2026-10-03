@@ -7,6 +7,7 @@ import {
   type SupervisedProcessResult,
   SupervisedProcessTimeoutError,
 } from "./supervised-process-contract.js";
+import { isObservationGapReason } from "./supervised-process-lineage.js";
 import { finishOutput, type OutputCapture } from "./supervised-process-output.js";
 
 /** Default maximum captured output for a supervised process. */
@@ -75,6 +76,7 @@ export function observationFailure(
     readonly pid?: number;
     readonly startTime?: string;
     readonly processGroupId?: number;
+    readonly gapReason?: unknown;
   };
   const safeCode =
     typeof observed.code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(observed.code)
@@ -120,6 +122,7 @@ export function observationFailure(
       operation: actualOperation,
       code: safeCode,
       ...observationIdentity,
+      ...(isObservationGapReason(observed.gapReason) ? { gap_reason: observed.gapReason } : {}),
     },
   };
 }

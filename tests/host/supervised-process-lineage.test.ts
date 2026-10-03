@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyObservationGap,
+  isObservationGapReason,
   type LineageContext,
   type LineageNode,
 } from "../../src/host/execution/supervised-process-lineage.js";
@@ -175,4 +176,107 @@ describe("classifyObservationGap", () => {
       expect(classification.reason).toBe(testCase.expectedReason);
     });
   }
+});
+
+describe("classifyObservationGap with a verified subreaper host (#157 option 1)", () => {
+  const REAPERED: LineageContext = { ...CONTEXT, subreaperPid: 50 };
+  const cases: readonly {
+    readonly name: string;
+    readonly nodes: ReadonlyMap<number, LineageNode>;
+    readonly lineage: LineageContext;
+    readonly candidate: number;
+    readonly expectedKind: "external" | "unresolved";
+    readonly expectedReason: string;
+  }[] = [
+    {
+      name: "skips a same-session client under a shared ancestor above the reaper host",
+      nodes: namespace(...SHARED.values(), node(600, 20)),
+      lineage: REAPERED,
+      candidate: 600,
+      expectedKind: "external",
+      expectedReason: "disjoint_tree",
+    },
+    {
+      name: "keeps a direct child of the reaper host unresolved (adopted escape)",
+      nodes: namespace(...SHARED.values(), node(600, 50)),
+      lineage: REAPERED,
+      candidate: 600,
+      expectedKind: "unresolved",
+      expectedReason: "ambiguous_lineage",
+    },
+    {
+      name: "skips an init orphan when the host is the verified reaper",
+      nodes: namespace(node(600, 1)),
+      lineage: REAPERED,
+      candidate: 600,
+      expectedKind: "external",
+      expectedReason: "disjoint_tree",
+    },
+    {
+      name: "keeps an init orphan unresolved without a verified reaper",
+      nodes: namespace(node(600, 1)),
+      lineage: CONTEXT,
+      candidate: 600,
+      expectedKind: "unresolved",
+      expectedReason: "orphan",
+    },
+    {
+      name: "keeps the ambiguity when the claimed reaper is absent from the ancestry",
+      nodes: namespace(...SHARED.values(), node(600, 20)),
+      lineage: { ...CONTEXT, subreaperPid: 999 },
+      candidate: 600,
+      expectedKind: "unresolved",
+      expectedReason: "ambiguous_lineage",
+    },
+    {
+      name: "keeps a descendant unresolved even with the reaper active",
+      nodes: namespace(...SHARED.values(), node(605, 100)),
+      lineage: REAPERED,
+      candidate: 605,
+      expectedKind: "unresolved",
+      expectedReason: "descendant",
+    },
+    {
+      name: "keeps an ancestor below the reaper host ambiguous (closer reaper possible)",
+      nodes: namespace(node(600, 90), node(90, 100)),
+      lineage: {
+        root: { pid: 100, startTime: "100" },
+        ancestors: [
+          node(90, 100),
+          node(50, 20, OWNER_UID, "4"),
+          node(20, 10, OWNER_UID, "3"),
+          node(10, 1, FOREIGN_UID, "2"),
+        ],
+        subreaperPid: 50,
+      },
+      candidate: 600,
+      expectedKind: "unresolved",
+      expectedReason: "ambiguous_lineage",
+    },
+  ];
+  for (const { name, nodes, lineage, candidate, expectedKind, expectedReason } of cases) {
+    it(name, () => {
+      expect(classifyObservationGap(candidate, lineage, nodes, OWNER_UID)).toEqual({
+        kind: expectedKind,
+        reason: expectedReason,
+      });
+    });
+  }
+});
+
+describe("isObservationGapReason", () => {
+  it("accepts exactly the seven verdict names", () => {
+    for (const reason of [
+      "lineage_ancestor",
+      "foreign_uid_parent",
+      "disjoint_tree",
+      "descendant",
+      "orphan",
+      "ambiguous_lineage",
+      "incomplete_snapshot",
+    ])
+      expect(isObservationGapReason(reason)).toBe(true);
+    for (const value of ["descend", "", 7, null, undefined, "EXTERNAL"])
+      expect(isObservationGapReason(value)).toBe(false);
+  });
 });
