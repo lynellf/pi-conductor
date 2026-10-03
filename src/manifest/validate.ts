@@ -24,6 +24,7 @@ import { validateContinuityPolicy } from "./continuity.js";
 import { validateControllerConfig } from "./controller-validation.js";
 import { validateDelegationInterface } from "./delegation-validation.js";
 import { validateEndGuardConfig } from "./end-guard.js";
+import { parseExecutionCapabilityPolicy } from "./execution-capability-policy.js";
 import { validateToolExecutionPolicy } from "./execution-policy.js";
 import { validateHandoffEvidencePolicy } from "./handoff-evidence.js";
 import { validateReviewGates } from "./review-gates.js";
@@ -126,6 +127,7 @@ export type ManifestErrorCode =
   | "trajectory-target-system-prompt-unresolved"
   /** Issue #76: executable tool policy contains malformed values or keys. */
   | "invalid-tool-execution-policy"
+  | "invalid-execution-capability-policy"
   /** Issue #106: delegated execution policy contains malformed values or keys. */
   | "invalid-subagent-execution-policy"
   /** Issue #75: end guard contains malformed values or keys. */
@@ -276,6 +278,16 @@ function isSafeProgressiveDisclosurePath(path: string): boolean {
 export function validateManifest(m: Manifest): ManifestReport {
   const errors: ManifestError[] = [];
   const warnings: ManifestWarning[] = [];
+  if (m.execution_policy !== undefined) {
+    try {
+      parseExecutionCapabilityPolicy(m.execution_policy);
+    } catch {
+      errors.push({
+        code: "invalid-execution-capability-policy",
+        message: "execution_policy must contain only mode: portable | strict",
+      });
+    }
+  }
 
   validateControllerConfig(m, errors);
   validateReviewGates(m, errors);

@@ -12,8 +12,19 @@ end_guard:
 The deadline defaults to 60 seconds and accepts a finite positive number up to
 3,600 seconds. The run's manifest snapshot pins both command and deadline. The
 host executes trusted repository configuration in the primary checkout with its
-environment, using the Linux process supervision described in
-[Executable tool controls](execution-controls.md).
+environment, using the host-detected tier described in
+[Executable tool controls](execution-controls.md). Enhanced Linux retains verified
+cleanup. Baseline still runs the actual command with its deadline/output bounds,
+but records `execution_tier: baseline` and `cleanup: not-guaranteed`: exit zero
+means guard success, not proof of descendant cleanup. A baseline timeout with
+observed direct-child close retains the existing three-failure guard correction
+budget; a foreground signal exit is an ordinary guard failure. Observed-close
+abort remains an owner abort but does not permanently bar checkpoint resume.
+Unobserved close, uncertain terminals, ambiguous persistence and old interruption
+records without foreground evidence still block resume. Guard attempt budgeting
+is separate from the role-tool `max_recoverable_timeouts` allowance. `execution_policy: {mode: strict}`
+rejects unavailable enhanced guards before any model work. Absent record tiers
+keep historical enhanced meanings; legacy success still requires confirmed cleanup.
 
 The guard runs only after the reducer establishes that a role-issued
 orchestrator `end` is legal. It does not run for worker ends or a missing required

@@ -7,8 +7,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { MachineDefinition, Role } from "../core/types.js";
 import type { RoleConfig } from "../manifest/types.js";
+import { isRoleToolExecutionRecord } from "../persistence/baseline-execution.js";
 import type { PersistedRecord, RecordLog } from "../persistence/log.js";
-import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import type { HandoffTransportSelectedRecord } from "../persistence/trajectory-records.js";
 import {
   sha256Canonical,
@@ -31,6 +31,7 @@ import {
 import { assertTrajectorySdkSupported } from "./trajectory-sdk-capability.js";
 export interface TrajectoryResumeContext {
   readonly modelRegistry: ModelRegistry;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly cwd: string;
   readonly agentDir: string;
   readonly sessionDir: string;
@@ -60,6 +61,7 @@ export async function resumeTrajectoryRole(
     assertTrajectoryEffortSupported(resolved.model, persisted.target.requested_effort);
     session = await spawnSharedSdkRoleSession({
       role,
+      ...(host.executionTier === undefined ? {} : { executionTier: host.executionTier }),
       roleConfig,
       model: resolved.model,
       logicalModel: persisted.target.model,
@@ -86,7 +88,7 @@ export async function resumeTrajectoryRole(
       runId: host.runId,
       visitIndex: 1,
       executionVisitIndex,
-      priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
+      priorToolExecutionRecords: host.log.records(host.runId).filter(isRoleToolExecutionRecord),
       machineDefinition: host.loadedManifest.def,
       delegateTool: null,
       ...(host.uiContext !== undefined && { uiContext: host.uiContext }),

@@ -3,6 +3,7 @@
 import { Value } from "typebox/value";
 import type { WorkspaceGuarantee } from "../core/types.js";
 import { assertAcceptedControlV2 } from "./accepted-control-v2.js";
+import { assertBaselineExecutionRecord } from "./baseline-execution.js";
 import {
   assertChildOutputCapture,
   assertChildOutputRecord,
@@ -116,6 +117,15 @@ export function assertPersistedRecordGuarantees(record: unknown): void {
 
   if (record.type === "transition_accepted" && record.accepted_control !== undefined) {
     assertAcceptedControlV2(record.accepted_control);
+  }
+
+  if (
+    record.type === "baseline_execution_started" ||
+    record.type === "baseline_execution_finished" ||
+    record.type === "execution_capabilities"
+  ) {
+    assertBaselineExecutionRecord(record);
+    return;
   }
 
   if (record.type === "role_turn") {

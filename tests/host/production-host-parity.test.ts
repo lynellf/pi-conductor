@@ -569,6 +569,11 @@ describe("ProductionHost — Host method parity with StubHost (Task 7A.4)", () =
       parent_session: null,
       ts: 0,
     });
-    expect(log.records(runId)).toHaveLength(1);
+    expect(log.records(runId)).toHaveLength(2);
+    expect(log.records(runId)[0]?.type).toBe("execution_capabilities");
+    expect(log.records(runId)[1]).toMatchObject({
+      type: "session_started",
+      session_file: "/tmp/s1.jsonl",
+    });
   });
 });

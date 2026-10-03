@@ -2,6 +2,7 @@
 
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
+import { baselineForegroundStatusSchema } from "./baseline-execution.js";
 
 const id = Type.String({ minLength: 1 });
 const safePositive = Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER });
@@ -15,6 +16,7 @@ const exitCode = Type.Union([
 export const endGuardStartedSchema = Type.Object(
   {
     type: Type.Literal("end_guard_started"),
+    execution_tier: Type.Optional(Type.Literal("baseline")),
     schema_version: Type.Literal(1),
     run_id: id,
     attempt_id: id,
@@ -33,6 +35,8 @@ export const endGuardStartedSchema = Type.Object(
 export const endGuardFinishedSchema = Type.Object(
   {
     type: Type.Literal("end_guard_finished"),
+    foreground_status: Type.Optional(baselineForegroundStatusSchema),
+    execution_tier: Type.Optional(Type.Literal("baseline")),
     schema_version: Type.Literal(1),
     run_id: id,
     attempt_id: id,
@@ -59,6 +63,7 @@ export const endGuardFinishedSchema = Type.Object(
       Type.Literal("confirmed"),
       Type.Literal("unconfirmed"),
       Type.Literal("not-started"),
+      Type.Literal("not-guaranteed"),
     ]),
     ts: Type.Number({ minimum: 0 }),
   },
@@ -128,6 +133,18 @@ export function assertEndGuardRecord(value: unknown): asserts value is EndGuardR
       throw new EndGuardRecordError("end-guard elapsed_ms must be finite");
     if (record.diagnostic && Buffer.byteLength(record.diagnostic, "utf8") > 4096)
       throw new EndGuardRecordError("end-guard diagnostic exceeds 4096 UTF-8 bytes");
+    if (record.execution_tier === "baseline") {
+      if (
+        record.cleanup !== "not-guaranteed" ||
+        (record.outcome === "passed" && record.exit_code !== 0)
+      )
+        throw new EndGuardRecordError("baseline end guard cannot claim confirmed cleanup");
+      return;
+    }
+    if (record.foreground_status !== undefined)
+      throw new EndGuardRecordError("foreground status requires explicit baseline execution tier");
+    if (record.cleanup === "not-guaranteed")
+      throw new EndGuardRecordError("baseline cleanup requires an explicit execution tier");
     if (record.outcome === "passed" && (record.exit_code !== 0 || record.cleanup !== "confirmed"))
       throw new EndGuardRecordError("passed end-guard result must exit successfully and clean up");
     if (
@@ -166,7 +183,8 @@ function sameIdentity(started: EndGuardStartedRecord, finished: EndGuardFinished
     started.request_id === finished.request_id &&
     started.role === finished.role &&
     started.role_session_id === finished.role_session_id &&
-    started.session_file === finished.session_file
+    started.session_file === finished.session_file &&
+    started.execution_tier === finished.execution_tier
   );
 }
 

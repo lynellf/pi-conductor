@@ -1,12 +1,20 @@
 import type { Role } from "../../core/types.js";
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
+import {
+  isBaselineExecutionRecord,
+  type RoleToolExecutionRecord,
+} from "../../persistence/baseline-execution.js";
 import type { PersistedRecord } from "../../persistence/log.js";
-import type { ToolExecutionRecord } from "../../persistence/tool-execution.js";
+import { isToolExecutionRecord } from "../../persistence/tool-execution.js";
 import type { SessionState } from "../cost.js";
 import type { DisplaySink } from "../display-sink.js";
 import type { RoleTurnTelemetryAttachment } from "../role-turn-producer.js";
 import type { CaptureRejector, SessionEventSource } from "../session-event-handler.js";
 import { attachSessionEventHandler } from "../session-event-handler.js";
+import {
+  BaselineExecutionController,
+  type RoleExecutionController,
+} from "./baseline-controller.js";
 import { ToolExecutionController, type ToolExecutionError } from "./tool-execution-controller.js";
 
 /** Inputs shared by fresh and trajectory role controller bindings. */
@@ -16,8 +24,9 @@ export interface RoleToolExecutionBindingOptions {
   readonly visitIndex: number;
   readonly roleSessionId: string;
   readonly policy: Readonly<Required<ToolExecutionPolicy>>;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly persist: (record: PersistedRecord) => void;
-  readonly priorRecords?: readonly ToolExecutionRecord[];
+  readonly priorRecords?: readonly RoleToolExecutionRecord[];
   readonly onFatal?: (error: ToolExecutionError) => void;
 }
 
@@ -35,7 +44,7 @@ export interface LiveRoleToolExecutionBindingOptions extends RoleToolExecutionBi
 
 /** Bind execution, state registration, and event accounting for one live role. */
 export function bindLiveRoleToolExecution(options: LiveRoleToolExecutionBindingOptions): {
-  readonly controller: ToolExecutionController;
+  readonly controller: RoleExecutionController;
   readonly unsubscribe: () => void;
 } {
   const controller = createRoleToolExecutionController(options);
@@ -68,13 +77,25 @@ export function bindLiveRoleToolExecution(options: LiveRoleToolExecutionBindingO
 /** Create the controller bound to one logical role invocation. */
 export function createRoleToolExecutionController(
   options: RoleToolExecutionBindingOptions,
-): ToolExecutionController {
+): RoleExecutionController {
+  if (options.executionTier === "baseline")
+    return new BaselineExecutionController({
+      runId: options.runId,
+      logicalSessionId: JSON.stringify([options.runId, options.role, options.visitIndex]),
+      roleSessionId: options.roleSessionId,
+      policy: options.policy,
+      persist: options.persist,
+      priorRecords: options.priorRecords?.filter(isBaselineExecutionRecord) ?? [],
+      ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
+    });
   return new ToolExecutionController({
     runId: options.runId,
     logicalSessionId: JSON.stringify([options.runId, options.role, options.visitIndex]),
     roleSessionId: options.roleSessionId,
     policy: options.policy,
-    ...(options.priorRecords === undefined ? {} : { priorRecords: options.priorRecords }),
+    ...(options.priorRecords === undefined
+      ? {}
+      : { priorRecords: options.priorRecords.filter(isToolExecutionRecord) }),
     persist: options.persist,
     ...(options.onFatal === undefined ? {} : { onFatal: options.onFatal }),
   });

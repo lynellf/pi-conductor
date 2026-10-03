@@ -15,7 +15,13 @@ export function hasUnconfirmedCleanup(error: unknown): boolean {
     readonly cleanup?: unknown;
     readonly terminal?: { readonly cleanup?: unknown };
   };
-  return candidate.cleanup === "unconfirmed" || candidate.terminal?.cleanup === "unconfirmed";
+  // Portable evidence cannot satisfy any enhanced cleanup authority.
+  return (
+    candidate.cleanup === "unconfirmed" ||
+    candidate.cleanup === "not-guaranteed" ||
+    candidate.terminal?.cleanup === "unconfirmed" ||
+    candidate.terminal?.cleanup === "not-guaranteed"
+  );
 }
 
 /** Wait for operation settlement after cancellation, bounded by graceful cleanup windows. */

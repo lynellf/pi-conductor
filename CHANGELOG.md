@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+- Detect host execution capabilities before role/model work. Ordinary SDK file
+  tools, foreground commands and end guards have a portable bounded baseline;
+  Linux enhanced supervision keeps its existing guarantees. Degradation is
+  visible and durable, never a silent runtime fallback.
+- Add closed `execution_policy: {mode: portable | strict}` and separate baseline
+  execution records. Observed-close baseline timeouts/aborts permit bounded
+  `tool_timeout` recovery with the pinned `max_recoverable_timeouts` budget; signal
+  exits are ordinary failures. Unobserved close or ambiguous persistence still
+  blocks resume/replacement, without claiming cleanup or accepting an acknowledgment
+  override. Explicit unavailable
+  controller, delegation, sandbox and container requirements fail preflight.
+- Linux hosts with restricted/unusable `/proc` degrade to baseline with a visible
+  warning under portable policy; `execution_policy: {mode: strict}` restores
+  fail-closed startup for executable tools and guards.
+- Bound long supervision timers and attempt owned cleanup after close-observation
+  errors while retaining uncertainty. Schedule Linux CI on its registered label.
+
 ## [0.22.1] - 2026-09-30
 
 ### Bug fixes

@@ -11,6 +11,7 @@ import type {
   TransitionRejected,
   UsageRecord,
 } from "../core/types.js";
+import type { BaselineExecutionRecord, ExecutionCapabilitiesRecord } from "./baseline-execution.js";
 import type {
   ChildCompletionEvidence,
   ChildCompletionProtocol,
@@ -492,6 +493,8 @@ export type PersistedRecord =
   | RoleTurnRecord
   | ToolExecutionRecord
   | EndGuardRecord
+  | BaselineExecutionRecord
+  | ExecutionCapabilitiesRecord
   | DelegationSubmissionAcceptedRecord
   | OrchestratorContextRecord
   | RunFinalizationFailedRecord

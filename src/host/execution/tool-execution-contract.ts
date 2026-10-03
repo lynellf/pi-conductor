@@ -18,7 +18,7 @@ export type ToolExecutionErrorCode =
 /** Structured controller failure surfaced at the model boundary. */
 export class ToolExecutionError extends Error {
   readonly code: ToolExecutionErrorCode;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
+  readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
   readonly executionId: string | undefined;
   readonly diagnostic: ToolExecutionDiagnostic | undefined;
 
@@ -26,7 +26,7 @@ export class ToolExecutionError extends Error {
     code: ToolExecutionErrorCode,
     message: string,
     options?: {
-      readonly cleanup?: "confirmed" | "unconfirmed" | "not-started";
+      readonly cleanup?: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
       readonly executionId?: string;
       readonly diagnostic?: ToolExecutionDiagnostic;
       readonly cause?: unknown;
@@ -46,6 +46,8 @@ export interface ToolExecutionScope {
   readonly supervisionId: string;
   readonly signal: AbortSignal;
   readonly graceMs: number;
+  /** Track each baseline child with an idempotent settler; never cleanup proof. */
+  readonly trackForeground?: () => (status: "closed" | "not-started") => void;
   remainingTimeoutMs(): number;
   assertOpen(): void;
 }

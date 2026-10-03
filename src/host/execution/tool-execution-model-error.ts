@@ -6,7 +6,7 @@ import { toolExecutionDiagnosticSchema } from "../../persistence/tool-execution-
 
 export interface ToolExecutionModelErrorFields {
   readonly code: string;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
+  readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
   readonly executionId?: string;
   readonly diagnostic?: ToolExecutionDiagnostic;
 }
@@ -14,7 +14,7 @@ export interface ToolExecutionModelErrorFields {
 /** Error whose JSON message is safe for the model-facing SDK boundary. */
 export class ToolExecutionModelError extends Error {
   readonly code: string;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
+  readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
   readonly executionId?: string;
 
   constructor(fields: ToolExecutionModelErrorFields, diagnostic: string) {
@@ -44,7 +44,8 @@ export function toToolExecutionModelError(error: unknown): ToolExecutionModelErr
   const cleanup =
     candidate.cleanup === "confirmed" ||
     candidate.cleanup === "unconfirmed" ||
-    candidate.cleanup === "not-started"
+    candidate.cleanup === "not-started" ||
+    candidate.cleanup === "not-guaranteed"
       ? candidate.cleanup
       : "not-started";
   const executionId = typeof candidate.executionId === "string" ? candidate.executionId : undefined;

@@ -181,6 +181,8 @@ export interface SeedRunMemoryArgs {
  * is the only place that touches SDK I/O.
  */
 export interface Host {
+  /** Host-detected execution guarantees; absent preserves legacy enhanced hosts. */
+  readonly executionTier?: "enhanced" | "baseline";
   /** Pinned control schema selected at run start; absent preserves legacy test hosts. */
   readonly controlProtocol?: "v1" | "v2";
   /** Canonical checkout used for host-side repository evidence, when available. */

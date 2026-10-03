@@ -16,7 +16,7 @@ concurrency:
 jobs:
   verify:
     name: lint + typecheck + test
-    runs-on: ubuntu-latest
+    runs-on: docker-build
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -26,6 +26,15 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 10.33.1
+          dest: ${{ runner.temp }}/conductor-pnpm
+
+      # Docker runners may default to a workspace-local store. Set this before
+      # setup-node queries the cache path, without unsupported job-level contexts.
+      - name: Keep generated pnpm cache outside source inputs
+        run: |
+          : "${RUNNER_TEMP:?missing runner temp}" "${GITHUB_ENV:?missing environment file}"
+          echo "npm_config_store_dir=$RUNNER_TEMP/pnpm-store" >> "$GITHUB_ENV"
+          echo "npm_config_package_import_method=copy" >> "$GITHUB_ENV"
 
       # Node 22.19.0 is the minimum supported runtime for the locked pi SDK
       # stack (`@earendil-works/pi-*` / `undici@8.5.0`).
@@ -34,10 +43,37 @@ jobs:
           node-version: 22.19.0
           cache: pnpm
 
+      # The shared tool cache need not have the job user's ownership. Do not
+      # weaken protected-runtime checks or mutate the shared cache: copy the
+      # pinned executable to this job's private directory with explicit modes.
+      - name: Use a job-owned pinned Node executable
+        run: |
+          mkdir -p "$RUNNER_TEMP/conductor-node/bin"
+          chmod 700 "$RUNNER_TEMP/conductor-node" "$RUNNER_TEMP/conductor-node/bin"
+          cp "$(command -v node)" "$RUNNER_TEMP/conductor-node/bin/node"
+          chmod 555 "$RUNNER_TEMP/conductor-node/bin/node"
+          echo "$RUNNER_TEMP/conductor-node/bin" >> "$GITHUB_PATH"
+
       - run: pnpm install --frozen-lockfile
+
+      # Job-local checkout/private copies only: preserve bytes and executable bits
+      # while tightening permissions inherited from the Docker runner's umask.
+      - name: Protect job-local source and dependency bytes
+        run: |
+          find . -type f -exec chmod go-w {} +
+          find . -type d -exec chmod go-w {} +
 
       - run: pnpm lint
 
       - run: pnpm typecheck
 
-      - run: pnpm test
+      # Permission-denial fixtures must execute without root's DAC bypass.
+      # Only this job's checkout/private runtime/home are changed, not the runner.
+      - name: Run full suite as an unprivileged identity
+        run: |
+          mkdir -p "$RUNNER_TEMP/conductor-test-home"
+          chmod 700 "$RUNNER_TEMP/conductor-test-home"
+          chown -hR 65534:65534 "$GITHUB_WORKSPACE" "$RUNNER_TEMP/conductor-node" "$RUNNER_TEMP/conductor-test-home"
+          setpriv --reuid=65534 --regid=65534 --clear-groups \
+            env HOME="$RUNNER_TEMP/conductor-test-home" PATH="$RUNNER_TEMP/conductor-node/bin:$PATH" \
+            pnpm test
