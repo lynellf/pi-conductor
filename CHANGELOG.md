@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-03
+
+### Features
+
 - Detect host execution capabilities before role/model work. Ordinary SDK file
   tools, foreground commands and end guards have a portable bounded baseline;
   Linux enhanced supervision keeps its existing guarantees. Degradation is
@@ -11,13 +15,39 @@
   `tool_timeout` recovery with the pinned `max_recoverable_timeouts` budget; signal
   exits are ordinary failures. Unobserved close or ambiguous persistence still
   blocks resume/replacement, without claiming cleanup or accepting an acknowledgment
-  override. Explicit unavailable
-  controller, delegation, sandbox and container requirements fail preflight.
+  override. Explicit unavailable controller, delegation, sandbox and container
+  requirements fail preflight.
+
+### Bug fixes
+
+- Preserve complete phase-work-packet cutoff provenance beyond the legacy
+  64-source limit, without widening bounded model-facing evidence (#155, #171).
+- Use a verified Linux child subreaper and captured launch lineage to distinguish
+  provably unrelated processes from unresolved observation gaps (#157, #170).
+  Missing native support retains conservative, fail-closed lineage classification;
+  process names, shared ancestors and disappearance are not ownership proof.
+- Bound long supervision timers and attempt owned cleanup after close-observation
+  errors while retaining uncertainty. Schedule Linux CI on its registered label
+  and retain matching Node headers when building its native helper.
+
+### Compatibility
+
 - Linux hosts with restricted/unusable `/proc` degrade to baseline with a visible
   warning under portable policy; `execution_policy: {mode: strict}` restores
-  fail-closed startup for executable tools and guards.
-- Bound long supervision timers and attempt owned cleanup after close-observation
-  errors while retaining uncertainty. Schedule Linux CI on its registered label.
+  fail-closed startup for executable tools and guards. Enhanced runtime failures
+  never trigger a downgrade to baseline.
+- Baseline cleanup remains `not-guaranteed`, including successful execution and
+  recoverable interruption. Observed foreground close is not descendant-cleanup
+  proof; legacy interrupted records without foreground evidence remain blocked.
+  Unavailable protected workspace, controller, delegation, sandbox and container
+  features are not replaced with shared or unconfined execution.
+- The npm artifact is to be built on Linux x64. Its native child-subreaper binary
+  is build-platform-specific; the package does not ship native build sources or
+  an install-time rebuild script. Other architectures/platforms do not gain
+  native-helper support from this artifact. Unloadable bindings retain the
+  existing warning and fail-closed lineage behavior. Full macOS and Windows
+  acceptance is not established; portable execution is not protected-workspace
+  portability. Node remains `>=22.19.0`; Pi/TypeBox peers are unchanged.
 
 ## [0.22.1] - 2026-09-30
 
