@@ -292,3 +292,182 @@ describe("findProcessesByOwnerToken scoped permission exclusions", () => {
     });
   });
 });
+
+describe("findProcessesByOwnerToken lineage exclusions (#157)", () => {
+  const uid = process.getuid?.() ?? 1000;
+  const foreignUid = uid + 1;
+
+  const statLine = (pid: number, parentPid: number, startTime: string, state = "S") => {
+    const fields = [
+      state,
+      String(parentPid),
+      String(pid),
+      String(pid),
+      ...Array<string>(15).fill("0"),
+      startTime,
+      "0",
+      "0",
+    ];
+    return `${pid} (worker) ${fields.join(" ")}`;
+  };
+
+  const statusLine = (processUid: number, state = "S (sleeping)") =>
+    `State:\t${state}\nUid:\t${processUid}\t${processUid}\t${processUid}\t${processUid}\n`;
+
+  interface NodeFixture {
+    readonly parentPid: number;
+    readonly startTime: string;
+    readonly uid: number;
+    readonly environ: string | "denied";
+    readonly state?: string;
+  }
+
+  function findWithLineage(
+    nodes: Readonly<Record<string, NodeFixture>>,
+    entries = Object.keys(nodes),
+  ) {
+    const denied = Object.assign(new Error("environment denied"), { code: "EACCES" });
+    const readFileMock = vi.fn(async (path: string) => {
+      const match = /^\/proc\/(\d+)\/(stat|status|environ)$/.exec(path);
+      if (match === null) throw new Error(`unexpected read: ${path}`);
+      const fixture = nodes[match[1] ?? ""];
+      if (fixture === undefined) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      const kind = match[2];
+      if (kind === "stat")
+        return statLine(Number(match[1]), fixture.parentPid, fixture.startTime, fixture.state);
+      if (kind === "status")
+        return statusLine(fixture.uid, fixture.state === "Z" ? "Z (zombie)" : undefined);
+      if (fixture.environ === "denied") throw denied;
+      return fixture.environ;
+    });
+    return { readFileMock, entries };
+  }
+
+  it("skips an inaccessible session daemon that is an ancestor of the tool root", async () => {
+    const { readFileMock, entries } = findWithLineage({
+      "1": { parentPid: 0, startTime: "1", uid: foreignUid, environ: "" },
+      "10": { parentPid: 1, startTime: "10", uid: foreignUid, environ: "" },
+      "20": { parentPid: 10, startTime: "20", uid, environ: "denied" },
+      "50": { parentPid: 20, startTime: "50", uid, environ: "" },
+      "100": { parentPid: 50, startTime: "100", uid, environ: "" },
+    });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actual,
+      readFile: readFileMock,
+      readdir: vi.fn().mockResolvedValue(entries),
+    }));
+    try {
+      const { captureLineageContext, findProcessesByOwnerToken } = await import(
+        "../../src/host/execution/supervised-process-identity.js"
+      );
+      const lineage = await captureLineageContext({ pid: 100, startTime: "100" });
+      await expect(
+        findProcessesByOwnerToken("execution", undefined, {
+          preexisting: new Map(),
+          lineage,
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("keeps failing closed for an inaccessible orphan of unknown origin", async () => {
+    const { readFileMock, entries } = findWithLineage({
+      "1": { parentPid: 0, startTime: "1", uid: foreignUid, environ: "" },
+      "100": { parentPid: 1, startTime: "100", uid, environ: "" },
+      "600": { parentPid: 1, startTime: "600", uid, environ: "denied" },
+    });
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actual,
+      readFile: readFileMock,
+      readdir: vi.fn().mockResolvedValue(entries),
+    }));
+    try {
+      const { captureLineageContext, findProcessesByOwnerToken } = await import(
+        "../../src/host/execution/supervised-process-identity.js"
+      );
+      const lineage = await captureLineageContext({ pid: 100, startTime: "100" });
+      await expect(
+        findProcessesByOwnerToken("execution", undefined, {
+          preexisting: new Map(),
+          lineage,
+        }),
+      ).rejects.toMatchObject({ operation: "read_environ", code: "EACCES", pid: 600 });
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  });
+
+  async function expectScan(
+    nodes: Readonly<Record<string, NodeFixture>>,
+    subreaperPid: number | undefined,
+  ) {
+    const { readFileMock, entries } = findWithLineage(nodes);
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    vi.resetModules();
+    vi.doMock("node:fs/promises", () => ({
+      ...actual,
+      readFile: readFileMock,
+      readdir: vi.fn().mockResolvedValue(entries),
+    }));
+    try {
+      const { captureLineageContext, findProcessesByOwnerToken } = await import(
+        "../../src/host/execution/supervised-process-identity.js"
+      );
+      const lineage = await captureLineageContext({ pid: 100, startTime: "100" }, subreaperPid);
+      return await findProcessesByOwnerToken("execution", undefined, {
+        preexisting: new Map(),
+        lineage,
+      });
+    } finally {
+      vi.doUnmock("node:fs/promises");
+      vi.resetModules();
+    }
+  }
+
+  const sessionTree = {
+    "1": { parentPid: 0, startTime: "1", uid: foreignUid, environ: "" },
+    "10": { parentPid: 1, startTime: "10", uid: foreignUid, environ: "" },
+    "20": { parentPid: 10, startTime: "20", uid, environ: "" },
+    "50": { parentPid: 20, startTime: "50", uid, environ: "" },
+    "100": { parentPid: 50, startTime: "100", uid, environ: "" },
+    "600": { parentPid: 20, startTime: "600", uid, environ: "denied" },
+  } as const;
+
+  it("skips an inaccessible same-session client above a verified subreaper host", async () => {
+    await expect(expectScan(sessionTree, 50)).resolves.toEqual([]);
+  });
+
+  it("keeps failing closed for an inaccessible child of the reaper host", async () => {
+    await expect(
+      expectScan(
+        {
+          ...sessionTree,
+          "600": { parentPid: 50, startTime: "600", uid, environ: "denied" },
+        },
+        50,
+      ),
+    ).rejects.toMatchObject({
+      operation: "read_environ",
+      code: "EACCES",
+      pid: 600,
+      gapReason: "ambiguous_lineage",
+    });
+  });
+
+  it("keeps failing closed for the same client without a verified reaper", async () => {
+    await expect(expectScan(sessionTree, undefined)).rejects.toMatchObject({
+      operation: "read_environ",
+      code: "EACCES",
+      pid: 600,
+      gapReason: "ambiguous_lineage",
+    });
+  });
+});

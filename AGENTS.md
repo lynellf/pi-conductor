@@ -203,6 +203,11 @@ implementation against it starts (specs are the overseer's concern).
   overrides `exclude` to drop `"tests"` (inherited from the base
   `tsconfig.json`) — without this override, no test file enters the program and
   the gate is a false signal.
+- **File modes are part of the gate.** The controller effect inventory rejects
+  group/world-writable implementation files (`mode & 0o022`). Editors and tools
+  running under umask `0002` rewrite files as `0664` and fail `pnpm test` with
+  "not a protected canonical regular file". Git tracks none of these bits;
+  repair with `git ls-files -z | xargs -0 chmod g-w` and re-run.
 - `pnpm build` — emits `dist/` with `.d.ts`.
 - `pnpm test` — all green; `tests/grep-guard.test.ts` passes.
 - `pnpm lint` (`biome check .`) / `pnpm format:check` — clean.

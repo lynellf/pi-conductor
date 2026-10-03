@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { hrtime } from "node:process";
+import { ensureChildSubreaper } from "./child-subreaper.js";
 import { armDeadline } from "./deadline-timer.js";
 import {
   snapshotAdmissionScope,
@@ -18,6 +19,7 @@ import {
   SupervisedProcessTimeoutError,
 } from "./supervised-process-contract.js";
 import {
+  captureLineageContext,
   findProcessesByOwnerToken,
   type ProcessIdentity,
   processGroupHasLiveMembers,
@@ -61,6 +63,10 @@ export async function runSupervisedProcess(
   }
   validateSupervisedProcessOptions(options);
   if (!options.executionId) throw new RangeError("executionId must be non-empty");
+  // #157 option 1: become the nearest subreaper before any supervised child
+  // can orphan, so escaped children reparent here and non-descendance is
+  // provable. Degraded state keeps the fail-closed classifier and warns.
+  const subreaper = ensureChildSubreaper();
   await options.onStart({
     executionId: options.executionId,
     effectiveDeadlineMs: Date.now() + options.timeoutMs,
@@ -79,7 +85,7 @@ export async function runSupervisedProcess(
   const processDeadline = Date.now() + options.timeoutMs;
   const supervisorIdentity = await readProcessIdentity(process.pid);
   const minimumOwnerStartTime = supervisorIdentity?.startTime;
-  const observationScope = await snapshotAdmissionScope();
+  let observationScope = await snapshotAdmissionScope();
   if (Date.now() >= processDeadline) {
     throw new SupervisedProcessTimeoutError("not-started", null, 0);
   }
@@ -149,6 +155,17 @@ export async function runSupervisedProcess(
       0,
       observationFailure(error, "read_stat", null),
     );
+  }
+  if (identity !== null) {
+    // #157: freeze the tool lineage while the leader is alive so later
+    // observation gaps can prove non-descendance.
+    observationScope = {
+      ...observationScope,
+      lineage: await captureLineageContext(
+        { pid: identity.pid, startTime: identity.startTime },
+        subreaper.active ? process.pid : undefined,
+      ),
+    };
   }
   if (!identity) {
     const observedSpawnError = spawnError;

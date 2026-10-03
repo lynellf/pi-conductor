@@ -46,11 +46,16 @@ jobs:
       # The shared tool cache need not have the job user's ownership. Do not
       # weaken protected-runtime checks or mutate the shared cache: copy the
       # pinned executable to this job's private directory with explicit modes.
+      # Keep its matching headers in the same prefix for #170's native build.
       - name: Use a job-owned pinned Node executable
         run: |
           mkdir -p "$RUNNER_TEMP/conductor-node/bin"
           chmod 700 "$RUNNER_TEMP/conductor-node" "$RUNNER_TEMP/conductor-node/bin"
-          cp "$(command -v node)" "$RUNNER_TEMP/conductor-node/bin/node"
+          source_node="$(command -v node)"
+          cp "$source_node" "$RUNNER_TEMP/conductor-node/bin/node"
+          mkdir -p "$RUNNER_TEMP/conductor-node/include"
+          chmod 700 "$RUNNER_TEMP/conductor-node/include"
+          cp -R "$(dirname "$source_node")/../include/node" "$RUNNER_TEMP/conductor-node/include/node"
           chmod 555 "$RUNNER_TEMP/conductor-node/bin/node"
           echo "$RUNNER_TEMP/conductor-node/bin" >> "$GITHUB_PATH"
 

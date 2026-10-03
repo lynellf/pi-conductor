@@ -225,7 +225,8 @@ describe("supervised process admission ordering review", () => {
           file: process.execPath,
           args: ["-e", "setInterval(()=>{},1000)"],
           cwd: process.cwd(),
-          timeoutMs: 100,
+          timeoutMs: 2_000, // the deadline only terminates the live child; pre-spawn
+          // observation setup must not race it (it did under full-suite load).
           graceMs: 20,
           onStart: () => undefined,
         }),
