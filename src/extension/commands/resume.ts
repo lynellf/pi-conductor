@@ -138,7 +138,7 @@ export async function handleResume(
       extension: {
         modelRegistry,
         cwd,
-        uiContext: ctx.ui,
+        ...(ctx.hasUI ? { uiContext: ctx.ui } : {}),
         isUiContextCurrent: isContextCurrent,
         ...(deps.displaySink !== undefined && { displaySink: deps.displaySink }),
         ...(sandboxHostApproval === undefined ? {} : { sandboxHostApproval }),

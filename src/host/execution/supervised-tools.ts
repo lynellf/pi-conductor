@@ -17,10 +17,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { ToolExecutionPolicy } from "../../manifest/execution-policy.js";
+import type { RoleExecutionController } from "./baseline-controller.js";
+import { runBaselineProcess } from "./baseline-process.js";
+import { BaselineProcessError } from "./baseline-process-error.js";
 import { type FileToolWorkerModel, runFileToolWorker } from "./file-tool-worker.js";
 import { runSupervisedProcess, SupervisedProcessError } from "./supervised-process.js";
 import { captureToolAdmission } from "./tool-admission.js";
-import type { ToolExecutionController, ToolExecutionScope } from "./tool-execution-controller.js";
+import type { ToolExecutionScope } from "./tool-execution-controller.js";
 import { ToolExecutionError as RuntimeToolExecutionError } from "./tool-execution-controller.js";
 import { toToolExecutionModelError } from "./tool-execution-model-error.js";
 
@@ -33,7 +36,8 @@ type BashParams = { readonly command: string; readonly timeout?: number };
 /** Options for controller-backed built-in tools. */
 export interface SupervisedToolsOptions {
   readonly cwd: string;
-  readonly getController: () => ToolExecutionController | null;
+  readonly getController: () => RoleExecutionController | null;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly getPolicy: () => Policy;
   readonly declaredTools?: readonly string[];
   readonly isSealed?: () => boolean;
@@ -46,7 +50,7 @@ export interface SupervisedToolsOptions {
 /** Structured details returned for controller failures. */
 export interface SupervisedToolErrorDetails {
   readonly code: string;
-  readonly cleanup: "confirmed" | "unconfirmed" | "not-started";
+  readonly cleanup: "confirmed" | "unconfirmed" | "not-started" | "not-guaranteed";
   readonly executionId?: string;
 }
 
@@ -65,7 +69,7 @@ function modelMetadata(ctx: {
   return ctx.model?.input === undefined ? undefined : { input: [...ctx.model.input] };
 }
 
-function controllerFor(options: SupervisedToolsOptions): ToolExecutionController {
+function controllerFor(options: SupervisedToolsOptions): RoleExecutionController {
   const controller = options.getController();
   if (controller === undefined || controller === null) {
     throw new Error("executable tool controller is not bound");
@@ -163,7 +167,11 @@ async function serializeMutation<T>(
     acquired = true;
     return await operation();
   } catch (error) {
-    if (error instanceof SupervisedProcessError && error.cleanup === "unconfirmed") {
+    if (
+      error instanceof SupervisedProcessError &&
+      error.cleanup === "unconfirmed" &&
+      !(error instanceof BaselineProcessError && error.foregroundStatus !== "unobserved")
+    ) {
       poisonMutationState(state);
       return Promise.reject(error);
     }
@@ -193,6 +201,14 @@ function sealedResult(): AgentToolResult<SupervisedToolErrorDetails> & { readonl
   };
 }
 
+function baselineRunner(scope: ToolExecutionScope): typeof runSupervisedProcess {
+  return (options) =>
+    runBaselineProcess({
+      ...options,
+      ...(scope.trackForeground === undefined ? {} : { trackForeground: scope.trackForeground }),
+    });
+}
+
 function rawFileDefinition(
   factory: DefinitionFactory,
   toolName: FileToolName,
@@ -200,6 +216,7 @@ function rawFileDefinition(
   scope: ToolExecutionScope,
   policy: Policy,
   worker: typeof runFileToolWorker,
+  processRunner: typeof runSupervisedProcess,
 ): ToolDefinition {
   const metadata = factory(cwd) as ToolDefinition;
   return {
@@ -211,6 +228,7 @@ function rawFileDefinition(
         worker({
           toolName,
           toolCallId,
+          processRunner,
           params,
           cwd,
           ...(model === undefined ? {} : { model }),
@@ -264,12 +282,18 @@ function supervisedFileDefinition(
               scope,
               policyFor(options),
               options.runFileToolWorker ?? runFileToolWorker,
+              options.executionTier === "baseline" ? baselineRunner(scope) : runSupervisedProcess,
             );
             const wrapped = options.wrapFileTool?.(raw) ?? raw;
             scope.assertOpen();
             return wrapped.execute(toolCallId, params, scope.signal, onUpdate, ctx);
           },
-          { captureAdmission: captureToolAdmission, ...(signal === undefined ? {} : { signal }) },
+          {
+            ...(options.executionTier === "baseline"
+              ? {}
+              : { captureAdmission: captureToolAdmission }),
+            ...(signal === undefined ? {} : { signal }),
+          },
         );
       } catch (error) {
         throw toToolExecutionModelError(error);
@@ -301,7 +325,9 @@ function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefiniti
               operations: {
                 exec: async (command, cwd, execOptions) => {
                   scope.assertOpen();
-                  const result = await runSupervisedProcess({
+                  const result = await (options.executionTier === "baseline"
+                    ? baselineRunner(scope)
+                    : runSupervisedProcess)({
                     executionId: scope.supervisionId,
                     command,
                     cwd,
@@ -313,6 +339,12 @@ function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefiniti
                     onStart: () => scope.assertOpen(),
                     onOutput: (_stream, chunk) => execOptions.onData(chunk),
                   });
+                  if (options.executionTier === "baseline" && result.signal !== null)
+                    throw new RuntimeToolExecutionError(
+                      "tool_failed",
+                      `baseline command terminated by ${result.signal}`,
+                      { cleanup: "not-guaranteed", executionId: scope.executionId },
+                    );
                   return { exitCode: result.exitCode };
                 },
               },
@@ -320,7 +352,9 @@ function supervisedBashDefinition(options: SupervisedToolsOptions): ToolDefiniti
             return definition.execute(toolCallId, bashParams, scope.signal, onUpdate, ctx);
           },
           {
-            captureAdmission: captureToolAdmission,
+            ...(options.executionTier === "baseline"
+              ? {}
+              : { captureAdmission: captureToolAdmission }),
             ...(signal === undefined ? {} : { signal }),
             ...(typeof bashParams.timeout === "number"
               ? { modelTimeoutSeconds: bashParams.timeout }

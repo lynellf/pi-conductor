@@ -5,6 +5,10 @@ import { join } from "node:path";
 
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  detectExecutionCapabilities,
+  ExecutionCapabilityError,
+} from "../../src/host/execution/execution-capabilities.js";
 import { FileToolWorkerError } from "../../src/host/execution/file-tool-worker.js";
 import { InMemoryRecordLog, loadManifestFromString, ProductionHost } from "../../src/index.js";
 
@@ -53,7 +57,7 @@ describe("ProductionHost supervised file-tool preflight", () => {
         "    delegation:\n      allowed_subagents: [child]\n      max_children_per_session: 1\n      max_parallel: 1\n",
       ),
     ],
-  ])("rejects %s before creating its session directory", async (_name, loadedManifest) => {
+  ])("rejects %s before creating its session directory", async (name, loadedManifest) => {
     const invalidPackageDir = await mkdtemp(join(tmpdir(), "pi-conductor-invalid-pi-"));
     directories.push(invalidPackageDir);
     process.env.PI_PACKAGE_DIR = invalidPackageDir;
@@ -69,7 +73,12 @@ describe("ProductionHost supervised file-tool preflight", () => {
           runId: "preflight",
           sessionDir,
         }),
-    ).toThrow(FileToolWorkerError);
+    ).toThrow(
+      name === "delegation-only parent" &&
+        detectExecutionCapabilities().execution_tier === "baseline"
+        ? ExecutionCapabilityError
+        : FileToolWorkerError,
+    );
     expect(existsSync(sessionDir)).toBe(false);
   });
 

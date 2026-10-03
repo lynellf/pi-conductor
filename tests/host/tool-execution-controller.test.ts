@@ -268,12 +268,15 @@ describe("ToolExecutionController", () => {
     }
   });
 
-  it("preserves explicit unconfirmed cleanup from a tool error", async () => {
+  it.each([
+    "unconfirmed",
+    "not-guaranteed",
+  ] as const)("preserves %s cleanup as an enhanced uncertainty barrier", async (cleanup) => {
     const execution = controller();
     await expect(
       execution.run("write", "poisoned", async () => {
         throw new ToolExecutionError("tool_failed", "mutation cleanup is unknown", {
-          cleanup: "unconfirmed",
+          cleanup,
         });
       }),
     ).rejects.toMatchObject({ code: "tool_cleanup_unconfirmed", cleanup: "unconfirmed" });

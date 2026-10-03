@@ -450,7 +450,11 @@ describe("Issue #63 trajectory resume", () => {
     });
 
     await expect(host.spawnRole("implementer")).rejects.toBeInstanceOf(TrajectoryResumeError);
-    expect(log.records("invalid-trajectory-selector")).toHaveLength(1);
+    expect(
+      log
+        .records("invalid-trajectory-selector")
+        .filter((record) => record.type !== "execution_capabilities"),
+    ).toHaveLength(1);
   });
 
   it("fails a clamped persisted target effort before its provider can receive a prompt", async () => {
@@ -687,7 +691,9 @@ describe("Issue #63 trajectory resume", () => {
     });
 
     await expect(host.spawnRole("implementer")).rejects.toThrow("previously failed");
-    expect(log.records("failed-trajectory")).toHaveLength(1);
+    expect(
+      log.records("failed-trajectory").filter((record) => record.type !== "execution_capabilities"),
+    ).toHaveLength(1);
   });
 
   it("rejects a malformed selector at the public resume boundary before host construction", async () => {

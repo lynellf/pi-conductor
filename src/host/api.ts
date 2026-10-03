@@ -40,6 +40,7 @@ import {
   normalizeContinuityPolicyForNewRun,
 } from "../manifest/continuity.js";
 import { pinExecutionPolicies } from "../manifest/pin-execution-policy.js";
+import { assertBaselineExecutionsSettled } from "../persistence/baseline-execution.js";
 import {
   type EndGuardRecord,
   endGuardBudgetExhausted,
@@ -313,6 +314,7 @@ export async function resumeRun(
           )))
         : await loadPinnedManifest(manifestSnapshot, manifestPath, opts.modelRegistry);
     assertManifestWorkspaceBackendsSupported(loaded);
+    assertBaselineExecutionsSettled(log.records(runId));
     assertNoUnfinishedToolExecutions(log.records(runId).filter(isToolExecutionRecord));
     const endGuardRecords = log
       .records(runId)
@@ -328,7 +330,12 @@ export async function resumeRun(
     if (
       endGuardRecords.some(
         (record) =>
-          record.type === "end_guard_finished" && record.outcome === "cleanup_unconfirmed",
+          record.type === "end_guard_finished" &&
+          (record.outcome === "cleanup_unconfirmed" ||
+            (record.execution_tier === "baseline" &&
+              (record.outcome === "aborted" || record.outcome === "timed_out") &&
+              record.foreground_status !== "closed" &&
+              record.foreground_status !== "not-started")),
       )
     ) {
       throw new Error("resumeRun: end_guard cleanup is unconfirmed; refusing unknown ownership");

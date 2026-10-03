@@ -180,6 +180,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
     }
     const context: SpawnRoleContext = {
       modelRegistry: this.modelRegistry,
+      executionTier: this.executionTier,
       cwd: this.cwd,
       loadedManifest: this.loadedManifest,
       log: this.log,
@@ -269,6 +270,7 @@ export class ProductionHost extends ProductionHostContext implements Host {
   ): Promise<RoleSession> {
     return resumeTrajectoryRoleInModule(
       {
+        executionTier: this.executionTier,
         modelRegistry: this.modelRegistry,
         cwd: this.cwd,
         agentDir: this.agentDir,

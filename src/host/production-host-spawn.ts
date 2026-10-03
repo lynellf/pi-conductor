@@ -5,6 +5,10 @@ import type { ModelEffort, Role } from "../core/types.js";
 import { DEFAULT_MODEL_EFFORT } from "../core/types.js";
 import { isHostGeneratedContinuityPolicy } from "../manifest/continuity.js";
 import type { ModelConfig, RoleConfig, WorkspaceSource } from "../manifest/types.js";
+import {
+  assertBaselineExecutionsSettled,
+  isRoleToolExecutionRecord,
+} from "../persistence/baseline-execution.js";
 import type { PersistedRecord, RecordLog, SnapshotPinnedRecord } from "../persistence/log.js";
 import { isToolExecutionRecord } from "../persistence/tool-execution.js";
 import { TrajectoryResumeError } from "../persistence/trajectory-records.js";
@@ -15,7 +19,6 @@ import type {
 import type { PoolChildResult } from "./delegation/pool.js";
 import type { DisplaySink } from "./display-sink.js";
 import { NoMoreModelsError, RoleEscalationError } from "./errors.js";
-import { isSupervisedProcessSupported } from "./execution/supervised-process.js";
 import { assertNoUnfinishedToolExecutions } from "./execution/tool-execution-controller.js";
 import type { RoleSession, SpawnRoleOptions } from "./host.js";
 import type { HostRejection } from "./host-rejection.js";
@@ -35,6 +38,7 @@ import { spawnSharedSdkRoleSession } from "./shared-sdk-role-spawn.js";
 import { assertSupportedWorkspaceBackend } from "./workspace/index.js";
 export interface SpawnRoleContext {
   readonly modelRegistry: ModelRegistry;
+  readonly executionTier?: "enhanced" | "baseline";
   readonly cwd: string;
   readonly loadedManifest: LoadedManifest;
   readonly log: RecordLog;
@@ -166,15 +170,7 @@ export async function spawnRole(
   }
 
   const roleConfig = host.lookupRoleConfig(role);
-  const declaredTools = roleConfig?.tools ?? [];
-  if (
-    declaredTools.some((name) =>
-      ["bash", "read", "write", "edit", "ls", "find", "grep"].includes(name),
-    ) &&
-    !isSupervisedProcessSupported()
-  ) {
-    throw new Error("role executable tools require a platform with supervised process cleanup");
-  }
+  assertBaselineExecutionsSettled(host.log.records(host.runId));
   // A replacement or trajectory successor must not begin while a prior
   // executable still has unknown ownership. Resume applies the same guard;
   // keeping it here also covers same-process fallback after disposal.
@@ -277,6 +273,7 @@ export async function spawnRole(
     };
     const isolatedSession = await spawnIsolatedRoleSession({
       role,
+      ...(host.executionTier === undefined ? {} : { executionTier: host.executionTier }),
       orchestratorRole: host.loadedManifest.def.orchestrator,
       controlProtocol: isHostGeneratedContinuityPolicy(host.loadedManifest.manifest.continuity)
         ? "v2"
@@ -334,7 +331,7 @@ export async function spawnRole(
       visitIndex: opts.visitIndex,
       workspaceVisitIndex: opts.workspaceVisitIndex ?? opts.visitIndex,
       executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-      priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
+      priorToolExecutionRecords: host.log.records(host.runId).filter(isRoleToolExecutionRecord),
       persistRecord: (record) => host.persistRecord(record),
       sessionStates: host.sessionStates,
       agentsBySessionId: host.agentsBySessionId,
@@ -428,6 +425,7 @@ export async function spawnRole(
 
   const sharedSession = await spawnSharedSdkRoleSession({
     role,
+    ...(host.executionTier === undefined ? {} : { executionTier: host.executionTier }),
     roleConfig,
     model,
     logicalModel: logical,
@@ -442,7 +440,7 @@ export async function spawnRole(
     runId: host.runId,
     visitIndex: opts.visitIndex ?? 1,
     executionVisitIndex: opts.executionVisitIndex ?? opts.visitIndex ?? 1,
-    priorToolExecutionRecords: host.log.records(host.runId).filter(isToolExecutionRecord),
+    priorToolExecutionRecords: host.log.records(host.runId).filter(isRoleToolExecutionRecord),
     machineDefinition: host.loadedManifest.def,
     controlProtocol: isHostGeneratedContinuityPolicy(host.loadedManifest.manifest.continuity)
       ? "v2"

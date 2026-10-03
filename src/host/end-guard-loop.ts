@@ -46,6 +46,7 @@ export async function runEndGuardAttempt(
   const timeoutMs = (args.config.timeout_seconds ?? 60) * 1_000;
   const started: EndGuardStartedRecord = {
     type: "end_guard_started",
+    ...(args.host.executionTier === "baseline" ? { execution_tier: "baseline" as const } : {}),
     schema_version: 1,
     run_id: args.runId,
     attempt_id: attemptId,
@@ -81,7 +82,7 @@ export async function runEndGuardAttempt(
       elapsedMs: 0,
       output: diagnostic.output,
       truncated: diagnostic.truncated,
-      cleanup: "unconfirmed",
+      cleanup: args.host.executionTier === "baseline" ? "not-guaranteed" : "unconfirmed",
     };
   }
   if (result.attemptId !== attemptId || result.roleSessionId !== args.session.sessionId) {
@@ -90,6 +91,7 @@ export async function runEndGuardAttempt(
 
   const finished: EndGuardFinishedRecord = {
     type: "end_guard_finished",
+    ...(args.host.executionTier === "baseline" ? { execution_tier: "baseline" as const } : {}),
     schema_version: 1,
     run_id: args.runId,
     attempt_id: result.attemptId,
@@ -99,6 +101,9 @@ export async function runEndGuardAttempt(
     role_session_id: result.roleSessionId,
     session_file: args.session.sessionFile,
     elapsed_ms: result.elapsedMs,
+    ...(args.host.executionTier === "baseline" && result.foregroundStatus !== undefined
+      ? { foreground_status: result.foregroundStatus }
+      : {}),
     outcome: result.outcome,
     exit_code: result.exitCode,
     signal: result.signal,

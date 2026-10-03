@@ -1,5 +1,39 @@
 # Executable tool controls
 
+## Capability selection
+
+Ordinary tools default to portable execution. Production preflight selects
+`enhanced` when Linux observation/admission interfaces are usable, otherwise
+`baseline`. It persists `execution_capabilities` before model work and displays
+baseline degradation through the UI or stderr. Enhanced runtime failures never
+retry under baseline. Use `execution_policy: { mode: strict }` to require enhanced
+cleanup for executable tools/guards; handoff/end-only runs need neither backend.
+Required unavailable controller/delegation/protected-workspace/sandbox/container features reject
+preflight, with no unconfined or unsandboxed fallback.
+
+Baseline uses the same isolated public SDK file tools and bounded foreground
+commands, but only finite best-effort cancellation. Its separate start/terminal
+records always say `cleanup: not-guaranteed`. Nominal completed/failed calls
+permit resume. Timeout or per-call abort with an observed direct-child close
+(or known not-started) also permits resume and returns `tool_timeout` within the
+pinned `max_recoverable_timeouts` budget. The budget survives physical replacement
+of the same logical invocation (including model fallback). A checkpoint resume
+that creates a new logical invocation starts a new budget, as in enhanced mode;
+exhaustion returns `tool_timeout_exhausted` and
+stops that invocation. A foreground signal exit is a normal failure. None of this
+proves descendant cleanup or replays the call: inspect partial effects before an
+explicit retry. Cancellation temporarily blocks admission until foreground settlement.
+Explicit session/run close remains a hard shutdown, not an automatic retry.
+Unmatched starts, unobserved close, ambiguous persistence and legacy interruption
+records without foreground evidence still block resume/replacement.
+`reconcile-tools` cannot confirm baseline cleanup or override that barrier.
+Changing hosts never reinterprets historical enhanced records.
+
+## Enhanced Linux execution
+
+The following ownership, cleanup and timeout-recovery contracts describe the
+**enhanced** tier, not guarantees supplied by baseline.
+
 Roles and subagent profiles can configure `tool_execution`:
 
 ```yaml
@@ -19,7 +53,7 @@ but cannot extend it. Output and CPU activity do not reset the clock.
 The deadline includes file-path confinement and any wait for an earlier mutation
 of the same file. Bash processes run in owned process groups. File tools run in
 separate Node workers so synchronous file processing cannot block the host's
-deadline timer. This currently requires Linux. Fresh workers add approximately
+deadline timer. Confirmed descendant cleanup requires usable Linux observation. Fresh workers add approximately
 0.6 seconds per file call on the development host; the exact cost depends on the
 machine and installed SDK.
 
@@ -261,7 +295,7 @@ not cover provider-backed campaigns or trajectory workflows. Run it with
 binary and host Pi package root.
 
 The supported runtime is a Node npm installation with an importable, on-disk
-Pi SDK. Linux is required for supervised workers. Preflight validates the host
+Pi SDK. Usable Linux observation is required for enhanced supervised workers; baseline workers remain available on other hosts. Preflight validates the host
 package name, version, export, and file-tool factories before a file-tool or
 delegation campaign starts. Repair the Pi installation or `PI_PACKAGE_DIR`
 override and restart Pi when preflight fails. Standalone bundled installations
